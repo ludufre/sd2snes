@@ -123,6 +123,7 @@ contrib/*
 docs/*
 utils/bin2asm
 utils/bin2c
+utils/bin2coe
 utils/chili2chr
 utils/genbsxpage
 utils/gentilemap
@@ -132,6 +133,8 @@ utils/palreorder
 release
 src/obj-mk2
 src/obj-mk3
+.dep
+.dep-*
 verilog/*/output_files
 verilog/*/simulation
 verilog/*/smartxplorer

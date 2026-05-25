@@ -1,0 +1,11 @@
+services:
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sd2snes-build:latest
+    container_name: sd2snes-build
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: ["bash", "build.sh"]
