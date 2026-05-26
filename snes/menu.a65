@@ -23,6 +23,9 @@ mainmenu:
   sta window_x
   lda #$0b
   sta window_y
+  lda #$01
+  sta mainmenu_active
+  stz egg_shown
   phb
     lda #^menu_enttab_mm
     pha
@@ -30,6 +33,7 @@ mainmenu:
     ldx #!menu_enttab_mm
     jsr show_menu
   plb
+  stz mainmenu_active
   jsr pop_window
   rts
 
@@ -163,6 +167,22 @@ menu_select_loop1
   stz isr_done
   jsr printtime
   jsr read_pad
+  lda mainmenu_active
+  beq menu_select_no_egg
+  lda egg_shown
+  bne menu_select_no_egg
+  lda pad_select
+  beq menu_select_no_egg
+  rep #$20 : .al
+  lda @$004218
+  and #$0420
+  cmp #$0420
+  sep #$20 : .as
+  bne menu_select_no_egg
+  lda #$01
+  sta egg_shown
+  jsr show_easter_egg
+menu_select_no_egg
   lda pad_up
   bne menu_select_up
   lda pad_down
@@ -1526,3 +1546,50 @@ menu_tab_edit_value_dialogs:
 .word menu_value_dialog_kv16
 .word menu_value_dialog_file
 .word menu_value_dialog_time
+
+show_easter_egg:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #^zero
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  lda @egg_win_x
+  sta window_x
+  lda @egg_win_y
+  sta window_y
+  lda @egg_win_w
+  sta window_w
+  lda @egg_win_h
+  sta window_h
+  jsr push_window
+  jsr draw_window
+  lda @egg_win_x
+  inc
+  sta print_x
+  stz print_x+1
+  lda @egg_win_y
+  inc
+  sta print_y
+  stz print_y+1
+  lda #^text_easter_egg
+  sta print_bank
+  ldx #!text_easter_egg
+  stx print_src
+  stz print_pal
+  lda #38
+  sta print_count
+  jsr hiprint
+  ldx #$00f0
+egg_wait_loop:
+  phx
+- lda isr_done
+  beq -
+  stz isr_done
+  plx
+  dex
+  bne egg_wait_loop
+  jsr pop_window
+  plp
+  rts

@@ -79,6 +79,10 @@ coldboot:       ; Regular, cold-start init
   jsr detect_ultra16
   jsr detect_satellaview
   jsr wait_mcu_ready
+  sep #$20 : .as
+  lda @SNES_CMD
+  cmp #$55
+  bne emu_mode
   ; Check autoboot flag (set by MCU if autoboot.cfg is present)
   ; Screen is still black (tgt_bright set in video_init)
   ; If autoboot is inactive, START is held, or the ROM can't be loaded:
@@ -107,6 +111,75 @@ coldboot_autoboot_out:
   sei
   stz $4200
   jmp @infloop  ; infinite loop in WRAM
+
+emu_mode:
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$0f
+  sta cur_bright
+  sta tgt_bright
+  sta menu_brightness
+  sta $2100
+  ; Simulate the menu's adjacent-row layout with accented PT-BR strings.
+  lda #10
+  sta print_y
+  lda #2
+  sta print_x
+  lda #^emu_str1
+  sta print_bank
+  ldx #!emu_str1
+  stx print_src
+  stz print_pal
+  lda #36
+  sta print_count
+  jsr hiprint
+  lda #11
+  sta print_y
+  lda #2
+  sta print_x
+  lda #^emu_str2
+  sta print_bank
+  ldx #!emu_str2
+  stx print_src
+  stz print_pal
+  lda #36
+  sta print_count
+  jsr hiprint
+  lda #12
+  sta print_y
+  lda #2
+  sta print_x
+  lda #^emu_str3
+  sta print_bank
+  ldx #!emu_str3
+  stx print_src
+  stz print_pal
+  lda #36
+  sta print_count
+  jsr hiprint
+  lda #13
+  sta print_y
+  lda #2
+  sta print_x
+  lda #^emu_str4
+  sta print_bank
+  ldx #!emu_str4
+  stx print_src
+  stz print_pal
+  lda #36
+  sta print_count
+  jsr hiprint
+- lda isr_done
+  lsr
+  bcc -
+  stz isr_done
+  bra -
+
+; Simulating the real menu: a few accented items at consecutive rows.
+emu_str1  .byt "Configura", 141, 139, "es", 0
+emu_str2  .byt "Ajustar Rel", 137, "gio", 0
+emu_str3  .byt "Op", 141, 139, "es BS-X", 0
+emu_str4  .byt "Op", 141, 139, "es do Navegador", 0
 
 colortest:
   sep #$20 : .as
@@ -650,10 +723,14 @@ wait_mcu_ready:
   sep #$20 : .as
   lda #$00
   sta @MCU_CMD
+  rep #$10 : .xl
+  ldx #$0000
 - lda @SNES_CMD
   cmp #$55
+  beq +
+  dex
   bne -
-  plp
++ plp
   rts
 
 ; autoboot_cmd_handshake: run game_handshake with CMD_LOAD_AUTOBOOT

@@ -75,11 +75,28 @@ run_on_host() {
     fi
 
     log "Running build inside container"
-    exec docker compose run --rm \
+    docker compose run --rm \
         -e OFFICIAL_VER="$OFFICIAL_VER" \
         -e OFFICIAL_URL="$OFFICIAL_URL" \
         -e SD2SNES_IN_CONTAINER=1 \
         build bash build.sh
+
+    local repo_dir
+    repo_dir="$(cd "$(dirname "$0")" && pwd)"
+    local release_dir="${repo_dir}/release/v${OFFICIAL_VER}"
+    local zip_name="sd2snes_firmware_v${OFFICIAL_VER}.zip"
+
+    log "Patching firmware binaries with PT-BR strings (host)"
+    python3 "${repo_dir}/snes/utils/patch_firmware_ptbr.py"
+
+    log "Repackaging zip"
+    rm -f "${release_dir}/${zip_name}"
+    ( cd "$release_dir" && zip -rq "$zip_name" sd2snes )
+
+    log "Done."
+    printf '\nOutputs:\n'
+    printf '  %s\n'  "${release_dir}/${zip_name}"
+    printf '  %s/\n' "${release_dir}/sd2snes"
 }
 
 # ---------------------------------------------------------------------------
@@ -128,14 +145,7 @@ run_in_container() {
     install -m644 README.md                      "${staging_dir}/README.md"
     install -m644 README.Savestates.FURiOUS.md   "${staging_dir}/README.Savestates.FURiOUS.md"
 
-    log "Repackaging zip"
-    rm -f "${release_dir}/${zip_name}"
-    ( cd "$release_dir" && zip -rq "$zip_name" sd2snes )
-
-    log "Done."
-    printf '\nOutputs:\n'
-    printf '  %s\n'  "${release_dir}/${zip_name}"
-    printf '  %s/\n' "$staging_dir"
+    log "Container side done; host will patch firmware + repackage."
 }
 
 if [ "${SD2SNES_IN_CONTAINER:-0}" = "1" ]; then
