@@ -416,11 +416,12 @@ cheat_detail_line .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
                   .byt 24,0
 
 text_spcid      .byt "SNES-SPC700"
-text_easter_egg .byt "Traduzido por Luan Freitas (@ludufre)", 0
+text_easter_egg  .byt "Traduzido por Luan Freitas (@ludufre)", 0
+text_easter_egg2 .byt "Testado por @lima112", 0
 egg_win_x       .byt 12
 egg_win_y       .byt 14
 egg_win_w       .byt 40
-egg_win_h       .byt 3
+egg_win_h       .byt 4
 rootdir         .byt "/", 0
 gfxptr_info     .byt "_GFXPTR_"
                 .word font

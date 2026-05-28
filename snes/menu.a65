@@ -1581,6 +1581,19 @@ show_easter_egg:
   lda #38
   sta print_count
   jsr hiprint
+  lda @egg_win_x
+  inc
+  sta print_x
+  stz print_x+1
+  inc print_y
+  lda #^text_easter_egg2
+  sta print_bank
+  ldx #!text_easter_egg2
+  stx print_src
+  stz print_pal
+  lda #38
+  sta print_count
+  jsr hiprint
   ldx #$00f0
 egg_wait_loop:
   phx

@@ -88,6 +88,9 @@ TRANSLATIONS = [
     (b"SD acc. time: %ld.%03ld / %ld.%03ld ms avg/max",
      b"Acesso SD:    %ld.%03ld / %ld.%03ld ms med/max"),
 
+    (b"Calculating disk space\x7f\x80                ",
+     b"Calculando espa" + ced + b"o em disco\x7f\x80            "),
+
     (b"SD acc. time: measuring\x7f\x80  ",
      b"Acesso SD:    medindo\x7f\x80    "),
 
@@ -141,10 +144,9 @@ TRANSLATIONS = [
 HEADER_SIZE = 256  # CONFIG_FW_HEADERSIZE in src/config-mk*; same on all variants
 
 # Bootloader (src/bootldr/iap.c:133) skips flashing when the version field in
-# the file equals the version already flashed. Bump it to a distinct, stable
-# value so PT-BR firmware is recognized as different from the official build.
-VERSION_TAG = b"1.11.2-ptbr"
-NEW_VERSION = zlib.crc32(VERSION_TAG) & 0xFFFFFFFF
+# the file equals the version already flashed. Derive version from the payload
+# CRC so any translation change produces a fresh version and forces a re-flash.
+VERSION_PREFIX = b"ptbr-"
 
 
 def fix_fw_header(data):
@@ -153,10 +155,11 @@ def fix_fw_header(data):
     payload = bytes(data[HEADER_SIZE:HEADER_SIZE + size])
     new_crc = zlib.crc32(payload) & 0xFFFFFFFF
     new_crcc = new_crc ^ 0xFFFFFFFF
-    data[4:8] = struct.pack("<I", NEW_VERSION)
+    new_version = zlib.crc32(VERSION_PREFIX + struct.pack("<I", new_crc)) & 0xFFFFFFFF
+    data[4:8] = struct.pack("<I", new_version)
     data[12:16] = struct.pack("<I", new_crc)
     data[16:20] = struct.pack("<I", new_crcc)
-    return NEW_VERSION, new_crc
+    return new_version, new_crc
 
 
 def patch_file(path):
