@@ -53,7 +53,7 @@ int write_sysinfo(int sd_measured) {
   status_save_from_menu();
 
   if (!sd_measured) {
-    sram_writeblock("Calculating disk space\x7f\x80                ", sram_addr, 40);
+    sram_writeblock("Calculando espa\x8do em disco\x7f\x80            ", sram_addr, 40);
   }
   /* remount before sdn_getcid so fatfs registers the disk state change first */
   f_getfree("0:", &fsfree, &ffs);
@@ -62,7 +62,7 @@ int write_sysinfo(int sd_measured) {
   fssize = ((uint64_t)fatfs.n_fatent - 2LL) * (uint64_t)fatfs.csize * 512LL / 1048576LL;
   fsfree = ((uint64_t)fsfree) * (uint64_t)fatfs.csize * 512LL / 1048576LL;
 
-  len = snprintf(linebuf, sizeof(linebuf), "    Firmware version: %s", CONFIG_VERSION);
+  len = snprintf(linebuf, sizeof(linebuf), "    Vers\x85o firmware: %s", CONFIG_VERSION);
   memset(linebuf+len, 0x20, 40-len);
   sram_writeblock(linebuf, sram_addr, 40);
   sram_addr += 40;
@@ -76,7 +76,7 @@ int write_sysinfo(int sd_measured) {
     sram_addr += 40;
     sram_memset(sram_addr, 40, 0x20);
     sram_addr += 40;
-    sram_writestrn("    *** SD Card removed/USB busy ***    ", sram_addr, 40);
+    sram_writestrn("    *** SD removido/USB ocupado ***    ", sram_addr, 40);
     sram_addr += 40;
     sram_memset(sram_addr, 40, 0x20);
     sram_addr += 40;
@@ -84,27 +84,27 @@ int write_sysinfo(int sd_measured) {
     sram_addr += 40;
     sd_ok = 0;
   } else {
-    len = snprintf(linebuf, sizeof(linebuf), "SD Maker/OEM:    0x%02x, \"%c%c\"", sd_cid[1], sd_cid[2], sd_cid[3]);
+    len = snprintf(linebuf, sizeof(linebuf), "Fabricante SD:   0x%02x, \"%c%c\"", sd_cid[1], sd_cid[2], sd_cid[3]);
     memset(linebuf+len, 0x20, 40-len);
     sram_writeblock(linebuf, sram_addr, 40);
     sram_addr += 40;
-    len = snprintf(linebuf, sizeof(linebuf), "SD Product Name: \"%c%c%c%c%c\", Rev. %d.%d", sd_cid[4], sd_cid[5], sd_cid[6], sd_cid[7], sd_cid[8], sd_cid[9]>>4, sd_cid[9]&15);
+    len = snprintf(linebuf, sizeof(linebuf), "Nome do produto: \"%c%c%c%c%c\", Rev. %d.%d", sd_cid[4], sd_cid[5], sd_cid[6], sd_cid[7], sd_cid[8], sd_cid[9]>>4, sd_cid[9]&15);
     memset(linebuf+len, 0x20, 40-len);
     sram_writeblock(linebuf, sram_addr, 40);
     sram_addr += 40;
-    len = snprintf(linebuf, sizeof(linebuf), "SD Serial No.:   %02x%02x%02x%02x, Mfd. %d/%02d", sd_cid[10], sd_cid[11], sd_cid[12], sd_cid[13], 2000+((sd_cid[14]&15)<<4)+(sd_cid[15]>>4), sd_cid[15]&15);
+    len = snprintf(linebuf, sizeof(linebuf), "Serial SD:       %02x%02x%02x%02x, Fab. %d/%02d", sd_cid[10], sd_cid[11], sd_cid[12], sd_cid[13], 2000+((sd_cid[14]&15)<<4)+(sd_cid[15]>>4), sd_cid[15]&15);
     memset(linebuf+len, 0x20, 40-len);
     sram_writeblock(linebuf, sram_addr, 40);
     sram_addr += 40;
     if(sd_tacc_max) {
-      len = snprintf(linebuf, sizeof(linebuf), "SD acc. time: %ld.%03ld / %ld.%03ld ms avg/max", sd_tacc_avg_int, sd_tacc_avg_frac, sd_tacc_max_int, sd_tacc_max_frac);
+      len = snprintf(linebuf, sizeof(linebuf), "Acesso SD:    %ld.%03ld / %ld.%03ld ms med/max", sd_tacc_avg_int, sd_tacc_avg_frac, sd_tacc_max_int, sd_tacc_max_frac);
     } else {
-      len = snprintf(linebuf, sizeof(linebuf), "SD acc. time: measuring\x7f\x80  ");
+      len = snprintf(linebuf, sizeof(linebuf), "Acesso SD:    medindo\x7f\x80");
     }
     memset(linebuf+len, 0x20, 40-len);
     sram_writeblock(linebuf, sram_addr, 40);
     sram_addr += 40;
-    len = snprintf(linebuf, sizeof(linebuf), "Card usage: %ldMB / %ldMB", fssize-fsfree, fssize);
+    len = snprintf(linebuf, sizeof(linebuf), "Uso do SD:  %ldMB / %ldMB", fssize-fsfree, fssize);
     memset(linebuf+len, 0x20, 40-len);
     sram_writeblock(linebuf, sram_addr, 40);
     sram_addr += 40;
@@ -114,10 +114,10 @@ int write_sysinfo(int sd_measured) {
       sgb_state = sgb_bios_state();
     }
     len = snprintf(linebuf, sizeof(linebuf), "sgb%d_boot.bin/sgb%d_snes.bin: %s", CFG.sgb_bios_version, CFG.sgb_bios_version, (
-      sgb_state == SGB_BIOS_MISSING ? "missing"
-      : sgb_state == SGB_BIOS_MISMATCH ? "mismatch"
+      sgb_state == SGB_BIOS_MISSING ? "ausente"
+      : sgb_state == SGB_BIOS_MISMATCH ? "errado"
       : sgb_state == SGB_BIOS_OK ? "ok"
-      : "checking"
+      : "lendo"
     ));
     memset(linebuf+len, 0x20, 40-len);
     sram_writeblock(linebuf, sram_addr, 40);
@@ -126,14 +126,14 @@ int write_sysinfo(int sd_measured) {
   }
   sram_memset(sram_addr, 40, 0x20);
   sram_addr += 40;
-  len = snprintf(linebuf, sizeof(linebuf), "CIC state: %s", get_cic_statefriendlyname(get_cic_state()));
+  len = snprintf(linebuf, sizeof(linebuf), "Modo CIC: %s", get_cic_statefriendlyname(get_cic_state()));
   memset(linebuf+len, 0x20, 40-len);
   sram_writeblock(linebuf, sram_addr, 40);
   sram_addr += 40;
   if(sysclk == -1)
-    len = snprintf(linebuf, sizeof(linebuf), "SNES master clock: measuring\x7f\x80");
+    len = snprintf(linebuf, sizeof(linebuf), "Clock SNES: medindo\x7f\x80");
   else
-    len = snprintf(linebuf, sizeof(linebuf), "SNES master clock: %ldHz    ", get_snes_sysclk());
+    len = snprintf(linebuf, sizeof(linebuf), "Clock SNES: %ldHz", get_snes_sysclk());
   memset(linebuf+len, 0x20, 40-len);
   sram_writeblock(linebuf, sram_addr, 40);
   sram_addr += 40;

@@ -51,12 +51,12 @@ char *fresult_names[] = { "FR_OK", "FR_DISK_ERR", "FR_INT_ERR",
   "FR_TIMEOUT", "FR_LOCKED", "FR_NOT_ENOUGH_CORE", "FR_TOO_MANY_OPEN_FILES",
   "FR_INVALID_PARAMETER" };
 
-char *fresult_friendly_names[] = { "No error", "Card I/O error", "Internal FS driver error",
-  "Drive not ready", "File not found", "Directory not found", "Invalid path name",
-  "Access denied", "Access denied (exists)", "Invalid file object", "Write protected",
-  "Invalid drive specified", "No work area", "Not a valid file system", "mkfs() aborted",
-  "Drive access timeout", "Shared access locked", "Not enough memory", "Too many open files",
-  "Invalid parameter" };
+char *fresult_friendly_names[] = { "Sem erro", "Erro de I/O", "Erro interno FS",
+  "Drive nao pronto", "Arq. nao achado", "Pasta nao achada", "Caminho invalido",
+  "Acesso negado", "Negado (ja existe)", "Arq. invalido", "Protegido",
+  "Drive invalido", "Sem mem. trab.", "FS invalido", "mkfs() abortou",
+  "Timeout no SD", "Acesso bloqueado", "Sem memoria", "Muitos arq. abertos",
+  "Param. invalido" };
 
 void file_init() {
   file_res=f_mount(&fatfs, "/", 1);
