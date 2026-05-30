@@ -329,6 +329,20 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_showcov
+ .byt  ^mtext_browser_showcov
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_SHOW_COVERS
+ .byt  ^CFG_SHOW_COVERS
+ .word !mdesc_browser_showcov
+ .byt  ^mdesc_browser_showcov
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
 ; .byt  MTYPE_VALUE
 ; .word !mtext_browser_screensaver_timeout
 ; .byt  ^mtext_browser_screensaver_timeout

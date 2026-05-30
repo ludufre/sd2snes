@@ -51,6 +51,7 @@ fileselloop:
   stz isr_done
   jsr printtime
   jsr filesel_updates ; update stuff, check keys etc
+  jsr cover_update    ; cover preview state machine (debounce + async load)
   lda filesel_dirty   ; is there ANY reason to redraw the menu?
   cmp #$01
   beq fileselloop_redraw ; then do
@@ -769,6 +770,9 @@ select_spc:
   sta @MCU_PARAM+2
   lda #$00
   sta @MCU_PARAM+3
+  jsr cover_sync_before_cmd ; idle the MCU channel first (see game_handshake):
+                            ; SPC entries also fire covers, so a request may be
+                            ; in flight when A is pressed
   lda #CMD_LOADSPC
   sta @MCU_CMD
 wait_spc:

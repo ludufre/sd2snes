@@ -213,43 +213,25 @@ setup_gfx:
   stx $2116
   DMA7(#$09, #$1000, #^zero, #!zero, #$18)
 
-; clear OAM tables
+; hide all sprites. The cover replaces the logo and uses BG1 (not OBJ); the old
+; logo splash sprites are gone. Fill OAM with $f0 so every sprite Y = 240, off
+; the bottom of the 224-line screen.
   ldx #$0000
   stx $2102
-  DMA7(#$08, #$220, #^zero, #!zero, #$04)
+  DMA7(#$08, #$220, #^oamhide, #!oamhide, #$04)
 
-; copy logo tiles
-  ldx #$2000
-  stx $2116
-  DMA7(#$01, #$4000, #^logo, #!logo, #$18)
-
-; generate logo tilemap
-  ldx #BG1_TILE_BASE
-  stx $2116
-  ldx #$0100
-- stx $2118
-  inx
-  cpx #$01e0
-  bne -
-
-
-; copy sprites tiles
-  ldx #OAM_TILE_BASE
-  stx $2116
-  DMA7(#$01, #$500, #^logospr, #!logospr, #$18)
-
-; set OAM tables
-  ldx #$0000
-  stx $2102
-  DMA7(#$00, #$60, #^oam_data_l, #!oam_data_l, #$04)
-  ldx #$0100
-  stx $2102
-  DMA7(#$00, #$09, #^oam_data_h, #!oam_data_h, #$04)
+; (logo tiles / tilemap / splash sprites removed - the cover owns the header now)
 
 ; set palette
   stz $2121
   DMA7(#$00, #$200, #^palette, #!palette, #$22)
   stz $2121
+
+; init cover preview AFTER the palette load: clears the cover VRAM region, loads
+; the header logo (tiles -> VRAM $6000, palette -> CGRAM 64) and builds the header
+; (logo cols 0..15 + blank cover area). Must run AFTER the palette DMA above so
+; the logo palette at CGRAM 64 is not overwritten. Still forced blank, NMI off.
+  jsr cover_init
 
 ; copy hdma tables so we can work "without" the cartridge
 ; palette
@@ -688,6 +670,8 @@ game_handshake:
   php
   sep #$20 : .as
   pha
+  jsr cover_sync_before_cmd ; idle the MCU channel: drain any in-flight cover
+                            ; request so its $55 can't be read as this cmd's ACK
   jsr hide_cursor
   jsr draw_loading_window
   jsr waitblank

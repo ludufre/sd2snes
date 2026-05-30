@@ -40,6 +40,7 @@ extern char current_filename[];
 #define SRAM_MENU_ADDR               (0xC00000L)
 #define SRAM_DIR_ADDR                (0xC10000L)
 #define SRAM_DB_ADDR                 (0xC80000L)
+#define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 
 #define SRAM_NUM_CHEATS              (0xCFFFFEL)
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* banks D0-DF for 2048 cheats per YML file */

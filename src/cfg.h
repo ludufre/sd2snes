@@ -49,6 +49,7 @@
 #define CFG_SGB_BIOS_VERSION             ("SGBBiosVersion")
 #define CFG_ENABLE_AUTOSAVE              ("EnableAutoSave")
 #define CFG_ENABLE_AUTOSAVE_MSU1         ("EnableMSU1AutoSave")
+#define CFG_SHOW_COVERS                  ("ShowCovers")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -94,8 +95,10 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  sgb_spr_increase;        /* SGB increase number of supported visible sprites */
   uint8_t  sgb_clock_fix;           /* SGB timing/clock (true: original/sgb2, false: snes/sgb1) */
   uint8_t  sgb_bios_version;        /* SGB bios firmware version (defined number loads: sgbX_boot.bin and sgbX_snes.bin) */
+  uint8_t  show_tribute;            /* reserved: keeps cfg_t aligned with the menu's CFG offset map (CFG_SHOW_TRIBUTE @ $B3) */
   uint8_t  enable_autosave;         /* enable automatic saving when SRAM contents change */
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
+  uint8_t  show_covers;             /* show per-ROM cover preview (Game.cov) in the file browser */
 } cfg_t;
 
 int cfg_save(void);

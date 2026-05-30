@@ -16,6 +16,7 @@ dirend_onscreen .byt 0
 dirlog_idx      .byt 0,0,0  ; long ptr
 direntry_fits_idx .byt 0,0
 longptr         .byt 0,0,0  ; general purpose long ptr
+cover_ptr       .byt 0,0,0  ; cover: direct-page long ptr for reading bank C9
 ;----------parameters for text output----------
 print_x         .word 0     ; x coordinate
 print_y         .word 0     ; y coordinate
@@ -249,4 +250,21 @@ dbg_ptr         .word 0
 fade_speed      .byt 0
 fade_count      .byt 0
 idle_count      .word 0
+
+;----------cover preview state (8bpp BG1 cover in the header band)
+cover_dirty            .byt 0    ; 1 if selection changed and a (re)load is needed
+cover_debounce         .byt 0    ; frames remaining before firing the request
+cover_request_pending  .byt 0    ; 1 while a CMD_LOAD_COVER is in flight
+cover_timeout          .word 0   ; frames left before abandoning a stuck request
+cover_last_sel         .word 0   ; last filesel_sel a cover was requested for
+cover_loaded           .byt 0    ; 1 if a real cover is currently shown
+cover_w                .byt 0    ; staged cover width  in tiles (from C9 meta)
+cover_h                .byt 0    ; staged cover height in tiles (from C9 meta)
+cover_cgbase           .byt 0    ; staged cover CGRAM base (from C9 meta)
+cover_ncm1             .byt 0    ; staged cover ncolors-1 (from C9 meta)
+cover_tmcol            .byt 0    ; tilemap column of the cover (32 - w)
+cover_ty               .byt 0    ; tilemap write scratch: row counter
+cover_char             .word 0   ; tilemap write scratch: running char number
+cover_tilebytes        .word 0   ; tile DMA length = w*h*64
+cover_palbytes         .word 0   ; palette DMA length = (ncm1+1)*2
 _END            .byt 0

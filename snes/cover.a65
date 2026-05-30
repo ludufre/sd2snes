@@ -1,0 +1,555 @@
+.link page $c0
+#include "memmap.i65"
+#include "dma.i65"
+
+; ===========================================================================
+; Cover preview - 8bpp BG1 image in the header band (replaces the logo).
+;
+; The cover is an 8bpp BG1 image shown in the top header band (mode 3, screen
+; lines 0..55 = BG1 tilemap rows 0..6, the old logo area). Tiles live in the
+; old logo VRAM region; cover tile 0 is char $101 (word $2020). Char $100
+; (word $2000) is kept cleared as a transparent backdrop. The cover palette
+; loads at CGRAM cg_base (128 for the 128-colour bring-up; the menu's text/UI
+; live in CGRAM 0..15 so there is no conflict and no restore is needed).
+;
+; The MCU stages a cover into bank C9 (CMD_LOAD_COVER, see src/cover.c):
+;   C9:$0000  8bpp tiles (w*h*64 bytes)
+;   C9:$3800  BGR555 palette (ncolors*2 bytes)
+;   C9:$3A00  meta: status, w_tiles, h_tiles, cg_base, ncolors-1, flags
+;
+; SAFETY: loading is fully asynchronous and NON-BLOCKING. We fire the command
+; once and poll SNES_CMD once per frame (never WRAM_WAIT_MCU). A frame timeout
+; abandons a stuck request so covers self-heal. The VRAM/CGRAM/tilemap upload
+; is done SYNCHRONOUSLY in forced blank (no VBlank overrun, no NMI work). Any
+; error hides the cover (fail-safe). Nothing here can wedge the menu or MCU.
+; ===========================================================================
+
+; -- cover_init: called once from setup_gfx during forced blank. Clears state,
+;    clears the cover VRAM region (so char $100+ are transparent), and blanks
+;    the header tilemap (cover hidden).
+cover_init:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz cover_dirty
+  stz cover_debounce
+  stz cover_request_pending
+  stz cover_loaded
+  stz cover_timeout
+  stz cover_timeout+1
+  lda #$ff
+  sta cover_last_sel        ; force a "changed" on the first frame
+  sta cover_last_sel+1
+  ; clear the cover VRAM region (old logo area) -> char $100+ transparent.
+  ; setup_gfx runs in forced blank with NMI still OFF, so we write VRAM directly.
+  ldx #COVER_VRAM_CLEAR
+  stx $2116
+  DMA7(#$09, #COVER_VRAM_CLEAR_LEN, #^zero, #!zero, #$18)
+  ; clear the BG tilemap WRAM buffers (BG2_TILE_BUF $7EA000 .. BG1_TILE_BUF $7EBFFF)
+  ; to char 0 (the menu's transparent clear char). clear_wram fills WRAM with $55,
+  ; and the NMI copies BG2_TILE_BUF rows 0-8 into the BG2 header every frame; the
+  ; old opaque logo used to hide that garbage, so removing the logo exposed it.
+  ldx #$a000
+  stx $2181
+  stz $2183
+  DMA7(#$08, #$2000, #^zero, #!zero, #$80)
+  ; load the baked header logo: tiles -> VRAM $6000 (char $300), palette -> CGRAM
+  ; 64 (free pal 4+5). setup_gfx calls cover_init AFTER the main palette DMA, so
+  ; the logo palette is not clobbered.
+  ldx #COVER_LOGO_VRAM
+  stx $2116
+  DMA7(#$01, #COVER_LOGO_TILEBYTES, #^logo_tiles, #!logo_tiles, #$18)
+  lda #COVER_LOGO_CGB
+  sta $2121
+  DMA7(#$00, #COVER_LOGO_PALBYTES, #^logo_pal, #!logo_pal, #$22)
+  ; build the header in WRAM (logo cols 0..15 + blank cols 16..31) and upload it
+  jsr cover_logo_to_buf
+  jsr cover_clear_area
+  jsr cover_dma_header
+  plp
+  rts
+
+; -- cover_blank_begin / cover_blank_end: enter/exit a forced-blank, NMI-OFF
+;    critical section so a foreground VRAM/CGRAM upload is safe. The VBlank NMI
+;    (reset.a65 do_screen_dma) reprograms DMA channel 7 and re-latches $2116 and
+;    writes $2100 (fade); if it fired mid-upload it would corrupt VRAM / un-blank
+;    the screen. We only ever call these from the browse loop, where NMI is $81,
+;    so restoring $81 is correct (NOT used from cover_init, where NMI is still
+;    off and the screen is already blanked). $4200 is write-only, hence the fixed
+;    restore value rather than save/restore.
+cover_blank_begin:
+  sep #$20 : .as
+  lda #$01                  ; NMI off so the VBlank handler can't run mid-upload
+  sta $4200
+  jsr waitblank             ; sync to VBlank start: the whole upload lands in VBlank
+                            ; (off-screen) so there is NO visible flash, and HDMA is
+                            ; idle in VBlank so no CGRAM race / no HDMA mask needed.
+                            ; waitblank polls $4212 (hardware), so it is safe with
+                            ; NMI off and bounded to <= 1 frame.
+  lda #$8f                  ; force blank: safety net so a slight VBlank overrun
+  sta $2100                 ; still writes VRAM/CGRAM (worst case: thin top band 1f)
+  rts
+cover_blank_end:
+  sep #$20 : .as
+  lda cur_bright            ; un-blank
+  sta $2100
+  lda #$81                  ; VBlank NMI + auto-joypad back on
+  sta $4200
+  rts
+
+; -- cover_hide: hide any shown cover during browsing (NMI on). Forces blank so
+;    the tilemap writes land, blanks the header tilemap, restores.
+cover_hide:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr cover_clear_area      ; blank cols 16..31 in WRAM (logo cols 0..15 stay)
+  jsr cover_blank_begin
+  jsr cover_dma_header      ; upload header (logo + blank) -> VRAM
+  jsr cover_blank_end
+  stz cover_loaded
+  plp
+  rts
+
+; -- cover_sync_before_cmd: drain an in-flight CMD_LOAD_COVER before the menu
+;    issues a BLOCKING MCU command (LOADROM via game_handshake, LOADSPC). The
+;    cover state machine fires CMD_LOAD_COVER autonomously when the cursor
+;    settles, sharing the SNES_CMD/MCU_CMD handshake and the $55 ready sentinel
+;    with the load commands. If the user presses A while a cover request is
+;    still in flight, the cover's $55 completion could be mistaken for the load
+;    command's ACK (swallowed load / handshake desync / hang). This waits for
+;    the request to finish so the channel is idle before the caller issues.
+;    BOUNDED + hang-proof: cover_poll clears cover_request_pending on completion
+;    OR after COVER_TIMEOUT frames, and we pace it one poll per frame, so this
+;    returns within <= COVER_TIMEOUT frames even if the MCU is stuck. In the
+;    common case (nothing in flight) it returns immediately with no delay.
+cover_sync_before_cmd:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda cover_request_pending
+  beq csbc_out              ; channel already idle - return immediately
+csbc_wait:
+  jsr waitblank             ; pace at one cover_poll/frame so COVER_TIMEOUT
+  jsr cover_poll            ; (frames) holds; consumes the $55 or ticks timeout
+  lda cover_request_pending
+  bne csbc_wait
+  jsr waitblank             ; drained: one more frame so the MCU settles back
+                            ; into its command poll before the caller issues
+csbc_out:
+  plp
+  rts
+
+; -- cover_dma_header: upload the 224-entry header tilemap from BG1_TILE_BUF
+;    (logo cols 0..15 + blank/cover cols 16..31) to VRAM. One pure DMA, fits in
+;    VBlank. Caller must have the screen blanked.
+cover_dma_header:
+  php
+  rep #$10 : .xl
+  ldx #BG1_TILE_BASE
+  stx $2116
+  DMA7(#$01, #$01C0, #^BG1_TILE_BUF, #!BG1_TILE_BUF, #$18)  ; 224 words WRAM->VRAM
+  plp
+  rts
+
+; -- cover_logo_to_buf: write the header logo's 16x7 tilemap (cols 0..15, char
+;    $300+) into BG1_TILE_BUF. The logo lives here permanently (cover/hide touch
+;    only cols 16..31), so this runs ONCE from cover_init.
+cover_logo_to_buf:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda #COVER_LOGO_CHAR
+  sta cover_char
+  sep #$20 : .as
+  stz cover_ty
+clb_row:
+  rep #$30 : .al : .xl
+  lda cover_ty
+  and #$00ff
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl                       ; X = row*64 (byte offset of col 0)
+  tax
+  sep #$20 : .as
+  ldy #$0000
+clb_col:
+  rep #$20 : .al
+  lda cover_char
+  sta @BG1_TILE_BUF, x
+  inc cover_char
+  sep #$20 : .as
+  inx
+  inx
+  iny
+  cpy #COVER_LOGO_COLS
+  bcc clb_col
+  inc cover_ty
+  lda cover_ty
+  cmp #7
+  bcc clb_row
+  plp
+  rts
+
+; -- cover_clear_area: blank the cover area (cols 16..31) of header rows 0..6 in
+;    BG1_TILE_BUF, leaving the logo (cols 0..15) intact. col>=16 <=> byte&$20.
+cover_clear_area:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+cca_loop:
+  txa
+  and #$20
+  beq cca_next
+  rep #$20 : .al
+  lda #COVER_BLANK_CHAR
+  sta @BG1_TILE_BUF, x
+  sep #$20 : .as
+cca_next:
+  inx
+  inx
+  cpx #$01C0
+  bcc cca_loop
+  plp
+  rts
+
+; -- cover_update: once per frame from fileselloop. Drives the lifecycle.
+cover_update:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CFG_SHOW_COVERS
+  bne cu_enabled
+  ; feature off: hide any shown cover, then do nothing
+  lda cover_loaded
+  beq cu_ret
+  jsr cover_hide
+  bra cu_ret
+cu_enabled:
+  jsr cover_poll
+  ; selection changed? Key off the highlighted ENTRY's identity, not the cursor
+  ; row: filesel_sel is the on-screen row (0..listdisp-1) and stays pinned while
+  ; the window scrolls at the top/bottom, so the entry address dirptr_addr +
+  ; filesel_sel*4 is what actually identifies the selection.
+  rep #$20 : .al
+  lda filesel_sel
+  and #$00ff
+  asl
+  asl
+  clc
+  adc dirptr_addr
+  cmp cover_last_sel
+  beq cu_same
+  sta cover_last_sel
+  sep #$20 : .as
+  lda #COVER_DEBOUNCE
+  sta cover_debounce
+  lda #$01
+  sta cover_dirty
+  bra cu_ret
+cu_same:
+  sep #$20 : .as
+  jsr cover_maybe_fire
+cu_ret:
+  plp
+  rts
+
+; -- cover_maybe_fire: when dirty + debounced + nothing in flight, fire
+;    CMD_LOAD_COVER for ROM/SPC entries (or hide the cover otherwise).
+cover_maybe_fire:
+  lda cover_dirty
+  beq cmf_out
+  lda cover_request_pending
+  bne cmf_out               ; a request is already in flight
+  lda cover_debounce
+  beq cmf_fire
+  dec cover_debounce
+  bra cmf_out
+cmf_fire:
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  bne cmf_out               ; MCU busy - keep dirty, retry next frame
+  jsr cover_sel_type        ; A = type of highlighted entry
+  cmp #TYPE_ROM
+  beq cmf_dofire
+  cmp #TYPE_SPC
+  beq cmf_dofire
+  ; not a ROM/SPC: stop asking, hide any cover
+  stz cover_dirty
+  lda cover_loaded
+  beq cmf_out
+  jsr cover_hide
+  bra cmf_out
+cmf_dofire:
+  stz cover_dirty
+  jsr cover_fill_param_for_current_sel
+  sep #$20 : .as
+  lda #$00                  ; clear ready (STZ has no long mode) so poll waits for $55
+  sta @SNES_CMD
+  lda #CMD_LOAD_COVER
+  sta @MCU_CMD
+  lda #$01
+  sta cover_request_pending
+  lda #COVER_TIMEOUT
+  sta cover_timeout
+  stz cover_timeout+1
+cmf_out:
+  rts
+
+; -- cover_poll: non-blocking check of an in-flight request. On completion,
+;    reads the C9 status and either shows the cover or hides it. A frame
+;    timeout abandons a stuck request (self-heal).
+cover_poll:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda cover_request_pending
+  beq cpoll_out
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  beq cpoll_done
+  ; still waiting: tick the timeout down
+  rep #$20 : .al
+  lda cover_timeout
+  dec
+  sta cover_timeout
+  sep #$20 : .as
+  lda cover_timeout
+  ora cover_timeout+1
+  bne cpoll_out
+  stz cover_request_pending ; gave up - menu stays responsive
+  bra cpoll_out
+cpoll_done:
+  stz cover_request_pending
+  lda @COVER_C9_STATUS
+  cmp #COVER_STATUS_OK
+  bne cpoll_missing
+  jsr cover_show
+  lda #$01
+  sta cover_loaded
+  bra cpoll_out
+cpoll_missing:
+  jsr cover_hide
+cpoll_out:
+  plp
+  rts
+
+; -- cover_show: upload the staged cover synchronously while forcing blank (so
+;    VRAM/CGRAM writes are safe outside VBlank and the tile DMA cannot overrun
+;    VBlank). Reads geometry from the C9 meta block.
+cover_show:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; read meta from C9 (fixed-address @long reads of bank C9 are reliable)
+  lda @COVER_C9_META_W
+  sta cover_w
+  lda @COVER_C9_META_H
+  sta cover_h
+  lda @COVER_C9_META_CGB
+  sta cover_cgbase
+  lda @COVER_C9_META_NCM1
+  sta cover_ncm1
+  ; defensive bounds: w 1..16, h 1..7. h MUST fit the 7-row (56px) band; w<=16 so
+  ; the right-aligned cover (col 32-w >= 16) stays in cols 16..31 and never
+  ; overwrites the logo (cols 0..15). (Matches COVER_MAX_COLS/ROWS in cover.h.)
+  lda cover_w
+  beq cshow_bad
+  cmp #17
+  bcs cshow_bad
+  lda cover_h
+  beq cshow_bad
+  cmp #8
+  bcs cshow_bad
+  ; defense-in-depth: reject a cg_base that would land the cover palette over
+  ; the menu's reserved CGRAM 0..15 (UI text). The firmware already enforces the
+  ; full contract (also the logo range) before STATUS_OK; this backstops a
+  ; corrupt/desynced meta so a bad cg_base can never scribble the UI palette.
+  lda cover_cgbase
+  cmp #16
+  bcc cshow_bad
+  bra cshow_ok
+cshow_bad:
+  jsr cover_hide
+  plp
+  rts
+cshow_ok:
+  jsr cover_calc_sizes      ; -> cover_tilebytes, cover_palbytes
+  jsr cover_build_tm        ; build the header tilemap in WRAM NOW (main loop), so
+                            ; the VBlank window below is pure DMA (no CPU tilemap
+                            ; writes -> no VBlank overrun -> no top black band)
+  jsr cover_blank_begin     ; NMI off + sync to VBlank + force blank (flash-free)
+  ; --- palette FIRST: C9:$3800 -> CGRAM cg_base, (ncm1+1)*2 bytes. It runs at the
+  ;     very start of VBlank so it finishes before HDMA could resume -> no CGADD/
+  ;     CGDATA race, which is why no HDMA mask is needed any more. ---
+  lda cover_cgbase
+  sta $2121                 ; CGADD
+  lda #$00                  ; DMAP: A->B, increment, 1x reg
+  sta $4370
+  lda #$22                  ; B = $2122 (CGDATA)
+  sta $4371
+  ldx #!COVER_C9_PAL
+  stx $4372
+  lda #^COVER_C9_PAL
+  sta $4374
+  ldx cover_palbytes
+  stx $4375
+  lda #$80
+  sta $420b
+  ; --- tiles: C9:$0000 -> BG1 cover VRAM, w*h*64 bytes (DMA channel 7) ---
+  ldx #COVER_VRAM_WORD
+  stx $2116
+  lda #$01                  ; DMAP: A->B, increment, 2x reg ($2118/$2119)
+  sta $4370
+  lda #$18                  ; B = $2118 (VMDATAL)
+  sta $4371
+  ldx #!COVER_C9_TILES
+  stx $4372                 ; A address low ($0000)
+  lda #^COVER_C9_TILES
+  sta $4374                 ; A bank ($C9)
+  ldx cover_tilebytes
+  stx $4375                 ; transfer size
+  lda #$80
+  sta $420b                 ; run channel 7
+  ; --- tilemap: one pure DMA of the WRAM buffer built above (blank + cover block)
+  ;     -> BG1 header. No CPU writes here, so the upload stays inside VBlank. ---
+  ldx #BG1_TILE_BASE
+  stx $2116
+  DMA7(#$01, #$01C0, #^BG1_TILE_BUF, #!BG1_TILE_BUF, #$18)  ; 224 words
+  jsr cover_blank_end       ; un-blank + NMI back on
+  plp
+  rts
+
+; -- cover_calc_sizes: cover_tilebytes = w*h*64, cover_palbytes = (ncm1+1)*2.
+;    Uses the PPU hardware multiplier for w*h.
+cover_calc_sizes:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda cover_w
+  sta $4202                 ; WRMPYA (CPU 8x8 multiply, NOT the PPU mode-7 $211b!)
+  lda cover_h
+  sta $4203                 ; WRMPYB -> starts the 8-cycle multiply
+  nop
+  nop
+  nop
+  nop                       ; >= 8 cycles before reading the product
+  rep #$20 : .al
+  lda $4216                 ; RDMPY = w*h (<= 224, fits the low word)
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl                       ; * 64
+  sta cover_tilebytes
+  lda cover_ncm1
+  and #$00ff
+  inc
+  asl                       ; (ncm1+1) * 2
+  sta cover_palbytes
+  sep #$20 : .as
+  plp
+  rts
+
+; -- cover_build_tm: build the cover area (cols 16..31) of the header tilemap in
+;    WRAM (BG1_TILE_BUF), leaving the logo (cols 0..15) intact, so cover_show can
+;    upload the whole header with one VBlank DMA. Runs in the MAIN LOOP (WRAM only)
+;    so its CPU cost does not eat the VBlank window. Writes the w x h cover block
+;    right-aligned at tilemap col 32-w (>=16 since w<=16).
+cover_build_tm:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr cover_clear_area      ; blank cols 16..31 (logo cols 0..15 stay)
+  lda #32
+  sec
+  sbc cover_w
+  sta cover_tmcol
+  rep #$20 : .al
+  lda #COVER_CHAR_BASE
+  sta cover_char
+  lda cover_tmcol
+  and #$00ff
+  asl                       ; X = tm_col*2 = byte offset of (row 0, tm_col)
+  tax
+  sep #$20 : .as
+  stz cover_ty
+cbtm_row:
+  phx
+  ldy #$0000
+cbtm_col:
+  rep #$20 : .al
+  lda cover_char
+  sta @BG1_TILE_BUF, x
+  inc cover_char
+  sep #$20 : .as
+  inx
+  inx
+  iny
+  tya
+  cmp cover_w
+  bcc cbtm_col
+  plx
+  rep #$20 : .al
+  txa
+  clc
+  adc #$0040                ; next row: +64 bytes (one 32-entry tilemap row)
+  tax
+  sep #$20 : .as
+  inc cover_ty
+  lda cover_ty
+  cmp cover_h
+  bcc cbtm_row
+  plp
+  rts
+
+; -- cover_sel_type: return the highlighted entry's type byte in A (8-bit).
+;    Entry record = [0..1] descr off, [2] bank, [3] type.
+cover_sel_type:
+  rep #$30 : .al : .xl
+  lda filesel_sel
+  and #$00ff
+  asl
+  asl
+  clc
+  adc #$0003
+  tay
+  sep #$20 : .as
+  lda [dirptr_addr], y
+  rts
+
+; -- cover_fill_param_for_current_sel: pack MCU_PARAM exactly like LOADROM so
+;    the MCU's get_selected_name() yields the ROM path (cwd + leaf).
+cover_fill_param_for_current_sel:
+  php
+  rep #$30 : .al : .xl
+  lda filesel_sel
+  and #$00ff
+  asl
+  asl
+  tay
+  lda [dirptr_addr], y      ; descriptor offset (16-bit)
+  sta @MCU_PARAM+4
+  iny
+  iny
+  sep #$20 : .as
+  lda [dirptr_addr], y      ; fileinfo bank
+  sta @MCU_PARAM+6
+  rep #$20 : .al
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+  lda #$00
+  sta @MCU_PARAM+7
+  plp
+  rts

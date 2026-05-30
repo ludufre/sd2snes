@@ -2,6 +2,7 @@
 
 version         .byt "                            v0.1",0
 zero            .word  0
+oamhide         .word  $f0f0   ; OAM fill: Y=$f0 (off-screen) hides every sprite
 bg2tile         .byt $20
 hdma_pal_src
   .byt 44
@@ -211,6 +212,7 @@ mtext_browser_hide_ext            .byt "Ocultar extens", 139, "es", 0
 mtext_browser_screensaver         .byt "Protetor de tela", 0
 mtext_browser_screensaver_timeout .byt "Escurecer tela ap", 137, "s", 0
 mtext_browser_ledbright           .byt "Brilho dos LEDs", 0
+mtext_browser_showcov             .byt "Mostrar capas", 0
 mtext_ingame_cheats               .byt "Iniciar com trapa", 141, "as", 0
 mtext_ingame_shortreset           .byt "Reset para o menu", 0
 mtext_ingame_enable               .byt "Hook no jogo", 0
@@ -258,6 +260,7 @@ mdesc_browser_hide_ext            .byt "Ocultar extens", 139, "es de arquivos", 
 mdesc_browser_screensaver         .byt "Escurecer a tela ap", 137, "s um tempo", 0
 mdesc_browser_screensaver_timeout .byt "Tempo para escurecer a tela", 0
 mdesc_browser_ledbright           .byt "Alterar brilho dos LEDs", 0
+mdesc_browser_showcov             .byt "Exibir capas dos jogos no menu", 0
 mdesc_ingame_cheats               .byt "Iniciar com trapa", 141, "as ativadas", 0
 mdesc_ingame_shortreset           .byt "Volta ao menu com reset curto", 0
 mdesc_ingame_enable               .byt "Necess", 130, "rio para bot", 139, "es e trapa", 141, "as 7E/7F", 0

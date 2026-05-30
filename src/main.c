@@ -15,6 +15,7 @@
 #include "filetypes.h"
 #include "memory.h"
 #include "snes.h"
+#include "cover.h"
 #include "led.h"
 #include "sort.h"
 #include "cic.h"
@@ -447,6 +448,14 @@ int main(void) {
           /* NACK so autoboot_cmd_handshake returns cleanly to menu */
           snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
           cmd=0;
+          break;
+        case SNES_CMD_LOAD_COVER:
+          /* MCU_PARAM was filled by the menu (cover_fill_param_for_current_sel)
+             to look exactly like LOADROM's params, so get_selected_name works.
+             load_cover is bounded + fail-safe: it never hangs the menu loop. */
+          get_selected_name(file_lfn);
+          load_cover(file_lfn, SRAM_COVER_ADDR);
+          cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_LOAD_CHT:
           /* load cheats */
