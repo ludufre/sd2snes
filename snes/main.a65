@@ -407,7 +407,7 @@ snes_init:
   stz $420c
   lda #$8f
   sta $2100     ; INIDISP: force blank
-  lda #$03      ; 8x8+16x16; name=0; base=3
+  lda #COVER_OBSEL ; 8x8/16x16; name sel 0; OBJ base $2000 (cover owns OBJ; cover_init re-sets)
   sta $2101
   stz $2102
   stz $2103

@@ -21,7 +21,7 @@ Cartucho multifuncional baseado em cartão SD para o SNES
 
 A tradução está disponível na seção [**Releases**](https://github.com/ludufre/sd2snes/releases) deste repositório. O pacote contém **apenas os arquivos traduzidos**, portanto é necessário instalar antes o firmware oficial completo, disponível em [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 
-O nome de cada Release indica a versão equivalente do firmware oficial. Por exemplo: a release **"Tradução v1.0 da Firmware v1.11.2"** corresponde ao firmware oficial `v1.11.2`.
+O nome de cada Release indica a versão equivalente do firmware oficial. Por exemplo: a release **"v2.1 (sd2snes v1.11.2)"** corresponde ao firmware oficial `v1.11.2`.
 
 1. Baixe e instale o firmware oficial da versão correspondente em [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 2. Baixe o `.zip` da tradução em [Releases](https://github.com/ludufre/sd2snes/releases), escolhendo a versão equivalente ao firmware instalado.
@@ -44,6 +44,9 @@ As capas usam um formato próprio (`.cov`). A maneira mais fácil de criá-las �
 ### 👉 [github.com/ludufre/sd2snes-covers](https://github.com/ludufre/sd2snes-covers)
 
 O app gera os arquivos `.cov` para a sua biblioteca de jogos. No menu, a exibição das capas pode ser ligada/desligada pela opção **"Mostrar capas"**.
+
+> [!IMPORTANT]
+> Gere as capas com o **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers) v1.1.0 ou superior**. Este firmware (**v1.11.2-br-2.1 ou superior**) usa o novo formato `.cov` de sprites OBJ — capas criadas com versões anteriores do app não serão exibidas corretamente; basta regerá-las com a v1.1.0+.
 
 ---
 

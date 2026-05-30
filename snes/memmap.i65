@@ -9,43 +9,56 @@
 
 #define OAM_TILE_BASE               $6000
 
-/* ---- cover preview (8bpp BG1 image in the header band) ----
-   The cover replaces the logo: an 8bpp BG1 image shown in the top header band
-   (mode 3, screen lines 0..55 = tilemap rows 0..6). Tiles live in the old logo
-   VRAM region (word $2000); cover tile 0 is char $101 (word $2020), and char
-   $100 (word $2000) is kept cleared as a transparent backdrop. Palette loads at
-   CGRAM cg_base (128 for the 128-colour bring-up). The MCU stages the cover
-   into bank C9 (CMD_LOAD_COVER, see src/cover.c). The whole upload is done
-   synchronously in forced blank (no VBlank overrun, no NMI work). */
-#define COVER_VRAM_WORD             $2020      /* VRAM word dest for cover tile 0 (= char $101) */
-#define COVER_CHAR_BASE             $0101      /* BG1 char number of cover tile 0 */
-#define COVER_BLANK_CHAR            $0100      /* cleared tile (word $2000) = transparent backdrop */
-#define COVER_VRAM_CLEAR            $2000      /* VRAM word: start of region cleared at init */
-#define COVER_VRAM_CLEAR_LEN        $4000      /* bytes to clear (old logo region) */
-#define COVER_TM_ROW                0          /* BG1 tilemap row of cover top-left */
-#define COVER_HDR_TILES             $00E0      /* header tilemap entries to blank = 7 rows * 32 */
-#define COVER_CGRAM_BASE            $80        /* fallback CGRAM base (C9 meta overrides) */
-#define COVER_DEBOUNCE              10         /* frames to settle before requesting */
+/* ---- cover preview (16x16 OBJ sprites floating over the file list) ----
+   The cover is drawn with OBJ sprites (independent of the BG mode), so the file
+   list keeps its full Mode-5 hi-res 18 rows. It is a w_spr x h_spr grid of 16x16
+   sprites, 4bpp, up to 8 OBJ palettes (CGRAM 128..255), one palette per 16x16
+   block (the BLOCKMAP). The 4bpp tiles live in the FREED BG-cover VRAM region:
+   OBJ name base $2000 (256 tiles). The cover floats OPAQUE (OBJ priority 3) over
+   the top of the list. The MCU stages the cover into bank C9 (CMD_LOAD_COVER,
+   see src/cover.c, .cov v4). The whole upload is done synchronously in forced
+   blank (no VBlank overrun, no NMI work). The list/band/logo are untouched. */
+#define COVER_OBJ_VRAM_BASE         $2000      /* OBJ name-table base (VRAM words) */
+#define COVER_OBJ_CLEAR_LEN         $2000      /* bytes cleared at init (256 4bpp tiles) */
+#define COVER_OBSEL                 $01        /* $2101: size tbl0 (8/16), name sel 0, base $2000 */
+/* The old BG-cover used char $100 (word $2000) as a zeroed transparent tile, but
+   that word is now the OBJ name table. So the header BG (cols 16..31) uses a
+   dedicated blank char in free VRAM after the logo ($6000..$6DFF). */
+#define COVER_BLANK_VRAM            $7800      /* VRAM word of the zeroed header blank tile */
+#define COVER_BLANK_CHAR            $03C0      /* BG1 char of the blank tile ($7800 / $20) */
+#define COVER_OBJ_X_RIGHT           256        /* right edge of the cover = screen edge; a w=8
+                                                  cover fills cols 16..31 (logo owns 0..15). The
+                                                  256 wrap is handled in cover_build_oam (lda #0). */
+#define COVER_OBJ_Y0                0          /* top of the cover in px (0 = touches the screen top) */
+#define COVER_OBJ_MAX_W             8          /* 16-wide name grid -> <= 8 sprites wide */
+#define COVER_OBJ_MAX_H             8          /* 256-tile page -> <= 8 sprites tall */
+#define COVER_OBJ_ATTR              $30        /* OAM attr base: OBJ priority 3 (bits5-4), no flip */
+#define COVER_OAM_FIRST             0          /* first OAM slot used by the cover */
+#define COVER_OAM_LO_BYTES          256        /* 64 sprites * 4 bytes (whole cover OAM low table) */
+#define COVER_OAM_HI_BYTES          16         /* 64 sprites / 4 (whole cover OAM high table) */
+#define COVER_DEBOUNCE              6          /* frames to settle before requesting (must stay
+                                                  > the 3-frame d-pad auto-repeat so held scrolling
+                                                  never fires a cover; 6 = faster load, still safe) */
 #define COVER_TIMEOUT               180        /* frames before giving up on the MCU */
 /* ---- header logo (8bpp BG1, left side; baked tiles in logo_gfx.a65) ----
    The logo lives permanently in BG1_TILE_BUF cols 0..15 (written once at init);
-   covers occupy cols 16..31 only, so the logo is never overwritten. */
+   the OBJ cover floats on the right, so the logo is never overwritten. */
 #define COVER_LOGO_VRAM            $6000      /* VRAM word dest for logo tile 0 (= char $300) */
 #define COVER_LOGO_CHAR            $0300      /* BG1 char number of logo tile 0 */
 #define COVER_LOGO_CGB             $40        /* CGRAM 64: logo palette base (pal 4+5, free) */
 #define COVER_LOGO_COLS            16         /* logo width in 8px tiles (128px, cols 0..15) */
 #define COVER_LOGO_TILEBYTES       $1C00      /* 16*7*64 = 7168 bytes */
 #define COVER_LOGO_PALBYTES        $0040      /* 32 colours * 2 = 64 bytes */
-#define COVER_AREA_COL             16         /* covers live in cols 16..31 (logo owns 0..15) */
+#define COVER_AREA_COL             16         /* logo owns cols 0..15 of the header tilemap */
 /* bank-C9 staging layout (must match src/cover.h COVER_OFF_*) */
 #define SRAM_COVER_ADDR             $C90000
-#define COVER_C9_TILES              $C90000    /* 8bpp tiles */
-#define COVER_C9_PAL                $C93800    /* BGR555 palette */
-#define COVER_C9_STATUS             $C93A00    /* meta: status,w,h,cgbase,ncolors-1,flags */
-#define COVER_C9_META_W             $C93A01
-#define COVER_C9_META_H             $C93A02
-#define COVER_C9_META_CGB           $C93A03
-#define COVER_C9_META_NCM1          $C93A04
+#define COVER_C9_TILES              $C90000    /* 4bpp tiles (name-grid order) */
+#define COVER_C9_PAL                $C92000    /* up to 8 OBJ palettes, 16 BGR555 each */
+#define COVER_C9_BLOCKMAP           $C92100    /* per-16x16-block palette index (0..7) */
+#define COVER_C9_STATUS             $C93A00    /* meta: status,w_spr,h_spr,npal,rsvd,flags */
+#define COVER_C9_META_W             $C93A01    /* w_spr */
+#define COVER_C9_META_H             $C93A02    /* h_spr */
+#define COVER_C9_META_NPAL          $C93A03    /* n_palettes */
 #define COVER_STATUS_OK             $01
 
 #define MCU_CMD                     $002A00
@@ -74,6 +87,7 @@
 
 #define BG2_TILE_BUF                $7EA000
 #define BG1_TILE_BUF                $7EB000
+#define COVER_OAM_LO                $7EC000    /* cover OAM low-table shadow (64 sprites*4) */
 
 #define WRAM_ROUTINE                $7EF000
 #define WRAM_STORE_BLOCKRAM_ROUTINE $7EF080

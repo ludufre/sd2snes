@@ -3,6 +3,7 @@
 version         .byt "                            v0.1",0
 zero            .word  0
 oamhide         .word  $f0f0   ; OAM fill: Y=$f0 (off-screen) hides every sprite
+oamlarge        .word  $aaaa   ; OAM hi-table fill: size=1 (16x16) + X bit8=0 for 4 sprites
 bg2tile         .byt $20
 hdma_pal_src
   .byt 44
@@ -107,11 +108,11 @@ hdma_math_src
   .byt 1 ; ...to move the color bar
   .byt $00, $4f
   .byt 1
-  .byt $33, $9f
-  .byt 7
-  .byt $33, $40
+  .byt $23, $9f   ; $2131: BG1+BG2+backdrop color math (OBJ bit cleared so the
+  .byt 7          ;        cover sprites stay OPAQUE over the selection bar)
+  .byt $23, $40
   .byt 1
-  .byt $73, $00
+  .byt $63, $00
   .byt 1
   .byt $00, $e0
   .byt 0

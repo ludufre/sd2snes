@@ -3,30 +3,32 @@
 #include "dma.i65"
 
 ; ===========================================================================
-; Cover preview - 8bpp BG1 image in the header band (replaces the logo).
+; Cover preview - 16x16 OBJ sprites floating OPAQUE over the file list.
 ;
-; The cover is an 8bpp BG1 image shown in the top header band (mode 3, screen
-; lines 0..55 = BG1 tilemap rows 0..6, the old logo area). Tiles live in the
-; old logo VRAM region; cover tile 0 is char $101 (word $2020). Char $100
-; (word $2000) is kept cleared as a transparent backdrop. The cover palette
-; loads at CGRAM cg_base (128 for the 128-colour bring-up; the menu's text/UI
-; live in CGRAM 0..15 so there is no conflict and no restore is needed).
+; The cover is drawn with OBJ sprites (independent of the BG mode), so the file
+; list keeps its full Mode-5 hi-res 18 rows. It is a w_spr x h_spr grid of 16x16
+; sprites, 4bpp, up to 8 OBJ palettes (CGRAM 128..255), one palette per 16x16
+; block (the BLOCKMAP), right-aligned in the top-right and extending DOWN over
+; the top of the list (OBJ priority 3 -> opaque over the BG). The 4bpp tiles live
+; in the freed BG-cover VRAM region: OBJ name base $2000 (256 tiles). The logo
+; (BG1, cols 0..15) and the list are untouched.
 ;
-; The MCU stages a cover into bank C9 (CMD_LOAD_COVER, see src/cover.c):
-;   C9:$0000  8bpp tiles (w*h*64 bytes)
-;   C9:$3800  BGR555 palette (ncolors*2 bytes)
-;   C9:$3A00  meta: status, w_tiles, h_tiles, cg_base, ncolors-1, flags
+; The MCU stages a cover into bank C9 (CMD_LOAD_COVER, see src/cover.c, .cov v4):
+;   C9:$0000  4bpp tiles (name-grid order, (2*h)*16*32 bytes)
+;   C9:$2000  up to 8 OBJ palettes (16 BGR555 each)
+;   C9:$2100  BLOCKMAP (one palette index per 16x16 block)
+;   C9:$3A00  meta: status, w_spr, h_spr, n_palettes, rsvd, flags
 ;
 ; SAFETY: loading is fully asynchronous and NON-BLOCKING. We fire the command
 ; once and poll SNES_CMD once per frame (never WRAM_WAIT_MCU). A frame timeout
-; abandons a stuck request so covers self-heal. The VRAM/CGRAM/tilemap upload
-; is done SYNCHRONOUSLY in forced blank (no VBlank overrun, no NMI work). Any
-; error hides the cover (fail-safe). Nothing here can wedge the menu or MCU.
+; abandons a stuck request so covers self-heal. The VRAM/CGRAM/OAM upload is done
+; SYNCHRONOUSLY in forced blank (no VBlank overrun, no NMI work). Any error hides
+; the cover (fail-safe). Nothing here can wedge the menu or MCU.
 ; ===========================================================================
 
 ; -- cover_init: called once from setup_gfx during forced blank. Clears state,
-;    clears the cover VRAM region (so char $100+ are transparent), and blanks
-;    the header tilemap (cover hidden).
+;    sets the OBJ name base ($2000) and clears the OBJ tile page + a blank header
+;    tile, loads the logo, and builds the static header tilemap (logo + blank).
 cover_init:
   php
   sep #$20 : .as
@@ -40,11 +42,19 @@ cover_init:
   lda #$ff
   sta cover_last_sel        ; force a "changed" on the first frame
   sta cover_last_sel+1
-  ; clear the cover VRAM region (old logo area) -> char $100+ transparent.
+  ; the cover is drawn with OBJ sprites: point the OBJ name table at the freed
+  ; BG-cover VRAM region ($2000) and clear it so unused tiles are transparent.
   ; setup_gfx runs in forced blank with NMI still OFF, so we write VRAM directly.
-  ldx #COVER_VRAM_CLEAR
+  lda #COVER_OBSEL
+  sta $2101
+  ldx #COVER_OBJ_VRAM_BASE
   stx $2116
-  DMA7(#$09, #COVER_VRAM_CLEAR_LEN, #^zero, #!zero, #$18)
+  DMA7(#$09, #COVER_OBJ_CLEAR_LEN, #^zero, #!zero, #$18)
+  ; a zeroed blank tile for the header BG cols 16..31 (the OBJ name table now owns
+  ; the old blank char $100, so use a dedicated tile in free VRAM after the logo)
+  ldx #COVER_BLANK_VRAM
+  stx $2116
+  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
   ; clear the BG tilemap WRAM buffers (BG2_TILE_BUF $7EA000 .. BG1_TILE_BUF $7EBFFF)
   ; to char 0 (the menu's transparent clear char). clear_wram fills WRAM with $55,
   ; and the NMI copies BG2_TILE_BUF rows 0-8 into the BG2 header every frame; the
@@ -98,14 +108,17 @@ cover_blank_end:
   rts
 
 ; -- cover_hide: hide any shown cover during browsing (NMI on). Forces blank so
-;    the tilemap writes land, blanks the header tilemap, restores.
+;    the OAM writes land, sets every cover sprite Y=$f0 (off-screen), restores.
 cover_hide:
   php
   sep #$20 : .as
   rep #$10 : .xl
-  jsr cover_clear_area      ; blank cols 16..31 in WRAM (logo cols 0..15 stay)
-  jsr cover_blank_begin
-  jsr cover_dma_header      ; upload header (logo + blank) -> VRAM
+  jsr cover_blank_begin     ; NMI off + forced blank so OAM writes are safe
+  ldx #COVER_OAM_FIRST*2
+  stx $2102                 ; OAMADD (word) -> cover's low-table slot 0
+  ; Y=$f0 (off-screen) for every possible cover sprite (64*4 bytes), fixed-source
+  ; like setup_gfx's oamhide; non-cover sprites stay hidden from the boot fill.
+  DMA7(#$08, #COVER_OAM_LO_BYTES, #^oamhide, #!oamhide, #$04)
   jsr cover_blank_end
   stz cover_loaded
   plp
@@ -339,9 +352,10 @@ cpoll_out:
   plp
   rts
 
-; -- cover_show: upload the staged cover synchronously while forcing blank (so
-;    VRAM/CGRAM writes are safe outside VBlank and the tile DMA cannot overrun
-;    VBlank). Reads geometry from the C9 meta block.
+; -- cover_show: upload the staged OBJ sprite cover synchronously in forced blank
+;    (so VRAM/CGRAM/OAM writes are safe). Reads geometry from the C9 meta block,
+;    builds the cover's OAM low table in WRAM, then DMAs tiles -> OBJ VRAM,
+;    palettes -> CGRAM 128, and the OAM low/high tables.
 cover_show:
   php
   sep #$20 : .as
@@ -351,161 +365,187 @@ cover_show:
   sta cover_w
   lda @COVER_C9_META_H
   sta cover_h
-  lda @COVER_C9_META_CGB
-  sta cover_cgbase
-  lda @COVER_C9_META_NCM1
-  sta cover_ncm1
-  ; defensive bounds: w 1..16, h 1..7. h MUST fit the 7-row (56px) band; w<=16 so
-  ; the right-aligned cover (col 32-w >= 16) stays in cols 16..31 and never
-  ; overwrites the logo (cols 0..15). (Matches COVER_MAX_COLS/ROWS in cover.h.)
+  lda @COVER_C9_META_NPAL
+  sta cover_npal
+  ; defensive bounds: w 1..8, h 1..8, npal 1..8 (256-tile OBJ page, 16-wide name
+  ; grid, 8 OBJ palettes). Matches COVER_OBJ_MAX_* in cover.h.
   lda cover_w
   beq cshow_bad
-  cmp #17
+  cmp #COVER_OBJ_MAX_W+1
   bcs cshow_bad
   lda cover_h
   beq cshow_bad
-  cmp #8
+  cmp #COVER_OBJ_MAX_H+1
   bcs cshow_bad
-  ; defense-in-depth: reject a cg_base that would land the cover palette over
-  ; the menu's reserved CGRAM 0..15 (UI text). The firmware already enforces the
-  ; full contract (also the logo range) before STATUS_OK; this backstops a
-  ; corrupt/desynced meta so a bad cg_base can never scribble the UI palette.
-  lda cover_cgbase
-  cmp #16
-  bcc cshow_bad
+  lda cover_npal
+  beq cshow_bad
+  cmp #9
+  bcs cshow_bad
   bra cshow_ok
 cshow_bad:
   jsr cover_hide
   plp
   rts
 cshow_ok:
-  jsr cover_calc_sizes      ; -> cover_tilebytes, cover_palbytes
-  jsr cover_build_tm        ; build the header tilemap in WRAM NOW (main loop), so
-                            ; the VBlank window below is pure DMA (no CPU tilemap
-                            ; writes -> no VBlank overrun -> no top black band)
-  jsr cover_blank_begin     ; NMI off + sync to VBlank + force blank (flash-free)
-  ; --- palette FIRST: C9:$3800 -> CGRAM cg_base, (ncm1+1)*2 bytes. It runs at the
-  ;     very start of VBlank so it finishes before HDMA could resume -> no CGADD/
-  ;     CGDATA race, which is why no HDMA mask is needed any more. ---
-  lda cover_cgbase
-  sta $2121                 ; CGADD
-  lda #$00                  ; DMAP: A->B, increment, 1x reg
-  sta $4370
-  lda #$22                  ; B = $2122 (CGDATA)
-  sta $4371
-  ldx #!COVER_C9_PAL
-  stx $4372
-  lda #^COVER_C9_PAL
-  sta $4374
-  ldx cover_palbytes
-  stx $4375
-  lda #$80
-  sta $420b
-  ; --- tiles: C9:$0000 -> BG1 cover VRAM, w*h*64 bytes (DMA channel 7) ---
-  ldx #COVER_VRAM_WORD
+  jsr cover_calc_sizes_obj   ; -> cover_tilebytes, cover_halfbytes, cover_chunk2_vram,
+                             ;    cover_palbytes
+  jsr cover_build_oam        ; build the cover OAM low table in WRAM NOW (main loop)
+  ; The full tile DMA (up to 8192 bytes) does NOT fit in one VBlank (~6.5KB budget),
+  ; so a single forced-blank window overruns into active display -> a 1-frame black
+  ; band at the top. Split it into TWO VBlank windows (each ~4.3KB, fits) -> no band.
+  ; Window 1 also HIDES the cover so the half-loaded tiles never show as garbage;
+  ; window 2 reveals the finished cover.
+  ; --- window 1: hide + palette -> CGRAM 128 + tiles chunk 1 -> VRAM $2000 ---
+  jsr cover_blank_begin      ; NMI off + sync to VBlank + force blank (flash-free)
+  ldx #COVER_OAM_FIRST*2
+  stx $2102                  ; OAMADD -> low-table sprite 0
+  DMA7(#$08, #COVER_OAM_LO_BYTES, #^oamhide, #!oamhide, #$04)  ; hide while loading
+  lda #$80                   ; CGADD = 128 (start of the OBJ palette region)
+  sta $2121
+  DMA7(#$00, cover_palbytes, #^COVER_C9_PAL, #!COVER_C9_PAL, #$22)
+  ldx #COVER_OBJ_VRAM_BASE
   stx $2116
-  lda #$01                  ; DMAP: A->B, increment, 2x reg ($2118/$2119)
-  sta $4370
-  lda #$18                  ; B = $2118 (VMDATAL)
-  sta $4371
-  ldx #!COVER_C9_TILES
-  stx $4372                 ; A address low ($0000)
-  lda #^COVER_C9_TILES
-  sta $4374                 ; A bank ($C9)
-  ldx cover_tilebytes
-  stx $4375                 ; transfer size
-  lda #$80
-  sta $420b                 ; run channel 7
-  ; --- tilemap: one pure DMA of the WRAM buffer built above (blank + cover block)
-  ;     -> BG1 header. No CPU writes here, so the upload stays inside VBlank. ---
-  ldx #BG1_TILE_BASE
+  DMA7(#$01, cover_halfbytes, #^COVER_C9_TILES, #!COVER_C9_TILES, #$18)
+  jsr cover_blank_end
+  ; --- window 2: tiles chunk 2 -> VRAM + reveal the finished cover (OAM) ---
+  jsr cover_blank_begin
+  ldx cover_chunk2_vram
   stx $2116
-  DMA7(#$01, #$01C0, #^BG1_TILE_BUF, #!BG1_TILE_BUF, #$18)  ; 224 words
-  jsr cover_blank_end       ; un-blank + NMI back on
+  DMA7(#$01, cover_halfbytes, #^COVER_C9_TILES, cover_halfbytes, #$18)  ; src = C9:halfbytes
+  ldx #COVER_OAM_FIRST*2
+  stx $2102                  ; OAMADD -> low-table sprite 0
+  DMA7(#$00, #COVER_OAM_LO_BYTES, #^COVER_OAM_LO, #!COVER_OAM_LO, #$04)
+  ldx #$0100                 ; OAMADD = $100 -> high table (byte 512)
+  stx $2102
+  DMA7(#$08, #COVER_OAM_HI_BYTES, #^oamlarge, #!oamlarge, #$04)
+  jsr cover_blank_end        ; un-blank + NMI back on
   plp
   rts
 
-; -- cover_calc_sizes: cover_tilebytes = w*h*64, cover_palbytes = (ncm1+1)*2.
-;    Uses the PPU hardware multiplier for w*h.
-cover_calc_sizes:
+; -- cover_calc_sizes_obj: cover_tilebytes = h_spr*1024 (h<<10), cover_palbytes =
+;    n_palettes*32 (npal<<5). No multiply needed.
+cover_calc_sizes_obj:
   php
-  sep #$20 : .as
-  rep #$10 : .xl
-  lda cover_w
-  sta $4202                 ; WRMPYA (CPU 8x8 multiply, NOT the PPU mode-7 $211b!)
+  rep #$20 : .al
   lda cover_h
-  sta $4203                 ; WRMPYB -> starts the 8-cycle multiply
-  nop
-  nop
-  nop
-  nop                       ; >= 8 cycles before reading the product
-  rep #$20 : .al
-  lda $4216                 ; RDMPY = w*h (<= 224, fits the low word)
-  asl
-  asl
-  asl
-  asl
-  asl
-  asl                       ; * 64
-  sta cover_tilebytes
-  lda cover_ncm1
   and #$00ff
-  inc
-  asl                       ; (ncm1+1) * 2
+  xba                       ; << 8
+  asl
+  asl                       ; << 2 more -> << 10  (h_spr*1024, h<=8 -> <= $2000)
+  sta cover_tilebytes
+  lsr                       ; h*512 = half the tile DMA (each half fits one VBlank)
+  sta cover_halfbytes
+  lsr                       ; h*256 = chunk-2 VRAM word offset
+  clc
+  adc #COVER_OBJ_VRAM_BASE   ; chunk-2 VRAM word addr ($2000 + h*256)
+  sta cover_chunk2_vram
+  lda cover_npal
+  and #$00ff
+  asl
+  asl
+  asl
+  asl
+  asl                       ; << 5  (n_palettes*32, npal<=8 -> <= 256)
   sta cover_palbytes
-  sep #$20 : .as
   plp
   rts
 
-; -- cover_build_tm: build the cover area (cols 16..31) of the header tilemap in
-;    WRAM (BG1_TILE_BUF), leaving the logo (cols 0..15) intact, so cover_show can
-;    upload the whole header with one VBlank DMA. Runs in the MAIN LOOP (WRAM only)
-;    so its CPU cost does not eat the VBlank window. Writes the w x h cover block
-;    right-aligned at tilemap col 32-w (>=16 since w<=16).
-cover_build_tm:
+; -- cover_build_oam: build the cover's OAM low table (cover_oam_lo) in WRAM in the
+;    MAIN LOOP (no VBlank cost). Writes the w_spr x h_spr grid of 16x16 sprites,
+;    then hides the remaining slots (so a smaller cover leaves no stray sprites from
+;    a previous larger one). Per sprite (sx,sy):
+;      X    = 248 - w*16 + sx*16   (right-aligned, 8px right margin)
+;      Y    = 8 + sy*16
+;      tile = (2*sy)*16 + 2*sx     (16-wide OBJ name grid; top-left 8x8 cell)
+;      attr = $30 | (pal<<1)       (OBJ priority 3 over the list; pal from BLOCKMAP)
+cover_build_oam:
   php
   sep #$20 : .as
   rep #$10 : .xl
-  jsr cover_clear_area      ; blank cols 16..31 (logo cols 0..15 stay)
-  lda #32
+  ; cover_ptr = C9:$2100 (BLOCKMAP); read per-sprite with [cover_ptr],y (reliable)
+  rep #$20 : .al
+  lda #!COVER_C9_BLOCKMAP
+  sta cover_ptr
+  sep #$20 : .as
+  lda #^COVER_C9_BLOCKMAP
+  sta cover_ptr+2
+  ; x0 = 256 - w_spr*16  (right-align to the screen edge so a w=8 cover fills cols
+  ; 16..31 exactly and never overlaps the logo at cols 0..15). 256 doesn't fit an
+  ; 8-bit immediate, so subtract from 0: 0 - w*16 wraps to 256 - w*16 (w in 1..8).
+  lda cover_w
+  asl
+  asl
+  asl
+  asl
+  sta cover_scr
+  lda #0
   sec
-  sbc cover_w
-  sta cover_tmcol
-  rep #$20 : .al
-  lda #COVER_CHAR_BASE
-  sta cover_char
-  lda cover_tmcol
-  and #$00ff
-  asl                       ; X = tm_col*2 = byte offset of (row 0, tm_col)
-  tax
-  sep #$20 : .as
-  stz cover_ty
-cbtm_row:
-  phx
-  ldy #$0000
-cbtm_col:
-  rep #$20 : .al
-  lda cover_char
-  sta @BG1_TILE_BUF, x
-  inc cover_char
-  sep #$20 : .as
+  sbc cover_scr
+  sta cover_x0
+  ldx #$0000                ; X = byte offset into cover_oam_lo
+  ldy #$0000                ; Y = sprite index (BLOCKMAP offset)
+  stz cover_sy
+cbo_row:
+  lda cover_sy
+  asl
+  asl
+  asl
+  asl
+  clc
+  adc #COVER_OBJ_Y0
+  sta cover_yrow            ; Y = 8 + sy*16
+  lda cover_sy
+  asl
+  asl
+  asl
+  asl
+  asl
+  sta cover_tilerow         ; tilerow = sy*32
+  stz cover_sx
+cbo_col:
+  lda cover_sx
+  asl
+  asl
+  asl
+  asl
+  clc
+  adc cover_x0
+  sta @COVER_OAM_LO, x      ; byte 0: X
   inx
+  lda cover_yrow
+  sta @COVER_OAM_LO, x      ; byte 1: Y
+  inx
+  lda cover_sx
+  asl
+  clc
+  adc cover_tilerow
+  sta @COVER_OAM_LO, x      ; byte 2: tile = sy*32 + sx*2
+  inx
+  lda [cover_ptr], y
+  and #$07
+  asl
+  ora #COVER_OBJ_ATTR
+  sta @COVER_OAM_LO, x      ; byte 3: attr = $30 | (pal<<1)
   inx
   iny
-  tya
+  lda cover_sx
+  inc
+  sta cover_sx
   cmp cover_w
-  bcc cbtm_col
-  plx
-  rep #$20 : .al
-  txa
-  clc
-  adc #$0040                ; next row: +64 bytes (one 32-entry tilemap row)
-  tax
-  sep #$20 : .as
-  inc cover_ty
-  lda cover_ty
+  bcc cbo_col
+  lda cover_sy
+  inc
+  sta cover_sy
   cmp cover_h
-  bcc cbtm_row
+  bcc cbo_row
+cbo_hide:
+  cpx #COVER_OAM_LO_BYTES
+  bcs cbo_done
+  lda #$f0
+  sta @COVER_OAM_LO, x      ; hide unused slots: Y=$f0 (off-screen)
+  inx
+  bra cbo_hide
+cbo_done:
   plp
   rts
 

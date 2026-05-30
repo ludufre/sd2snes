@@ -84,41 +84,40 @@ int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
   }
 
   uint8_t flags      = hdr[3];
-  uint8_t w          = hdr[4];
-  uint8_t h          = hdr[5];
-  uint8_t cg_base    = hdr[6];
-  uint8_t ncolors_m1 = hdr[7];
+  uint8_t w_spr      = hdr[4];
+  uint8_t h_spr      = hdr[5];
+  uint8_t n_palettes = hdr[6];
 
-  uint32_t ntiles  = (uint32_t)w * h;
-  uint32_t ncolors = (uint32_t)ncolors_m1 + 1;
-  uint32_t cg_end  = (uint32_t)cg_base + ncolors;   /* exclusive CGRAM end */
-  /* the cover palette must fit in CGRAM and must NOT overlap the CGRAM the menu
-   * always shows: 0..15 (UI text) or 64..95 (header logo, COVER_LOGO_CGB..+32).
-   * Previously only the PC converter enforced cg_base>=16; enforce it here too
-   * so a hand-made/corrupt .cov can't recolour the menu UI or the logo. */
-  if(w == 0 || h == 0 || w > COVER_MAX_COLS || h > COVER_MAX_ROWS
-     || ntiles > COVER_MAX_TILES
-     || cg_base < 16 || cg_end > 256
-     || (cg_base < 96 && cg_end > 64)) {
-    printf("cover: bad dims w=%u h=%u cgbase=%u ncolors=%lu\n",
-           w, h, cg_base, (unsigned long)ncolors);
+  /* v4 OBJ sprite cover: a w_spr x h_spr grid of 16x16 sprites, <=8 OBJ palettes.
+   * The 4bpp tiles live in a 256-tile OBJ name table at VRAM $2000, in 16-wide
+   * name-grid order: (2*h_spr)*16 tiles, so 32*h_spr <= 256 -> h_spr <= 8, and the
+   * grid is 16 wide -> w_spr <= 8. OBJ palettes are fixed at CGRAM 128..255, so
+   * there is no cg_base to validate (it can never recolour the UI/logo). */
+  if(w_spr == 0 || h_spr == 0
+     || w_spr > COVER_OBJ_MAX_W || h_spr > COVER_OBJ_MAX_H
+     || n_palettes == 0 || n_palettes > COVER_MAX_PALETTES) {
+    printf("cover: bad dims w_spr=%u h_spr=%u npal=%u\n", w_spr, h_spr, n_palettes);
     file_close();
     cover_set_status(sram_addr, COVER_STATUS_ERROR, 0, 0, 0, 0, 0);
     return 0;
   }
 
-  uint32_t pal_size   = ncolors * 2;     /* <= 512   */
-  uint32_t tiles_size = ntiles * 64;     /* <= 14336 */
+  uint32_t pal_size      = (uint32_t)n_palettes * 32;   /* np*16*2,  <= 256  */
+  uint32_t blockmap_size = (uint32_t)w_spr * h_spr;     /*           <= 64   */
+  uint32_t tiles_size    = (uint32_t)h_spr * 1024;      /* (2*h)*16*32, <= 8192 */
 
-  /* file order matches cover_conv.py: PALETTE then TILES */
-  if(!cover_stream(sram_addr + COVER_OFF_PAL, pal_size))     goto trunc;
-  if(!cover_stream(sram_addr + COVER_OFF_TILES, tiles_size)) goto trunc;
+  /* file order matches cover_conv.py: PALETTES, BLOCKMAP, TILES */
+  if(!cover_stream(sram_addr + COVER_OFF_PAL,      pal_size))      goto trunc;
+  if(!cover_stream(sram_addr + COVER_OFF_BLOCKMAP, blockmap_size)) goto trunc;
+  if(!cover_stream(sram_addr + COVER_OFF_TILES,    tiles_size))    goto trunc;
 
   file_close();
 
-  cover_set_status(sram_addr, COVER_STATUS_OK, w, h, cg_base, ncolors_m1, flags);
-  printf("cover: ok %ux%u px, %lu colours @ CGRAM %u, %lu tiles\n",
-         w * 8, h * 8, (unsigned long)ncolors, cg_base, (unsigned long)ntiles);
+  /* meta args map to: w_spr, h_spr, n_palettes (the old cg_base slot), 0, flags */
+  cover_set_status(sram_addr, COVER_STATUS_OK, w_spr, h_spr, n_palettes, 0, flags);
+  printf("cover: ok %ux%u px, %ux%u sprites, %u palettes, %lu tiles\n",
+         w_spr * 16, h_spr * 16, w_spr, h_spr, n_palettes,
+         (unsigned long)(tiles_size / 32));
   return 1;
 
 trunc:

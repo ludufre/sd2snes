@@ -21,7 +21,7 @@ SD card based multi-purpose cartridge for the SNES
 
 The translation is available in the [**Releases**](https://github.com/ludufre/sd2snes/releases) section of this repository. The package contains **only the translated files**, so you must first install the full official firmware, available at [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 
-Each Release name indicates the equivalent official firmware version. For example: the release **"Tradução v1.0 da Firmware v1.11.2"** corresponds to the official firmware `v1.11.2`.
+Each Release name indicates the equivalent official firmware version. For example: the release **"v2.1 (sd2snes v1.11.2)"** corresponds to the official firmware `v1.11.2`.
 
 1. Download and install the official firmware of the matching version from [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 2. Download the translation `.zip` from [Releases](https://github.com/ludufre/sd2snes/releases), choosing the version that matches the installed firmware.
@@ -44,6 +44,9 @@ Covers use a custom format (`.cov`). The easiest way to create them is with the 
 ### 👉 [github.com/ludufre/sd2snes-covers](https://github.com/ludufre/sd2snes-covers)
 
 The app generates the `.cov` files for your game library. In the menu, cover display can be toggled on/off with the **"Mostrar capas"** option.
+
+> [!IMPORTANT]
+> Generate the covers with **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers) v1.1.0 or newer**. This firmware (**v1.11.2-br-2.1 or newer**) uses the new OBJ-sprite `.cov` format — covers created with older app versions won't display correctly; just regenerate them with v1.1.0+.
 
 ---
 

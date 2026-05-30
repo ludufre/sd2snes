@@ -258,13 +258,20 @@ cover_request_pending  .byt 0    ; 1 while a CMD_LOAD_COVER is in flight
 cover_timeout          .word 0   ; frames left before abandoning a stuck request
 cover_last_sel         .word 0   ; last filesel_sel a cover was requested for
 cover_loaded           .byt 0    ; 1 if a real cover is currently shown
-cover_w                .byt 0    ; staged cover width  in tiles (from C9 meta)
-cover_h                .byt 0    ; staged cover height in tiles (from C9 meta)
-cover_cgbase           .byt 0    ; staged cover CGRAM base (from C9 meta)
-cover_ncm1             .byt 0    ; staged cover ncolors-1 (from C9 meta)
-cover_tmcol            .byt 0    ; tilemap column of the cover (32 - w)
-cover_ty               .byt 0    ; tilemap write scratch: row counter
-cover_char             .word 0   ; tilemap write scratch: running char number
-cover_tilebytes        .word 0   ; tile DMA length = w*h*64
-cover_palbytes         .word 0   ; palette DMA length = (ncm1+1)*2
+cover_w                .byt 0    ; staged cover width  in 16x16 sprites (from C9 meta)
+cover_h                .byt 0    ; staged cover height in 16x16 sprites (from C9 meta)
+cover_npal             .byt 0    ; staged cover palette count (from C9 meta)
+cover_ty               .byt 0    ; logo tilemap write scratch: row counter
+cover_char             .word 0   ; logo tilemap write scratch: running char number
+cover_tilebytes        .word 0   ; OBJ tile DMA length  = h_spr*1024
+cover_palbytes         .word 0   ; OBJ palette DMA length = n_palettes*32
+cover_halfbytes        .word 0   ; half the tile DMA (h*512) - split across 2 VBlanks
+cover_chunk2_vram      .word 0   ; VRAM word addr of the 2nd tile chunk ($2000 + h*256)
+cover_nspr             .byt 0    ; sprite count = w_spr*h_spr
+cover_x0               .byt 0    ; left X of the cover grid = 248 - w*16
+cover_yrow             .byt 0    ; OAM build scratch: Y of the current sprite row
+cover_tilerow          .byt 0    ; OAM build scratch: base tile of the row (sy*32)
+cover_scr              .byt 0    ; OAM build scratch
+cover_sx               .byt 0    ; OAM build scratch: sprite column
+cover_sy               .byt 0    ; OAM build scratch: sprite row
 _END            .byt 0

@@ -791,6 +791,7 @@ filesel_key_y:
   rts
 
 open_context_menu:
+  jsr cover_sync_before_cmd
   rep #$20 : .al
   lda filesel_sel
   and #$00ff
