@@ -435,8 +435,7 @@ egg_win_h       .byt 4
 rootdir         .byt "/", 0
 gfxptr_info     .byt "_GFXPTR_"
                 .word font
-                .word logo
-                .word logospr
+                .word logo_pal
                 .word hdma_math_src
                 .word hdma_bar_color_src
                 .word hdma_pal_src
