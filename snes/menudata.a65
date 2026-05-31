@@ -394,6 +394,20 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_menumusic
+ .byt  ^mtext_browser_menumusic
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_MENU_MUSIC
+ .byt  ^CFG_ENABLE_MENU_MUSIC
+ .word !mdesc_browser_menumusic
+ .byt  ^mdesc_browser_menumusic
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
 ; .byt  MTYPE_VALUE
 ; .word !mtext_browser_screensaver_timeout
 ; .byt  ^mtext_browser_screensaver_timeout

@@ -52,6 +52,7 @@
 #define CFG_SHOW_COVERS                  ("ShowCovers")
 #define CFG_LANGUAGE                     ("Language")
 #define CFG_PATCH_VERIFY_INTEGRITY       ("PatchVerifyIntegrity")
+#define CFG_ENABLE_MENU_MUSIC            ("EnableMenuMusic")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -103,6 +104,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  show_covers;             /* show per-ROM cover preview (Game.cov) in the file browser */
   uint8_t  language;                /* menu/firmware language (0: English, 1: pt-BR) */
   uint8_t  patch_verify_integrity;  /* CFG @ $B8: re-read+CRC the patched ROM after IPS/BPS (slow) */
+  uint8_t  enable_menu_music;       /* play background menu music (/sd2snes/menu.spc) */
 } cfg_t;
 
 int cfg_save(void);

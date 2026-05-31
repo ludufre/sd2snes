@@ -69,6 +69,12 @@
 #define WARM_COMPLEMENT             $002AF9
 #define SAVED_SP                    $002AFB
 
+#define BGM_STATE                   $002AF7 /* fork: menu-music runtime state. Lives in the $2A
+                                              FPGA region, which is NOT cleared by clear_wram and
+                                              survives a reset, so coldboot explicitly zeroes it
+                                              (main.a65) -- every non-warm reset lands in coldboot.
+                                              0=not loaded (reload), 1=playing, 2=tried-no-spc. */
+
 #define BRAM_PAYLOAD                $002A10
 #define BRAM_RETURN_VECTOR          $002A6C
 #define BRAM_RESET_HOOK             $002A7D
@@ -142,6 +148,7 @@
 #define CMD_LOAD_AUTOBOOT           $1b /* trigger autoboot at cold boot */
 #define CMD_LOAD_COVER              $1c /* stage sibling .cov for highlighted ROM into bank C9 */
 #define CMD_QUERY_IPS_PATCHES       $1d /* find IPS patches for selected ROM */
+#define CMD_LOAD_MENU_SPC           $1e /* stage /sd2snes/menu.spc for background menu music */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */
@@ -203,6 +210,7 @@
 #define CFG_SHOW_COVERS                 CFG_ADDR+$00B6
 #define CFG_LANGUAGE                    CFG_ADDR+$00B7
 #define CFG_PATCH_VERIFY_INTEGRITY      CFG_ADDR+$00B8
+#define CFG_ENABLE_MENU_MUSIC           CFG_ADDR+$00B9
 
 #define MENU_ENTRY_SIZE             23
 

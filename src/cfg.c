@@ -59,7 +59,8 @@ cfg_t CFG_DEFAULT = {
   .enable_autosave_msu1 = 1,
   .show_covers = 1,
   .language = 0,
-  .patch_verify_integrity = 1
+  .patch_verify_integrity = 1,
+  .enable_menu_music = 1
 };
 
 cfg_t CFG;
@@ -167,6 +168,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %d\n", CFG_LANGUAGE, CFG.language);
   f_printf(&file_handle, "\n#  %s: Re-read and CRC-check the ROM after applying an IPS/BPS patch (slow; ~23s for a 4MB BPS)\n", CFG_PATCH_VERIFY_INTEGRITY);
   f_printf(&file_handle, "%s: %s\n", CFG_PATCH_VERIFY_INTEGRITY, CFG.patch_verify_integrity ? "true" : "false");
+  f_printf(&file_handle, "\n#  %s: Play background music (/sd2snes/menu.spc) in the menu\n", CFG_ENABLE_MENU_MUSIC);
+  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_MUSIC, CFG.enable_menu_music ? "true" : "false");
   file_close();
   return err;
 }
@@ -305,6 +308,9 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_PATCH_VERIFY_INTEGRITY, &tok)) {
       CFG.patch_verify_integrity = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_ENABLE_MENU_MUSIC, &tok)) {
+      CFG.enable_menu_music = tok.boolvalue ? 1 : 0;
     }
   }
   yaml_file_close();

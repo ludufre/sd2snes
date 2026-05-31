@@ -53,6 +53,7 @@
 #define SNES_CMD_LOAD_AUTOBOOT       (0x1b) /* boot into the stored autoboot ROM */
 #define SNES_CMD_LOAD_COVER          (0x1c) /* stage sibling .cov for the highlighted ROM */
 #define SNES_CMD_QUERY_IPS_PATCHES   (0x1d) /* find IPS patches for selected ROM */
+#define SNES_CMD_LOAD_MENU_SPC       (0x1e) /* stage /sd2snes/menu.spc for background menu music */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)

@@ -680,3 +680,39 @@ exec_instr:
   phd
   pld
   rts
+
+;---------------------------------------
+; menu_bgm_load (fork): play /sd2snes/menu.spc as background music.
+; - returns immediately if music is disabled in config, or if no valid SPC is
+;   staged (e.g. menu.spc absent -> load_spc zeroed the header).
+; - else reuses spc700_load to upload the snapshot; the S-SMP then plays it
+;   autonomously (zero S-CPU cost). MUST run with the S-SMP at IPL (cold boot,
+;   or right after a warm reset) -- spc700_load's handshake requires it.
+menu_bgm_load:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CFG_ENABLE_MENU_MUSIC
+  beq menu_bgm_none        ; music disabled in config -> nothing playing
+  lda #CMD_LOAD_MENU_SPC   ; ask the MCU to stage /sd2snes/menu.spc into SDRAM
+  sta @MCU_CMD
+-
+  lda @MCU_CMD             ; wait until the MCU finishes (it clears MCU_CMD)
+  bne -
+  ldx #$000a               ; validate the SPC header magic (as spcplayer does)
+-
+  lda @SPC_HEADER,x
+  cmp @text_spcid,x
+  bne menu_bgm_none        ; no valid SPC staged (e.g. menu.spc absent) -> skip
+  dex
+  bne -
+  jsr spc700_load          ; upload snapshot; S-SMP plays it autonomously
+  lda #$01                 ; BGM_STATE = playing
+  sta @BGM_STATE
+  plp
+  rts
+menu_bgm_none:
+  lda #$02                 ; BGM_STATE = tried, nothing playing (don't retry per-frame)
+  sta @BGM_STATE
+  plp
+  rts

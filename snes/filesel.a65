@@ -55,6 +55,9 @@ fileselloop:
   lda filesel_dirty   ; is there ANY reason to redraw the menu?
   cmp #$01
   beq fileselloop_redraw ; then do
+  jsr bgm_update      ; fork: start/stop menu music. Only here (not-dirty branch)
+                      ; so the list is already painted before the ~1s SPC upload
+                      ; freezes NMI; also stops music when toggled off.
   jsr scroll_direntry
   bra fileselloop
 fileselloop_redraw
@@ -777,8 +780,105 @@ wait_spc:
   lda @MCU_CMD
   cmp #$00
   bne wait_spc
+  ; fork: with menu music off the S-SMP is at IPL -> play the chosen .spc
+  ; directly (stock path). With music on the bgm is running on the S-SMP, and
+  ; the only way back to IPL (which spc700_load needs) is a SNES reset. So
+  ; warm-reset here, then RESUME at spc_play_now: the warm boot restores the SP
+  ; and set_bank does plp;rts on the [P][return] frame we push below (the same
+  ; SAVED_SP/WARM_SIGNATURE mechanism the player uses to exit in spc_key_b).
+  ; apu_ram_init runs during the warm boot, so the S-SMP is back at IPL when we
+  ; reach spc_play_now. The .spc staged in SDRAM survives the reset (it lives in
+  ; MCU-managed SDRAM, untouched by the SNES reset).
+  lda @BGM_STATE         ; only pause+warm-reset if the bgm is actually playing
+  cmp #$01               ; (config on but no menu.spc -> APU already at IPL)
+  bne spc_play_now
+  ; Build the frame set_bank's `plp; rts` will unwind on the warm boot: push the
+  ; resume address (spc_play_now-1, all menu code is bank $c0 so a near rts is
+  ; fine) then the P byte, then snapshot SP into SAVED_SP. pea pushes a 16-bit
+  ; value regardless of the M flag (same idiom as `pea !CFG_BSX_TIME`).
+  pea !(spc_play_now-1)
+  php
+  rep #$20 : .al
+  tsc
+  sta @SAVED_SP
+  lda #$fa50
+  sta @WARM_SIGNATURE
+  eor #$ffff
+  sta @WARM_COMPLEMENT
+  sep #$20 : .as
+  sei
+  stz $2100
+  jsr backup_wram
+  lda #CMD_RESET
+  sta @MCU_CMD
+-
+  bra -
+spc_play_now:
   jsr spcplayer
+  jsr menu_bgm_load     ; back from the player (S-SMP at IPL): restore the bgm.
+                        ; no-op when music is off. spcplayer normally exits via
+                        ; its own warm reset, whose set_bank rts lands here.
   rts
+
+;---------------------------------------
+; bgm_update (fork): called once per fileselloop frame. Lazily starts the menu
+; music the FIRST time (so the file list paints before the ~1s SPC upload freezes
+; NMI), and stops it when the user turns the option off mid-menu. Stopping a
+; running S-SMP is only possible with a SNES reset, so the off-path warm-resets
+; (apu_ram_init silences the APU during the warm boot) and resumes right here.
+bgm_update:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CFG_ENABLE_MENU_MUSIC
+  beq bgm_upd_disabled
+  ; enabled: load once. BGM_STATE 0 = not attempted yet this session.
+  lda @BGM_STATE
+  bne bgm_upd_done         ; 1=playing or 2=tried -> nothing to do
+  jsr menu_bgm_load        ; list is visible now; sets BGM_STATE to 1 or 2
+  bra bgm_upd_done
+bgm_upd_disabled:
+  lda @BGM_STATE
+  cmp #$01
+  bne bgm_upd_setidle      ; nothing playing -> just clear the attempt flag
+  ; music is playing but now disabled -> warm-reset to silence the S-SMP
+  lda #$00                 ; (snescom stz has no long mode -> lda #0 : sta)
+  sta @BGM_STATE           ; will be silent after the reset
+  jsr bgm_silence_reset    ; resumes here after the warm boot (APU back at IPL)
+  sep #$20 : .as
+  lda #$01
+  sta filesel_dirty        ; warm boot cleared VRAM -> force a browser repaint
+  bra bgm_upd_done
+bgm_upd_setidle:
+  lda #$00                 ; re-enabling later triggers a fresh load attempt
+  sta @BGM_STATE
+bgm_upd_done:
+  plp
+  rts
+
+;---------------------------------------
+; bgm_silence_reset (fork): warm-reset the SNES to return the S-SMP to IPL -- the
+; only way to stop a running SPC. Mirrors spc_key_b: snapshot SP, set the warm
+; signature, back up WRAM, issue CMD_RESET. The jsr return address already on the
+; stack (plus the P byte we push) is what set_bank's `plp; rts` unwinds after the
+; warm boot, so execution resumes in bgm_update right after the call.
+bgm_silence_reset:
+  php                      ; P byte for set_bank's plp on the warm boot
+  rep #$20 : .al
+  tsc
+  sta @SAVED_SP
+  lda #$fa50
+  sta @WARM_SIGNATURE
+  eor #$ffff
+  sta @WARM_COMPLEMENT
+  sep #$20 : .as
+  sei
+  stz $2100
+  jsr backup_wram
+  lda #CMD_RESET
+  sta @MCU_CMD
+-
+  bra -
 
 filesel_key_x:
   jsr cover_menu_off    ; hide the box-art cover behind the menu (reloads on close)

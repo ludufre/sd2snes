@@ -166,6 +166,8 @@ TRANSLATIONS = {
     'cheat_detail_head': 'PAR       GG        Endereço Valor',
     'mtext_browser_showcov': 'Mostrar capas',
     'mdesc_browser_showcov': 'Exibir capas dos jogos no menu',
+    'mtext_browser_menumusic': 'Música do menu',
+    'mdesc_browser_menumusic': 'Tocar música de fundo (menu.spc) no menu',
     'text_mm_language': 'Idioma',
     'mdesc_mm_language': 'Define o idioma do menu/firmware',
 }

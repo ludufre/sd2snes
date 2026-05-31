@@ -342,6 +342,13 @@ int main(void) {
           filesize = load_spc(file_lfn, SRAM_SPC_DATA_ADDR, SRAM_SPC_HEADER_ADDR);
           cmd=0; /* stay in menu loop */
           break;
+        case SNES_CMD_LOAD_MENU_SPC:
+          /* stage background menu music from a fixed path (no browser selection).
+             load_spc is graceful: a missing/too-small file zeroes the SPC header,
+             which the menu detects and skips. */
+          filesize = load_spc((uint8_t*)"/sd2snes/menu.spc", SRAM_SPC_DATA_ADDR, SRAM_SPC_HEADER_ADDR);
+          cmd=0; /* stay in menu loop */
+          break;
         case SNES_CMD_RESET:
           /* process RESET request from SNES */
           printf("RESET requested by SNES\n");

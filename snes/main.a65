@@ -68,6 +68,13 @@ coldboot:       ; Regular, cold-start init
   jsr killdma
   jsr clear_wram
   jsr apu_ram_init
+  ; fork: apu_ram_init just put the S-SMP back at IPL, so nothing is playing.
+  ; Reset BGM_STATE so bgm_update reloads the menu music. EVERY non-warm reset
+  ; lands here (only our deliberate warm resets take the warmboot path), and the
+  ; $2A FPGA region is NOT touched by clear_wram, so without this a reset would
+  ; leave BGM_STATE=1 and the music would never restart. (snescom: no long stz.)
+  lda #$00
+  sta @BGM_STATE
   jsr waitblank
   jsr snes_init
   jsr setup_gfx
