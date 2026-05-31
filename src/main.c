@@ -273,6 +273,7 @@ int main(void) {
     status_load_to_menu();
 
     uint8_t cmd = 0;
+    uint8_t menu_reload = 0;
     uint64_t btime = 0;
     uint32_t filesize=0;
     printf("test sram\n");
@@ -494,12 +495,19 @@ int main(void) {
 // XXX          cheat_save_from_menu()
           cmd=0; /* stay in menu loop */
           break;
+        case SNES_CMD_RESET_TO_MENU:
+          /* USB-triggered menu reload: leave the menu loop so the outer loop
+             re-runs load_rom(MENU_FILENAME) and reboots into the fresh menu.bin.
+             Lets menu.bin be updated over USB without a physical power-cycle. */
+          menu_reload = 1;
+          break;
         default:
           printf("unknown cmd: %d\n", cmd);
           cmd=0; /* unknown cmd: stay in loop */
           break;
       }
     }
+    if(menu_reload) continue; /* reload menu.bin from SD (outer loop) */
     printf("loaded %lu bytes\n", filesize);
     printf("cmd was %x, going to snes main loop\n", cmd);
 
