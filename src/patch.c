@@ -188,26 +188,122 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
     return count;
 }
 
-/* Write len bytes from buf to SRAM at addr using the FPGA SPI write-with-
-   auto-increment command.  This mirrors the pattern in load_sram(). */
+/* The patcher writes ROM bytes through the MCU memory window while the SNES is
+   held in reset.  Under an enhancement-chip FPGA core the MCU_RDY line can stay
+   deasserted, which hangs the unbounded FPGA_WAIT_RDY forever (the reported
+   stall).  These helpers bound every MCU_RDY wait with FPGA_WAIT_RDY_TO and
+   latch patch_io_err on timeout; the apply loops poll patch_io_err and abort
+   the patch cleanly (returning 0 -> the load fails) instead of wedging the MCU.
+   Kept local to patch.c so the timing-critical global sram_* paths used by DMA,
+   savestate and normal loading stay unchanged. */
+static volatile uint8_t patch_io_err = 0;
+
+/* set_mcu_addr with a bounded ready-wait (mirrors fpga_spi.c set_mcu_addr).
+   Once patch_io_err is latched, every helper short-circuits here so a stalled
+   load aborts in O(records) rather than re-spending the full timeout per op. */
+static void psram_set_addr(uint32_t addr) {
+    if (patch_io_err) return;
+    FPGA_SELECT();
+    FPGA_WAIT_RDY_TO(patch_io_err);
+    FPGA_TX_BYTE(FPGA_CMD_SETADDR | FPGA_TGT_MEM);
+    FPGA_TX_BYTE((addr >> 16) & 0xff);
+    FPGA_TX_BYTE((addr >> 8) & 0xff);
+    FPGA_TX_BYTE((addr) & 0xff);
+    FPGA_DESELECT();
+}
+
+/* Write len bytes from buf to SRAM at addr (WRITE + auto-increment), bounded. */
 static void sram_write_from_buf(uint32_t addr, const uint8_t *buf, uint16_t len) {
-    set_mcu_addr(addr);
+    psram_set_addr(addr);
+    if (patch_io_err) return;
     FPGA_SELECT();
     FPGA_TX_BYTE(0x98); /* WRITE, address auto-increment */
     for (uint16_t i = 0; i < len; i++) {
         FPGA_TX_BYTE(buf[i]);
-        FPGA_WAIT_RDY();
+        FPGA_WAIT_RDY_TO(patch_io_err);
+        if (patch_io_err) break;
     }
     FPGA_DESELECT();
+}
+
+/* memset over SRAM (WRITE + auto-increment), bounded. */
+static void psram_memset(uint32_t addr, uint32_t len, uint8_t val) {
+    psram_set_addr(addr);
+    if (patch_io_err) return;
+    FPGA_SELECT();
+    FPGA_TX_BYTE(0x98);
+    for (uint32_t i = 0; i < len; i++) {
+        FPGA_TX_BYTE(val);
+        FPGA_WAIT_RDY_TO(patch_io_err);
+        if (patch_io_err) break;
+    }
+    FPGA_DESELECT();
+}
+
+/* Read size bytes from SRAM into buf (READ + auto-increment), bounded. */
+static uint16_t psram_readblock(void *buf, uint32_t addr, uint16_t size) {
+    uint8_t *tgt = buf;
+    uint16_t count = size;
+    psram_set_addr(addr);
+    if (patch_io_err) return 0;
+    FPGA_SELECT();
+    FPGA_TX_BYTE(0x88); /* READ */
+    while (count--) {
+        FPGA_WAIT_RDY_TO(patch_io_err);
+        if (patch_io_err) break;
+        *(tgt++) = FPGA_RX_BYTE();
+    }
+    FPGA_DESELECT();
+    return size;
+}
+
+/* Write size bytes from buf to SRAM (WRITE + auto-increment), bounded. */
+static uint16_t psram_writeblock(void *buf, uint32_t addr, uint16_t size) {
+    uint8_t *src = buf;
+    uint16_t count = size;
+    psram_set_addr(addr);
+    if (patch_io_err) return 0;
+    FPGA_SELECT();
+    FPGA_TX_BYTE(0x98); /* WRITE */
+    while (count--) {
+        FPGA_TX_BYTE(*src++);
+        FPGA_WAIT_RDY_TO(patch_io_err);
+        if (patch_io_err) break;
+    }
+    FPGA_DESELECT();
+    return size;
+}
+
+/* Read a NUL-terminated string from SRAM (READ + auto-increment), bounded. */
+static uint16_t psram_readstrn(void *buf, uint32_t addr, uint16_t size) {
+    uint8_t *tgt = buf;
+    uint16_t count = size;
+    uint16_t elemcount = 0;
+    psram_set_addr(addr);
+    if (patch_io_err) { *tgt = 0; return 0; }
+    FPGA_SELECT();
+    FPGA_TX_BYTE(0x88); /* READ */
+    while (count--) {
+        FPGA_WAIT_RDY_TO(patch_io_err);
+        if (patch_io_err) break;
+        if (!(*(tgt++) = FPGA_RX_BYTE())) break;
+        elemcount++;
+    }
+    tgt--;
+    if (*tgt) *tgt = 0;
+    FPGA_DESELECT();
+    return elemcount;
 }
 
 uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                    uint32_t original_rom_size, uint32_t rom_header_size) {
     if (index < 1 || index > IPS_MAX_PATCHES) return 0;
 
+    patch_io_err = 0;
+
     /* Read the full IPS file path from SRAM */
     uint8_t ips_path[IPS_PATH_LEN];
-    sram_readstrn(ips_path,
+    psram_readstrn(ips_path,
                   sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(ips_path));
 
@@ -300,7 +396,7 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         uint32_t fill_len = adj_max_end - original_rom_size;
         printf("IPS: zeroing 0x%lx bytes from 0x%lx\n", (unsigned long)fill_len,
                (unsigned long)(rom_base_addr + original_rom_size));
-        sram_memset(rom_base_addr + original_rom_size, fill_len, 0x00);
+        psram_memset(rom_base_addr + original_rom_size, fill_len, 0x00);
     }
 
     /* ------------------------------------------------------------------
@@ -311,6 +407,7 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     int err = 0;
 
     for (;;) {
+        if (patch_io_err) { err = 1; break; } /* SDRAM write stalled */
         f_read(&file_handle, rec, 3, &br);
         if (br != 3) break;  /* truncated or EOF before "EOF" marker */
 
@@ -343,7 +440,7 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
             uint32_t sram_off = (offset < adj) ? 0 : (offset - adj);
             uint16_t rle_write = (uint16_t)(rle_count - rle_skip);
 
-            sram_memset(rom_base_addr + sram_off, rle_write, rle_val);
+            psram_memset(rom_base_addr + sram_off, rle_write, rle_val);
         } else {
             /* Data record: hunk_size bytes of replacement data. */
             /* Skip records entirely within the header region. */
@@ -372,7 +469,9 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
 ips_apply_done:
     file_close();
-    if (err) printf("ips_apply: error during patching\n");
+    if (patch_io_err) err = 1; /* treat a stalled write as failure */
+    if (err) printf("ips_apply: error during patching%s\n",
+                    patch_io_err ? " (FPGA MCU_RDY timeout - enhancement chip?)" : "");
     else     printf("ips_apply: done, adj=%lu adj_max_end=0x%lx\n",
                     (unsigned long)adj, (unsigned long)adj_max_end);
     return err ? 0 : adj_max_end;
@@ -421,8 +520,10 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                    uint32_t original_rom_size) {
     if (index < 1 || index > IPS_MAX_PATCHES) return 0;
 
+    patch_io_err = 0; /* clear stall latch for this apply */
+
     uint8_t bps_path[IPS_PATH_LEN];
-    sram_readstrn(bps_path,
+    psram_readstrn(bps_path,
                   sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(bps_path));
 
@@ -482,11 +583,12 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     {
         uint32_t bak_off = 0;
         while (bak_off < original_rom_size) {
+            if (patch_io_err) break; /* SDRAM stalled during backup */
             uint16_t chunk = (original_rom_size - bak_off > (uint32_t)sizeof(file_buf))
                              ? (uint16_t)sizeof(file_buf)
                              : (uint16_t)(original_rom_size - bak_off);
-            sram_readblock(file_buf, rom_base_addr + bak_off, chunk);
-            sram_writeblock(file_buf, source_base_addr + bak_off, chunk);
+            psram_readblock(file_buf, rom_base_addr + bak_off, chunk);
+            psram_writeblock(file_buf, source_base_addr + bak_off, chunk);
             bak_off += chunk;
         }
     }
@@ -503,6 +605,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
     /* Loop condition: check the logical (post-buffer) file position */
     while (BPS_LOGICAL_POS() < action_end && !err) {
+        if (patch_io_err) { err = 1; break; } /* SDRAM write stalled */
         uint32_t d      = bps_decode_vli();
         uint8_t  action = (uint8_t)(d & 3);
         uint32_t length = (d >> 2) + 1;
@@ -553,7 +656,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                 while (length > 0) {
                     uint16_t chunk = (length > (uint32_t)sizeof(file_buf))
                                      ? (uint16_t)sizeof(file_buf) : (uint16_t)length;
-                    sram_readblock(file_buf, source_base_addr + source_rel, chunk);
+                    psram_readblock(file_buf, source_base_addr + source_rel, chunk);
                     sram_write_from_buf(rom_base_addr + output_offset,
                                         file_buf, chunk);
                     output_offset += chunk;
@@ -582,9 +685,9 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                 if (target_rel < output_offset &&
                     (output_offset - target_rel) <= 1) {
                     uint8_t fill;
-                    sram_readblock(&fill, rom_base_addr + target_rel, 1);
+                    psram_readblock(&fill, rom_base_addr + target_rel, 1);
                     /* Pre-fill file_buf with that byte for the memset-style write */
-                    sram_memset(rom_base_addr + output_offset, length, fill);
+                    psram_memset(rom_base_addr + output_offset, length, fill);
                     target_rel    += length;
                     output_offset += length;
                 } else {
@@ -596,7 +699,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                             uint32_t dist = output_offset - target_rel;
                             if (chunk > dist) chunk = dist;
                         }
-                        sram_readblock(file_buf, rom_base_addr + target_rel,
+                        psram_readblock(file_buf, rom_base_addr + target_rel,
                                        (uint16_t)chunk);
                         sram_write_from_buf(rom_base_addr + output_offset,
                                             file_buf, (uint16_t)chunk);
@@ -625,6 +728,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         }
     }
     file_close();
+    if (patch_io_err) err = 1; /* treat a stalled write as failure */
     tick_t t_act_elapsed   = getticks() - t_actions;
     tick_t t_total_elapsed = getticks() - t_bps_start;
     printf("bps: %lu actions in %u ticks (%u ms), total %u ticks (%u ms)\n",
@@ -634,7 +738,8 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
            (unsigned)t_total_elapsed,
            (unsigned)t_total_elapsed * 10u);
     if (err) {
-        printf("bps_apply: error during patching\n");
+        printf("bps_apply: error during patching%s\n",
+               patch_io_err ? " (FPGA MCU_RDY timeout - enhancement chip?)" : "");
     } else {
         printf("bps_apply: done, target_size=0x%lx\n", (unsigned long)target_size);
         /* Verify CRC32 of the patched SRAM against the BPS-embedded expected value.
@@ -644,7 +749,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         while (remaining > 0) {
             uint16_t chunk = (remaining > (uint32_t)sizeof(file_buf))
                              ? (uint16_t)sizeof(file_buf) : (uint16_t)remaining;
-            sram_readblock(file_buf, rom_base_addr + addr_off, chunk);
+            psram_readblock(file_buf, rom_base_addr + addr_off, chunk);
             for (uint16_t i = 0; i < chunk; i++)
                 crc = crc32_update(crc, file_buf[i]);
             addr_off  += chunk;
@@ -664,10 +769,15 @@ uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     if (index < 1 || index > IPS_MAX_PATCHES) return 0;
 
     /* Read the stored SD path to determine the patch format from its extension */
+    patch_io_err = 0; /* clear before the first SDRAM access */
     uint8_t path[IPS_PATH_LEN];
-    sram_readstrn(path,
+    psram_readstrn(path,
                   sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(path));
+    if (patch_io_err) { /* SDRAM stalled before we could even read the path */
+        printf("patch_apply: FPGA MCU_RDY timeout reading patch path\n");
+        return 0;
+    }
 
     const char *dot = NULL;
     for (const char *p = (const char *)path; *p; p++)

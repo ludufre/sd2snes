@@ -57,6 +57,13 @@ char* hex = "0123456789ABCDEF";
 
 uint8_t current_ips_srm_source[256];
 
+/* State for re-deriving the FPGA core from a PATCHED image.
+   When a patch changes the cartridge type, load_rom() recurses once with
+   ips_recore_active set and ips_recore_props holding the cartridge fields
+   detected from the patched SDRAM image. */
+static uint8_t ips_recore_active = 0;
+static snes_romprops_t ips_recore_props;
+
 extern snes_romprops_t romprops;
 extern uint32_t saveram_crc_old, saveram_crc, saveram_offset;
 extern sgb_romprops_t sgb_romprops;
@@ -274,6 +281,20 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
 
   filesize = file_handle.fsize;
   smc_id(&romprops, file_offset);
+  /* On a recore reload, the file still holds the UNPATCHED header, so smc_id()
+     picked the old core again.  Force the cartridge type detected from the
+     patched image (ips_recore_props), but keep the file's own copier offset /
+     load address / size. Those describe how to stream the file, not the
+     patched cartridge type. */
+  if(ips_recore_active) {
+    uint32_t f_offset  = romprops.offset;
+    uint32_t f_load    = romprops.load_address;
+    uint32_t f_romsize = romprops.romsize_bytes;
+    romprops = ips_recore_props;
+    romprops.offset        = f_offset;
+    romprops.load_address  = f_load;
+    romprops.romsize_bytes = f_romsize;
+  }
   file_close();
 
   if(flags & LOADROM_WITH_COMBO) {
@@ -533,7 +554,21 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     /* Apply IPS patch to the ROM in SRAM while the SNES is in hardware reset.
        ips_pending_index is set by the CMD_LOADROM handler in main.c before
        calling load_rom().  We consume+clear it here. */
+    uint8_t saved_ips_idx = ips_pending_index; /* for recore reload */
+    uint8_t patch_ok = 0;                      /* patch_apply succeeded */
     if(ips_pending_index > 0) {
+      /* On a recore reload, fpga_pgm() above wiped all of SDRAM, including the
+         patch list that ips_find_patches() staged once at SRAM_IPS_LIST_ADDR
+         before LOADROM.  The patch's full path survives in MCU RAM as
+         current_ips_srm_source, so re-stage it into SDRAM at the same slot
+         patch_apply() reads, otherwise the re-patch would open an empty path
+         and silently leave the ROM unpatched. */
+      if(ips_recore_active && current_ips_srm_source[0]) {
+        sram_writeblock(current_ips_srm_source,
+                        SRAM_IPS_LIST_ADDR + 512
+                          + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
+                        (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
+      }
       /* Dispatch to ips_apply or bps_apply based on the patch file extension.
          For IPS: pass the copier-header size so offset correction works when
          the IPS was authored for a headered ROM.  For combo ROMs
@@ -546,6 +581,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
                                      romprops.romsize_bytes,
                                      ips_header_size);
       ips_pending_index = 0;
+      patch_ok = (ips_end > 0);
       /* If the IPS patch wrote past the original ROM boundary (ROM expansion
          hack), expand the FPGA ROM mask so those new banks are accessible.
          romprops.romsize_bytes is always a power of 2, so a simple left-
@@ -554,7 +590,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
         /* IPS/BPS patches authored for a headered (512-byte copier prefix)
            ROM image sometimes have max_end that overshoots a clean power-of-2
            ROM boundary by exactly 512 bytes.  Those extra bytes are the
-           copier header padding — not real ROM data — so they must not cause
+           copier header padding (not real ROM data) so they must not cause
            the mask to double.  Snap ips_end back to the clean boundary when
            the overshoot is ≤ 512 bytes. */
         if (ips_end > 512) {
@@ -584,6 +620,46 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
                romprops.romsize_bytes, new_size, new_size - 1);
         romprops.romsize_bytes = new_size;
         set_rom_mask(new_size - 1);
+      }
+    }
+
+    /* The FPGA core, mapper and masks were all selected from the PRE-patch
+       header (smc_id ran on the unpatched file before fpga_pgm).  If the patch
+       changed the cartridge type (e.g. an SA-1 / Super FX conversion hack), the
+       wrong core is currently loaded and the game would boot broken.
+       Re-derive the cartridge from the now-patched image in SDRAM; if it needs a
+       different core, reload+repatch once under the correct core.  Reconfiguring
+       the FPGA wipes SDRAM, so a full reload (re-stream + re-patch) is required
+       rather than a bare fpga_pgm.  Guarded so the normal path (no patch, or a
+       patch that keeps the same core) is completely unaffected. */
+    if(saved_ips_idx && patch_ok && !ips_recore_active) {
+      smc_id_sdram(&ips_recore_props, SRAM_ROM_ADDR + romprops.load_address,
+                   romprops.romsize_bytes);
+      const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
+      const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
+                                                           : FPGA_BASE;
+      if(core_new != core_now) {
+        printf("IPS: patch changed cartridge type -> reloading under correct core\n");
+        ips_recore_active = 1;
+        ips_pending_index = saved_ips_idx; /* re-apply the same patch on reload */
+        /* Keep the SNES held in hardware reset across the reload (do NOT
+           deassert here): the SNES handshake already completed on this pass, so
+           we drop LOADROM_WAIT_SNES and let fpga_pgm reconfigure the FPGA while
+           the SNES is safely in reset.  The recursive call ends with its own
+           deassert_reset(), releasing the SNES into the correctly-cored game.
+           NOTE: on the recursive pass the global (un-timeout'd) sram_* writes to
+           SaveRAM/BWRAM (0xE00000) run under the chip core; they complete only
+           because a fresh fpga_pgm powers up SNES_DEADr=1 and the SNES stays in
+           reset the whole time, so the chip-core RAM arbiter grants the MCU
+           every cycle.  Do not deassert before the reload or those would hang. */
+        uint32_t r = load_rom(filename, base_addr,
+                              (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
+        ips_recore_active = 0;
+        /* If the reload aborted early (before its own deassert_reset), the SNES
+           is still held in reset from this pass release it so the console is
+           never left frozen with the MCU alive. */
+        if(!r) deassert_reset();
+        return r;
       }
     }
     deassert_reset();
