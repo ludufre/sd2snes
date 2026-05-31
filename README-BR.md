@@ -16,6 +16,8 @@ Cartucho multifuncional baseado em cartão SD para o SNES
 
 - 🇧🇷 **Tradução em Português do Brasil** — menu, mensagens e telas do firmware totalmente traduzidos.
 - 🎮 **Capas dos jogos** — exibe a capa (box-art) do jogo no menu enquanto você navega pela lista. Veja a seção **Capas dos Jogos** abaixo.
+- 🎵 **Música de fundo no menu** — toca uma faixa `.spc` enquanto você navega pelo menu. Veja a seção **Música do Menu** abaixo.
+- 🩹 **Patches IPS/BPS** — aplica patches de tradução/hack a um jogo no boot, sem modificar a ROM. Veja a seção **Patches IPS/BPS** abaixo.
 
 ## Instalação
 
@@ -47,6 +49,63 @@ O app gera os arquivos `.cov` para a sua biblioteca de jogos. No menu, a exibiç
 
 > [!IMPORTANT]
 > Gere as capas com o **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers) v1.1.0 ou superior**. Este firmware (**v1.11.2-br-2.1 ou superior**) usa o novo formato `.cov` de sprites OBJ — capas criadas com versões anteriores do app não serão exibidas corretamente; basta regerá-las com a v1.1.0+.
+
+---
+
+## 🩹 Patches IPS/BPS
+
+Este fork pode aplicar patches **IPS** e **BPS** (traduções, hacks, correções) a um jogo **na hora de carregar**. O patch é aplicado apenas à cópia da ROM na memória — **o arquivo original da ROM no cartão SD nunca é modificado**.
+
+Coloque o arquivo de patch na **mesma pasta** da ROM, com um nome que **comece com o nome da ROM** (sem a extensão) e termine em **`.ips`** ou **`.bps`**:
+
+```
+/sd2snes/A/Aladdin (USA).sfc
+/sd2snes/A/Aladdin (USA).ips          ← um patch para este jogo
+/sd2snes/A/Aladdin (USA) (Hack).bps   ← outro patch para o mesmo jogo
+```
+
+Ao abrir um jogo que tenha patches correspondentes, o menu mostra um **seletor de patch** antes de iniciar:
+
+- **`[Sem patch]`** é sempre a primeira opção — inicia o jogo sem patch.
+- Escolha um patch para aplicá-lo neste boot.
+- Até **8** patches por jogo são listados (ordenados por nome).
+
+`.ips` e `.bps` são detectados automaticamente. Patches BPS podem gerar uma ROM maior (isso é tratado automaticamente).
+
+**Verificar integridade:** há uma opção no menu em **Configurações → Opções de Patches → Verificar Integridade**. Quando ligada (padrão), o firmware relê a ROM já aplicada para confirmar que o patch foi aplicado corretamente. Isso deixa o carregamento bem mais lento (~23 s para um BPS de 4 MB), então desligue se preferir carregamentos mais rápidos.
+
+---
+
+## 🎵 Música do Menu
+
+O menu pode tocar uma música de fundo enquanto você navega pela lista de jogos. A música é qualquer arquivo **`.spc`** (o formato de música nativo do SNES) colocado neste caminho exato no cartão SD:
+
+```
+/sd2snes/menu.spc
+```
+
+**Como definir ou trocar a música:**
+
+1. Baixe um arquivo `.spc` (veja onde abaixo).
+2. Renomeie para `menu.spc`.
+3. Copie para a pasta `/sd2snes/` do seu cartão SD.
+4. Pronto — a música toca no próximo boot do menu.
+
+**Onde baixar arquivos `.spc`:**
+
+- [snesmusic.org](https://snesmusic.org) — trilhas sonoras de jogos de SNES.
+- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — coleções de SPC por jogo.
+
+> [!TIP]
+> Muitos sites distribuem as trilhas em `.rsn` (um arquivo `.rar` contendo vários `.spc` dentro). Nesse caso, extraia o `.rsn` e escolha um dos `.spc` de dentro.
+
+**Ligar/desligar:** há um interruptor no menu em **Configurações → Opções do Navegador → Música do menu**. Quando ligada (padrão), o menu procura por `/sd2snes/menu.spc`; se o arquivo não existir, o menu simplesmente fica em silêncio (sem erro).
+
+**Observações:**
+
+- Só funciona o formato `.spc` (não MP3/WAV). Um `.spc` não é uma gravação de áudio — é um "snapshot" do chip de som do SNES (amostras + sequência), limitado a 64 KB. **Não existe conversão de MP3 para `.spc`**; use trilhas `.spc` prontas.
+- Ao carregar a música (no boot, após um reset ou ao ligar o interruptor) há uma breve pausa de ~1 s enquanto os 64 KB são enviados ao chip de som. Isso é uma limitação do hardware (a transferência precisa rodar com as interrupções desligadas).
+- Ao abrir um `.spc` pelo navegador de arquivos, a música de fundo é pausada automaticamente e retomada quando você volta (tecla B).
 
 ---
 

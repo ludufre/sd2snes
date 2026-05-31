@@ -16,6 +16,8 @@ SD card based multi-purpose cartridge for the SNES
 
 - 🇧🇷 **Brazilian Portuguese translation** — the firmware menu, messages and screens fully translated.
 - 🎮 **Game covers** — shows the game's box-art cover in the menu as you browse the list. See the **Game Covers** section below.
+- 🎵 **Menu background music** — plays an `.spc` track while you browse the menu. See the **Menu Music** section below.
+- 🩹 **IPS/BPS patches** — apply translation/hack patches to a game at boot, without modifying the ROM. See the **IPS/BPS Patches** section below.
 
 ## Installation
 
@@ -47,6 +49,63 @@ The app generates the `.cov` files for your game library. In the menu, cover dis
 
 > [!IMPORTANT]
 > Generate the covers with **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers) v1.1.0 or newer**. This firmware (**v1.11.2-br-2.1 or newer**) uses the new OBJ-sprite `.cov` format — covers created with older app versions won't display correctly; just regenerate them with v1.1.0+.
+
+---
+
+## 🩹 IPS/BPS Patches
+
+This fork can apply **IPS** and **BPS** patches (fan translations, hacks, fixes) to a game **at load time**. The patch is applied to the copy of the ROM in memory only — **your original ROM file on the SD card is never modified**.
+
+Drop the patch file in the **same folder** as the ROM, with a name that **starts with the ROM's name** (without extension) and ends in **`.ips`** or **`.bps`**:
+
+```
+/sd2snes/A/Aladdin (USA).sfc
+/sd2snes/A/Aladdin (USA).ips          ← a patch for this game
+/sd2snes/A/Aladdin (USA) (Hack).bps   ← another patch for the same game
+```
+
+When you open a game that has matching patches, the menu shows a **patch selector** before booting:
+
+- **`[No patch]`** is always the first option — boot the game unpatched.
+- Pick a patch to apply it for this boot.
+- Up to **8** patches per game are listed (sorted by name).
+
+`.ips` and `.bps` are auto-detected. BPS patches may produce a larger ROM (this is handled automatically).
+
+**Verify integrity:** there's an option in the menu at **Configurações → Opções de Patches → Verificar Integridade** (*Settings → Patch Options → Verify integrity*). When on (the default), the firmware re-reads the patched ROM to confirm it was applied correctly. This makes loading noticeably slower (~23 s for a 4 MB BPS), so turn it off if you'd rather have faster loads.
+
+---
+
+## 🎵 Menu Music
+
+The menu can play background music while you browse the game list. The music is any **`.spc`** file (the SNES's native music format) placed at this exact path on the SD card:
+
+```
+/sd2snes/menu.spc
+```
+
+**How to set or change the music:**
+
+1. Get an `.spc` file (see sources below).
+2. Rename it to `menu.spc`.
+3. Copy it into the `/sd2snes/` folder on your SD card.
+4. Done — the music plays the next time the menu boots.
+
+**Where to get `.spc` files:**
+
+- [snesmusic.org](https://snesmusic.org) — SNES game soundtracks.
+- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — SPC sets per game.
+
+> [!TIP]
+> Many sites distribute soundtracks as `.rsn` (a `.rar` archive containing several `.spc` files). In that case, extract the `.rsn` and pick one of the `.spc` files inside.
+
+**Turning it on/off:** there's a switch in the menu at **Configurações → Opções do Navegador → Música do menu** (*Settings → Browser Options → Menu music*). When on (the default), the menu looks for `/sd2snes/menu.spc`; if the file isn't present, the menu simply stays silent (no error).
+
+**Notes:**
+
+- Only the `.spc` format works (not MP3/WAV). An `.spc` isn't an audio recording — it's a snapshot of the SNES sound chip (samples + sequence), capped at 64 KB. **There is no MP3-to-`.spc` conversion**; use ready-made `.spc` tracks.
+- When the music loads (at boot, after a reset, or when you switch it on) there's a brief ~1 s pause while the 64 KB are uploaded to the sound chip. This is a hardware limitation (the transfer must run with interrupts disabled).
+- Opening an `.spc` from the file browser pauses the background music automatically and resumes it when you go back (B button).
 
 ---
 
