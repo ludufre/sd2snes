@@ -486,10 +486,12 @@ filesel_key_a:
   rts
 
 filesel_key_select:
+  jsr cover_menu_off    ; hide the box-art cover behind the favorite games window
   jsl select_favorite_file
   rts
 
 filesel_key_start:
+  jsr cover_menu_off    ; hide the box-art cover behind the recent games window
   jsl select_last_file
   rts
 
