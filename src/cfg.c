@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 
 #include "cfg.h"
 #include "config.h"
@@ -9,6 +10,12 @@
 #include "yaml.h"
 #include "rtc.h"
 #include "snes.h"
+
+/* The SNES menu pokes config bytes by hard-coded offset (snes/memmap.i65,
+   CFG_*=CFG_ADDR+$nn).  Pin the C struct layout to that map so inserting or
+   resizing a field can never silently desync the menu from the firmware. */
+_Static_assert(offsetof(cfg_t, language) == 0xB7, "cfg_t.language must stay at CFG_ADDR+$B7");
+_Static_assert(offsetof(cfg_t, patch_verify_integrity) == 0xB8, "cfg_t.patch_verify_integrity must stay at CFG_ADDR+$B8");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -51,7 +58,8 @@ cfg_t CFG_DEFAULT = {
   .enable_autosave = 1,
   .enable_autosave_msu1 = 1,
   .show_covers = 1,
-  .language = 0
+  .language = 0,
+  .patch_verify_integrity = 1
 };
 
 cfg_t CFG;
@@ -157,6 +165,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_SHOW_COVERS, CFG.show_covers ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR)\n", CFG_LANGUAGE);
   f_printf(&file_handle, "%s: %d\n", CFG_LANGUAGE, CFG.language);
+  f_printf(&file_handle, "\n#  %s: Re-read and CRC-check the ROM after applying an IPS/BPS patch (slow; ~23s for a 4MB BPS)\n", CFG_PATCH_VERIFY_INTEGRITY);
+  f_printf(&file_handle, "%s: %s\n", CFG_PATCH_VERIFY_INTEGRITY, CFG.patch_verify_integrity ? "true" : "false");
   file_close();
   return err;
 }
@@ -292,6 +302,9 @@ int cfg_load() {
     if(yaml_get_itemvalue(CFG_LANGUAGE, &tok)) {
       CFG.language = tok.longvalue;
       if(CFG.language > 1) CFG.language = 0;
+    }
+    if(yaml_get_itemvalue(CFG_PATCH_VERIFY_INTEGRITY, &tok)) {
+      CFG.patch_verify_integrity = tok.boolvalue ? 1 : 0;
     }
   }
   yaml_file_close();

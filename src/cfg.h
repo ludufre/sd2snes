@@ -51,6 +51,7 @@
 #define CFG_ENABLE_AUTOSAVE_MSU1         ("EnableMSU1AutoSave")
 #define CFG_SHOW_COVERS                  ("ShowCovers")
 #define CFG_LANGUAGE                     ("Language")
+#define CFG_PATCH_VERIFY_INTEGRITY       ("PatchVerifyIntegrity")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -101,6 +102,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
   uint8_t  show_covers;             /* show per-ROM cover preview (Game.cov) in the file browser */
   uint8_t  language;                /* menu/firmware language (0: English, 1: pt-BR) */
+  uint8_t  patch_verify_integrity;  /* CFG @ $B8: re-read+CRC the patched ROM after IPS/BPS (slow) */
 } cfg_t;
 
 int cfg_save(void);

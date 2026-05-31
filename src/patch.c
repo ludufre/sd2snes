@@ -11,8 +11,19 @@
 #include "patch.h"
 #include "timer.h"
 #include "crc32.h"
+#include "cfg.h"
 
 #include <string.h>
+
+extern cfg_t CFG;
+
+/* Whether to re-read the whole patched image back from SDRAM and verify it
+   against the BPS-embedded CRC32 after applying.  This is a pure sanity check:
+   if the per-byte writes completed without patch_io_err the image is already
+   correct.  The re-read walks target_size bytes byte-by-byte over the slow
+   MCU<->SDRAM link (~8 s extra for a 4 MB BPS), so it is exposed as the runtime
+   menu option "Verify Integrity" (Configuracao > Patch Options), default ON. */
+#define BPS_VERIFY_CRC (CFG.patch_verify_integrity)
 
 uint8_t ips_pending_index = 0;
 
@@ -623,7 +634,11 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                        * bps_sb needed). */
                 /* Phase A: bytes already in bps_sb */
                 uint16_t avail = bps_sb_len - bps_sb_pos;
-                if (avail > (uint16_t)length) avail = (uint16_t)length;
+                /* clamp avail to length WITHOUT truncating length to 16 bits:
+                   (uint16_t)length is 0 when length is a multiple of 0x10000,
+                   which would wrongly drop the buffered read-ahead bytes.  avail
+                   is <= sizeof(bps_sb) (256), so only length < avail matters. */
+                if (length < avail) avail = (uint16_t)length;
                 if (avail > 0) {
                     sram_write_from_buf(rom_base_addr + output_offset,
                                         bps_sb + bps_sb_pos, avail);
@@ -714,9 +729,10 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         }
     }
 
-    /* Read the BPS-embedded target CRC32 (at fsize-8..fsize-5) before closing */
+    /* Read the BPS-embedded target CRC32 (at fsize-8..fsize-5) before closing,
+       only when integrity verification is enabled. */
     uint32_t bps_target_crc32 = 0;
-    {
+    if (BPS_VERIFY_CRC) {
         uint8_t crc_bytes[4];
         UINT br2;
         f_lseek(&file_handle, file_handle.fsize - 8);
@@ -743,8 +759,10 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                patch_io_err ? " (FPGA MCU_RDY timeout - enhancement chip?)" : "");
     } else {
         printf("bps_apply: done, target_size=0x%lx\n", (unsigned long)target_size);
-        /* Verify CRC32 of the patched SRAM against the BPS-embedded expected value.
-         * Reads target_size bytes from SRAM in 512-byte chunks (~0.5 s for 2 MB). */
+      if (BPS_VERIFY_CRC) {
+        /* Verify CRC32 of the patched SRAM against the BPS-embedded expected
+         * value.  Re-reads the whole target image byte-by-byte (~8 s for 4 MB) —
+         * gated by the "Verify Integrity" menu option (BPS_VERIFY_CRC). */
         uint32_t crc = crc32_init();
         uint32_t remaining = target_size, addr_off = 0;
         while (remaining > 0) {
@@ -761,8 +779,221 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                (unsigned long)bps_target_crc32,
                (unsigned long)crc,
                crc == bps_target_crc32 ? "OK" : "MISMATCH");
+      }
     }
     return err ? 0 : target_size;
+}
+
+/* ------------------------------------------------------------------
+ * bps_probe_header  (load-time optimization)
+ *
+ * A chip-converting BPS (e.g. SMW -> SA-1) is otherwise applied TWICE: once
+ * under the wrong (pre-patch) core just to discover the new cartridge type, then
+ * again under the correct core.  Applying a 4 MB BPS costs ~9 s, so the wasted
+ * first pass roughly doubles the load time.
+ *
+ * This probe materializes ONLY the first `out_limit` bytes of the BPS target
+ * image (enough to cover the SNES internal header at 0x7FC0 / 0xFFC0) into a
+ * scratch region, so the caller can run smc on the patched header and decide
+ * whether a core change is needed BEFORE committing the full, slow patch.
+ *
+ * It writes output to a scratch base ABOVE both the source ROM and the eventual
+ * target image (rom_base + max(target_size, original_rom_size)); SourceRead /
+ * SourceCopy therefore read the still-pristine original at rom_base directly, so
+ * NO source backup and NO CRC pass are needed, and the real ROM image at
+ * rom_base is never touched.  That makes the probe purely advisory: if it is
+ * wrong or bails, the caller's post-patch smc re-detection still guarantees
+ * correctness (at worst the old, slower behavior).
+ *
+ * Returns target_size on success (with *out_scratch_base set to where the header
+ * window was materialized), or 0 for a non-BPS file / error / bail.
+ * ------------------------------------------------------------------ */
+uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
+                          uint32_t rom_base_addr, uint32_t original_rom_size,
+                          uint32_t out_limit, uint32_t *out_scratch_base) {
+    if (index < 1 || index > IPS_MAX_PATCHES) return 0;
+
+    patch_io_err = 0;
+
+    uint8_t bps_path[IPS_PATH_LEN];
+    psram_readstrn(bps_path,
+                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sizeof(bps_path));
+    if (patch_io_err) return 0;
+
+    file_open(bps_path, FA_READ);
+    if (file_res != FR_OK) return 0;
+
+    uint8_t magic[4];
+    UINT br;
+    f_read(&file_handle, magic, 4, &br);
+    if (br != 4 || memcmp(magic, "BPS1", 4) != 0) {
+        /* Not a BPS (e.g. an IPS) — let the caller fall back to the legacy path */
+        file_close();
+        return 0;
+    }
+
+    bps_sb_pos = 0;
+    bps_sb_len = 0;
+
+    bps_decode_vli();                        /* source_size — unused */
+    uint32_t target_size   = bps_decode_vli();
+    uint32_t metadata_size = bps_decode_vli();
+
+    /* Header must lie within the target image for the probe to be meaningful. */
+    if (target_size < out_limit) { file_close(); return 0; }
+    /* target_size is an unbounded file VLI.  Reject anything larger than the
+       biggest real SNES ROM (8 MB) so a hostile/corrupt header can never push
+       the scratch window into the SaveRAM/menu/cover/cheat staging banks above
+       the ROM region; the post-patch smc safety net still handles such loads. */
+    if (target_size > 0x800000) { file_close(); return 0; }
+
+    if (metadata_size > 0) {
+        uint32_t logical = BPS_LOGICAL_POS();
+        f_lseek(&file_handle, logical + metadata_size);
+        bps_sb_pos = 0;
+        bps_sb_len = 0;
+    }
+
+    /* Scratch sits above both the source ROM and the eventual target image, so
+     * it overlaps neither — SourceCopy can read rom_base directly, unbacked. */
+    uint32_t scratch_base = rom_base_addr
+        + ((target_size > original_rom_size) ? target_size : original_rom_size);
+
+    /* Safety bound: never let the probe window reach the SaveRAM region.  For a
+     * pathologically large image (or an unusual combo load_address) just bail —
+     * the caller's post-patch smc re-detection still handles it correctly. */
+    if (scratch_base + out_limit > SRAM_SAVE_ADDR) { file_close(); return 0; }
+
+    uint32_t action_end   = file_handle.fsize - 12;
+    uint32_t output_offset = 0;
+    uint32_t source_rel    = 0;
+    uint32_t target_rel    = 0;
+    int err = 0;
+
+    while (BPS_LOGICAL_POS() < action_end && !err && output_offset < out_limit) {
+        if (patch_io_err) { err = 1; break; }
+        uint32_t d      = bps_decode_vli();
+        uint8_t  action = (uint8_t)(d & 3);
+        uint32_t length = (d >> 2) + 1;
+
+        /* Clamp the final action to the probe window; we stop right after. */
+        if (output_offset + length > out_limit)
+            length = out_limit - output_offset;
+
+        switch (action) {
+            case 0: /* SourceRead: copy pristine source -> scratch (NOT a no-op
+                       here because scratch != source). */
+                /* A valid BPS only SourceReads while output_offset < source_size
+                   (== original_rom_size); bail on a malformed offset rather than
+                   pull stale SDRAM past the pristine image into the header. */
+                if (output_offset >= original_rom_size
+                        || length > original_rom_size - output_offset) {
+                    err = 1; break;
+                }
+                while (length > 0) {
+                    uint16_t chunk = (length > (uint32_t)sizeof(file_buf))
+                                     ? (uint16_t)sizeof(file_buf) : (uint16_t)length;
+                    psram_readblock(file_buf, rom_base_addr + output_offset, chunk);
+                    sram_write_from_buf(scratch_base + output_offset, file_buf, chunk);
+                    output_offset += chunk;
+                    length        -= chunk;
+                }
+                break;
+
+            case 1: { /* TargetRead: literal bytes from the patch file. */
+                uint16_t avail = bps_sb_len - bps_sb_pos;
+                /* clamp avail to length WITHOUT truncating length to 16 bits:
+                   (uint16_t)length is 0 when length is a multiple of 0x10000,
+                   which would wrongly drop the buffered read-ahead bytes.  avail
+                   is <= sizeof(bps_sb) (256), so only length < avail matters. */
+                if (length < avail) avail = (uint16_t)length;
+                if (avail > 0) {
+                    sram_write_from_buf(scratch_base + output_offset,
+                                        bps_sb + bps_sb_pos, avail);
+                    bps_sb_pos    += avail;
+                    output_offset += avail;
+                    length        -= avail;
+                }
+                while (length > 0) {
+                    UINT to_read = (length > (uint32_t)sizeof(file_buf))
+                                   ? (UINT)sizeof(file_buf) : (UINT)length;
+                    f_read(&file_handle, file_buf, to_read, &br);
+                    bps_sb_pos = 0;
+                    bps_sb_len = 0;
+                    if (br == 0) { err = 1; break; }
+                    sram_write_from_buf(scratch_base + output_offset,
+                                        file_buf, (uint16_t)br);
+                    output_offset += br;
+                    length        -= br;
+                }
+                break;
+            }
+
+            case 2: { /* SourceCopy: pristine source[source_rel] -> scratch. */
+                uint32_t d2    = bps_decode_vli();
+                int32_t  delta = (d2 & 1) ? -(int32_t)(d2 >> 1) : (int32_t)(d2 >> 1);
+                source_rel = (uint32_t)((int32_t)source_rel + delta);
+                /* Defense-in-depth: a valid BPS only references source bytes
+                   within source_size (== original_rom_size here).  If a malformed
+                   patch points outside the pristine source, bail to the safe
+                   apply-then-detect path rather than reading scratch/stale data
+                   and mis-advising the probe. */
+                if (source_rel >= original_rom_size
+                        || length > original_rom_size - source_rel) {
+                    err = 1; break;
+                }
+                while (length > 0) {
+                    uint16_t chunk = (length > (uint32_t)sizeof(file_buf))
+                                     ? (uint16_t)sizeof(file_buf) : (uint16_t)length;
+                    psram_readblock(file_buf, rom_base_addr + source_rel, chunk);
+                    sram_write_from_buf(scratch_base + output_offset, file_buf, chunk);
+                    output_offset += chunk;
+                    source_rel    += chunk;
+                    length        -= chunk;
+                }
+                break;
+            }
+
+            case 3: { /* TargetCopy: already-written scratch[target_rel] -> scratch. */
+                uint32_t d2    = bps_decode_vli();
+                int32_t  delta = (d2 & 1) ? -(int32_t)(d2 >> 1) : (int32_t)(d2 >> 1);
+                target_rel = (uint32_t)((int32_t)target_rel + delta);
+
+                if (target_rel < output_offset &&
+                    (output_offset - target_rel) <= 1) {
+                    uint8_t fill;
+                    psram_readblock(&fill, scratch_base + target_rel, 1);
+                    psram_memset(scratch_base + output_offset, length, fill);
+                    target_rel    += length;
+                    output_offset += length;
+                } else {
+                    while (length > 0) {
+                        uint32_t chunk = length;
+                        if (chunk > sizeof(file_buf))
+                            chunk = sizeof(file_buf);
+                        if (target_rel < output_offset) {
+                            uint32_t dist = output_offset - target_rel;
+                            if (chunk > dist) chunk = dist;
+                        }
+                        psram_readblock(file_buf, scratch_base + target_rel,
+                                       (uint16_t)chunk);
+                        sram_write_from_buf(scratch_base + output_offset,
+                                            file_buf, (uint16_t)chunk);
+                        target_rel    += chunk;
+                        output_offset += chunk;
+                        length        -= chunk;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    file_close();
+    if (err || patch_io_err) return 0;
+    if (out_scratch_base) *out_scratch_base = scratch_base;
+    return target_size;
 }
 
 uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,

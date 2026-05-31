@@ -102,6 +102,8 @@ typedef struct __attribute__ ((__packed__)) _snes_romprops {
 
 void smc_id(snes_romprops_t*, uint32_t file_offset);
 void smc_id_sdram(snes_romprops_t* props, uint32_t sram_base, uint32_t rom_size);
+void smc_id_sdram_window(snes_romprops_t* props, uint32_t sram_base,
+                         uint32_t rom_size, uint32_t valid_bytes);
 uint8_t smc_headerscore(uint32_t addr, snes_header_t* header, uint32_t file_offset);
 
 #endif

@@ -51,6 +51,12 @@ uint32_t hdr_addr[6] = {0xffb0, 0x101b0, 0x7fb0, 0x81b0, 0x40ffb0, 0x4101b0};
 uint8_t  smc_src_active = 0;
 uint32_t smc_src_base = 0;
 uint32_t smc_src_size = 0;
+/* smc_src_valid: how many bytes from smc_src_base are actually materialized and
+   safe to read for header scoring.  Equals smc_src_size for a full image, but is
+   SMALLER for the BPS header probe (only the first ~64 KB are materialized while
+   smc_src_size still carries the full logical target size for the fsize-based
+   branches).  Header slots that do not fit within smc_src_valid are rejected. */
+uint32_t smc_src_valid = 0;
 #define SMC_FSIZE() (smc_src_active ? smc_src_size : file_handle.fsize)
 static UINT smc_readblock(void* buf, uint32_t addr, uint16_t size, uint32_t file_offset) {
   if(smc_src_active) { sram_readblock(buf, smc_src_base + addr, size); return size; }
@@ -102,7 +108,7 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->fpga_conf = NULL;
   for(uint8_t num = 0; num < 6; num++) {
     score = smc_headerscore(hdr_addr[num], header, file_offset);
-    printf("%d: offset = %lX; score = %d\n", num, hdr_addr[num], score); // */
+    //printf("%d: offset = %lX; score = %d\n", num, hdr_addr[num], score);
     if(score>=maxscore) {
       score_idx=num;
       maxscore=score;
@@ -363,13 +369,24 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
    that image, reading the header from SDRAM instead of the file. Used to
    detect when a patch changed the cartridge type / required FPGA core. */
 void smc_id_sdram(snes_romprops_t* props, uint32_t sram_base, uint32_t rom_size) {
+  smc_id_sdram_window(props, sram_base, rom_size, rom_size);
+}
+
+/* Like smc_id_sdram, but only the first `valid_bytes` from sram_base are
+   materialized/safe to read (the rest of `rom_size` is the logical size used by
+   the fsize-dependent branches).  Used by the BPS header probe, which only
+   materializes a small window covering the SNES internal header. */
+void smc_id_sdram_window(snes_romprops_t* props, uint32_t sram_base,
+                         uint32_t rom_size, uint32_t valid_bytes) {
   smc_src_active = 1;
   smc_src_base = sram_base;
   smc_src_size = rom_size;
+  smc_src_valid = valid_bytes;
   smc_id(props, 0);
   smc_src_active = 0;
   smc_src_base = 0;
   smc_src_size = 0;
+  smc_src_valid = 0;
 }
 
 uint8_t smc_headerscore(uint32_t addr, snes_header_t* header, uint32_t file_offset) {
@@ -385,7 +402,7 @@ uint8_t smc_headerscore(uint32_t addr, snes_header_t* header, uint32_t file_offs
      so a header slot past the streamed image (e.g. 0x40ffb0 for a 4MB image)
      would read stale data left by a previous load and could win a bogus score.
      Reject any slot that does not fit within the image. */
-  if(smc_src_active && (addr + sizeof(snes_header_t)) > smc_src_size) {
+  if(smc_src_active && (addr + sizeof(snes_header_t)) > smc_src_valid) {
     return 0;
   }
   if((smc_readblock(header, addr, sizeof(snes_header_t), file_offset) < sizeof(snes_header_t))

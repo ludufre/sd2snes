@@ -14,6 +14,11 @@
 /* Bytes reserved per full-path slot in the IPS SRAM list */
 #define IPS_PATH_LEN     256
 
+/* Bytes of the patched image the BPS probe materializes to read the SNES header.
+   Covers both the LoROM-position header (0x7FC0, used by SA-1) and the
+   HiROM-position header (0xFFC0) plus the full snes_header_t. */
+#define PATCH_PROBE_HEADER_LIMIT  0x10000
+
 /*
  * ips_pending_index: non-zero when a patch should be applied inside load_rom.
  * Set by the CMD_LOADROM handler in main.c before calling load_rom();
@@ -67,6 +72,22 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
  */
 uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                    uint32_t original_rom_size);
+
+/*
+ * bps_probe_header  (load-time optimization)
+ *   Cheaply materialize ONLY the first out_limit bytes of a BPS target image
+ *   into a scratch region (rom_base + max(target_size, original_rom_size)),
+ *   so the caller can run smc on the patched SNES header and decide whether the
+ *   patch changes the cartridge type / required FPGA core BEFORE applying the
+ *   full (slow) patch.  Reads source from the pristine original at rom_base; the
+ *   real ROM image at rom_base is never modified.  Returns 0 for a non-BPS file
+ *   (magic mismatch) / error, so the caller can fall back to the legacy
+ *   apply-then-detect path.  On success returns target_size and sets
+ *   *out_scratch_base to the materialized header window's base address.
+ */
+uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
+                          uint32_t rom_base_addr, uint32_t original_rom_size,
+                          uint32_t out_limit, uint32_t *out_scratch_base);
 
 /*
  * patch_apply

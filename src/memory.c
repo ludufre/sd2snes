@@ -569,6 +569,43 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
                           + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
                         (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
       }
+
+      /* Load-time optimization (outer pass only): a chip-converting BPS would
+         otherwise be applied TWICE — once under the wrong (pre-patch) core just
+         to discover the new cartridge type, then again under the correct core
+         (~2x the ~9 s patch time for a 4 MB BPS).  Peek at the patched header
+         cheaply (first 64 KB only, into scratch above the image) so we can
+         reconfigure to the correct core FIRST and apply the full patch just
+         once.  bps_probe_header returns 0 for non-BPS / errors, and the
+         post-patch smc re-detection below stays as a safety net — so a probe
+         miss only costs time, never correctness. */
+      if(!ips_recore_active) {
+        uint32_t probe_scratch = 0;
+        uint32_t probe_tgt = bps_probe_header(SRAM_IPS_LIST_ADDR, saved_ips_idx,
+                                              SRAM_ROM_ADDR + romprops.load_address,
+                                              romprops.romsize_bytes,
+                                              PATCH_PROBE_HEADER_LIMIT,
+                                              &probe_scratch);
+        if(probe_tgt) {
+          smc_id_sdram_window(&ips_recore_props, probe_scratch, probe_tgt,
+                              PATCH_PROBE_HEADER_LIMIT);
+          const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
+          const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
+                                                               : FPGA_BASE;
+          if(core_new != core_now) {
+            printf("IPS: probe detected cartridge type change -> reloading under "
+                   "correct core (skipping redundant first patch)\n");
+            ips_recore_active = 1;
+            ips_pending_index = saved_ips_idx;
+            uint32_t r = load_rom(filename, base_addr,
+                                  (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
+            ips_recore_active = 0;
+            if(!r) deassert_reset();
+            return r;
+          }
+        }
+      }
+
       /* Dispatch to ips_apply or bps_apply based on the patch file extension.
          For IPS: pass the copier-header size so offset correction works when
          the IPS was authored for a headered ROM.  For combo ROMs

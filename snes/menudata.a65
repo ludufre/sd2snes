@@ -243,6 +243,42 @@ menu_enttab_cfg:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_patch
+ .byt  ^mtext_cfg_patch
+ .word !menu_enttab_patch
+ .byt  ^menu_enttab_patch
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_patch
+ .byt  ^mdesc_cfg_patch
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt 0
+
+; ---- Patch Options submenu (IPS/BPS soft-patching) ----
+menu_enttab_patch:
+; HEADER
+ .byt  1
+ .word !mtext_cfg_patch
+ .byt  ^mtext_cfg_patch
+; ENTRIES
+ .byt  MTYPE_VALUE
+ .word !mtext_patch_verify
+ .byt  ^mtext_patch_verify
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_PATCH_VERIFY_INTEGRITY
+ .byt  ^CFG_PATCH_VERIFY_INTEGRITY
+ .word !mdesc_patch_verify
+ .byt  ^mdesc_patch_verify
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt 0
 
 menu_enttab_bsx:
