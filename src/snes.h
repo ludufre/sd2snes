@@ -52,6 +52,7 @@
 #define SNES_CMD_CLR_AUTOBOOT_ROM    (0x1a) /* clear autoboot ROM setting */
 #define SNES_CMD_LOAD_AUTOBOOT       (0x1b) /* boot into the stored autoboot ROM */
 #define SNES_CMD_LOAD_COVER          (0x1c) /* stage sibling .cov for the highlighted ROM */
+#define SNES_CMD_QUERY_IPS_PATCHES   (0x1d) /* find IPS patches for selected ROM */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)

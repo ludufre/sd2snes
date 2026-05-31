@@ -58,6 +58,17 @@
 
 #define FPGA_WAIT_RDY()    do {__NOP(); __NOP(); __NOP(); __NOP(); while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE)); __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP(); while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)); } while (0)
 
+/* Used ONLY by the ROM patcher.  An enhancement-chip FPGA core can leave the
+   MCU SDRAM-port ready line (FPGA_MCU_RDY) deasserted, which makes the unbounded
+   FPGA_WAIT_RDY busy-wait hang the MCU forever. This variant bounds the MCU_RDY
+   wait: if it never asserts, it sets (toflag) to 1 and bails out, so the patch
+   aborts the load cleanly instead of wedging the menu. The bound is far beyond
+   any legitimate per-byte SDRAM cycle (~tens of ms at 96 MHz) yet finite. The
+   timing-critical global paths (DMA, savestate, normal load) keep the original
+   unbounded FPGA_WAIT_RDY and are unaffected. */
+#define FPGA_MCU_RDY_TIMEOUT    (5000000UL)
+#define FPGA_WAIT_RDY_TO(toflag) do {__NOP(); __NOP(); __NOP(); __NOP(); while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE)); __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP(); { uint32_t _wto = FPGA_MCU_RDY_TIMEOUT; while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)) { if(!--_wto) { (toflag) = 1; break; } } } } while (0)
+
 /* command parameters */
 #define FPGA_MEM_AUTOINC        (0x8)
 #define FPGA_SDDMA_PARTIAL      (0x4)

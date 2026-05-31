@@ -141,6 +141,11 @@
 #define CMD_CLR_AUTOBOOT_ROM        $1a /* clear autoboot ROM setting */
 #define CMD_LOAD_AUTOBOOT           $1b /* trigger autoboot at cold boot */
 #define CMD_LOAD_COVER              $1c /* stage sibling .cov for highlighted ROM into bank C9 */
+#define CMD_QUERY_IPS_PATCHES       $1d /* find IPS patches for selected ROM */
+
+#define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
+#define IPS_NAME_LEN                64       /* bytes per display name entry */
+#define IPS_MAX_PATCHES             8        /* maximum patches per ROM */
 #define CMD_SAVESTATE               $40
 #define CMD_LOADSTATE               $41
 #define CMD_MCU_RDY                 $55
