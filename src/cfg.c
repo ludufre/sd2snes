@@ -47,7 +47,6 @@ cfg_t CFG_DEFAULT = {
   .sgb_enh_override = 0,
   .sgb_clock_fix = 1,
   .sgb_bios_version = 2,
-  .show_tribute = 1,
   .enable_autosave = 1,
   .enable_autosave_msu1 = 1
 };
@@ -146,8 +145,6 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %d\n", CFG_GSU_SPEED, CFG.gsu_speed);
   f_printf(&file_handle, "#  %s: MSU audio volume boost\n#    (0: none; 1: +3.5dBFS; 2: +6dBFS; 3: +9.5dBFS; 4: +12dBFS)\n", CFG_MSU_VOLUME_BOOST);
   f_printf(&file_handle, "%s: %d\n", CFG_MSU_VOLUME_BOOST, CFG.msu_volume_boost);
-  f_puts("\n# Show Near memorial screen (only in 1.11.0)\n", &file_handle);
-  f_printf(&file_handle, "%s: %d\n", CFG_SHOW_TRIBUTE, CFG.show_tribute);
   f_puts("\n# Autosave (save SRAM contents to card when changes are detected)\n", &file_handle);
   f_printf(&file_handle, "#  %s: Autosave for everything except MSU-1 games\n", CFG_ENABLE_AUTOSAVE);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_AUTOSAVE, CFG.enable_autosave ? "true" : "false");
@@ -276,10 +273,6 @@ int cfg_load() {
     if(yaml_get_itemvalue(CFG_SGB_BIOS_VERSION, &tok)) {
       CFG.sgb_bios_version = tok.longvalue;
     }
-    if(yaml_get_itemvalue(CFG_SHOW_TRIBUTE, &tok)) {
-      CFG.show_tribute = tok.longvalue;
-      printf("show_tribute is %d\n", CFG.show_tribute);
-    }
     if(yaml_get_itemvalue(CFG_ENABLE_AUTOSAVE, &tok)) {
       CFG.enable_autosave = tok.boolvalue ? 1 : 0;
     }
@@ -291,10 +284,10 @@ int cfg_load() {
   return err;
 }
 
-int cfg_validity_check_recent_games() {
-  int err = 0, index, index_max, write_indices[10], rewrite_lastfile = 0;
+int cfg_validity_check_listed_games(const uint8_t *listfilename) {
+  int err = 0, index, index_max, write_indices[10], rewrite_listfile = 0;
   TCHAR fntmp[10][256];
-  file_open(LAST_FILE, FA_READ);
+  file_open(listfilename, FA_READ);
   if(file_status == FILE_ERR) {
     return 0;
   }
@@ -310,12 +303,15 @@ int cfg_validity_check_recent_games() {
     file_open((uint8_t*)fntmp[index], FA_READ);
     write_indices[index] = file_status;
     if(file_status != FILE_OK)
-      rewrite_lastfile = 1;
+      rewrite_listfile = 1;
     file_close();
   }
-  if(rewrite_lastfile) {
-    f_rename ((TCHAR*)LAST_FILE, (TCHAR*)LAST_FILE_BAK);
-    file_open(LAST_FILE, FA_CREATE_ALWAYS | FA_WRITE);
+  if(rewrite_listfile) {
+    uint8_t listfile_bak[80];
+    strncpy((char*)listfile_bak, (char*)listfilename, sizeof(listfile_bak) - 5);
+    strncat((char*)listfile_bak, ".bak", 5);
+    f_rename ((TCHAR*)listfilename, (TCHAR*)listfile_bak);
+    file_open(listfilename, FA_CREATE_ALWAYS | FA_WRITE);
     for(index = 0; index < index_max; index++) {
       if(write_indices[index] == FILE_OK) {
         err = f_puts(fntmp[index], &file_handle);
@@ -327,11 +323,11 @@ int cfg_validity_check_recent_games() {
   return err;
 }
 
-int cfg_add_last_game(uint8_t *fn) {
+int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_oldest) {
   int err = 0, index, index2, found = 0, foundindex = 0, written = 0;
   TCHAR fqfn[256];
   TCHAR fntmp[10][256];
-  file_open(LAST_FILE, FA_READ);
+  file_open(listfilename, FA_READ);
   fqfn[0] = 0;
   if(fn[0] !=  '/') {
     strncpy(fqfn, (const char*)file_path, 256);
@@ -349,7 +345,15 @@ int cfg_add_last_game(uint8_t *fn) {
     }
   }
   file_close();
-  file_open(LAST_FILE, FA_CREATE_ALWAYS | FA_WRITE);
+
+  if(!evict_oldest) {
+    if(index > 9 + found) {
+      //List is full and game is not already in list, refuse to add it
+      return 1;
+    }
+  }
+
+  file_open(listfilename, FA_CREATE_ALWAYS | FA_WRITE);
   /* always put new entry on top of list */
   err = f_puts((const TCHAR*)fqfn, &file_handle);
   err = f_putc(0, &file_handle);
@@ -369,118 +373,12 @@ int cfg_add_last_game(uint8_t *fn) {
   return err;
 }
 
-int cfg_get_last_game(uint8_t *fn, uint8_t index) {
-  int err = 0;
-  file_open(LAST_FILE, FA_READ);
-  do {
-    f_gets((TCHAR*)fn, 255, &file_handle);
-  } while (index--);
-  file_close();
-  return err;
-}
-
-void cfg_dump_recent_games_for_snes(uint32_t address) {
-  TCHAR fntmp[256];
-  int index;
-  file_open(LAST_FILE, FA_READ);
-  for(index = 0; index < 10 && !f_eof(&file_handle); index++) {
-    f_gets(fntmp, 255, &file_handle);
-    sram_writestrn(strrchr((const char*)fntmp, '/')+1, address+256*index, 256);
-  }
-  STM.num_recent_games = index;
-  file_close();
-}
-
-int cfg_validity_check_favorite_games() {
-  int err = 0, index, index_max, write_indices[10], rewrite_favoritefile = 0;
-  TCHAR fntmp[10][256];
-  file_open(FAVORITES_FILE, FA_READ);
-  if(file_status == FILE_ERR) {
-    return 0;
-  }
-  for(index = 0; index < 10 && !f_eof(&file_handle); index++) {
-    f_gets(fntmp[index], 255, &file_handle);
-  }
-  if(!f_eof(&file_handle))
-    index_max = 10;
-  else
-    index_max = index;
-  file_close();
-  for(index = 0; index < index_max; index++) {
-    file_open((uint8_t*)fntmp[index], FA_READ);
-    write_indices[index] = file_status;
-    if(file_status != FILE_OK)
-      rewrite_favoritefile = 1;
-    file_close();
-  }
-  if(rewrite_favoritefile) {
-    f_rename ((TCHAR*)FAVORITES_FILE, (TCHAR*)FAVORITES_FILE_BAK);
-    file_open(FAVORITES_FILE, FA_CREATE_ALWAYS | FA_WRITE);
-    for(index = 0; index < index_max; index++) {
-      if(write_indices[index] == FILE_OK) {
-        err = f_puts(fntmp[index], &file_handle);
-        err = f_putc(0, &file_handle);
-      }
-    }
-    file_close();
-  }
-  return err;
-}
-
-int cfg_add_favorite_game(uint8_t *fn) {
-  int err = 0, index, index2, found = 0, foundindex = 0, written = 0;
-  TCHAR fqfn[256];
-  TCHAR fntmp[10][256];
-  file_open(FAVORITES_FILE, FA_READ);
-  fqfn[0] = 0;
-  if(fn[0] !=  '/') {
-    strncpy(fqfn, (const char*)file_path, 256);
-    fqfn[255] = 0;
-  }
-  strncat(fqfn, (const char*)fn, 256 - strlen(fqfn) - 1);
-  for(index = 0; index < 10; index++) {
-    f_gets(fntmp[index], 255, &file_handle);
-    if((*fntmp[index] == 0) || (*fntmp[index] == '\n')) {
-      break; /* last entry found */
-    }
-    if(!strncasecmp((TCHAR*)fqfn, fntmp[index], 255)) {
-      found = 1; /* file already in list */
-      foundindex = index;
-    }
-  }
-  file_close();
-
-  if(index > 9 + found) {
-    //List is full and game is not already in list, refuse to add it
-    return 1;
-  }
-
-  file_open(FAVORITES_FILE, FA_CREATE_ALWAYS | FA_WRITE);
-  /* always put new entry on top of list */
-  err = f_puts((const TCHAR*)fqfn, &file_handle);
-  err = f_putc(0, &file_handle);
-  written++;
-  if(index > 9 + found) index = 9 + found; /* truncate oldest entry */
-  /* allow number of destination entries to be the same as source in case
-   * we're only moving a previous entry to top */
-  for(index2 = 0; index2 < index; index2++) {
-    if(found && (index2 == foundindex)){
-      continue; /* omit found entry here to prevent dupe */
-    }
-    err = f_puts(fntmp[index2], &file_handle);
-    err = f_putc(0, &file_handle);
-    written++;
-  }
-  file_close();
-  return err;
-}
-
-int cfg_remove_favorite_game(uint8_t index_to_remove) {
+int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove) {
   int err = 0, index, index2, written = 0;
   TCHAR fntmp[10][256];
 
-  // Load current favorites list into memory
-  file_open(FAVORITES_FILE, FA_READ);
+  // Load current file list into memory
+  file_open(listfilename, FA_READ);
   for(index = 0; index < 10; index++) {
     f_gets(fntmp[index], 255, &file_handle);
     if((*fntmp[index] == 0) || (*fntmp[index] == '\n')) {
@@ -489,8 +387,8 @@ int cfg_remove_favorite_game(uint8_t index_to_remove) {
   }
   file_close();
 
-  //Write back all favorites except the one at index_to_remove
-  file_open(FAVORITES_FILE, FA_CREATE_ALWAYS | FA_WRITE);
+  //Write back all items except the one at index_to_remove
+  file_open(listfilename, FA_CREATE_ALWAYS | FA_WRITE);
   for(index2 = 0; index2 < index; index2++) {
     if(index2 == index_to_remove){
       continue;
@@ -503,9 +401,9 @@ int cfg_remove_favorite_game(uint8_t index_to_remove) {
   return err;
 }
 
-int cfg_get_favorite_game(uint8_t *fn, uint8_t index) {
+int cfg_get_listed_game(const uint8_t *listfilename, uint8_t *fn, uint8_t index) {
   int err = 0;
-  file_open(FAVORITES_FILE, FA_READ);
+  file_open(listfilename, FA_READ);
   do {
     f_gets((TCHAR*)fn, 255, &file_handle);
   } while (index--);
@@ -513,16 +411,25 @@ int cfg_get_favorite_game(uint8_t *fn, uint8_t index) {
   return err;
 }
 
-void cfg_dump_favorite_games_for_snes(uint32_t address) {
+/**
+ * @brief Reads file names from a list file and makes them accessible inside
+ *        SNES address space.
+ *
+ * @param listfilename The file to read the list entries from.
+ * @param address The address in SNES address space where the list entries are
+ *                to be made accessible.
+ * @return uint8_t Number of list entries.
+ */
+uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t address) {
   TCHAR fntmp[256];
   int index;
-  file_open(FAVORITES_FILE, FA_READ);
+  file_open(listfilename, FA_READ);
   for(index = 0; index < 10 && !f_eof(&file_handle); index++) {
     f_gets(fntmp, 255, &file_handle);
     sram_writestrn(strrchr((const char*)fntmp, '/')+1, address+256*index, 256);
   }
-  STM.num_favorite_games = index;
   file_close();
+  return (uint8_t) index;
 }
 
 /* ---- Autoboot ROM functions ---- */

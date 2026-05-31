@@ -2,12 +2,11 @@
 #define _CFG_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define CFG_FILE ("/sd2snes/config.yml")
 #define LAST_FILE ((const uint8_t*)"/sd2snes/lastgame.cfg")
-#define LAST_FILE_BAK ((const uint8_t*)"/sd2snes/~lastgame.cfg")
 #define FAVORITES_FILE     ((const uint8_t*)"/sd2snes/favorites.cfg")
-#define FAVORITES_FILE_BAK ((const uint8_t*)"/sd2snes/~favorites.cfg")
 #define AUTOBOOT_FILE      ((const uint8_t*)"/sd2snes/autoboot.cfg")
 
 #define CFG_VIDMODE_MENU                 ("VideoModeMenu")
@@ -48,7 +47,6 @@
 #define CFG_SGB_SPR_INCREASE             ("SGBSprIncrease")
 #define CFG_SGB_CLOCK_FIX                ("SGBClockFix")
 #define CFG_SGB_BIOS_VERSION             ("SGBBiosVersion")
-#define CFG_SHOW_TRIBUTE                 ("ShowTribute")
 #define CFG_ENABLE_AUTOSAVE              ("EnableAutoSave")
 #define CFG_ENABLE_AUTOSAVE_MSU1         ("EnableMSU1AutoSave")
 
@@ -96,7 +94,6 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  sgb_spr_increase;        /* SGB increase number of supported visible sprites */
   uint8_t  sgb_clock_fix;           /* SGB timing/clock (true: original/sgb2, false: snes/sgb1) */
   uint8_t  sgb_bios_version;        /* SGB bios firmware version (defined number loads: sgbX_boot.bin and sgbX_snes.bin) */
-  uint8_t  show_tribute;
   uint8_t  enable_autosave;         /* enable automatic saving when SRAM contents change */
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
 } cfg_t;
@@ -104,16 +101,11 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
 int cfg_save(void);
 int cfg_load(void);
 
-int cfg_validity_check_recent_games(void);
-int cfg_add_last_game(uint8_t *fn);
-int cfg_get_last_game(uint8_t *fn, uint8_t index);
-void cfg_dump_recent_games_for_snes(uint32_t address);
-
-int cfg_validity_check_favorite_games(void);
-int cfg_add_favorite_game(uint8_t *fn);
-int cfg_remove_favorite_game(uint8_t index_to_remove);
-int cfg_get_favorite_game(uint8_t *fn, uint8_t index);
-void cfg_dump_favorite_games_for_snes(uint32_t address);
+int cfg_validity_check_listed_games(const uint8_t *listfilename);
+int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_oldest);
+int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove);
+int cfg_get_listed_game(const uint8_t *listfilename, uint8_t *fn, uint8_t index);
+uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t address);
 
 uint8_t cfg_is_autoboot_enabled(void);
 int cfg_get_autoboot_rom(uint8_t *fn);
