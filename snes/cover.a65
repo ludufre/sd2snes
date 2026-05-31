@@ -124,6 +124,25 @@ cover_hide:
   plp
   rts
 
+; -- cover_menu_off: hide the floating OBJ box-art cover before a menu/window opens
+;    (the cover is OBJ sprites with priority over the BG menu, so it would float on
+;    top of it). Also invalidate cover_last_sel so the browser loop's cover_update
+;    reloads the cover for the current selection once the menu closes. Call from the
+;    filesel input handlers (same DB context as cover_update).
+cover_menu_off:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda cover_loaded
+  beq +
+  jsr cover_hide
++ rep #$20 : .al
+  lda #$ffff
+  sta cover_last_sel
+  sep #$20 : .as
+  plp
+  rts
+
 ; -- cover_sync_before_cmd: drain an in-flight CMD_LOAD_COVER before the menu
 ;    issues a BLOCKING MCU command (LOADROM via game_handshake, LOADSPC). The
 ;    cover state machine fires CMD_LOAD_COVER autonomously when the cursor

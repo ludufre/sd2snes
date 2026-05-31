@@ -779,6 +779,7 @@ wait_spc:
   rts
 
 filesel_key_x:
+  jsr cover_menu_off    ; hide the box-art cover behind the menu (reloads on close)
   jsr mainmenu
   sep #$20 : .as
   lda #$01              ; the menu may have switched language -> redraw browser
@@ -786,6 +787,7 @@ filesel_key_x:
   rts
 
 filesel_key_y:
+  jsr cover_menu_off    ; hide the box-art cover behind the context menu
   jsr open_context_menu
   rts
 
