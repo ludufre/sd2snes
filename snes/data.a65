@@ -28,6 +28,10 @@ print_ptr       .byt 0,0,0  ; read pointer
 print_count     .word 0     ; how many characters may be printed?
 print_done      .word 0     ; how many characters were printed?
 print_over      .byt 0      ; was the string printed incompletely?
+;----------language selection----------
+cur_lang        .byt 0      ; active menu language (0=EN, 1=pt-BR); mirrors CFG_LANGUAGE
+resolve_ptr     .byt 0,0,0  ; resolve_str: zero-page long ptr to read a dispatch-table entry
+kv_len_tmp      .byt 0      ; menu_kv_value_len: resolved kv-value length out-param
 ;----------parameters for dma----------
 dma_a_bank      .byt 0
 dma_a_addr      .word 0
@@ -275,4 +279,8 @@ cover_tilerow          .byt 0    ; OAM build scratch: base tile of the row (sy*3
 cover_scr              .byt 0    ; OAM build scratch
 cover_sx               .byt 0    ; OAM build scratch: sprite column
 cover_sy               .byt 0    ; OAM build scratch: sprite row
+
+;----------language switch redraw bookkeeping
+menu_drawn_lang        .byt 0    ; language the current show_menu window was drawn in
+mainmenu_relang        .byt 0    ; set when the language changed -> main menu re-shows
 _END            .byt 0

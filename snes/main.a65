@@ -101,6 +101,14 @@ coldboot_bypass_autoboot:         ; clear autoboot flag, continue to menu
   jsr clr_autoboot_at_boot
 coldboot_autoboot_out:
   jsr screen_on
+  ; load the persisted language (mirrored from config.yml by the MCU) so the
+  ; whole menu draws in the right language from the first frame.
+  sep #$20 : .as
+  lda @CFG_LANGUAGE
+  cmp #$03
+  bcc +
+  lda #$00              ; unknown -> English
++ sta @cur_lang
   jsr filesel_init
   sep #$20 : .as
   lda @ST_RTC_VALID

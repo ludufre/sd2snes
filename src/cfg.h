@@ -50,6 +50,7 @@
 #define CFG_ENABLE_AUTOSAVE              ("EnableAutoSave")
 #define CFG_ENABLE_AUTOSAVE_MSU1         ("EnableMSU1AutoSave")
 #define CFG_SHOW_COVERS                  ("ShowCovers")
+#define CFG_LANGUAGE                     ("Language")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -99,6 +100,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_autosave;         /* enable automatic saving when SRAM contents change */
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
   uint8_t  show_covers;             /* show per-ROM cover preview (Game.cov) in the file browser */
+  uint8_t  language;                /* menu/firmware language (0: English, 1: pt-BR) */
 } cfg_t;
 
 int cfg_save(void);

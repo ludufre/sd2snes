@@ -201,6 +201,7 @@
 #define CFG_ENABLE_AUTOSAVE             CFG_ADDR+$00B4
 #define CFG_ENABLE_AUTOSAVE_MSU1        CFG_ADDR+$00B5
 #define CFG_SHOW_COVERS                 CFG_ADDR+$00B6
+#define CFG_LANGUAGE                    CFG_ADDR+$00B7
 
 #define MENU_ENTRY_SIZE             23
 

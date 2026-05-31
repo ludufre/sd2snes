@@ -149,14 +149,14 @@ int main(void) {
         snes_bootclear();
         delay_ms(50);
         snes_bootprint_version();
-        snes_bootprint_center( 8, "Sem cartao SD!");
+        snes_bootprint_center( 8, "No SD Card found!");
         snes_bootprint_center( 9, "\x12\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x11");
-        snes_bootprint_center(11, "Insira o cartao SD e");
-        snes_bootprint_center(13, "verifique se esta bem");
-        snes_bootprint_center(15, "encaixado");
+        snes_bootprint_center(11, "Please insert SD Card and");
+        snes_bootprint_center(13, "make sure it is seated");
+        snes_bootprint_center(15, "properly.");
         cli_entrycheck();
         while(disk_status(0) & (STA_NODISK));
-        snes_bootprint_center(17, "SD inserido!");
+        snes_bootprint_center(17, "SD Card inserted!");
         delay_ms(200);
       }
       file_open((uint8_t*)MENU_FILENAME, FA_READ);
@@ -166,14 +166,14 @@ int main(void) {
         snes_bootclear();
         delay_ms(50);
         snes_bootprint_version();
-        snes_bootprint_center( 5, "Falha ao carregar menu!");
+        snes_bootprint_center( 5, "Could not load menu ROM!");
         snes_bootprint_center( 6, "\x12\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x13\x11");
-        snes_bootprint_center( 9, "Erro: %s", errorname);
-        snes_bootprint_center(12, "Verifique se cartao esta");
-        snes_bootprint_center(14, "formatado corretamente");
-        snes_bootprint_center(16, "(MBR+FAT32) e que o");
-        snes_bootprint_center(18, "arquivo " MENU_FILENAME);
-        snes_bootprint_center(20, "existe.");
+        snes_bootprint_center( 9, "Error: %s", errorname);
+        snes_bootprint_center(12, "Check that your card is wor-");
+        snes_bootprint_center(14, "king, formatted correctly");
+        snes_bootprint_center(16, "(MBR+FAT32), and that the");
+        snes_bootprint_center(18, "file " MENU_FILENAME);
+        snes_bootprint_center(20, "exists.");
         cli_entrycheck();
         while((disk_status(0) & ~STA_PROTECT) == 0);
       } else {
@@ -184,7 +184,7 @@ int main(void) {
     if(fpga_config == FPGA_ROM) {
       snes_bootclear();
       snes_bootprint_version();
-      snes_bootprint_center(12, "Carregando.");
+      snes_bootprint_center(12, "Loading ...");
     }
     led_pwm();
     rdyled(1);

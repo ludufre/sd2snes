@@ -17,6 +17,76 @@
 ; print_done (# of chars printed)
 ; print_over (char after print_count)
 
+; resolve_str: language-resolve print_src/print_bank in place. If the pointer is a
+; dispatch table in [strtab_lo, strtab_hi), replace it with the active-language
+; string; any other pointer is left untouched. Preserves A/X/Y/P/D/B.
+resolve_str:
+  php
+  rep #$30 : .al : .xl
+  pha
+  phx
+  phy
+  phd
+  phb
+  pea $0000
+  pld
+  sep #$20 : .as
+  lda #$7e
+  pha
+  plb
+  lda print_bank
+  cmp #^strtab_lo
+  bne resolve_str_out
+  rep #$20 : .al
+  lda print_src
+  cmp #!strtab_lo
+  bcc resolve_str_out
+  cmp #!strtab_hi
+  bcs resolve_str_out
+  sep #$20 : .as
+  lda cur_lang
+  cmp @strtab_nlang        ; languages actually present (set by build_const)
+  bcc +
+  lda #$00                 ; cur_lang past the last present column -> English
++ asl
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc print_src
+  sta resolve_ptr
+  sep #$20 : .as
+  lda #^strtab_lo
+  sta resolve_ptr+2
+  rep #$20 : .al
+  lda [resolve_ptr]
+  sta print_src
+  sep #$20 : .as
+  lda #^strtab_lo
+  sta print_bank
+resolve_str_out:
+  plb
+  pld
+  rep #$30 : .al : .xl
+  ply
+  plx
+  pla
+  plp
+  rts
+
+; resolve_yx: resolve_str for a (Y=addr, A=bank) pointer (as used by strlen).
+; Entry .as/.xl. Exit same widths, A=resolved bank, Y=resolved addr.
+resolve_yx:
+  sta @print_bank
+  rep #$20 : .al
+  tya
+  sta @print_src
+  jsr resolve_str
+  lda @print_src
+  tay
+  sep #$20 : .as
+  lda @print_bank
+  rts
+
 hiprint:
   php
   phd
@@ -28,6 +98,7 @@ hiprint:
   lda #$7e
   pha
   plb
+  jsr resolve_str
   ldx print_src
   stx print_ptr
   lda print_bank

@@ -2,16 +2,16 @@
 #include "config.h"
 #include "uart.h"
 #include "cic.h"
+#include "lang.h"
 
 char *cicstatenames[4] = { "CIC_OK", "CIC_FAIL", "CIC_PAIR", "CIC_SCIC" };
-char *cicstatefriendly[4] = {"Original ou sem", "CIC original (falhou)", "SuperCIC ampliado", "SuperCIC detect. n/usado"};
 
 void print_cic_state() {
   printf("CIC state: %s\n", get_cic_statename(get_cic_state()));
 }
 
 inline char *get_cic_statefriendlyname(enum cicstates state) {
-  return cicstatefriendly[state];
+  return (char *)cicstatefriendly_l[lang_idx()][state];
 }
 
 inline char *get_cic_statename(enum cicstates state) {

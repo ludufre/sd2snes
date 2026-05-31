@@ -29,6 +29,7 @@
 #include "ff.h"
 #include "fileops.h"
 #include "diskio.h"
+#include "lang.h"
 
 #include <string.h>
 #include <stdarg.h>
@@ -50,13 +51,6 @@ char *fresult_names[] = { "FR_OK", "FR_DISK_ERR", "FR_INT_ERR",
   "FR_INVALID_DRIVE", "FR_NOT_ENABLED", "FR_NO_FILESYSTEM", "FR_MKFS_ABORTED",
   "FR_TIMEOUT", "FR_LOCKED", "FR_NOT_ENOUGH_CORE", "FR_TOO_MANY_OPEN_FILES",
   "FR_INVALID_PARAMETER" };
-
-char *fresult_friendly_names[] = { "Sem erro", "Erro de I/O", "Erro interno FS",
-  "Drive nao pronto", "Arq. nao achado", "Pasta nao achada", "Caminho invalido",
-  "Acesso negado", "Negado (ja existe)", "Arq. invalido", "Protegido",
-  "Drive invalido", "Sem mem. trab.", "FS invalido", "mkfs() abortou",
-  "Timeout no SD", "Acesso bloqueado", "Sem memoria", "Muitos arq. abertos",
-  "Param. invalido" };
 
 void file_init() {
   file_res=f_mount(&fatfs, "/", 1);
@@ -173,7 +167,7 @@ char *get_fresult_name(FRESULT res) {
 }
 
 char *get_fresult_friendlyname(FRESULT res) {
-  return fresult_friendly_names[res];
+  return (char *)fresult_friendly_names_l[lang_idx()][res];
 }
 
 void vprint_fresult(FRESULT res, const char *fmt, va_list arglist) {

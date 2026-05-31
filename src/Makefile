@@ -80,7 +80,7 @@ SRC  = main.c ff.c ccsbcs.c
 SRC += printf.c fileops.c fpga.c fpga_spi.c snes.c smc.c
 SRC += memory.c filetypes.c faulthandler.c sort.c crc32.c cic.c cover.c patch.c
 SRC += cli.c ymodem.c rle.c msu1.c crc16.c sysinfo.c
-SRC += cfg.c cheat.c yaml.c savestate.c sgb.c hwinfo.c
+SRC += cfg.c cheat.c yaml.c savestate.c sgb.c hwinfo.c lang.c
 
 SRC += usbdesc.c usbcore.c usbuser.c cdcuser.c usbinterface.c
 

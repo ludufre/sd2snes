@@ -19,13 +19,16 @@ mainmenu:
   sta window_h
   jsr push_window
   jsr window_greyout
+  lda #$01
+  sta mainmenu_active
+  stz egg_shown
+mainmenu_reshow:
+  sep #$20 : .as
+  stz mainmenu_relang        ; cleared each pass; set by show_menu on a language change
   lda #$06
   sta window_x
   lda #$0b
   sta window_y
-  lda #$01
-  sta mainmenu_active
-  stz egg_shown
   phb
     lda #^menu_enttab_mm
     pha
@@ -33,7 +36,11 @@ mainmenu:
     ldx #!menu_enttab_mm
     jsr show_menu
   plb
-  stz mainmenu_active
+  lda mainmenu_relang        ; language switched -> reopen the menu fresh (new widths)
+  beq +
+  jsr filesel_statusbar      ; refresh the (visible, un-greyed) browser statusbar now,
+  bra mainmenu_reshow        ; so it follows the new language together with the menu
++ stz mainmenu_active
   jsr pop_window
   rts
 
@@ -306,6 +313,8 @@ show_menu:
     sta window_tbank
     jsr draw_window
     jsr show_menu_entries
+    lda cur_lang             ; record the language this window was drawn in
+    sta menu_drawn_lang
     lda w_numentries
     sta listsel_max
 show_menu_loop:
@@ -340,6 +349,15 @@ show_menu_loop:
 show_menu_cont:
     sep #$20 : .as
 ;    jsr pop_window
+    lda mainmenu_active        ; only the main menu hosts the Language entry
+    beq show_menu_cont_reprint
+    lda cur_lang
+    cmp menu_drawn_lang
+    beq show_menu_cont_reprint
+    lda #$01                   ; language changed -> close; mainmenu reopens it fresh
+    sta mainmenu_relang
+    jmp show_menu_out
+show_menu_cont_reprint:
     jsr show_menu_entries
     jmp show_menu_loop
 show_menu_out:
@@ -464,6 +482,15 @@ show_menu_editvalue:
         jsr menu_edit_value
       plb
     ply
+    ; Re-sync the active language from the (committed, or reverted-on-cancel) setting.
+    ; A no-op for non-language entries; for the Language entry it makes cur_lang match
+    ; CFG_LANGUAGE so show_menu_cont's relang check fires only on a real commit.
+    sep #$20 : .as
+    lda @CFG_LANGUAGE
+    cmp #$03
+    bcc +
+    lda #$00
++   sta cur_lang
     jmp show_menu_cont
 #undef _locals
 
@@ -495,6 +522,7 @@ menu_measure:
   sep #$20 : .as
   ldy !$1, x
   lda !$3, x
+  jsr resolve_yx
   phb
     pha
     plb
@@ -515,6 +543,7 @@ menu_measure_line_loop:
     sep #$20 : .as
     ldy !$1, x         ; resolve pointer to menu entry text
     lda !$3, x
+    jsr resolve_yx
     pha
     plb
     jsr strlen
@@ -584,41 +613,34 @@ menu_meas_opt_04
     cmp #$05           ; key-value (16bit)
     bne menu_meas_opt_06
 menu_meas_opt_keyval ; count max value length
-    pea $0000
+    ; The per-value resolve+strlen+bank-juggling lives in menu_kv_value_len so the
+    ; loop body stays tiny (all branches in short range; no out-of-range trampolines).
+    pea $0000          ; running max length (low byte at 2,s after the phb below)
     phb
       ldy !$4, x       ; get pointer to
       lda !$6, x       ; key-value table
       pha
-      plb
+      plb              ; DB = kv table bank
       rep #$20 : .al
 menu_meas_opt_nextkey
       lda !$0, y        ; get key
       cmp #$ffff
-      beq +
+      beq menu_meas_opt_keyval_done
       iny
-      iny              ; move to value
-      phy
-        phb
-          sep #$20 : .as
-          lda !$2, y     ; get bank of string
-          pha
-          rep #$20 : .al
-          lda !$0, y     ; get pointer to string
-          plb
-          tay
-          jsr strlen     ; get length
-        plb
-        tya
-        cmp 4, s ; compare-replace
-        bmi menu_meas_opt_keyval_skip
-        sta 4, s
+      iny              ; Y -> value entry (ptr@+0, bank@+2)
+      jsr menu_kv_value_len ; kv_len_tmp = resolved value length; preserves Y/X/DB
+      sep #$20 : .as
+      lda @kv_len_tmp
+      cmp 2, s         ; compare with running max (accumulator low byte)
+      bcc menu_meas_opt_keyval_skip
+      sta 2, s         ; new max
 menu_meas_opt_keyval_skip
-      ply
-      iny              ; move to next key
+      rep #$20 : .al
       iny
       iny
+      iny              ; Y -> next key (skip ptr+bank)
       bra menu_meas_opt_nextkey
-+
+menu_meas_opt_keyval_done
     plb
     pla
     bra menu_meas_opt_set
@@ -637,6 +659,42 @@ menu_meas_opt_set:
   plp
   rts
 #undef _locals
+
+; menu_kv_value_len: resolve a key-value option string and measure its length.
+; in : Y = pointer to the value entry (string ptr@+0, string bank@+2) in the kv table
+;      DB = kv table bank
+; out: kv_len_tmp = resolved string length (0..255)
+; preserves A, X, Y, P, DP and DB (self-contained balanced frame).
+; A is not preserved (caller reloads from kv_len_tmp); X is preserved transitively
+; by resolve_str and strlen (both phx/plx internally).
+menu_kv_value_len:
+  php
+  rep #$30 : .al : .xl
+  phy
+  phb
+  sep #$20 : .as
+  lda !$2, y           ; bank of kv value string
+  sta @print_bank
+  rep #$20 : .al
+  lda !$0, y           ; pointer to kv value string
+  sta @print_src
+  jsr resolve_str      ; language-resolve in place
+  lda @print_src
+  tay                  ; Y = resolved addr
+  sep #$20 : .as
+  lda @print_bank
+  pha
+  plb                  ; DB = resolved bank
+  jsr strlen           ; Y = length
+  rep #$20 : .al
+  tya
+  sep #$20 : .as
+  sta @kv_len_tmp      ; out-param
+  plb                  ; restore DB
+  rep #$30 : .al : .xl
+  ply
+  plp
+  rts
 
 .byt "MENU_PRINT_ENTRIES"
 menu_print_entries:
@@ -863,11 +921,16 @@ menu_print_opt_string_keyval:
     bne +
     ldy w_kvtab_addr      ; invalid setting -> default to first entry
 +   lda !$2, y
-    pha                   ; save offset for right-align
       sta @print_src
       sep #$20 : .as
       lda !$4, y
       sta @print_bank
+      rep #$20 : .al
+      jsr resolve_str       ; resolve language BEFORE right_align (correct value position)
+      lda @print_src
+      pha                   ; save resolved addr for right-align
+      sep #$20 : .as
+      lda @print_bank
       pha
       plb
     ply
@@ -1423,10 +1486,14 @@ menu_value_dialog_kv8_cancel:
       sta w_work_value
       lda !$2, y
       sta @print_src
-      sta w_label_addr
       sep #$20 : .as
       lda !$4, y
       sta @print_bank
+      rep #$20 : .al
+      jsr resolve_str       ; resolve before right_align (kv8 preview value position)
+      lda @print_src
+      sta w_label_addr      ; resolved addr for right_align below
+      sep #$20 : .as
       lda #$01
       bit w_text_grey
       bpl +

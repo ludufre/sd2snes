@@ -780,6 +780,9 @@ wait_spc:
 
 filesel_key_x:
   jsr mainmenu
+  sep #$20 : .as
+  lda #$01              ; the menu may have switched language -> redraw browser
+  sta filesel_dirty     ; chrome (statusbar) so it follows the new language too
   rts
 
 filesel_key_y:
@@ -882,6 +885,25 @@ filesel_statusbar
   php
   sep #$20 : .as
   rep #$10 : .xl
+  ; clear the keys field first (x=$02..$2a, up to the clock at x=$2b) so a shorter
+  ; localized string after a language switch leaves no trailing characters.
+  lda #^space64
+  sta @print_bank
+  rep #$20 : .al
+  lda #!space64
+  sta @print_src
+  sep #$20 : .as
+  lda #$00
+  sta @print_pal
+  lda #$02
+  sta @print_x
+  lda #$29
+  sta @print_count
+  lda listdisp
+  clc
+  adc #$0a
+  sta @print_y
+  jsr hiprint
   lda #^text_statusbar_keys
   sta @print_bank
   rep #$20 : .al

@@ -50,7 +50,8 @@ cfg_t CFG_DEFAULT = {
   .show_tribute = 0,
   .enable_autosave = 1,
   .enable_autosave_msu1 = 1,
-  .show_covers = 1
+  .show_covers = 1,
+  .language = 0
 };
 
 cfg_t CFG;
@@ -154,6 +155,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_AUTOSAVE_MSU1, CFG.enable_autosave_msu1 ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Show per-ROM cover preview (Game.cov) in the file browser\n", CFG_SHOW_COVERS);
   f_printf(&file_handle, "%s: %s\n", CFG_SHOW_COVERS, CFG.show_covers ? "true" : "false");
+  f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR)\n", CFG_LANGUAGE);
+  f_printf(&file_handle, "%s: %d\n", CFG_LANGUAGE, CFG.language);
   file_close();
   return err;
 }
@@ -285,6 +288,10 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_SHOW_COVERS, &tok)) {
       CFG.show_covers = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_LANGUAGE, &tok)) {
+      CFG.language = tok.longvalue;
+      if(CFG.language > 1) CFG.language = 0;
     }
   }
   yaml_file_close();

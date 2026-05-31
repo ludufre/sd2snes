@@ -145,3 +145,8 @@ verilog/*/incremental_db
 obj/
 snes/menu.rtc
 snes/menu.srm
+
+# generated bilingual (EN+PT) menu strings (snes/utils/build_const.py)
+snes/const_lang.a65
+
+/snes/utils/__pycache__

@@ -108,6 +108,21 @@ menu_enttab_mm:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !text_mm_language
+ .byt  ^text_mm_language
+ .word !kv_language
+ .byt  ^kv_language
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_LANGUAGE
+ .byt  ^CFG_LANGUAGE
+ .word !mdesc_mm_language
+ .byt  ^mdesc_mm_language
+ .word !(mfunc_chg_language-1)
+ .byt  ^(mfunc_chg_language-1)
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  0
 
 menu_enttab_cfg:
@@ -967,6 +982,18 @@ mfunc_chg_ledbright:
   cmp @SNES_CMD
   bne -
   rtl
+
+mfunc_chg_language:
+  ; A = new language (fired on each kv8 scroll). Switch the menu's active language
+  ; live; persistence is handled by the dialog commit (writes CFG_LANGUAGE + sends
+  ; SAVE_CFG), and show_menu re-shows the main menu when cur_lang != menu_drawn_lang.
+  sta @cur_lang
+  rtl
+
+kv_language:
+.word $0000, !text_lang_en : .byt ^text_lang_en
+.word $0001, !text_lang_ptbr : .byt ^text_lang_ptbr
+.word $ffff
 
 kv_bsx_timesource:
 .word $0000, !text_rtc : .byt ^text_rtc

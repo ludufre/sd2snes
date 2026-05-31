@@ -1,0 +1,73 @@
+#include <stddef.h>
+#include "lang.h"
+#include "cfg.h"
+
+extern cfg_t CFG;
+
+uint8_t lang_idx(void) {
+  return CFG.language < NUM_LANG ? CFG.language : 0;
+}
+
+/* CIC "friendly" state names (cic.c) -------------------------------------- */
+const char *const cicstatefriendly_l[NUM_LANG][4] = {
+  /* LANG_EN   */ { "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used" },
+  /* LANG_PTBR */ { "Original ou sem", "CIC original (falhou)", "SuperCIC ampliado", "SuperCIC detect. n/usado" },
+};
+
+/* FatFs FRESULT friendly names (fileops.c) -------------------------------- */
+const char *const fresult_friendly_names_l[NUM_LANG][20] = {
+  /* LANG_EN */ {
+    "No error", "Card I/O error", "Internal FS driver error",
+    "Drive not ready", "File not found", "Directory not found", "Invalid path name",
+    "Access denied", "Access denied (exists)", "Invalid file object", "Write protected",
+    "Invalid drive specified", "No work area", "Not a valid file system", "mkfs() aborted",
+    "Drive access timeout", "Shared access locked", "Not enough memory", "Too many open files",
+    "Invalid parameter"
+  },
+  /* LANG_PTBR */ {
+    "Sem erro", "Erro de I/O", "Erro interno FS",
+    "Drive nao pronto", "Arq. nao achado", "Pasta nao achada", "Caminho invalido",
+    "Acesso negado", "Negado (ja existe)", "Arq. invalido", "Protegido",
+    "Drive invalido", "Sem mem. trab.", "FS invalido", "mkfs() abortou",
+    "Timeout no SD", "Acesso bloqueado", "Sem memoria", "Muitos arq. abertos",
+    "Param. invalido"
+  },
+};
+
+/* sysinfo screen messages (sysinfo.c) ------------------------------------- */
+const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
+  /* LANG_EN */ {
+    [SI_BUSY_DISK]          = "Calculating disk space\x7f\x80                ",
+    [SI_FW_VERSION]         = "    Firmware version: %s",
+    [SI_SD_REMOVED]         = "    *** SD Card removed/USB busy ***    ",
+    [SI_SD_MAKER]           = "SD Maker/OEM:    0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "SD Product Name: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "SD Serial No.:   %02x%02x%02x%02x, Mfd. %d/%02d",
+    [SI_SD_ACC_TIME]        = "SD acc. time: %ld.%03ld / %ld.%03ld ms avg/max",
+    [SI_SD_ACC_MEASURING]   = "SD acc. time: measuring\x7f\x80  ",
+    [SI_CARD_USAGE]         = "Card usage: %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "CIC state: %s",
+    [SI_SNES_CLK_MEASURING] = "SNES master clock: measuring\x7f\x80",
+    [SI_SNES_CLK]           = "SNES master clock: %ldHz    ",
+  },
+  /* LANG_PTBR */ {
+    [SI_BUSY_DISK]          = "Calculando espa\x8do em disco\x7f\x80            ",
+    [SI_FW_VERSION]         = "    Vers\x85o firmware: %s",
+    [SI_SD_REMOVED]         = "    *** SD removido/USB ocupado ***    ",
+    [SI_SD_MAKER]           = "Fabricante SD:   0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "Nome do produto: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "Serial SD:       %02x%02x%02x%02x, Fab. %d/%02d",
+    [SI_SD_ACC_TIME]        = "Acesso SD:    %ld.%03ld / %ld.%03ld ms med/max",
+    [SI_SD_ACC_MEASURING]   = "Acesso SD:    medindo\x7f\x80",
+    [SI_CARD_USAGE]         = "Uso do SD:  %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "Modo CIC: %s",
+    [SI_SNES_CLK_MEASURING] = "Clock SNES: medindo\x7f\x80",
+    [SI_SNES_CLK]           = "Clock SNES: %ldHz",
+  },
+};
+
+/* SGB BIOS state words (sysinfo.c) ---------------------------------------- */
+const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT] = {
+  /* LANG_EN   */ { "missing", "mismatch", "ok", "checking" },
+  /* LANG_PTBR */ { "ausente", "errado", "ok", "lendo" },
+};

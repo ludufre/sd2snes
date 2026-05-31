@@ -171,7 +171,7 @@ window_wv       .byt 26
 window_ev       .byt 27
 window_tl       .byt 28
 window_tr       .byt 29
-text_clkset     .byt "Ajuste a hora", 0
+text_clkset     .byt "Please set the time", 0
 time_win_x      .byt 20
 time_win_y      .byt 17
 time_win_w      .byt 25
@@ -180,7 +180,7 @@ main_win_x      .byt 18
 main_win_y      .byt 11
 main_win_w      .byt 27
 main_win_h      .byt 13
-text_mainmenu   .byt "Menu Principal", 0
+text_mainmenu   .byt "Main Menu", 0
 sysinfo_win_x   .byt 10
 sysinfo_win_y   .byt 9
 sysinfo_win_w   .byt 43
@@ -190,149 +190,153 @@ last_win_y      .byt 12
 last_win_w      .byt 60
 
 text_ellipse                      .byt 127, 128, 0
-text_mm_file                      .byt "Navegador de Arquivos", 0
-text_mm_last                      .byt "Jogos Recentes", 0
-text_mm_favorites                 .byt "Jogos Favoritos", 0
-mtext_mm_cfg                      .byt "Configura", 141, 139, "es", 0
-mtext_mm_sysinfo                  .byt "Informa", 141, 139, "es do Sistema", 0
-mtext_cfg_time                    .byt "Ajustar Rel", 137, "gio", 0
-mtext_cfg_bsx                     .byt "Op", 141, 139, "es BS-X", 0
-mtext_cfg_browser                 .byt "Op", 141, 139, "es do Navegador", 0
-mtext_cfg_chip                    .byt "Op", 141, 139, "es de Chip", 0
-mtext_cfg_sgb                     .byt "Op", 141, 139, "es SGB", 0
-mtext_cfg_ingame                  .byt "Op", 141, 139, "es no Jogo", 0
-mtext_cfg_savestates              .byt "Op", 141, 139, "es de Savestates", 0
-mtext_cfg_scic                    .byt "Op", 141, 139, "es SuperCIC", 0
-mtext_bsx_timesource              .byt "Rel", 137, "gio BS-X", 0
-mtext_bsx_time                    .byt "Hora customizada", 0
-mtext_scic_enable                 .byt "Ativar SuperCIC", 0
-mtext_scic_vmode_menu             .byt " ", 129, "Modo v", 136, "deo do menu", 0
-mtext_scic_vmode_game             .byt " ", 129, "Modo v", 136, "deo do jogo", 0
-mtext_browser_sort                .byt "Ordenar diret", 137, "rios", 0
-mtext_browser_hide_ext            .byt "Ocultar extens", 139, "es", 0
-mtext_browser_screensaver         .byt "Protetor de tela", 0
-mtext_browser_screensaver_timeout .byt "Escurecer tela ap", 137, "s", 0
-mtext_browser_ledbright           .byt "Brilho dos LEDs", 0
-mtext_browser_showcov             .byt "Mostrar capas", 0
-mtext_ingame_cheats               .byt "Iniciar com trapa", 141, "as", 0
-mtext_ingame_shortreset           .byt "Reset para o menu", 0
-mtext_ingame_enable               .byt "Hook no jogo", 0
-mtext_ingame_buttons              .byt " ", 129, "Bot", 139, "es no jogo", 0
-mtext_ingame_holdoff              .byt " ", 129, "Espera inicial", 0
-mtext_ingame_savestate            .byt "Savestates no jogo", 0
-mtext_savestate_slots             .byt " ", 129, "Slots de savestate", 0
-mtext_loadstate_delay             .byt " ", 129, "Atraso ao carregar", 0
-mtext_sgb_enable_hooks            .byt "Hooks no jogo", 0
+text_mm_file                      .byt "File Browser", 0
+text_mm_last                      .byt "Recent Games", 0
+text_mm_favorites                 .byt "Favorite Games", 0
+mtext_mm_cfg                      .byt "Configuration", 0
+mtext_mm_sysinfo                  .byt "System Information", 0
+text_mm_language                  .byt "Language", 0
+text_lang_en                      .byt "English", 0
+text_lang_ptbr                    .byt "Portugu", 135, "s", 0
+mtext_cfg_time                    .byt "Set Clock", 0
+mtext_cfg_bsx                     .byt "BS-X Settings", 0
+mtext_cfg_browser                 .byt "Browser Settings", 0
+mtext_cfg_chip                    .byt "Chip Options", 0
+mtext_cfg_sgb                     .byt "SGB Settings", 0
+mtext_cfg_ingame                  .byt "In-game Settings", 0
+mtext_cfg_savestates              .byt "Savestates Settings", 0
+mtext_cfg_scic                    .byt "SuperCIC Settings", 0
+mtext_bsx_timesource              .byt "BS-X clock", 0
+mtext_bsx_time                    .byt "Custom time", 0
+mtext_scic_enable                 .byt "Enable SuperCIC", 0
+mtext_scic_vmode_menu             .byt " ",129,"Menu video mode", 0
+mtext_scic_vmode_game             .byt " ",129,"Game video mode", 0
+mtext_browser_sort                .byt "Sort directories", 0
+mtext_browser_hide_ext            .byt "Hide file extensions", 0
+mtext_browser_screensaver         .byt "Screensaver", 0
+mtext_browser_screensaver_timeout .byt "Fade screen after", 0
+mtext_browser_ledbright           .byt "LED brightness", 0
+mtext_browser_showcov             .byt "Show covers", 0
+mtext_ingame_cheats               .byt "Start with cheats enabled", 0
+mtext_ingame_shortreset           .byt "Reset to menu", 0
+mtext_ingame_enable               .byt "In-game hook", 0
+mtext_ingame_buttons              .byt " ",129,"In-game buttons", 0
+mtext_ingame_holdoff              .byt " ",129,"Initial holdoff", 0
+mtext_ingame_savestate            .byt "In-game savestates", 0
+mtext_savestate_slots             .byt " ",129,"Savestate slots", 0
+mtext_loadstate_delay             .byt " ",129,"Load delay (frames)", 0
+mtext_sgb_enable_hooks            .byt "In-game hooks", 0
 mtext_sgb_enable_state            .byt "Savestates (XR, XL)", 0
-mtext_sgb_enh_override            .byt "Recursos do SGB", 0
-mtext_sgb_spr_increase            .byt "Limite m", 130, "x. sprites (40)", 0
-mtext_sgb_volume_boost            .byt "Boost de volume", 0
+mtext_sgb_enh_override            .byt "SGB features", 0
+mtext_sgb_spr_increase            .byt "Maximum sprites limit (40)", 0
+mtext_sgb_volume_boost            .byt "Volume boost", 0
 mtext_sgb_clock                   .byt "Clock (Timing)", 0
-mtext_sgb_bios                    .byt "Vers", 133, "o do BIOS", 0
-mtext_ingame_regionpatch          .byt "Patch auto. de regi", 133, "o", 0
-mtext_ingame_1chiptransientfixes  .byt "Corre", 141, 139, "es 1CHIP", 0
-mtext_ingame_brightlimit          .byt "Limite de brilho", 0
-mtext_ingame_resetpatch           .byt "Patch de reset (clock)", 0
-mtext_ingame_autosave             .byt "Auto-salvar", 0
-mtext_ingame_autosave_msu1        .byt " ", 129, "Auto-salvar MSU-1", 0
-mtext_chip_cx4_speed              .byt "Velocidade Cx4", 0
-mtext_chip_gsu_speed              .byt "Velocidade SuperFX", 0
-mtext_chip_msu1_volume_boost      .byt "Boost volume MSU-1", 0
+mtext_sgb_bios                    .byt "BIOS version", 0
+mtext_ingame_regionpatch          .byt "Auto region patch", 0
+mtext_ingame_1chiptransientfixes  .byt "1CHIP transient fixes", 0
+mtext_ingame_brightlimit          .byt "Brightness limit", 0
+mtext_ingame_resetpatch           .byt "Reset patch for clock phase", 0
+mtext_ingame_autosave             .byt "Autosave", 0
+mtext_ingame_autosave_msu1        .byt " ",129,"MSU-1 Autosave", 0
+mtext_chip_cx4_speed              .byt "Cx4 speed", 0
+mtext_chip_gsu_speed              .byt "SuperFX speed", 0
+mtext_chip_msu1_volume_boost      .byt "MSU-1 volume boost", 0
 
-mdesc_mm_last                     .byt "Mostra at", 134, " 10 jogos recentes", 0
-mdesc_mm_favorites                .byt "Mostra at", 134, " 10 jogos favoritos", 0
-mdesc_mm_cfg                      .byt "Configurar o sd2snes", 0
-mdesc_mm_sysinfo                  .byt "Info de FW, SD, SNES, CIC", 127, 128, 0
-mdesc_cfg_time                    .byt "Ajustar data e hora", 0
-mdesc_cfg_bsx                     .byt "Op", 141, 139, "es espec", 136, "ficas BS-X/Satellaview", 0
-mdesc_cfg_browser                 .byt "Alterar op", 141, 139, "es do navegador", 0
-mdesc_cfg_chip                    .byt "Recursos especiais de chip", 0
-mdesc_cfg_ingame                  .byt "Recursos durante o jogo", 0
-mdesc_cfg_sgb                     .byt "Recursos do Super Game Boy", 0
-mdesc_cfg_savestates              .byt "Recursos de savestates", 0
-mdesc_cfg_scic                    .byt "Ativar SuperCIC e modos de v", 136, "deo", 0
-mdesc_bsx_timesource              .byt "Data/hora vistas pelos jogos BS-X", 0
-mdesc_bsx_time                    .byt "Hora e data customizadas para BS-X", 0
-mdesc_scic_enable                 .byt "Necess", 130, "rio para recursos SuperCIC", 0
-mdesc_scic_vmode_menu             .byt "Modo de v", 136, "deo do menu", 0
-mdesc_scic_vmode_game             .byt "Modo de v", 136, "deo dos jogos", 0
-mdesc_browser_sort                .byt "Ordenar listas de arquivos", 0
-mdesc_browser_hide_ext            .byt "Ocultar extens", 139, "es de arquivos", 0
-mdesc_browser_screensaver         .byt "Escurecer a tela ap", 137, "s um tempo", 0
-mdesc_browser_screensaver_timeout .byt "Tempo para escurecer a tela", 0
-mdesc_browser_ledbright           .byt "Alterar brilho dos LEDs", 0
-mdesc_browser_showcov             .byt "Exibir capas dos jogos no menu", 0
-mdesc_ingame_cheats               .byt "Iniciar com trapa", 141, "as ativadas", 0
-mdesc_ingame_shortreset           .byt "Volta ao menu com reset curto", 0
-mdesc_ingame_enable               .byt "Necess", 130, "rio para bot", 139, "es e trapa", 141, "as 7E/7F", 0
-mdesc_ingame_buttons              .byt "Bot", 139, "es no jogo (reset, trapa", 141, "as", 127, 128, "). Requer hook ativo.", 0
-mdesc_ingame_holdoff              .byt "Espera 10s antes de ativar o hook", 0
-mdesc_ingame_savestate            .byt "Savestates no jogo. Padr", 133, "o: Salvar Start+L, Carregar Start+R", 0
-mdesc_savestate_slots             .byt "Slots de savestate. Select+Dpad escolhe o slot", 0
-mdesc_loadstate_delay             .byt "Ajustar atraso ao carregar state (frames)", 0
-mdesc_sgb_enable_hooks            .byt "Necess", 130, "rio para bot", 139, "es no jogo", 0
-mdesc_sgb_enable_state            .byt "Savestates internos no SGB2 (XR, XL)", 0
-mdesc_sgb_enh_override            .byt "Ativar/desativar recursos SGB", 0
-mdesc_sgb_spr_increase            .byt "Aumentar n", 140, "mero de sprites vis", 136, "veis", 0
-mdesc_sgb_volume_boost            .byt "Aumentar volume do ", 130, "udio SGB", 0
-mdesc_sgb_clock                   .byt "Ajustar clock do SGB (timing)", 0
-mdesc_sgb_bios                    .byt "Selecionar vers", 133, "o de BIOS do SGB", 0
-mdesc_ingame_regionpatch          .byt "Ignora prote", 141, 133, "o simples de regi", 133, "o", 0
-mdesc_ingame_1chiptransientfixes  .byt "Corrige glitches de brilho em 1CHIP/Jr.", 0
-mdesc_ingame_brightlimit          .byt "Limitar brilho geral (RGB em 1CHIP)", 0
-mdesc_ingame_resetpatch           .byt "Patch de reset para alinhar clocks", 0
-mdesc_ingame_autosave             .byt "Salvar SRM automaticamente quando muda", 0
-mdesc_ingame_autosave_msu1        .byt "MSU-1: salva SRM em pausas. Pode travar.", 0
-mdesc_chip_cx4_speed              .byt "Velocidade do soft core Cx4", 0
-mdesc_chip_gsu_speed              .byt "Velocidade do soft core SuperFX", 0
-mdesc_chip_msu1_volume_boost      .byt "Boost de volume MSU-1 (Rev. E-G)", 0
-mdesc_cx4_speed_fast              .byt "Rodar o mais r", 130, "pido poss", 136, "vel", 0
-mdesc_cx4_speed_normal            .byt "Rodar aprox. na velocidade original", 0
-mdesc_gsu_speed_fast              .byt "Rodar o mais r", 130, "pido poss", 136, "vel", 0
-mdesc_gsu_speed_normal            .byt "Rodar aprox. na velocidade original", 0
+mdesc_mm_last                     .byt "Show up to 10 most recently played games", 0
+mdesc_mm_favorites                .byt "Show up to 10 favorite games", 0
+mdesc_mm_cfg                      .byt "Configure the sd2snes", 0
+mdesc_mm_sysinfo                  .byt "Info about FW version, SD Card, SNES, CIC", 127, 128, 0
+mdesc_mm_language                 .byt "Set the menu/firmware language", 0
+mdesc_cfg_time                    .byt "Set the date and time", 0
+mdesc_cfg_bsx                     .byt "BS-X/Satellaview specific settings", 0
+mdesc_cfg_browser                 .byt "Change file browser settings", 0
+mdesc_cfg_chip                    .byt "Set special chip features", 0
+mdesc_cfg_ingame                  .byt "Set in-game features", 0
+mdesc_cfg_sgb                     .byt "Set Super Game Boy features", 0
+mdesc_cfg_savestates              .byt "Set savestates features", 0
+mdesc_cfg_scic                    .byt "Enable/Disable SuperCIC and set video modes", 0
+mdesc_bsx_timesource              .byt "Choose what date and time BS-X games see", 0
+mdesc_bsx_time                    .byt "Set custom time and date for BS-X games", 0
+mdesc_scic_enable                 .byt "Required for SuperCIC enhanced features", 0
+mdesc_scic_vmode_menu             .byt "Set video mode for menu", 0
+mdesc_scic_vmode_game             .byt "Set video mode for games", 0
+mdesc_browser_sort                .byt "Choose whether to sort file lists", 0
+mdesc_browser_hide_ext            .byt "Choose whether to hide file extensions", 0
+mdesc_browser_screensaver         .byt "Fade-out the screen after some time", 0
+mdesc_browser_screensaver_timeout .byt "Set time after which to fade the screen", 0
+mdesc_browser_ledbright           .byt "Change brightness of LEDs", 0
+mdesc_browser_showcov             .byt "Show game covers in the menu", 0
+mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
+mdesc_ingame_shortreset           .byt "Go back to menu on short reset if enabled", 0
+mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
+mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
+mdesc_ingame_holdoff              .byt "Wait 10 seconds before enabling hook (helps some games boot with hook enabled)", 0
+mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+L / Load - Start+R", 0
+mdesc_savestate_slots             .byt "Enable savestate slots. Select+Dpad: Each direction is a slot to choose", 0
+mdesc_loadstate_delay             .byt "Adjust the load state delay (frames)", 0
+mdesc_sgb_enable_hooks            .byt "Required for in-game buttons", 0
+mdesc_sgb_enable_state            .byt "Enable built-in savestates on SGB2 (XR, XL)", 0
+mdesc_sgb_enh_override            .byt "Disable/enable the SGB enhancements", 0
+mdesc_sgb_spr_increase            .byt "Increase number of supported visible sprites", 0
+mdesc_sgb_volume_boost            .byt "Set volume boost for SGB audio if its too quiet", 0
+mdesc_sgb_clock                   .byt "Adjusts the SGB clock (timing)", 0
+mdesc_sgb_bios                    .byt "Select a SGB firmware/BIOS version", 0
+mdesc_ingame_regionpatch          .byt "Bypass simple region protection by games", 0
+mdesc_ingame_1chiptransientfixes  .byt "Patch brightness changes to fix sync glitches, fading scanlines and missing shadow on 1CHIP/Jr. consoles", 0
+mdesc_ingame_brightlimit          .byt "Limit overall brightness (e.g. on 1CHIP consoles to meet RGB line levels)", 0
+mdesc_ingame_resetpatch           .byt "Enable reset patch to align clocks.  Fixes graphical issues in some games", 0
+mdesc_ingame_autosave             .byt "Automatically save SRM file when Save RAM contents change", 0
+mdesc_ingame_autosave_msu1        .byt "MSU-1: Take some opportunities to auto-save SRM file. May cause brief stuttering.", 0
+mdesc_chip_cx4_speed              .byt "Set speed of Cx4 soft core", 0
+mdesc_chip_gsu_speed              .byt "Set speed of SuperFX soft core", 0
+mdesc_chip_msu1_volume_boost      .byt "Set volume boost for MSU1 audio if your sd2snes is too quiet (Rev. E-G)", 0
+mdesc_cx4_speed_fast              .byt "Run as fast as possible", 0
+mdesc_cx4_speed_normal            .byt "Run at approx. original speed", 0
+mdesc_gsu_speed_fast              .byt "Run as fast as possible", 0
+mdesc_gsu_speed_normal            .byt "Run at approx. original speed", 0
 
-text_filesel_selected_file .byt "Arquivo selecionado", 0
-text_filesel_context_add_to_favorites .byt "Adicionar aos favoritos", 0
-mdesc_filesel_context_add_to_favorites .byt "Adiciona o arquivo aos favoritos", 0
+text_filesel_selected_file .byt "Selected file", 0
+text_filesel_context_add_to_favorites .byt "Add to favorites", 0
+mdesc_filesel_context_add_to_favorites .byt "Add the selected file to favorites", 0
 
-text_filesel_context_remove_from_favorites .byt "Remover dos favoritos", 0
-mdesc_filesel_context_remove_from_favorites .byt "Remove o arquivo dos favoritos", 0
+text_filesel_context_remove_from_favorites .byt "Remove from favorites", 0
+mdesc_filesel_context_remove_from_favorites .byt "Remove the selected file from favorites", 0
 
-text_recent_context_remove_from_recent .byt "Remover dos recentes", 0
-mdesc_recent_context_remove_from_recent .byt "Remove o arquivo dos jogos recentes", 0
+text_recent_context_remove_from_recent .byt "Remove from recent games", 0
+mdesc_recent_context_remove_from_recent .byt "Remove selected file from the recent games list", 0
 
-text_filesel_set_as_autoboot .byt "Definir como autoboot", 0
-mdesc_filesel_set_as_autoboot .byt "Inicia esta ROM no pr", 137, "ximo power-on (START cancela)", 0
+text_filesel_set_as_autoboot .byt "Set as autoboot", 0
+mdesc_filesel_set_as_autoboot .byt "Boot this ROM automatically on next power-on (hold START during powerup/reset to cancel)", 0
 
-text_statusbar_play .byt "A:Jogar B:Voltar X:Menu", 0
-text_statusbar_keys .byt "A:OK B:Voltar X:Menu Y:Contexto", 0
-text_statusbar_spc  .byt "B:Voltar", 0
-text_statusbar_menu .byt "A:OK B:Voltar", 0
-text_last           .byt "Jogos recentes", 0
-text_favorite       .byt "Jogos favoritos", 0
+text_statusbar_play .byt "A:Play B:Back X:Menu", 0
+text_statusbar_keys .byt "A:Select B:Back X:Menu Y:Context", 0
+text_statusbar_spc  .byt "B:Back", 0
+text_statusbar_menu .byt "A:Select B:Back", 0
+text_last           .byt "Recent games", 0
+text_favorite       .byt "Favorite games", 0
 text_system         .byt "CPU/PPU1/PPU2: a/b/c        VMode: x0Hz",0
 
-text_on_p1      .byt "Lig: P1", 0
-text_on_p2      .byt "Lig: P2", 0
-text_on         .byt "Lig", 0
-text_off        .byt "Des", 0
-text_enabled    .byt "Ativado", 0
-text_disabled   .byt "Desativ.", 0
+text_on_p1      .byt "On: P1", 0
+text_on_p2      .byt "On: P2", 0
+text_on         .byt "On", 0
+text_off        .byt "Off", 0
+text_enabled    .byt "Enabled", 0
+text_disabled   .byt "Disabled", 0
 text_normal     .byt "Normal", 0
-text_fast       .byt "R", 130, "pido", 0
-text_rtc        .byt "Tempo real", 0
-text_custom     .byt "Custom.", 0
-text_yes        .byt "Sim", 0
-text_no         .byt "N", 133, "o", 0
+text_fast       .byt "Fast", 0
+text_rtc        .byt "Real-time", 0
+text_custom     .byt "Custom", 0
+text_yes        .byt "Yes", 0
+text_no         .byt "No", 0
 text_50Hz       .byt "50Hz", 0
 text_60Hz       .byt "60Hz", 0
 text_auto       .byt "Auto", 0
 text_pal        .byt "PAL", 0
 text_ntsc       .byt "NTSC", 0
-text_add        .byt "Adicionar", 0
-text_remove     .byt "Remover", 0
-text_edit       .byt "Editar", 0
-text_save       .byt "Salvar", 0
+text_add        .byt "Add", 0
+text_remove     .byt "Remove", 0
+text_edit       .byt "Edit", 0
+text_save       .byt "Save", 0
 
 text_1min       .byt "1 min", 0
 text_2min       .byt "2 mins", 0
@@ -344,7 +348,7 @@ text_15min      .byt "15 mins", 0
 text_20min      .byt "20 mins", 0
 text_30min      .byt "30 mins", 0
 text_45min      .byt "45 mins", 0
-text_60min      .byt "1 hora", 0
+text_60min      .byt "1 hour", 0
 
 text_minus1     .byt "-1", 0
 text_minus2     .byt "-2", 0
@@ -378,52 +382,52 @@ text_12db       .byt "+12dBFS", 0
 text_sgb_clock1 .byt "SGB1: 4.295 MHz", 0
 text_sgb_clock2 .byt "SGB2: 4.194 MHz", 0
 
-text_spcplay    .byt "Tocador de SPC", 0
+text_spcplay    .byt "SPC Music Player", 0
 spcplay_win_x   .byt 15
 spcplay_win_y   .byt 15
 spcplay_win_w   .byt 33
 spcplay_win_h   .byt 3
 
-text_spcload    .byt "Carregando SPC no SPC700", 127, 128, 0
-text_spcstarta  .byt "**** Tocando SPC ****", 0
-text_spcstartb  .byt "Nome:  ", 0
-text_spcstartc  .byt "M", 140, "sica:", 0
-text_spcstartd  .byt "Artista:", 0
-text_spc_statusbar .byt "B:Voltar", 0
+text_spcload    .byt "Loading SPC data to SPC700", 127, 128, 0
+text_spcstarta  .byt "**** Now playing SPC tune ****", 0
+text_spcstartb  .byt "Name:  ",0
+text_spcstartc  .byt "Song:  ",0
+text_spcstartd  .byt "Artist:",0
+text_spc_statusbar .byt "B:Back", 0
 
 spcstart_win_x  .byt 10
 spcstart_win_y  .byt 13
 spcstart_win_w  .byt 44
 spcstart_win_h  .byt 9
 
-text_loading    .byt "Carregando", 127, 128, "                  ", 0
-text_saving     .byt "Salvando", 127, 128, "                    ", 0
+text_loading    .byt "Loading", 127, 128, "                        ",0
+text_saving     .byt "Saving", 127, 128, "                         ",0
 loading_win_x   .byt 2
 loading_win_y   .byt 28
 loading_win_w   .byt 34
 loading_win_h   .byt 1
 
-text_cheat      .byt "Trapa", 141, "as para ", 0
+text_cheat      .byt "Cheats for ", 0
 text_ips_header .byt "Patches", 0
-text_ips_nopatch .byt "[Sem patch]", 0
+text_ips_nopatch .byt "[No patch]", 0
 cheat_win_x     .byt 6
 cheat_win_y     .byt 11
 cheat_win_w     .byt 52
 cheat_win_h     .byt 15
 
-cheat_tab_head  .byt "Nome                         # c", 137, "digos   Ativado", 0
+cheat_tab_head  .byt "Name                         # of codes  Enabled", 0
 cheat_tab_line  .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
                 .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
                 .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,0
 
-cheat_detail_head .byt "PAR       GG        Endere", 141, "o Valor", 0
+cheat_detail_head .byt "PAR       GG        Address Value", 0
 cheat_detail_line .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
                   .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
                   .byt 24,0
 
 text_spcid      .byt "SNES-SPC700"
 text_easter_egg  .byt "Traduzido por Luan Freitas (@ludufre)", 0
-text_easter_egg2 .byt "Testado por @lima112", 0
+text_easter_egg2 .byt "Testado por @lima112 e @thalescamara", 0
 egg_win_x       .byt 12
 egg_win_y       .byt 14
 egg_win_w       .byt 40
@@ -439,4 +443,3 @@ gfxptr_info     .byt "_GFXPTR_"
                 .word oam_data_l
                 .word oam_data_h
                 .word palette
-
