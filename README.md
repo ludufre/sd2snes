@@ -18,6 +18,7 @@ SD card based multi-purpose cartridge for the SNES
 - 🎮 **Game covers** — shows the game's box-art cover in the menu as you browse the list. See the **Game Covers** section below.
 - 🎵 **Menu background music** — plays an `.spc` track while you browse the menu. See the **Menu Music** section below.
 - 🩹 **IPS/BPS patches** — apply translation/hack patches to a game at boot, without modifying the ROM. See the **IPS/BPS Patches** section below.
+- 🔄 **Reset to menu — back to your folder/ROM** — a short reset can return you straight to the folder, or even the exact ROM, you were just playing. See the **Reset to Menu** section below.
 
 ## Installation
 
@@ -106,6 +107,22 @@ The menu can play background music while you browse the game list. The music is 
 - Only the `.spc` format works (not MP3/WAV). An `.spc` isn't an audio recording — it's a snapshot of the SNES sound chip (samples + sequence), capped at 64 KB. **There is no MP3-to-`.spc` conversion**; use ready-made `.spc` tracks.
 - When the music loads (at boot, after a reset, or when you switch it on) there's a brief ~1 s pause while the 64 KB are uploaded to the sound chip. This is a hardware limitation (the transfer must run with interrupts disabled).
 - Opening an `.spc` from the file browser pauses the background music automatically and resumes it when you go back (B button).
+
+---
+
+## 🔄 Reset to Menu
+
+The firmware can bring you **back to the menu** when you press the console's reset button (a short reset), instead of restarting the running game. This fork extends that option so you don't land at the top of the list every time — it can take you **straight back to where you were**.
+
+Set it in the menu at **Configurações → Opções no Jogo → Reset para o menu** (*Settings → In-game Settings → Reset to menu*). Four modes are available:
+
+- **Off** — the reset button just restarts the game (default SNES behavior).
+- **On** — a short reset returns to the menu.
+- **Folder** *(new)* — returns to the menu **and opens the folder** of the game you were playing.
+- **ROM** *(new)* — everything **Folder** does, **plus** it pre-selects (highlights) the ROM you were just playing, so you can relaunch it — or jump to a neighbor — with a single press.
+
+> [!NOTE]
+> The **Folder** and **ROM** modes only reposition the list after a reset back to the menu — a cold power-on still starts at the top, as usual. Your choice is saved in the config and survives reboots.
 
 ---
 

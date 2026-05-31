@@ -18,6 +18,7 @@ Cartucho multifuncional baseado em cartão SD para o SNES
 - 🎮 **Capas dos jogos** — exibe a capa (box-art) do jogo no menu enquanto você navega pela lista. Veja a seção **Capas dos Jogos** abaixo.
 - 🎵 **Música de fundo no menu** — toca uma faixa `.spc` enquanto você navega pelo menu. Veja a seção **Música do Menu** abaixo.
 - 🩹 **Patches IPS/BPS** — aplica patches de tradução/hack a um jogo no boot, sem modificar a ROM. Veja a seção **Patches IPS/BPS** abaixo.
+- 🔄 **Reset para o menu — de volta à sua pasta/ROM** — um reset curto pode te levar direto à pasta, ou até à ROM exata, que você estava jogando. Veja a seção **Reset para o Menu** abaixo.
 
 ## Instalação
 
@@ -106,6 +107,22 @@ O menu pode tocar uma música de fundo enquanto você navega pela lista de jogos
 - Só funciona o formato `.spc` (não MP3/WAV). Um `.spc` não é uma gravação de áudio — é um "snapshot" do chip de som do SNES (amostras + sequência), limitado a 64 KB. **Não existe conversão de MP3 para `.spc`**; use trilhas `.spc` prontas.
 - Ao carregar a música (no boot, após um reset ou ao ligar o interruptor) há uma breve pausa de ~1 s enquanto os 64 KB são enviados ao chip de som. Isso é uma limitação do hardware (a transferência precisa rodar com as interrupções desligadas).
 - Ao abrir um `.spc` pelo navegador de arquivos, a música de fundo é pausada automaticamente e retomada quando você volta (tecla B).
+
+---
+
+## 🔄 Reset para o Menu
+
+O firmware pode te levar **de volta ao menu** quando você aperta o botão de reset do console (um reset curto), em vez de reiniciar o jogo. Este fork amplia essa opção para que você não caia sempre no topo da lista — ele pode te levar **direto para onde você estava**.
+
+Configure no menu em **Configurações → Opções no Jogo → Reset para o menu**. Há quatro modos:
+
+- **Des** — o botão de reset apenas reinicia o jogo (comportamento padrão do SNES).
+- **Lig** — um reset curto volta ao menu.
+- **Pasta** *(novo)* — volta ao menu **e abre a pasta** do jogo que você estava jogando.
+- **ROM** *(novo)* — tudo que o **Pasta** faz, **e ainda** pré-seleciona (destaca) a ROM que você estava jogando, para você reabri-la — ou pular para uma vizinha — com um único toque.
+
+> [!NOTE]
+> Os modos **Pasta** e **ROM** só reposicionam a lista após um reset de volta ao menu — ligar o console do zero ainda começa no topo, como de costume. Sua escolha é salva na configuração e mantida entre reinícios.
 
 ---
 
