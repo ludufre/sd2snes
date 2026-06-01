@@ -8,17 +8,19 @@ SD card based multi-purpose cartridge for the SNES
 
 > **Notice**
 >
-> This fork provides the **Brazilian Portuguese translation** and the **game covers** feature for the sd2snes firmware, based on the [original repository](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf).
+> This fork provides a **multi-language menu (Brazilian Portuguese + English, switchable in the menu)** and the **game covers** feature for the sd2snes firmware, based on the [original repository](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf).
 >
-> For questions and bugs about the **translation** or the **covers**, use this repository. For anything else related to the firmware itself, please use the original repository.
+> For questions and bugs about the **translation / language selector** or the **covers**, use this repository. For anything else related to the firmware itself, please use the original repository.
 
 ## ✨ Highlights
 
-- 🇧🇷 **Brazilian Portuguese translation** — the firmware menu, messages and screens fully translated.
+This fork is based on the original sd2snes project and also incorporates community contributions from the original repository.
+
+- 🌐 **Multi-language (Portuguese + English)** — the firmware menu, messages and screens fully translated to Brazilian Portuguese, plus an in-menu **language selector** to switch between Portuguese and the original English on the fly. See the **Languages** section below.
 - 🎮 **Game covers** — shows the game's box-art cover in the menu as you browse the list. See the **Game Covers** section below.
 - 🎵 **Menu background music** — plays an `.spc` track while you browse the menu. See the **Menu Music** section below.
-- 🩹 **IPS/BPS patches** — apply translation/hack patches to a game at boot, without modifying the ROM. See the **IPS/BPS Patches** section below.
-- 🔄 **Reset to menu — back to your folder/ROM** — a short reset can return you straight to the folder, or even the exact ROM, you were just playing. See the **Reset to Menu** section below.
+- 🩹 **IPS/BPS patches** — apply translation/hack patches to a game at boot, without modifying the ROM. See the **IPS/BPS Patches** section below. By [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293) and modified by me.
+- 🔄 **Reset to menu — back to your folder/ROM** — a short reset can return you straight to the folder, or even the exact ROM, you were just playing. See the **Reset to Menu** section below. By [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293).
 
 ## Installation
 
@@ -29,7 +31,18 @@ Each Release name indicates the equivalent official firmware version. For exampl
 1. Download and install the official firmware of the matching version from [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 2. Download the translation `.zip` from [Releases](https://github.com/ludufre/sd2snes/releases), choosing the version that matches the installed firmware.
 3. Extract the contents of the `.zip` into the `/sd2snes` folder on your SD card, replacing the existing files.
-4. Insert the card into your sd2snes/FXPAK and power on the console. The menu will load in Brazilian Portuguese.
+4. Insert the card into your sd2snes/FXPAK and power on the console. The menu loads in Brazilian Portuguese by default — switch to English (or back) anytime via the **Language** option in the main menu.
+
+## 🌐 Languages
+
+This fork isn't only a Brazilian Portuguese translation — it ships a **language selector** so the menu can run in **Portuguese** or in the **original English**, switchable at any time.
+
+Switch it via the **Language** option in the main menu — the change is applied live, and your choice is saved for the next boot.
+
+- **Português** — the full Brazilian Portuguese translation (menu, messages, screens).
+- **English** — the original firmware language.
+
+---
 
 ## 🎮 Game Covers
 
@@ -73,7 +86,7 @@ When you open a game that has matching patches, the menu shows a **patch selecto
 
 `.ips` and `.bps` are auto-detected. BPS patches may produce a larger ROM (this is handled automatically).
 
-**Verify integrity:** there's an option in the menu at **Configurações → Opções de Patches → Verificar Integridade** (*Settings → Patch Options → Verify integrity*). When on (the default), the firmware re-reads the patched ROM to confirm it was applied correctly. This makes loading noticeably slower (~23 s for a 4 MB BPS), so turn it off if you'd rather have faster loads.
+**Verify integrity:** there's an option in the menu at **Configuration → Patch Options → Verify Integrity**. When "On", the firmware re-reads the patched ROM to confirm it was applied correctly. This makes loading noticeably slower (~23 s for a 4 MB BPS), so turn it off if you'd rather have faster loads.
 
 ---
 
@@ -100,7 +113,7 @@ The menu can play background music while you browse the game list. The music is 
 > [!TIP]
 > Many sites distribute soundtracks as `.rsn` (a `.rar` archive containing several `.spc` files). In that case, extract the `.rsn` and pick one of the `.spc` files inside.
 
-**Turning it on/off:** there's a switch in the menu at **Configurações → Opções do Navegador → Música do menu** (*Settings → Browser Options → Menu music*). When on (the default), the menu looks for `/sd2snes/menu.spc`; if the file isn't present, the menu simply stays silent (no error).
+**Turning it on/off:** there's a switch in the menu at **Configuration → Browser Settings → Menu music**. When on (the default), the menu looks for `/sd2snes/menu.spc`; if the file isn't present, the menu simply stays silent (no error).
 
 **Notes:**
 
@@ -114,7 +127,7 @@ The menu can play background music while you browse the game list. The music is 
 
 The firmware can bring you **back to the menu** when you press the console's reset button (a short reset), instead of restarting the running game. This fork extends that option so you don't land at the top of the list every time — it can take you **straight back to where you were**.
 
-Set it in the menu at **Configurações → Opções no Jogo → Reset para o menu** (*Settings → In-game Settings → Reset to menu*). Four modes are available:
+Set it in the menu at **Configuration → In-game Settings → Reset to menu**. Four modes are available:
 
 - **Off** — the reset button just restarts the game (default SNES behavior).
 - **On** — a short reset returns to the menu.
@@ -125,6 +138,19 @@ Set it in the menu at **Configurações → Opções no Jogo → Reset para o me
 > The **Folder** and **ROM** modes only reposition the list after a reset back to the menu — a cold power-on still starts at the top, as usual. Your choice is saved in the config and survives reboots.
 
 ---
+
+---
+
+## ⚖️ License & Source Code
+
+This project remains licensed under the GNU General Public License v2.0 (GPL-2.0), following the original sd2snes project license.
+
+All original copyrights belong to their respective authors and contributors.
+
+Additional modifications in this fork:
+Copyright (C) 2026 Luan Freitas
+
+Source code for all distributed binaries/releases is available in this repository and corresponding Git tags/releases, in accordance with GPL requirements.
 
 See [Original README](https://github.com/mrehkopf/sd2snes/blob/master/README.md)
 

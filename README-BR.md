@@ -8,17 +8,19 @@ Cartucho multifuncional baseado em cartão SD para o SNES
 
 > **Aviso**
 >
-> Este fork fornece a **tradução em Português do Brasil** e a **funcionalidade de capas dos jogos** para o firmware do sd2snes, baseado no [repositório original](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf).
+> Este fork fornece um **menu multi-idioma (Português do Brasil + Inglês, alternável no menu)** e a **funcionalidade de capas dos jogos** para o firmware do sd2snes, baseado no [repositório original](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf).
 >
-> Para dúvidas e bugs sobre a **tradução** ou as **capas**, use este repositório. Para qualquer outra coisa relacionada ao firmware em si, por favor utilize o repositório original.
+> Para dúvidas e bugs sobre a **tradução / seletor de idioma** ou as **capas**, use este repositório. Para qualquer outra coisa relacionada ao firmware em si, por favor utilize o repositório original.
 
 ## ✨ Destaques
 
-- 🇧🇷 **Tradução em Português do Brasil** — menu, mensagens e telas do firmware totalmente traduzidos.
+Este fork é baseado no projeto original do sd2snes e também incorpora contribuições da comunidade do repositório original.
+
+- 🌐 **Multi-idioma (Português + Inglês)** — menu, mensagens e telas do firmware totalmente traduzidos para o Português do Brasil, com um **seletor de idioma** no menu para alternar entre Português e o Inglês original na hora. Veja a seção **Idiomas** abaixo.
 - 🎮 **Capas dos jogos** — exibe a capa (box-art) do jogo no menu enquanto você navega pela lista. Veja a seção **Capas dos Jogos** abaixo.
 - 🎵 **Música de fundo no menu** — toca uma faixa `.spc` enquanto você navega pelo menu. Veja a seção **Música do Menu** abaixo.
-- 🩹 **Patches IPS/BPS** — aplica patches de tradução/hack a um jogo no boot, sem modificar a ROM. Veja a seção **Patches IPS/BPS** abaixo.
-- 🔄 **Reset para o menu — de volta à sua pasta/ROM** — um reset curto pode te levar direto à pasta, ou até à ROM exata, que você estava jogando. Veja a seção **Reset para o Menu** abaixo.
+- 🩹 **Patches IPS/BPS** — aplica patches de tradução/hack a um jogo no boot, sem modificar a ROM. Veja a seção **Patches IPS/BPS** abaixo. Por [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293) e modificado por mim.
+- 🔄 **Reset para o menu — de volta à sua pasta/ROM** — um reset curto pode te levar direto à pasta, ou até à ROM exata, que você estava jogando. Veja a seção **Reset para o Menu** abaixo. Por [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293).
 
 ## Instalação
 
@@ -29,7 +31,18 @@ O nome de cada Release indica a versão equivalente do firmware oficial. Por exe
 1. Baixe e instale o firmware oficial da versão correspondente em [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 2. Baixe o `.zip` da tradução em [Releases](https://github.com/ludufre/sd2snes/releases), escolhendo a versão equivalente ao firmware instalado.
 3. Extraia o conteúdo do `.zip` dentro da pasta `/sd2snes` do seu cartão SD, substituindo os arquivos existentes.
-4. Insira o cartão no seu sd2snes/FXPAK e ligue o console. O menu será carregado em Português do Brasil.
+4. Insira o cartão no seu sd2snes/FXPAK e ligue o console. O menu carrega em Português do Brasil por padrão — troque para Inglês (ou de volta) a qualquer momento pela opção **Idioma** no menu principal.
+
+## 🌐 Idiomas
+
+Este fork não é só uma tradução em Português do Brasil — ele traz um **seletor de idioma** para o menu rodar em **Português** ou no **Inglês original**, alternável a qualquer momento.
+
+Alterne pela opção **Idioma** no menu principal — a troca é aplicada na hora e sua escolha é salva para o próximo boot.
+
+- **Português** — a tradução completa em Português do Brasil (menu, mensagens, telas).
+- **English** — o idioma original do firmware.
+
+---
 
 ## 🎮 Capas dos Jogos
 
@@ -125,6 +138,17 @@ Configure no menu em **Configurações → Opções no Jogo → Reset para o men
 > Os modos **Pasta** e **ROM** só reposicionam a lista após um reset de volta ao menu — ligar o console do zero ainda começa no topo, como de costume. Sua escolha é salva na configuração e mantida entre reinícios.
 
 ---
+
+## ⚖️ Licença & Código-fonte
+
+Este projeto continua licenciado sob a GNU General Public License v2.0 (GPL-2.0), seguindo a licença do projeto original sd2snes.
+
+Todos os direitos autorais originais pertencem aos seus respectivos autores e contribuidores.
+
+Modificações adicionais neste fork:
+Copyright (C) 2026 Luan Freitas
+
+O código-fonte de todos os binários/releases distribuídos está disponível neste repositório e nas tags/releases correspondentes do Git, em conformidade com os requisitos da GPL.
 
 Veja o [README original](https://github.com/mrehkopf/sd2snes/blob/master/README.md)
 
