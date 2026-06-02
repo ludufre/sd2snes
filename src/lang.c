@@ -12,6 +12,7 @@ uint8_t lang_idx(void) {
 const char *const cicstatefriendly_l[NUM_LANG][4] = {
   /* LANG_EN   */ { "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used" },
   /* LANG_PTBR */ { "Original ou sem", "CIC original (falhou)", "SuperCIC ampliado", "SuperCIC detect. n/usado" },
+  /* LANG_ES   */ { "Original o sin CIC", "CIC original (fall\x89)", "SuperCIC ampliado", "SuperCIC detect. sin uso" },
 };
 
 /* FatFs FRESULT friendly names (fileops.c) -------------------------------- */
@@ -31,6 +32,14 @@ const char *const fresult_friendly_names_l[NUM_LANG][20] = {
     "Drive invalido", "Sem mem. trab.", "FS invalido", "mkfs() abortou",
     "Timeout no SD", "Acesso bloqueado", "Sem memoria", "Muitos arq. abertos",
     "Param. invalido"
+  },
+  /* LANG_ES */ {
+    "Sin error", "Error de E/S", "Error interno FS",
+    "Disco no listo", "Arch. no hallado", "Carpeta no hallada", "Ruta inv\x82lida",
+    "Acceso denegado", "Denegado (ya existe)", "Arch. inv\x82lido", "Protegido",
+    "Disco inv\x82lido", "Sin \x82rea trab.", "FS inv\x82lido", "mkfs() abortado",
+    "Timeout del SD", "Acceso bloqueado", "Sin memoria", "Muchos arch. abiertos",
+    "Par\x82m. inv\x82lido"
   },
 };
 
@@ -64,10 +73,25 @@ const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
     [SI_SNES_CLK_MEASURING] = "Clock SNES: medindo\x7f\x80",
     [SI_SNES_CLK]           = "Clock SNES: %ldHz",
   },
+  /* LANG_ES */ {
+    [SI_BUSY_DISK]          = "Calculando espacio en disco\x7f\x80           ",
+    [SI_FW_VERSION]         = "    Versi\x89n firmware: %s",
+    [SI_SD_REMOVED]         = "   *** SD extra\x88""do/USB ocupado ***   ",
+    [SI_SD_MAKER]           = "Fabricante SD:   0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "Nombre producto: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "Serial SD:       %02x%02x%02x%02x, Fab. %d/%02d",
+    [SI_SD_ACC_TIME]        = "Acceso SD:    %ld.%03ld / %ld.%03ld ms med/m\x82x",
+    [SI_SD_ACC_MEASURING]   = "Acceso SD:    midiendo\x7f\x80",
+    [SI_CARD_USAGE]         = "Uso del SD: %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "Estado CIC: %s",
+    [SI_SNES_CLK_MEASURING] = "Clock SNES: midiendo\x7f\x80",
+    [SI_SNES_CLK]           = "Clock SNES: %ldHz",
+  },
 };
 
 /* SGB BIOS state words (sysinfo.c) ---------------------------------------- */
 const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT] = {
   /* LANG_EN   */ { "missing", "mismatch", "ok", "checking" },
   /* LANG_PTBR */ { "ausente", "errado", "ok", "lendo" },
+  /* LANG_ES   */ { "ausente", "err\x89neo", "ok", "leyendo" },
 };

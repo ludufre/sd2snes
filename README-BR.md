@@ -1,6 +1,7 @@
 <h1> sd2snes ❤️ capas</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Demonstração">
+<img src="gfx/langs.gif" width="384" alt="O menu principal em Inglês, Português do Brasil e Espanhol">
 
 Cartucho multifuncional baseado em cartão SD para o SNES
 
@@ -8,7 +9,7 @@ Cartucho multifuncional baseado em cartão SD para o SNES
 
 > **Aviso**
 >
-> Este fork fornece um **menu multi-idioma (Português do Brasil + Inglês, alternável no menu)** e a **funcionalidade de capas dos jogos** para o firmware do sd2snes, baseado no [repositório original](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf).
+> Este fork fornece um **menu multi-idioma (Português do Brasil, Inglês e Espanhol, alternável no menu)** e a **funcionalidade de capas dos jogos** para o firmware do sd2snes, baseado no [repositório original](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf).
 >
 > Para dúvidas e bugs sobre a **tradução / seletor de idioma** ou as **capas**, use este repositório. Para qualquer outra coisa relacionada ao firmware em si, por favor utilize o repositório original.
 
@@ -16,7 +17,7 @@ Cartucho multifuncional baseado em cartão SD para o SNES
 
 Este fork é baseado no projeto original do sd2snes e também incorpora contribuições da comunidade do repositório original.
 
-- 🌐 **Multi-idioma (Português + Inglês)** — menu, mensagens e telas do firmware totalmente traduzidos para o Português do Brasil, com um **seletor de idioma** no menu para alternar entre Português e o Inglês original na hora. Veja a seção **Idiomas** abaixo.
+- 🌐 **Multi-idioma (Português + Inglês + Espanhol)** — menu, mensagens e telas do firmware totalmente traduzidos para o Português do Brasil **e o Espanhol**, com um **seletor de idioma** no menu para alternar entre Português, o Inglês original e o Espanhol na hora. Veja a seção **Idiomas** abaixo.
 - 🎮 **Capas dos jogos** — exibe a capa (box-art) do jogo no menu enquanto você navega pela lista. Veja a seção **Capas dos Jogos** abaixo.
 - 🎵 **Música de fundo no menu** — toca uma faixa `.spc` enquanto você navega pelo menu. Veja a seção **Música do Menu** abaixo.
 - 🩹 **Patches IPS/BPS** — aplica patches de tradução/hack a um jogo no boot, sem modificar a ROM. Veja a seção **Patches IPS/BPS** abaixo. Por [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293) e modificado por mim.
@@ -31,16 +32,19 @@ O nome de cada Release indica a versão equivalente do firmware oficial. Por exe
 1. Baixe e instale o firmware oficial da versão correspondente em [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 2. Baixe o `.zip` da tradução em [Releases](https://github.com/ludufre/sd2snes/releases), escolhendo a versão equivalente ao firmware instalado.
 3. Extraia o conteúdo do `.zip` dentro da pasta `/sd2snes` do seu cartão SD, substituindo os arquivos existentes.
-4. Insira o cartão no seu sd2snes/FXPAK e ligue o console. O menu carrega em Português do Brasil por padrão — troque para Inglês (ou de volta) a qualquer momento pela opção **Idioma** no menu principal.
+4. Insira o cartão no seu sd2snes/FXPAK e ligue o console. O menu carrega em Português do Brasil por padrão — alterne entre Português, Inglês e Espanhol a qualquer momento pela opção **Idioma** no menu principal.
 
 ## 🌐 Idiomas
 
-Este fork não é só uma tradução em Português do Brasil — ele traz um **seletor de idioma** para o menu rodar em **Português** ou no **Inglês original**, alternável a qualquer momento.
+<img src="gfx/langs.gif" width="512" alt="O menu principal em Inglês, Português do Brasil e Espanhol">
+
+Este fork não é só uma tradução em Português do Brasil — ele traz um **seletor de idioma** para o menu rodar em **Português do Brasil**, no **Inglês original** ou em **Espanhol**, alternável a qualquer momento.
 
 Alterne pela opção **Idioma** no menu principal — a troca é aplicada na hora e sua escolha é salva para o próximo boot.
 
 - **Português** — a tradução completa em Português do Brasil (menu, mensagens, telas).
 - **English** — o idioma original do firmware.
+- **Español** — tradução completa em Espanhol (menu, mensagens e telas). *(novo)*
 
 ---
 

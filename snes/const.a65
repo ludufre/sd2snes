@@ -198,6 +198,7 @@ mtext_mm_sysinfo                  .byt "System Information", 0
 text_mm_language                  .byt "Language", 0
 text_lang_en                      .byt "English", 0
 text_lang_ptbr                    .byt "Portugu", 135, "s", 0
+text_lang_es                      .byt "Espa", 154, "ol", 0
 mtext_cfg_time                    .byt "Set Clock", 0
 mtext_cfg_bsx                     .byt "BS-X Settings", 0
 mtext_cfg_browser                 .byt "Browser Settings", 0

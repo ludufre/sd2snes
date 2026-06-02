@@ -19,8 +19,8 @@ all: $(OUT) $(MAP)
 # Generate the const source from the English base + language dicts.
 # EN+PT only (es dropped to fit bank C0). Re-add utils/lang_es.py to both lines
 # below to go trilingual again -- but only if it fits C0 (see the link guard).
-const_lang.a65: const.a65 utils/build_const.py utils/lang_ptbr.py
-	python3 utils/build_const.py const.a65 utils/lang_ptbr.py -o const_lang.a65
+const_lang.a65: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py
+	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py -o const_lang.a65
 
 smc: menu.bin
 	cat menu.bin sd2snes.rom > menu.smc

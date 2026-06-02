@@ -164,7 +164,7 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_AUTOSAVE_MSU1, CFG.enable_autosave_msu1 ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Show per-ROM cover preview (Game.cov) in the file browser\n", CFG_SHOW_COVERS);
   f_printf(&file_handle, "%s: %s\n", CFG_SHOW_COVERS, CFG.show_covers ? "true" : "false");
-  f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR)\n", CFG_LANGUAGE);
+  f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR, 2: Spanish)\n", CFG_LANGUAGE);
   f_printf(&file_handle, "%s: %d\n", CFG_LANGUAGE, CFG.language);
   f_printf(&file_handle, "\n#  %s: Re-read and CRC-check the ROM after applying an IPS/BPS patch (slow; ~23s for a 4MB BPS)\n", CFG_PATCH_VERIFY_INTEGRITY);
   f_printf(&file_handle, "%s: %s\n", CFG_PATCH_VERIFY_INTEGRITY, CFG.patch_verify_integrity ? "true" : "false");
@@ -308,7 +308,7 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_LANGUAGE, &tok)) {
       CFG.language = tok.longvalue;
-      if(CFG.language > 1) CFG.language = 0;
+      if(CFG.language > 2) CFG.language = 0;
     }
     if(yaml_get_itemvalue(CFG_PATCH_VERIFY_INTEGRITY, &tok)) {
       CFG.patch_verify_integrity = tok.boolvalue ? 1 : 0;

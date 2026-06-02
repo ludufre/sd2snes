@@ -1,6 +1,7 @@
 <h1> sd2snes ❤️ covers</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Showcase">
+<img src="gfx/langs.gif" width="384" alt="The main menu shown in English, Brazilian Portuguese and Spanish">
 
 SD card based multi-purpose cartridge for the SNES
 
@@ -8,7 +9,7 @@ SD card based multi-purpose cartridge for the SNES
 
 > **Notice**
 >
-> This fork provides a **multi-language menu (Brazilian Portuguese + English, switchable in the menu)** and the **game covers** feature for the sd2snes firmware, based on the [original repository](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf).
+> This fork provides a **multi-language menu (Brazilian Portuguese, English and Spanish, switchable in the menu)** and the **game covers** feature for the sd2snes firmware, based on the [original repository](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf).
 >
 > For questions and bugs about the **translation / language selector** or the **covers**, use this repository. For anything else related to the firmware itself, please use the original repository.
 
@@ -16,7 +17,7 @@ SD card based multi-purpose cartridge for the SNES
 
 This fork is based on the original sd2snes project and also incorporates community contributions from the original repository.
 
-- 🌐 **Multi-language (Portuguese + English)** — the firmware menu, messages and screens fully translated to Brazilian Portuguese, plus an in-menu **language selector** to switch between Portuguese and the original English on the fly. See the **Languages** section below.
+- 🌐 **Multi-language (Portuguese + English + Spanish)** — the firmware menu, messages and screens fully translated to Brazilian Portuguese **and Spanish**, plus an in-menu **language selector** to switch between Portuguese, the original English and Spanish on the fly. See the **Languages** section below.
 - 🎮 **Game covers** — shows the game's box-art cover in the menu as you browse the list. See the **Game Covers** section below.
 - 🎵 **Menu background music** — plays an `.spc` track while you browse the menu. See the **Menu Music** section below.
 - 🩹 **IPS/BPS patches** — apply translation/hack patches to a game at boot, without modifying the ROM. See the **IPS/BPS Patches** section below. By [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293) and modified by me.
@@ -31,16 +32,19 @@ Each Release name indicates the equivalent official firmware version. For exampl
 1. Download and install the official firmware of the matching version from [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
 2. Download the translation `.zip` from [Releases](https://github.com/ludufre/sd2snes/releases), choosing the version that matches the installed firmware.
 3. Extract the contents of the `.zip` into the `/sd2snes` folder on your SD card, replacing the existing files.
-4. Insert the card into your sd2snes/FXPAK and power on the console. The menu loads in Brazilian Portuguese by default — switch to English (or back) anytime via the **Language** option in the main menu.
+4. Insert the card into your sd2snes/FXPAK and power on the console. The menu loads in Brazilian Portuguese by default — switch between Portuguese, English and Spanish anytime via the **Language** option in the main menu.
 
 ## 🌐 Languages
 
-This fork isn't only a Brazilian Portuguese translation — it ships a **language selector** so the menu can run in **Portuguese** or in the **original English**, switchable at any time.
+<img src="gfx/langs.gif" width="512" alt="The main menu shown in English, Brazilian Portuguese and Spanish">
+
+This fork isn't only a Brazilian Portuguese translation — it ships a **language selector** so the menu can run in **Brazilian Portuguese**, the **original English**, or **Spanish**, switchable at any time.
 
 Switch it via the **Language** option in the main menu — the change is applied live, and your choice is saved for the next boot.
 
 - **Português** — the full Brazilian Portuguese translation (menu, messages, screens).
 - **English** — the original firmware language.
+- **Español** — full Spanish translation (menu, messages and screens). *(new)*
 
 ---
 
