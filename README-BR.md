@@ -22,6 +22,7 @@ Este fork é baseado no projeto original do sd2snes e também incorpora contribu
 - 🎵 **Música de fundo no menu** — toca uma faixa `.spc` enquanto você navega pelo menu. Veja a seção **Música do Menu** abaixo.
 - 🩹 **Patches IPS/BPS** — aplica patches de tradução/hack a um jogo no boot, sem modificar a ROM. Veja a seção **Patches IPS/BPS** abaixo. Por [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293) e modificado por mim.
 - 🔄 **Reset para o menu — de volta à sua pasta/ROM** — um reset curto pode te levar direto à pasta, ou até à ROM exata, que você estava jogando. Veja a seção **Reset para o Menu** abaixo. Por [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293).
+- 🎨 **Tema personalizado** — mude o logo, a paleta, o fundo e as cores do seletor com um editor de temas adaptado para este fork (o editor oficial do sd2snes **não** é compatível). Veja a seção **Tema Personalizado** abaixo.
 
 ## Instalação
 
@@ -140,6 +141,21 @@ Configure no menu em **Configurações → Opções no Jogo → Reset para o men
 
 > [!NOTE]
 > Os modos **Pasta** e **ROM** só reposicionam a lista após um reset de volta ao menu — ligar o console do zero ainda começa no topo, como de costume. Sua escolha é salva na configuração e mantida entre reinícios.
+
+---
+
+## 🎨 Tema Personalizado (logo, cores, fonte)
+
+Você pode personalizar o **logo, a paleta, o fundo e as cores do seletor** do menu — mas **não** com o editor de temas oficial do sd2snes.
+
+> [!IMPORTANT]
+> O **editor de temas oficial** ([sd2snes.de/themes/editor](https://sd2snes.de/themes/editor/)) **não funciona** com este firmware. Para abrir espaço para as **capas**, o layout do cabeçalho do menu foi alterado: o logo precisou ficar **menor** — agora ele ocupa só a **metade esquerda** do cabeçalho (**128×56**, em vez do **256×56** original), já que a metade direita é a capa, e usa uma **paleta de cores própria**. O editor oficial ainda espera o logo antigo de largura total, então não consegue ler nem gravar o `m3nu.bin` deste fork.
+
+Use o **editor de temas adaptado para este fork**:
+
+### 👉 [sd2snes.ludufre.com/theme](https://sd2snes.ludufre.com/theme/)
+
+Ele edita a fonte, a paleta, o fundo e as cores do seletor igual ao editor original, e grava o **logo 128×56** deste fork (com transparência) direto no `m3nu.bin`. Faça upload do seu `m3nu.bin`, faça upload de um **PNG 128×56** para o logo, marque o que quer mudar e baixe.
 
 ---
 

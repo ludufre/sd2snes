@@ -22,6 +22,7 @@ This fork is based on the original sd2snes project and also incorporates communi
 - 🎵 **Menu background music** — plays an `.spc` track while you browse the menu. See the **Menu Music** section below.
 - 🩹 **IPS/BPS patches** — apply translation/hack patches to a game at boot, without modifying the ROM. See the **IPS/BPS Patches** section below. By [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293) and modified by me.
 - 🔄 **Reset to menu — back to your folder/ROM** — a short reset can return you straight to the folder, or even the exact ROM, you were just playing. See the **Reset to Menu** section below. By [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293).
+- 🎨 **Custom theme** — change the logo, palette, background and selector colours with a theme editor adapted for this fork (the official sd2snes editor is **not** compatible). See the **Custom Theme** section below.
 
 ## Installation
 
@@ -142,6 +143,19 @@ Set it in the menu at **Configuration → In-game Settings → Reset to menu**. 
 > The **Folder** and **ROM** modes only reposition the list after a reset back to the menu — a cold power-on still starts at the top, as usual. Your choice is saved in the config and survives reboots.
 
 ---
+
+## 🎨 Custom Theme (logo, colours, font)
+
+You can customise the menu's **logo, palette, background and selector colours** — but **not** with the official sd2snes theme editor.
+
+> [!IMPORTANT]
+> The **official theme editor** ([sd2snes.de/themes/editor](https://sd2snes.de/themes/editor/)) **does not work** with this firmware. To make room for the **covers**, the menu header layout was changed: the logo had to be made **smaller** — it now occupies only the **left half** of the header (**128×56**, instead of the stock **256×56**), since the right half is taken by the cover, and it uses its **own colour palette**. The official editor still expects the old full-width logo, so it can't read or write this fork's `m3nu.bin`.
+
+Use the **theme editor adapted for this fork** instead:
+
+### 👉 [sd2snes.ludufre.com/theme](https://sd2snes.ludufre.com/theme/)
+
+It edits the font, palette, background and selector colours just like the upstream tool, and writes this fork's **128×56 logo** (with transparency) directly into `m3nu.bin`. Upload your `m3nu.bin`, upload a **128×56 PNG** for the logo, tick what you want to change, and download.
 
 ---
 
