@@ -3,173 +3,259 @@
 <img src="gfx/showcase.gif" width="512" alt="Demonstração">
 <img src="gfx/langs.gif" width="384" alt="O menu principal em Inglês, Português do Brasil e Espanhol">
 
-Cartucho multifuncional baseado em cartão SD para o SNES
+Uma experiência mais amigável de firmware para sd2snes/FXPAK: idiomas, capas de jogos, música no menu, patches e reset para o menu mais prático.
 
-**🌐 Idioma:** [English 🇺🇸](README.md) · Português
+**🌐 Idioma:** [English 🇺🇸](README.md) · Português · [Español 🇪🇸](README-ES.md)
 
-> **Aviso**
+**Mais informações:** o hotsite [sd2snes.ludufre.com](https://sd2snes.ludufre.com) reúne mais detalhes, guias e exemplos visuais sobre este fork.
+
+> **O que é isto?**
 >
-> Este fork fornece um **menu multi-idioma (Português do Brasil, Inglês e Espanhol, alternável no menu)** e a **funcionalidade de capas dos jogos** para o firmware do sd2snes, baseado no [repositório original](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf).
+> Este é um fork do [firmware original do sd2snes](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf). Ele mantém a base do firmware original e adiciona melhorias voltadas para quem usa o cartucho: menu em Português do Brasil, Inglês e Espanhol, capas de jogos, música no menu, seleção de patches IPS/BPS e opções melhores de reset para o menu.
 >
-> Para dúvidas e bugs sobre a **tradução / seletor de idioma** ou as **capas**, use este repositório. Para qualquer outra coisa relacionada ao firmware em si, por favor utilize o repositório original.
+> Use este repositório para dúvidas ou bugs sobre a **tradução**, o **seletor de idioma**, as **capas**, a **música do menu**, o **seletor de patches** ou o **editor de temas deste fork**. Para problemas do firmware principal que não tenham relação com essas adições, use o projeto original.
 
-## ✨ Destaques
+## Comece aqui
 
-Este fork é baseado no projeto original do sd2snes e também incorpora contribuições da comunidade do repositório original.
+Se você só quer usar este firmware, **não** precisa compilar nada nem baixar o código-fonte.
 
-- 🌐 **Multi-idioma (Português + Inglês + Espanhol)** — menu, mensagens e telas do firmware totalmente traduzidos para o Português do Brasil **e o Espanhol**, com um **seletor de idioma** no menu para alternar entre Português, o Inglês original e o Espanhol na hora. Veja a seção **Idiomas** abaixo.
-- 🎮 **Capas dos jogos** — exibe a capa (box-art) do jogo no menu enquanto você navega pela lista. Veja a seção **Capas dos Jogos** abaixo.
-- 🎵 **Música de fundo no menu** — toca uma faixa `.spc` enquanto você navega pelo menu. Veja a seção **Música do Menu** abaixo.
-- 🩹 **Patches IPS/BPS** — aplica patches de tradução/hack a um jogo no boot, sem modificar a ROM. Veja a seção **Patches IPS/BPS** abaixo. Por [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293) e modificado por mim.
-- 🔄 **Reset para o menu — de volta à sua pasta/ROM** — um reset curto pode te levar direto à pasta, ou até à ROM exata, que você estava jogando. Veja a seção **Reset para o Menu** abaixo. Por [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293).
-- 🎨 **Tema personalizado** — mude o logo, a paleta, o fundo e as cores do seletor com um editor de temas adaptado para este fork (o editor oficial do sd2snes **não** é compatível). Veja a seção **Tema Personalizado** abaixo.
+Você precisa de:
+
+- Um cartucho sd2snes ou FXPAK.
+- Um cartão SD já preparado para o seu cartucho.
+- O `.zip` **full** da página [Releases](https://github.com/ludufre/sd2snes/releases) deste repositório.
+
+> [!NOTE]
+> Este projeto não inclui jogos/ROMs. Use seus próprios arquivos obtidos legalmente.
+
+## O que este fork adiciona
+
+- **Idiomas:** escolha Português do Brasil, Inglês ou Espanhol diretamente no menu.
+- **Capas dos jogos:** veja a capa de cada jogo enquanto navega pela lista de ROMs.
+- **Música no menu:** toque uma faixa `.spc` de fundo enquanto navega.
+- **Patches IPS/BPS:** escolha patches de tradução, hacks ou correções antes de iniciar um jogo, sem alterar a ROM no cartão SD.
+- **Melhorias no reset para o menu:** volte para a mesma pasta ou até para a mesma ROM depois de um reset curto.
+- **Temas personalizados:** edite logo, fonte, paleta, fundo e cores do seletor com o editor de temas feito para este fork.
 
 ## Instalação
 
-A tradução está disponível na seção [**Releases**](https://github.com/ludufre/sd2snes/releases) deste repositório. O pacote contém **apenas os arquivos traduzidos**, portanto é necessário instalar antes o firmware oficial completo, disponível em [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
+Para a instalação mais simples, baixe a release marcada como **full**. Ela já inclui todos os arquivos de firmware necessários para este fork, então você **não** precisa baixar antes o firmware oficial equivalente.
 
-O nome de cada Release indica a versão equivalente do firmware oficial. Por exemplo: a release **"v2.1 (sd2snes v1.11.2)"** corresponde ao firmware oficial `v1.11.2`.
+O nome de cada release mostra a versão correspondente do firmware oficial. Por exemplo, **"v2.1 (sd2snes v1.11.2)"** foi feita para o firmware oficial `v1.11.2`.
 
-1. Baixe e instale o firmware oficial da versão correspondente em [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads).
-2. Baixe o `.zip` da tradução em [Releases](https://github.com/ludufre/sd2snes/releases), escolhendo a versão equivalente ao firmware instalado.
-3. Extraia o conteúdo do `.zip` dentro da pasta `/sd2snes` do seu cartão SD, substituindo os arquivos existentes.
-4. Insira o cartão no seu sd2snes/FXPAK e ligue o console. O menu carrega em Português do Brasil por padrão — alterne entre Português, Inglês e Espanhol a qualquer momento pela opção **Idioma** no menu principal.
+1. Baixe o `.zip` **full** correspondente na página [Releases](https://github.com/ludufre/sd2snes/releases) deste repositório.
+2. Abra o `.zip` e copie o conteúdo para a **raiz do cartão SD**.
+3. Substitua os arquivos existentes quando o computador perguntar.
+4. Coloque o cartão SD de volta no sd2snes/FXPAK e ligue o console.
 
-## 🌐 Idiomas
+Se você baixar um pacote que não seja full, ele contém apenas os arquivos alterados por este fork. Nesse caso, instale primeiro o firmware oficial correspondente em [sd2snes.de/blog/downloads](https://sd2snes.de/blog/downloads) e depois copie os arquivos deste fork para a pasta `/sd2snes`, substituindo os arquivos existentes.
+
+O menu inicia em **Inglês por padrão**. Você pode trocar o idioma a qualquer momento pela opção **Idioma** no menu principal.
+
+## Receber notificações de novas versões
+
+Para receber uma notificação do GitHub sempre que uma nova versão do firmware for lançada:
+
+1. Abra este repositório no GitHub.
+2. Clique em **Watch**.
+3. Escolha **Custom**.
+4. Marque **Releases** e salve.
+
+<p>
+<img src="gfx/follow1.png" width="256" alt="Menu Watch do GitHub com a opção Custom">
+<img src="gfx/follow2.png" width="256" alt="Notificações customizadas do GitHub com Releases marcado">
+</p>
+
+## Idiomas
 
 <img src="gfx/langs.gif" width="512" alt="O menu principal em Inglês, Português do Brasil e Espanhol">
 
-Este fork não é só uma tradução em Português do Brasil — ele traz um **seletor de idioma** para o menu rodar em **Português do Brasil**, no **Inglês original** ou em **Espanhol**, alternável a qualquer momento.
+O menu pode rodar em três idiomas:
 
-Alterne pela opção **Idioma** no menu principal — a troca é aplicada na hora e sua escolha é salva para o próximo boot.
+- **Português:** tradução em Português do Brasil para menus, mensagens e telas.
+- **English:** o idioma original e padrão do firmware.
+- **Español:** tradução em Espanhol para menus, mensagens e telas.
 
-- **Português** — a tradução completa em Português do Brasil (menu, mensagens, telas).
-- **English** — o idioma original do firmware.
-- **Español** — tradução completa em Espanhol (menu, mensagens e telas). *(novo)*
+Abra **Idioma** no menu principal, escolha o idioma desejado e o menu muda na hora. Sua escolha fica salva para a próxima vez que ligar o console.
 
----
+## Capas dos jogos
 
-## 🎮 Capas dos Jogos
+As capas aparecem no menu enquanto você navega pelos jogos.
 
-Além da tradução, este fork exibe a **capa (box-art) do jogo** no menu, enquanto você navega pela lista de jogos.
+Para cada ROM, coloque um arquivo de capa na mesma pasta da ROM. O arquivo de capa precisa ter o mesmo nome da ROM, mas com a extensão `.cov`:
 
-Para cada ROM, basta colocar um arquivo de capa **com o mesmo nome** e a extensão **`.cov`** na mesma pasta da ROM:
-
-```
+```text
 /sd2snes/A/Aladdin (USA).sfc
-/sd2snes/A/Aladdin (USA).cov   ← a capa deste jogo
+/sd2snes/A/Aladdin (USA).cov
 ```
 
-As capas usam um formato próprio (`.cov`). A maneira mais fácil de criá-las é com o **aplicativo multiplataforma** (Windows, macOS e Linux), disponível no repositório:
+A forma mais fácil de criar arquivos `.cov` é usando o aplicativo gerador de capas:
 
 ### 👉 [github.com/ludufre/sd2snes-covers](https://github.com/ludufre/sd2snes-covers)
 
-O app gera os arquivos `.cov` para a sua biblioteca de jogos. No menu, a exibição das capas pode ser ligada/desligada pela opção **"Mostrar capas"**.
+Use o **sd2snes-covers v1.1.0 ou mais novo**. Se você criou capas com uma versão mais antiga, gere as capas novamente com o app mais novo.
 
-> [!IMPORTANT]
-> Gere as capas com o **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers) v1.1.0 ou superior**. Este firmware (**v1.11.2-br-2.1 ou superior**) usa o novo formato `.cov` de sprites OBJ — capas criadas com versões anteriores do app não serão exibidas corretamente; basta regerá-las com a v1.1.0+.
+Você pode ligar ou desligar as capas no menu em **Mostrar capas** / **Show covers**.
 
----
+## Patches IPS/BPS
 
-## 🩹 Patches IPS/BPS
+Este fork pode aplicar patches **IPS** e **BPS** quando um jogo carrega. Isso é útil para traduções de fãs, hacks e correções.
 
-Este fork pode aplicar patches **IPS** e **BPS** (traduções, hacks, correções) a um jogo **na hora de carregar**. O patch é aplicado apenas à cópia da ROM na memória — **o arquivo original da ROM no cartão SD nunca é modificado**.
+A ROM no cartão SD não é alterada. O patch é aplicado apenas enquanto o jogo está sendo carregado.
 
-Coloque o arquivo de patch na **mesma pasta** da ROM, com um nome que **comece com o nome da ROM** (sem a extensão) e termine em **`.ips`** ou **`.bps`**:
+Coloque o patch na mesma pasta da ROM. O nome do arquivo precisa começar com o nome da ROM, sem a extensão da ROM, e terminar em `.ips` ou `.bps`:
 
-```
+```text
 /sd2snes/A/Aladdin (USA).sfc
-/sd2snes/A/Aladdin (USA).ips          ← um patch para este jogo
-/sd2snes/A/Aladdin (USA) (Hack).bps   ← outro patch para o mesmo jogo
+/sd2snes/A/Aladdin (USA).ips
+/sd2snes/A/Aladdin (USA) (Hack).bps
 ```
 
-Ao abrir um jogo que tenha patches correspondentes, o menu mostra um **seletor de patch** antes de iniciar:
+Ao abrir um jogo com patches correspondentes, o menu mostra um seletor de patch:
 
-- **`[Sem patch]`** é sempre a primeira opção — inicia o jogo sem patch.
-- Escolha um patch para aplicá-lo neste boot.
-- Até **8** patches por jogo são listados (ordenados por nome).
+- **`[Sem patch]`** inicia o jogo normalmente.
+- Escolha um patch para usá-lo neste boot.
+- Até **8** patches são exibidos por jogo.
 
-`.ips` e `.bps` são detectados automaticamente. Patches BPS podem gerar uma ROM maior (isso é tratado automaticamente).
+## Música do menu
 
-**Verificar integridade:** há uma opção no menu em **Configurações → Opções de Patches → Verificar Integridade**. Quando ligada (padrão), o firmware relê a ROM já aplicada para confirmar que o patch foi aplicado corretamente. Isso deixa o carregamento bem mais lento (~23 s para um BPS de 4 MB), então desligue se preferir carregamentos mais rápidos.
+O menu pode tocar música de fundo enquanto você navega. O arquivo precisa ser um **`.spc`** chamado `menu.spc` e ficar neste caminho:
 
----
-
-## 🎵 Música do Menu
-
-O menu pode tocar uma música de fundo enquanto você navega pela lista de jogos. A música é qualquer arquivo **`.spc`** (o formato de música nativo do SNES) colocado neste caminho exato no cartão SD:
-
-```
+```text
 /sd2snes/menu.spc
 ```
 
-**Como definir ou trocar a música:**
+Para adicionar música:
 
-1. Baixe um arquivo `.spc` (veja onde abaixo).
+1. Baixe um arquivo `.spc`.
 2. Renomeie para `menu.spc`.
-3. Copie para a pasta `/sd2snes/` do seu cartão SD.
-4. Pronto — a música toca no próximo boot do menu.
+3. Copie para a pasta `/sd2snes/` do cartão SD.
+4. Ligue o console.
 
-**Onde baixar arquivos `.spc`:**
+Bons lugares para encontrar arquivos `.spc`:
 
-- [snesmusic.org](https://snesmusic.org) — trilhas sonoras de jogos de SNES.
-- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — coleções de SPC por jogo.
+- [snesmusic.org](https://snesmusic.org)
+- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc)
+
+Você pode ligar ou desligar a música em **Configurações → Opções do Navegador → Música do menu**.
 
 > [!TIP]
-> Muitos sites distribuem as trilhas em `.rsn` (um arquivo `.rar` contendo vários `.spc` dentro). Nesse caso, extraia o `.rsn` e escolha um dos `.spc` de dentro.
+> Algumas trilhas vêm como arquivos `.rsn`. Um `.rsn` geralmente é um arquivo compactado com vários `.spc` dentro. Extraia o `.rsn` e escolha um dos arquivos `.spc`.
 
-**Ligar/desligar:** há um interruptor no menu em **Configurações → Opções do Navegador → Música do menu**. Quando ligada (padrão), o menu procura por `/sd2snes/menu.spc`; se o arquivo não existir, o menu simplesmente fica em silêncio (sem erro).
+## Reset para o menu
 
-**Observações:**
+O botão de reset pode levar você de volta ao menu do sd2snes em vez de apenas reiniciar o jogo. Este fork adiciona duas opções para facilitar o retorno à sua lista de jogos.
 
-- Só funciona o formato `.spc` (não MP3/WAV). Um `.spc` não é uma gravação de áudio — é um "snapshot" do chip de som do SNES (amostras + sequência), limitado a 64 KB. **Não existe conversão de MP3 para `.spc`**; use trilhas `.spc` prontas.
-- Ao carregar a música (no boot, após um reset ou ao ligar o interruptor) há uma breve pausa de ~1 s enquanto os 64 KB são enviados ao chip de som. Isso é uma limitação do hardware (a transferência precisa rodar com as interrupções desligadas).
-- Ao abrir um `.spc` pelo navegador de arquivos, a música de fundo é pausada automaticamente e retomada quando você volta (tecla B).
+Configure em **Configurações → Opções no Jogo → Reset para o menu**:
 
----
+- **Des:** o reset se comporta como um reset normal do SNES.
+- **Lig:** um reset curto volta para o menu.
+- **Pasta:** volta para o menu e abre a pasta do jogo que você estava jogando.
+- **ROM:** volta para a pasta e destaca a ROM que você estava jogando.
 
-## 🔄 Reset para o Menu
+As opções **Pasta** e **ROM** funcionam depois de um reset de volta para o menu. Ao ligar o console do zero, ele ainda começa no menu inicial normal.
 
-O firmware pode te levar **de volta ao menu** quando você aperta o botão de reset do console (um reset curto), em vez de reiniciar o jogo. Este fork amplia essa opção para que você não caia sempre no topo da lista — ele pode te levar **direto para onde você estava**.
+## Tema personalizado
 
-Configure no menu em **Configurações → Opções no Jogo → Reset para o menu**. Há quatro modos:
+Você pode personalizar o logo, a fonte, a paleta, o fundo e as cores do seletor do menu.
 
-- **Des** — o botão de reset apenas reinicia o jogo (comportamento padrão do SNES).
-- **Lig** — um reset curto volta ao menu.
-- **Pasta** *(novo)* — volta ao menu **e abre a pasta** do jogo que você estava jogando.
-- **ROM** *(novo)* — tudo que o **Pasta** faz, **e ainda** pré-seleciona (destaca) a ROM que você estava jogando, para você reabri-la — ou pular para uma vizinha — com um único toque.
-
-> [!NOTE]
-> Os modos **Pasta** e **ROM** só reposicionam a lista após um reset de volta ao menu — ligar o console do zero ainda começa no topo, como de costume. Sua escolha é salva na configuração e mantida entre reinícios.
-
----
-
-## 🎨 Tema Personalizado (logo, cores, fonte)
-
-Você pode personalizar o **logo, a paleta, o fundo e as cores do seletor** do menu — mas **não** com o editor de temas oficial do sd2snes.
-
-> [!IMPORTANT]
-> O **editor de temas oficial** ([sd2snes.de/themes/editor](https://sd2snes.de/themes/editor/)) **não funciona** com este firmware. Para abrir espaço para as **capas**, o layout do cabeçalho do menu foi alterado: o logo precisou ficar **menor** — agora ele ocupa só a **metade esquerda** do cabeçalho (**128×56**, em vez do **256×56** original), já que a metade direita é a capa, e usa uma **paleta de cores própria**. O editor oficial ainda espera o logo antigo de largura total, então não consegue ler nem gravar o `m3nu.bin` deste fork.
-
-Use o **editor de temas adaptado para este fork**:
+Use o editor de temas feito para este fork:
 
 ### 👉 [sd2snes.ludufre.com/theme](https://sd2snes.ludufre.com/theme/)
 
-Ele edita a fonte, a paleta, o fundo e as cores do seletor igual ao editor original, e grava o **logo 128×56** deste fork (com transparência) direto no `m3nu.bin`. Faça upload do seu `m3nu.bin`, faça upload de um **PNG 128×56** para o logo, marque o que quer mudar e baixe.
+> [!IMPORTANT]
+> O editor de temas oficial do sd2snes não suporta o formato de tema deste fork. Use o editor acima ao editar o `m3nu.bin` deste firmware.
 
----
+Fluxo básico para editar um tema:
 
-## ⚖️ Licença & Código-fonte
+1. Abra o editor de temas.
+2. Envie o seu `m3nu.bin`.
+3. Envie um **PNG 128×56** se quiser trocar o logo.
+4. Escolha as partes que quer alterar.
+5. Baixe o arquivo editado e copie de volta para o cartão SD.
+
+## Problemas comuns
+
+**O menu não mudou depois da instalação.**
+
+Confira se você usou a release **full** correspondente e copiou os arquivos para a raiz do cartão SD. Se usou um pacote que não seja full, confira se o firmware oficial correspondente foi instalado primeiro e se os arquivos deste fork foram copiados para `/sd2snes`.
+
+**As capas não aparecem.**
+
+Confira se as capas estão ativadas, se cada arquivo `.cov` tem o mesmo nome da ROM e se as capas foram geradas com o **sd2snes-covers v1.1.0 ou mais novo**.
+
+**A música do menu não toca.**
+
+Confira se o arquivo se chama exatamente `menu.spc`, se está em `/sd2snes/menu.spc` e se realmente é um arquivo `.spc`. MP3 e WAV não funcionam.
+
+**Um patch não aparece.**
+
+Confira se o patch está na mesma pasta da ROM, começa com o nome da ROM e termina em `.ips` ou `.bps`.
+
+## Notas avançadas
+
+Esta seção é principalmente para desenvolvedores, mantenedores e usuários avançados. Você não precisa dela para a instalação normal.
+
+### Formato das capas
+
+Este firmware, a partir da versão **v1.11.2-br-2.1**, usa o formato `.cov` mais novo com sprites OBJ. Capas geradas por versões antigas do aplicativo de capas não aparecem corretamente. Gere as capas novamente com o **sd2snes-covers v1.1.0 ou mais novo**.
+
+### Verificação de integridade de patches BPS
+
+A verificação de integridade para BPS pode ser ativada em **Configurações → Opções de Patches → Verificar Integridade**.
+
+Essa opção vem **Desativada por padrão**. Quando ligada, o firmware relê a ROM depois de aplicar um patch BPS para confirmar que ele foi aplicado corretamente. Isso deixa o carregamento de BPS mais lento; por exemplo, um patch BPS de 4 MB pode adicionar cerca de 15 segundos ao carregamento, em média. Patches IPS não são verificados por essa opção.
+
+### Limitações da música do menu
+
+Apenas arquivos `.spc` são suportados. Um arquivo `.spc` não é uma gravação de áudio comum; ele é um snapshot do estado do chip de som do SNES e tem limite de 64 KB. Não existe conversão direta de MP3 para SPC.
+
+Quando a música carrega no boot, depois de um reset ou depois de ligar a opção, o menu pode pausar brevemente enquanto o arquivo é enviado para o chip de som do SNES. Abrir um `.spc` pelo navegador de arquivos pausa a música de fundo e retoma quando você volta com o botão B.
+
+### Formato do tema
+
+O editor de temas oficial espera o layout original do sd2snes, com logo ocupando toda a largura do cabeçalho. Este fork mudou o cabeçalho do menu para abrir espaço para as capas dos jogos:
+
+- Área do logo original: **256×56**
+- Área do logo neste fork: **128×56**
+- O lado direito do cabeçalho fica reservado para a capa do jogo
+- O logo usa uma paleta de cores própria
+
+Por isso, o editor oficial não consegue ler nem gravar corretamente o `m3nu.bin` deste fork.
+
+### Créditos
+
+O suporte a patches IPS/BPS e o trabalho original de reset para o menu vêm de [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293), com alterações feitas neste fork.
+
+Contribuidores do repositório original do sd2snes listados pelo GitHub:
+
+- [@mrehkopf](https://github.com/mrehkopf)
+- [@RedGuyyyy](https://github.com/RedGuyyyy)
+- [@github-user-name](https://github.com/github-user-name)
+- [@furious](https://github.com/furious)
+- [@redacted173](https://github.com/redacted173)
+- [@francois-berder](https://github.com/francois-berder)
+- [@Godzil](https://github.com/Godzil)
+- [@mlarouche](https://github.com/mlarouche)
+- [@devinacker](https://github.com/devinacker)
+- [@Xeroxxx](https://github.com/Xeroxxx)
+- [@tcprescott](https://github.com/tcprescott)
+- [@freelancer42](https://github.com/freelancer42)
+- [@LuigiBlood](https://github.com/LuigiBlood)
+- [@DevLaTron](https://github.com/DevLaTron)
+- [@gasparitiago](https://github.com/gasparitiago)
+
+### Código-fonte e licença
 
 Este projeto continua licenciado sob a GNU General Public License v2.0 (GPL-2.0), seguindo a licença do projeto original sd2snes.
 
 Todos os direitos autorais originais pertencem aos seus respectivos autores e contribuidores.
 
-Modificações adicionais neste fork:
-Copyright (C) 2026 Luan Freitas
+Alterações específicas deste fork:
+Copyright (C) 2026 Luan Freitas e contribuidores
 
 O código-fonte de todos os binários/releases distribuídos está disponível neste repositório e nas tags/releases correspondentes do Git, em conformidade com os requisitos da GPL.
 
-Veja o [README original](https://github.com/mrehkopf/sd2snes/blob/master/README.md)
+Veja o [README original](https://github.com/mrehkopf/sd2snes/blob/master/README.md).
 
-Veja o [README do FURiOUS](README.Savestates.FURiOUS.md) para informações sobre Save States!
+Veja o [README do FURiOUS](README.Savestates.FURiOUS.md) para informações sobre Save States.
