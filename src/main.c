@@ -494,6 +494,20 @@ int main(void) {
           load_cover(file_lfn, SRAM_COVER_ADDR);
           cmd=0; /* stay in menu loop */
           break;
+        case SNES_CMD_LOAD_COVER_RECENT:
+          /* small (downscaled) cover for the highlighted RECENT game; the menu
+             puts the list index in MCU_PARAM (resolved like LOADLAST). Bounded
+             + fail-safe like load_cover; reuses the same C9 staging area. */
+          cfg_get_listed_game(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          load_cover(file_lfn, SRAM_COVER_ADDR);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_LOAD_COVER_FAVORITE:
+          /* small (downscaled) cover for the highlighted FAVORITE game */
+          cfg_get_listed_game(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          load_cover(file_lfn, SRAM_COVER_ADDR);
+          cmd=0; /* stay in menu loop */
+          break;
         case SNES_CMD_LOAD_CHT:
           /* load cheats */
           cmd=0; /* stay in menu loop */

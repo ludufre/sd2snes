@@ -39,6 +39,7 @@ cover_init:
   stz cover_loaded
   stz cover_timeout
   stz cover_timeout+1
+  stz listcover_active      ; boot: the list cover hook is off (WRAM isn't zeroed for us)
   lda #$ff
   sta cover_last_sel        ; force a "changed" on the first frame
   sta cover_last_sel+1
@@ -611,4 +612,70 @@ cover_fill_param_for_current_sel:
   lda #$00
   sta @MCU_PARAM+7
   plp
+  rts
+
+; ===========================================================================
+; Show the highlighted Recent/Favorite game cover. It reuses the
+; normal full-size cover render (cover_show / load_cover); the only list-specific
+; parts are the by-index MCU commands (CMD_LOAD_COVER_RECENT/FAVORITE) and the
+; per-frame trigger below.
+; ===========================================================================
+
+; -- listcover_update: per-frame hook while a Recent/Favorite list is open (called
+;    from menu_select_loop1 when listcover_active). Poll an in-flight request, and
+;    on selection change debounce + (re)fire a cover load for the new index.
+listcover_update:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr cover_poll            ; renders the cover on completion
+  lda listsel_sel
+  cmp listcover_lastsel
+  beq lcu_same
+  sta listcover_lastsel
+  lda #COVER_DEBOUNCE
+  sta cover_debounce
+  lda #$01
+  sta cover_dirty
+  bra lcu_out
+lcu_same:
+  jsr listcover_maybe_fire
+lcu_out:
+  plp
+  rts
+
+; -- listcover_maybe_fire: dirty + debounced + idle + MCU ready -> fire the
+;    by-index cover command for the highlighted recent/favorite entry.
+listcover_maybe_fire:
+  lda cover_dirty
+  beq lcmf_out
+  lda cover_request_pending
+  bne lcmf_out
+  lda cover_debounce
+  beq lcmf_fire
+  dec cover_debounce
+  bra lcmf_out
+lcmf_fire:
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  bne lcmf_out              ; MCU busy - keep dirty, retry next frame
+  stz cover_dirty
+  lda listsel_sel
+  sta @MCU_PARAM            ; highlighted list index
+  lda #$00
+  sta @SNES_CMD             ; clear ready so cover_poll waits for $55
+  lda listcover_which
+  beq lcmf_recent
+  lda #CMD_LOAD_COVER_FAVORITE
+  bra lcmf_send
+lcmf_recent:
+  lda #CMD_LOAD_COVER_RECENT
+lcmf_send:
+  sta @MCU_CMD
+  lda #$01
+  sta cover_request_pending
+  lda #COVER_TIMEOUT
+  sta cover_timeout
+  stz cover_timeout+1
+lcmf_out:
   rts

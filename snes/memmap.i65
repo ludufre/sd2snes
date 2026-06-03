@@ -150,6 +150,8 @@
 #define CMD_LOAD_COVER              $1c /* stage sibling .cov for highlighted ROM into bank C9 */
 #define CMD_QUERY_IPS_PATCHES       $1d /* find IPS patches for selected ROM */
 #define CMD_LOAD_MENU_SPC           $1e /* stage /sd2snes/menu.spc for background menu music */
+#define CMD_LOAD_COVER_RECENT       $1f /* stage downscaled .cov for recent game (index in MCU_PARAM) */
+#define CMD_LOAD_COVER_FAVORITE     $20 /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */

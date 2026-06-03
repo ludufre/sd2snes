@@ -1195,7 +1195,19 @@ select_last_choose:
   lda #$01
   sta listsel_step
   sta listsel_pickbutton ; allow button Y
+  lda #$01                   ; cover follows the highlighted list entry
+  sta listcover_active
+  stz listcover_which        ; 0 = recent
+  lda #$ff
+  sta listcover_lastsel      ; force a cover load for the current selection
+  stz cover_request_pending
+  stz cover_dirty
+  stz cover_debounce
   jsr menu_select_noinit
+  stz listcover_active       ; stop the per-frame hook before any context menu/command
+  pha                        ; save the selection index (cover_sync clobbers A)
+  jsr cover_sync_before_cmd  ; drain any in-flight cover load so the channel is idle
+  pla
   sta listsel_backup
   sta @MCU_PARAM
   cmp #$ff
@@ -1223,7 +1235,11 @@ select_last_file_context_menu:
 select_last_file_done:
   jsr pop_window
 select_last_file_out:
-  jsr enable_screen_update
+  stz listcover_active       ; leaving the list -> reload the browser cover
+  lda cover_loaded
+  beq +
+  jsr cover_hide
++ jsr enable_screen_update
   plp
   rtl
 
@@ -1299,7 +1315,19 @@ select_favorite_choose:
   lda #$01
   sta listsel_step
   sta listsel_pickbutton ; allow button Y
+  lda #$01                   ; cover follows the highlighted list entry
+  sta listcover_active
+  sta listcover_which        ; 1 = favorite
+  lda #$ff
+  sta listcover_lastsel      ; force a cover load for the current selection
+  stz cover_request_pending
+  stz cover_dirty
+  stz cover_debounce
   jsr menu_select_noinit
+  stz listcover_active       ; stop the per-frame hook before any context menu/command
+  pha                        ; save the selection index (cover_sync clobbers A)
+  jsr cover_sync_before_cmd  ; drain any in-flight cover load so the channel is idle
+  pla
   sta listsel_backup
   sta @MCU_PARAM ; store selected item index in mcu param
   cmp #$ff ; if no selected item, do nothing
@@ -1327,7 +1355,11 @@ select_favorite_file_context_menu
 select_favorite_file_done
   jsr pop_window
 select_favorite_file_out
-  jsr enable_screen_update
+  stz listcover_active       ; leaving the list -> reload the browser cover
+  lda cover_loaded
+  beq +
+  jsr cover_hide
++ jsr enable_screen_update
   plp
   rtl
 

@@ -279,6 +279,9 @@ cover_tilerow          .byt 0    ; OAM build scratch: base tile of the row (sy*3
 cover_scr              .byt 0    ; OAM build scratch
 cover_sx               .byt 0    ; OAM build scratch: sprite column
 cover_sy               .byt 0    ; OAM build scratch: sprite row
+listcover_active       .byt 0    ; 1 while a Recent/Favorite list is open (enables the per-frame hook)
+listcover_which        .byt 0    ; 0 = recent (CMD_LOAD_COVER_RECENT), 1 = favorite (CMD_LOAD_COVER_FAVORITE)
+listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (debounce)
 
 ;----------language switch redraw bookkeeping
 menu_drawn_lang        .byt 0    ; language the current show_menu window was drawn in
