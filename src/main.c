@@ -200,8 +200,8 @@ int main(void) {
       cfg_validity_check_listed_games(FAVORITES_FILE);
     }
     if(fpga_config != FPGA_BASE) fpga_pgm((uint8_t*)FPGA_BASE);
-    STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR);
-    STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR);
+    STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
+    STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
     led_set_brightness(CFG.led_brightness);
 
     /* load menu */
@@ -414,7 +414,7 @@ int main(void) {
           get_selected_name(file_lfn);
           printf("Selected name: %s\n", file_lfn);
           cfg_add_listed_game(FAVORITES_FILE, file_lfn, false);
-          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR);
+          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
           status_load_to_menu();
           cmd=0; /* stay in menu loop */
           break;
@@ -422,19 +422,19 @@ int main(void) {
           cfg_get_listed_game(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
           printf("Selected name from recent: %s\n", file_lfn);
           cfg_add_listed_game(FAVORITES_FILE, file_lfn, true);
-          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR);
+          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
           status_load_to_menu();
           cmd=0;
           break;
         case SNES_CMD_REMOVE_RECENT_ROM:
           cfg_remove_listed_game(LAST_FILE, snes_get_mcu_param() & 0xff);
-          STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR);
+          STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
           status_load_to_menu();
           cmd=0;
           break;
         case SNES_CMD_REMOVE_FAVORITE_ROM:
           cfg_remove_listed_game(FAVORITES_FILE, snes_get_mcu_param() & 0xff);
-          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR);
+          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
           status_load_to_menu();
           cmd=0; /* stay in menu loop */
           break;

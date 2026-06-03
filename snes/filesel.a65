@@ -1988,15 +1988,17 @@ fnl_sf_check:
   bra fnl_sf_done
 fnl_sf_scroll:
   ; index >= listdisp: scroll so entry appears last on screen
-  pha
   sec
   sbc listdisp
   inc
   asl
-  asl                     ; dirptr_addr = (index - listdisp + 1) * 4
-  sta @dirptr_addr
-  sta @dirstart_addr
-  pla
+  asl                     ; A = (index - listdisp + 1) * 4
+  sta @dirptr_addr        ; scroll so the matched entry is the last visible row
+  lda #$0000
+  sta @dirstart_addr      ; the directory ALWAYS starts at $C1:0000 — keep the
+                          ; scroll floor at 0 (do NOT set it to the scroll
+                          ; offset, or Up/PageUp/End/Home break and the list
+                          ; corrupts once dirptr drops below the bogus floor)
   lda listdisp
   dec
   sta @filesel_sel
@@ -2075,18 +2077,34 @@ fnl_cf_loop:
   bne fnl_cf_not_ext
   lda #$2e                ; treat $01 as '.'
 fnl_cf_not_ext:
-  and #$DF
-  sta mm_tmp
+  sta mm_tmp              ; mm_tmp = RAW entry char (post $01 -> '.')
   ; Read LAST_GAME[X] char — long,X ($BF), valid in 65816
-  lda @LAST_GAME, x
-  and #$DF
+  lda @LAST_GAME, x       ; A = RAW target char
+  ; End-of-string MUST be detected on the raw bytes, BEFORE case-folding:
+  ; 0x20 (space) & 0xDF == 0x00, so folding first lets a space pose as the
+  ; NUL terminator and truncates the compare at the first space. Almost
+  ; every No-Intro ROM name contains a space, so that would pre-select the
+  ; wrong ROM (the first one sharing the pre-space token).
+  bne fnl_cf_tgt          ; target char present
+  lda mm_tmp              ; target == NUL: full match iff entry is also NUL
+  beq fnl_cf_yes
+  bra fnl_cf_no           ; entry longer than target -> no match
+fnl_cf_tgt:
+  pha                     ; save raw target char
+  lda mm_tmp              ; entry char
+  beq fnl_cf_no_bal       ; entry ended before target -> no match
+  and #$DF                ; case-fold entry (space stays distinct from NUL)
+  sta mm_tmp
+  pla                     ; raw target char
+  and #$DF                ; case-fold target
   cmp mm_tmp
   bne fnl_cf_no
-  cmp #$00                ; both null = full match
-  beq fnl_cf_yes
   iny
   inx
   bra fnl_cf_loop
+fnl_cf_no_bal:
+  pla                     ; discard saved target, keep the stack balanced
+  bra fnl_cf_no
 fnl_cf_yes:
   plp
   sec

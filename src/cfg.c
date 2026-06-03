@@ -457,16 +457,23 @@ int cfg_get_listed_game(const uint8_t *listfilename, uint8_t *fn, uint8_t index)
  *                to be made accessible.
  * @return uint8_t Number of list entries.
  */
-uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t address) {
+uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t address, uint8_t write_lastdir) {
   TCHAR fntmp[256];
   TCHAR dirtmp[256];
   int index;
-  sram_writebyte(0, SRAM_LASTGAME_DIR_ADDR); /* default: empty dir path */
+  /* LAST_GAME_DIR (used by reset_to_menu Folder/ROM navigation) belongs ONLY
+     to the recent-games list. The favorites dump shares this function but must
+     NOT touch LAST_GAME_DIR — otherwise it clobbers the recent game's folder
+     with the favorite index-0 folder (e.g. a root favorite resets it to "/"),
+     and the menu never returns to a sub-folder game. */
+  if(write_lastdir) {
+    sram_writebyte(0, SRAM_LASTGAME_DIR_ADDR); /* default: empty dir path */
+  }
   file_open(listfilename, FA_READ);
   for(index = 0; index < 10 && !f_eof(&file_handle); index++) {
     f_gets(fntmp, 255, &file_handle);
     sram_writestrn(strrchr((const char*)fntmp, '/')+1, address+256*index, 256);
-    if(index == 0) {
+    if(write_lastdir && index == 0) {
       /* write directory of most recent game for reset_to_menu >= 2 (Folder/Rom) navigation */
       char *slash = strrchr((const char*)fntmp, '/');
       if(slash != NULL) {
