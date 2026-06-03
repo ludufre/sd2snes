@@ -59,7 +59,7 @@ cfg_t CFG_DEFAULT = {
   .enable_autosave_msu1 = 1,
   .show_covers = 1,
   .language = 0,
-  .patch_verify_integrity = 1,
+  .patch_verify_integrity = 0,
   .enable_menu_music = 1
 };
 
