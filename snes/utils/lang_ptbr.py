@@ -124,6 +124,8 @@ TRANSLATIONS = {
     'text_statusbar_menu': 'A:OK B:Voltar',
     'text_last': 'Jogos recentes',
     'text_favorite': 'Jogos favoritos',
+    'text_no_last': 'Nenhum recente',
+    'text_no_favorite': 'Nenhum favorito',
     'text_on_p1': 'Lig: P1',
     'text_on_p2': 'Lig: P2',
     'text_on': 'Lig',

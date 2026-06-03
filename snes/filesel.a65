@@ -1030,13 +1030,114 @@ filesel_statusbar
   pla
   rts
 
+; show_empty_msg: pop up a small centered message box (closed border, NO title)
+; with the message text centered INSIDE the box, then wait for A/B/Start/Select
+; before closing. The caller passes the message string pointer in
+; window_tbank/window_taddr (a const_lang dispatch table is fine -> resolved here).
+; Used for the empty Recent/Favorite lists so the keypress that opened the list
+; gives visible feedback. Enters in .as/.xl with DBR=$7e.
+show_empty_msg:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda bar_xl              ; the select bar is a hardware colour window (drawn by the
+  pha                     ; NMI from bar_xl/yl/wl), not a tile, so push_window can't
+  lda bar_yl              ; hide it -> save it and park it off-screen ($ff, like
+  pha                     ; spcplayer) so it doesn't bleed under the popup border
+  lda bar_wl
+  pha
+  lda #$ff
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+  lda window_tbank        ; stash the caller's message pointer across draw_window
+  pha
+  rep #$20 : .al
+  lda window_taddr
+  pha
+  sep #$20 : .as
+  lda #20
+  sta window_x
+  lda #13
+  sta window_y
+  lda #24
+  sta window_w
+  lda #3
+  sta window_h
+  lda #^zero              ; empty title -> draw_window draws a closed top border
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsr push_window
+  jsr draw_window
+  rep #$20 : .al          ; recover the message pointer into print_src/print_bank
+  pla
+  sta print_src
+  sep #$20 : .as
+  pla
+  sta print_bank
+  lda print_bank          ; resolve language + measure length to center it
+  ldy print_src
+  jsr resolve_yx          ; A=resolved bank, Y=resolved addr; print_* now resolved
+  phb
+  pha
+  plb                     ; DB = resolved string bank (for strlen)
+  jsr strlen              ; Y = string length
+  plb                     ; restore DB
+  sep #$20 : .as
+  tya                     ; A = length (always < 256)
+  sta window_tmp          ; draw_window is done, so window_tmp is free scratch
+  lda window_w
+  sec
+  sbc window_tmp          ; window_w - length
+  lsr                     ; / 2
+  clc
+  adc window_x            ; print_x = window_x + (window_w - length)/2  (centered)
+  sta print_x
+  lda window_y
+  inc                     ; print_y = body row (window_y + 1, for h=3)
+  sta print_y
+  stz print_pal           ; palette 0 (white), same as list text
+  lda #56
+  sta print_count
+  jsr hiprint             ; draw the message INSIDE the box
+  jsr enable_screen_update
+show_empty_msg_wait:
+  lda isr_done
+  beq show_empty_msg_wait
+  stz isr_done
+  jsr printtime
+  jsr read_pad
+  lda pad_a
+  ora pad_b
+  ora pad_start
+  ora pad_select
+  beq show_empty_msg_wait
+  jsr pop_window
+  pla                     ; restore the selection bar for the underlying menu/list
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  plp
+  rts
+
 select_last_file:
   php
   sep #$20 : .as
   rep #$10 : .xl
   lda #$00
   sta listsel_backup
-select_last_redraw:
+  lda @ST_NUM_RECENT_GAMES       ; first open: if the list is empty, show the message
+  bne select_last_redraw
+  lda #^text_no_last
+  sta window_tbank
+  ldx #!text_no_last
+  stx window_taddr
+  jsr show_empty_msg
+  jmp select_last_file_out
+select_last_redraw:               ; redraw after a remove: if now empty, just close
   lda @ST_NUM_RECENT_GAMES
   sta num_recent_games
   stz recent_sel
@@ -1133,7 +1234,15 @@ select_favorite_file:
   rep #$10 : .xl
   lda #$00
   sta listsel_backup
-select_favorite_redraw:
+  lda @ST_NUM_FAVORITE_GAMES     ; first open: if the list is empty, show the message
+  bne select_favorite_redraw
+  lda #^text_no_favorite
+  sta window_tbank
+  ldx #!text_no_favorite
+  stx window_taddr
+  jsr show_empty_msg
+  jmp select_favorite_file_out
+select_favorite_redraw:           ; redraw after a remove: if now empty, just close
   lda @ST_NUM_FAVORITE_GAMES
   bne +
   jmp select_favorite_file_out
