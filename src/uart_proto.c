@@ -72,6 +72,9 @@ static volatile uint8_t wifi_pending;                    /* UP_WIFI_* queued by 
 static ESPLINK_BUF char wifi_req_ssid[UP_WIFI_SSID_MAX + 1];
 static ESPLINK_BUF char wifi_req_pass[UP_WIFI_PASS_MAX + 1];
 static ESPLINK_BUF uart_wifi_state_t ws;                 /* status + scan, read by main.c */
+static ESPLINK_BUF char esp_str[40];                     /* companion version "x.y.z (CHIP)" */
+
+#define UP_ESP_PRESENT_TICKS 500   /* ~5s @ HZ=100: ESP reported in recently */
 
 void uart_proto_init(void) {
   ps = PS_SOF;
@@ -85,6 +88,7 @@ void uart_proto_init(void) {
   wifi_req_ssid[0] = 0;
   wifi_req_pass[0] = 0;
   memset(&ws, 0, sizeof(ws));
+  esp_str[0] = 0;
 }
 
 /* copy a NUL-terminated string, clamped to max chars (+NUL); returns chars copied */
@@ -338,6 +342,12 @@ static void handle_frame(void) {
     break;
   }
 
+  case UP_OP_ESP_INFO:
+    /* payload: companion version string, e.g. "1.0.0 (ESP32)" */
+    copy_str(esp_str, (const char *)pl, (int)sizeof(esp_str) - 1);
+    reply_status(op, seq, 0);
+    break;
+
   default:
     reply_status(op, seq, 0xFF);   /* unknown opcode */
     break;
@@ -420,4 +430,10 @@ void uart_wifi_request_connect(const char *ssid, const char *pass) {
   copy_str(wifi_req_ssid, ssid, UP_WIFI_SSID_MAX);
   copy_str(wifi_req_pass, pass ? pass : "", UP_WIFI_PASS_MAX);
   wifi_pending = UP_WIFI_CONNECT;
+}
+
+const char *uart_esp_string(void) { return esp_str; }
+
+int uart_esp_present(void) {
+  return esp_str[0] && (tick_t)(getticks() - up_last_active) < UP_ESP_PRESENT_TICKS;
 }

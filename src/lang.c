@@ -58,6 +58,8 @@ const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
     [SI_CIC_STATE]          = "CIC state: %s",
     [SI_SNES_CLK_MEASURING] = "SNES master clock: measuring\x7f\x80",
     [SI_SNES_CLK]           = "SNES master clock: %ldHz    ",
+    [SI_COMPANION]          = "Companion: %s",
+    [SI_NOT_DETECTED]       = "Not detected",
   },
   /* LANG_PTBR */ {
     [SI_BUSY_DISK]          = "Calculando espa\x8do em disco\x7f\x80            ",
@@ -72,6 +74,8 @@ const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
     [SI_CIC_STATE]          = "Modo CIC: %s",
     [SI_SNES_CLK_MEASURING] = "Clock SNES: medindo\x7f\x80",
     [SI_SNES_CLK]           = "Clock SNES: %ldHz",
+    [SI_COMPANION]          = "Companion: %s",
+    [SI_NOT_DETECTED]       = "N\x85o detectado",
   },
   /* LANG_ES */ {
     [SI_BUSY_DISK]          = "Calculando espacio en disco\x7f\x80           ",
@@ -86,6 +90,8 @@ const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
     [SI_CIC_STATE]          = "Estado CIC: %s",
     [SI_SNES_CLK_MEASURING] = "Clock SNES: midiendo\x7f\x80",
     [SI_SNES_CLK]           = "Clock SNES: %ldHz",
+    [SI_COMPANION]          = "Companion: %s",
+    [SI_NOT_DETECTED]       = "No detectado",
   },
 };
 

@@ -18,21 +18,36 @@
 #include "cfg.h"
 #include "sgb.h"
 #include "lang.h"
+#include "esplink.h"
+#include "uart_proto.h"
 
 extern snes_status_t STS;
 extern cfg_t CFG;
 
 static uint32_t sd_tacc_max, sd_tacc_avg;
 
+/* Companion (ESP) info snapshot, captured on entry (while the MCU is still free,
+   coming from the menu loop). The SD access-time measurement later freezes the
+   MCU for ~20s, so we must NOT re-query the live link during the sysinfo screen. */
+static uint8_t esp_snap_present;
+static char    esp_snap_str[40];
+
 void sysinfo_loop() {
   sd_tacc_max = 0;
   sd_tacc_avg = 0;
   int sd_measured = 0;
+  /* snapshot the companion now, before the SD measurement can freeze the MCU */
+  esp_snap_present = uart_esp_present();
+  strncpy(esp_snap_str, uart_esp_string(), sizeof(esp_snap_str) - 1);
+  esp_snap_str[sizeof(esp_snap_str) - 1] = 0;
   echo_mcu_cmd();
   while(snes_get_mcu_cmd() == SNES_CMD_SYSINFO) {
     sd_measured = write_sysinfo(sd_measured);
     delay_ms(100);
     usbint_handler();
+#if ESPLINK_ENABLE
+    uart_proto_poll();   /* keep servicing the ESP so the companion line stays live */
+#endif
   }
   echo_mcu_cmd();
 }
@@ -67,7 +82,14 @@ int write_sysinfo(int sd_measured) {
   memset(linebuf+len, 0x20, 40-len);
   sram_writeblock(linebuf, sram_addr, 40);
   sram_addr += 40;
-  sram_memset(sram_addr, 40, 0x20);
+  /* companion (ESP) version (snapshot from entry), or "not detected" */
+  {
+    const char *cs = esp_snap_present ? esp_snap_str
+                                      : sysinfo_msg[lang_idx()][SI_NOT_DETECTED];
+    len = snprintf(linebuf, sizeof(linebuf), sysinfo_msg[lang_idx()][SI_COMPANION], cs);
+  }
+  memset(linebuf+len, 0x20, 40-len);
+  sram_writeblock(linebuf, sram_addr, 40);
   sram_addr += 40;
   if(disk_state == DISK_REMOVED || usbint_server_busy()) {
     sd_measured = 0;

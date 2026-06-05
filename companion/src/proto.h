@@ -45,6 +45,7 @@
 #define UP_OP_WIFI_POLL   0x10
 #define UP_OP_WIFI_REPORT 0x11
 #define UP_OP_WIFI_SCAN   0x12
+#define UP_OP_ESP_INFO    0x13   // ESP->MCU: companion version string "x.y.z (CHIP)"
 
 #define UP_WIFI_NONE      0
 #define UP_WIFI_SCAN_REQ  1

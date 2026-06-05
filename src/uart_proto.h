@@ -65,6 +65,7 @@
 #define UP_OP_WIFI_POLL   0x10
 #define UP_OP_WIFI_REPORT 0x11
 #define UP_OP_WIFI_SCAN   0x12
+#define UP_OP_ESP_INFO    0x13   /* ESP->MCU: companion version string "x.y.z (CHIP)" */
 
 /* menu->ESP actions carried by WIFI_POLL */
 #define UP_WIFI_NONE      0
@@ -98,5 +99,9 @@ const uart_wifi_state_t *uart_wifi_state(void);   /* status + last scan (read by
 void uart_wifi_request_scan(void);                /* queue a scan for the ESP to run */
 void uart_wifi_request_connect(const char *ssid, const char *pass);
 void uart_wifi_request_forget(void);
+
+/* ---- companion (ESP) identity, reported via UP_OP_ESP_INFO ---- */
+int  uart_esp_present(void);        /* 1 if the ESP reported in recently */
+const char *uart_esp_string(void); /* "x.y.z (CHIP)" or "" if never seen */
 
 #endif

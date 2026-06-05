@@ -228,7 +228,10 @@ function uploadOne(file){ return new Promise((res,rej)=>{
   xhr.onload=()=>{ let ok=false,st=0; try{const j=JSON.parse(xhr.responseText); ok=j.ok; st=j.status;}catch{ ok=xhr.status<300; }
     ok?res():rej(new Error("status "+st)); };
   xhr.onerror=()=>rej(new Error("net")); xhr.onabort=()=>rej(new Error("__abort"));
-  xhr.send(file);
+  // multipart/form-data: the ESP WebServer drives server.upload() only for forms;
+  // a raw body takes its raw path (null _currentUpload -> crash on ESP32).
+  const fd=new FormData(); fd.append("f", file, file.name);
+  xhr.send(fd);
 }); }
 
 async function upload(files){
@@ -346,7 +349,9 @@ function otaPut(dest, bytes){ return new Promise((res,rej)=>{
   xhr.onload=()=>{ let ok=false,st=0; try{const j=JSON.parse(xhr.responseText); ok=j.ok; st=j.status;}catch{ ok=xhr.status<300; }
     ok?res():rej(new Error("status "+st)); };
   xhr.onerror=()=>rej(new Error("net"));
-  xhr.send(new Blob([bytes]));
+  // multipart/form-data (see uploadOne): raw bodies crash the ESP WebServer.
+  const fd=new FormData(); fd.append("f", new Blob([bytes]), baseName(dest));
+  xhr.send(fd);
 }); }
 async function otaWrite(){
   const boxes = [...$("#otalist").querySelectorAll("input:checked")];

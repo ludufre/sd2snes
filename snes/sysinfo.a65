@@ -37,6 +37,16 @@ show_sysinfo:
   jsr draw_window
   stz print_pal
 
+  ; blank the sysinfo block first - it is shared with the WiFi screen (WIFI_BLK),
+  ; so without this a leftover IP/SSID would flash here while the MCU is loading
+  ldx #$0000
+  lda #$20
+sysinfo_clrblk:
+  sta @SYSINFO_BLK, x
+  inx
+  cpx #520
+  bne sysinfo_clrblk
+
   ldx #38
 copy_snes_system_text:
   lda @text_system,x

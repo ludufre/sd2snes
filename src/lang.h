@@ -19,6 +19,8 @@ enum {
   SI_CIC_STATE,           /* "CIC state: %s"                                    */
   SI_SNES_CLK_MEASURING,  /* "SNES master clock: measuring..."                  */
   SI_SNES_CLK,            /* "SNES master clock: %ldHz"                         */
+  SI_COMPANION,           /* "Companion: %s"                                    */
+  SI_NOT_DETECTED,        /* "Not detected"  (value for SI_COMPANION)           */
   SI_COUNT
 };
 
