@@ -57,6 +57,26 @@
 #define SNES_CMD_LOAD_COVER_RECENT   (0x1f) /* stage downscaled .cov for recent game (index in MCU_PARAM) */
 #define SNES_CMD_LOAD_COVER_FAVORITE (0x20) /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
 
+/* WiFi-in-menu (bridged to the ESP via uart_proto WIFI_* opcodes). The status +
+   scan block and the connect params live in the SRAM sysinfo block (modal, so
+   it never overlaps the sysinfo screen). See WIFI_OFF_* below. */
+#define SNES_CMD_WIFI_SCAN           (0x21) /* queue an AP scan on the ESP */
+#define SNES_CMD_WIFI_GET            (0x22) /* write current status + scan list to SRAM */
+#define SNES_CMD_WIFI_CONNECT        (0x23) /* connect using ssid/pass the menu wrote to SRAM */
+#define SNES_CMD_WIFI_FORGET         (0x24) /* forget the saved network */
+
+/* WiFi SRAM block layout (base = SRAM_SYSINFO_ADDR; menu side = WIFI_BLK $FF1200) */
+#define WIFI_OFF_CONNECTED  0    /* u8  */
+#define WIFI_OFF_RSSI       1    /* i8  */
+#define WIFI_OFF_SSID       2    /* char[33] */
+#define WIFI_OFF_IP         35   /* char[16] */
+#define WIFI_OFF_SCAN_CNT   51   /* u8  */
+#define WIFI_OFF_SCAN_SEQ   52   /* u8  */
+#define WIFI_OFF_APS        53   /* scan_cnt * { i8 rssi, u8 enc, char ssid[33] } = 35B each */
+#define WIFI_AP_STRIDE      35
+#define WIFI_OFF_REQ_SSID   340  /* char[33] - menu writes (CONNECT) */
+#define WIFI_OFF_REQ_PASS   373  /* char[64] - menu writes (CONNECT) */
+
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)
 

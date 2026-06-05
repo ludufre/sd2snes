@@ -152,6 +152,24 @@
 #define CMD_LOAD_MENU_SPC           $1e /* stage /sd2snes/menu.spc for background menu music */
 #define CMD_LOAD_COVER_RECENT       $1f /* stage downscaled .cov for recent game (index in MCU_PARAM) */
 #define CMD_LOAD_COVER_FAVORITE     $20 /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
+#define CMD_WIFI_SCAN               $21 /* queue an AP scan on the ESP */
+#define CMD_WIFI_GET                $22 /* write current status + scan list to WIFI_BLK */
+#define CMD_WIFI_CONNECT            $23 /* connect using ssid/pass written to WIFI_BLK */
+#define CMD_WIFI_FORGET             $24 /* forget the saved network */
+
+/* WiFi status/scan block + connect params. Aliases SYSINFO_BLK (both modal, so
+   they never coexist). Layout MUST match src/snes.h WIFI_OFF_*. */
+#define WIFI_BLK                    $FF1200
+#define WIFI_OFF_CONNECTED          0    /* u8 */
+#define WIFI_OFF_RSSI               1    /* i8 */
+#define WIFI_OFF_SSID               2    /* char[33] */
+#define WIFI_OFF_IP                 35   /* char[16] */
+#define WIFI_OFF_SCAN_CNT           51   /* u8 */
+#define WIFI_OFF_SCAN_SEQ           52   /* u8 */
+#define WIFI_OFF_APS                53   /* scan_cnt * {i8 rssi, u8 enc, char ssid[33]} */
+#define WIFI_AP_STRIDE              35
+#define WIFI_OFF_REQ_SSID           340  /* char[33] - menu writes (CONNECT) */
+#define WIFI_OFF_REQ_PASS           373  /* char[64] - menu writes (CONNECT) */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */

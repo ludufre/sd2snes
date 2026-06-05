@@ -35,3 +35,22 @@
 #define UP_OP_MV        0x0A
 #define UP_OP_MKDIR     0x0B
 #define UP_OP_ABORT     0x0C
+
+// WiFi-in-menu bridge (0x10..0x1F). ESP=client / MCU=server: the ESP polls the
+// MCU for a pending menu request and pushes status/scan back.
+//   WIFI_POLL   req: -                resp: u8 action(0=none,1=scan,2=connect,3=forget)
+//                                           [+ ssid\0 pass\0 when action==connect]
+//   WIFI_REPORT req: u8 connected, i8 rssi, ssid\0, ip\0   resp: u8 ok
+//   WIFI_SCAN   req: u8 count, count*{i8 rssi, u8 enc, ssid\0}  resp: u8 ok
+#define UP_OP_WIFI_POLL   0x10
+#define UP_OP_WIFI_REPORT 0x11
+#define UP_OP_WIFI_SCAN   0x12
+
+#define UP_WIFI_NONE      0
+#define UP_WIFI_SCAN_REQ  1
+#define UP_WIFI_CONNECT   2
+#define UP_WIFI_FORGET    3
+
+#define UP_WIFI_MAX_APS   8
+#define UP_WIFI_SSID_MAX  32
+#define UP_WIFI_PASS_MAX  63

@@ -56,11 +56,47 @@
 #define UP_OP_MKDIR     0x0B
 #define UP_OP_ABORT     0x0C
 
+/* WiFi-in-menu bridge (0x10..0x1F). Direction is still ESP=client / MCU=server:
+   the ESP polls the MCU for a pending menu request and pushes status/scan back.
+     WIFI_POLL  req: -                resp: u8 action(0=none,1=scan,2=connect,3=forget)
+                                            [+ ssid\0 pass\0 when action==connect]
+     WIFI_REPORT req: u8 connected, i8 rssi, ssid\0, ip\0   resp: u8 ok
+     WIFI_SCAN  req: u8 count, count*{i8 rssi, u8 enc, ssid\0}  resp: u8 ok */
+#define UP_OP_WIFI_POLL   0x10
+#define UP_OP_WIFI_REPORT 0x11
+#define UP_OP_WIFI_SCAN   0x12
+
+/* menu->ESP actions carried by WIFI_POLL */
+#define UP_WIFI_NONE      0
+#define UP_WIFI_SCAN_REQ  1
+#define UP_WIFI_CONNECT   2
+#define UP_WIFI_FORGET    3
+
+#define UP_WIFI_MAX_APS   8      /* scan APs surfaced to the menu (fits one frame) */
+#define UP_WIFI_SSID_MAX  32
+#define UP_WIFI_PASS_MAX  63
+
 /* status byte: 0 = OK, otherwise the FatFs FRESULT value. */
 
 void uart_proto_init(void);     /* call once after uart0_link_init() + file_init() */
 void uart_proto_poll(void);     /* call every main-loop iteration (like usbint_handler) */
 int  uart_proto_busy(void);     /* 1 while a file/dir handle is open or a reply is pending */
 int  uart_proto_active(void);   /* 1 if a frame arrived recently (~100ms) -> a transfer is flowing */
+
+/* ---- WiFi-in-menu bridge (talks to the ESP via WIFI_* opcodes) ---- */
+typedef struct {
+  uint8_t connected;       /* 1 = STA has an IP */
+  int8_t  rssi;            /* current STA RSSI (dBm) */
+  char    ssid[UP_WIFI_SSID_MAX + 1];
+  char    ip[16];
+  uint8_t scan_count;      /* APs in aps[] (0..UP_WIFI_MAX_APS) */
+  uint8_t scan_seq;        /* increments on each fresh scan result */
+  struct { int8_t rssi; uint8_t enc; char ssid[UP_WIFI_SSID_MAX + 1]; } aps[UP_WIFI_MAX_APS];
+} uart_wifi_state_t;
+
+const uart_wifi_state_t *uart_wifi_state(void);   /* status + last scan (read by main.c) */
+void uart_wifi_request_scan(void);                /* queue a scan for the ESP to run */
+void uart_wifi_request_connect(const char *ssid, const char *pass);
+void uart_wifi_request_forget(void);
 
 #endif

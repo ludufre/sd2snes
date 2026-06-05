@@ -220,6 +220,26 @@ mtext_browser_ledbright           .byt "LED brightness", 0
 mtext_browser_showcov             .byt "Show covers", 0
 mtext_cfg_patch                   .byt "Patch Options", 0
 mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
+mtext_cfg_wifi                    .byt "WiFi", 0
+mdesc_cfg_wifi                    .byt "Connect the sd2snes to a WiFi network", 0
+; ---- WiFi config screen ----
+wifi_s_title                      .byt "WiFi", 0
+wifi_s_scan                       .byt "Scanning networks...", 0
+wifi_s_nonet                      .byt "No networks found.", 0
+wifi_s_hint                       .byt "up/dn  A:select  X:rescan  B:back", 0
+wifi_s_curconn                    .byt "Connected: ", 0
+wifi_s_curoff                     .byt "Not connected", 0
+wifi_s_passlbl                    .byt "Password:", 0
+wifi_s_kbd1                       .byt "A:type B:del X:space Y:aA", 0
+wifi_s_kbd2                       .byt "START:connect  SELECT:back", 0
+wifi_s_connecting                 .byt "Connecting...", 0
+wifi_s_ok                         .byt "Connected!", 0
+wifi_s_anykey                     .byt "Press any button to go back", 0
+wifi_s_fail                       .byt "Failed - check password. A:retry", 0
+wifi_s_ipl                        .byt "IP: ", 0
+wifi_s_lock                       .byt " *", 0
+wifi_keys_lo                      .byt "abcdefghijklmnopqrstuvwxyz0123456789.-_@!#$%&*()", 0
+wifi_keys_hi                      .byt "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_@!#$%&*()", 0
 mtext_browser_menumusic           .byt "Menu music", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
 mtext_ingame_shortreset           .byt "Reset to menu", 0

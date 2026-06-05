@@ -256,6 +256,19 @@ menu_enttab_cfg:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_FUNC
+ .word !mtext_cfg_wifi
+ .byt  ^mtext_cfg_wifi
+ .word !wifi_menu_screen-1
+ .byt  ^wifi_menu_screen-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_wifi
+ .byt  ^mdesc_cfg_wifi
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt 0
 
 ; ---- Patch Options submenu (IPS/BPS soft-patching) ----

@@ -286,4 +286,37 @@ listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (d
 ;----------language switch redraw bookkeeping
 menu_drawn_lang        .byt 0    ; language the current show_menu window was drawn in
 mainmenu_relang        .byt 0    ; set when the language changed -> main menu re-shows
+
+;----------WiFi config screen (wifi.a65)
+wifi_phase             .byt 0    ; 0=scan,1=list,2=keyboard,3=connecting,4=result
+wifi_cursor            .byt 0    ; selected network row (0..wifi_scan_cnt-1)
+wifi_scan_cnt          .byt 0    ; cached AP count from WIFI_BLK
+wifi_last_seq          .byt 0    ; last scan_seq seen (detects a fresh scan)
+wifi_dirty             .byt 0    ; 1 -> redraw the screen
+wifi_kx                .byt 0    ; keyboard cursor column
+wifi_ky                .byt 0    ; keyboard cursor row
+wifi_shift             .byt 0    ; 0=lowercase, 1=uppercase letters
+wifi_pass_len          .byt 0    ; chars in wifi_pass_buf
+wifi_wait              .word 0   ; connect-poll countdown (frames)
+wifi_ok                .byt 0    ; result: 1=connected, 0=failed
+wifi_rowi              .byt 0    ; render loop row index
+wifi_kxc               .byt 0    ; keyboard row build column counter
+wifi_okx               .byt 0    ; previous keyboard cursor column (incremental redraw)
+wifi_oky               .byt 0    ; previous keyboard cursor row
+wifi_pass_buf                    ; password being typed (NUL-terminated ASCII, 65B)
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0
+wifi_ssid_buf                    ; SSID of the chosen network (34B)
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0
+wifi_linebuf                     ; scratch for one rendered text line (64B)
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
 _END            .byt 0

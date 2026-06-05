@@ -133,14 +133,26 @@ static esp_err_t recv_resp(uint8_t exp_seq, uint8_t *rtype, uint8_t *rpl,
     return ESP_ERR_TIMEOUT;
 }
 
+// Single-attempt transaction with an explicit timeout.
+static esp_err_t txn_to(uint8_t op, const uint8_t *pl, uint16_t len,
+                        uint8_t *rtype, uint8_t *rpl, uint16_t rpl_max, uint16_t *rlen,
+                        int timeout_ms) {
+    uint8_t seq;
+    send_req(op, pl, len, &seq);
+    return recv_resp(seq, rtype, rpl, rpl_max, rlen, timeout_ms);
+}
+
 // Single-attempt transaction (link is verified-clean; the WebUI/browser retries
 // whole operations on the rare timeout). Avoids non-idempotent LS_NEXT re-sends.
 static esp_err_t txn(uint8_t op, const uint8_t *pl, uint16_t len,
                      uint8_t *rtype, uint8_t *rpl, uint16_t rpl_max, uint16_t *rlen) {
-    uint8_t seq;
-    send_req(op, pl, len, &seq);
-    return recv_resp(seq, rtype, rpl, rpl_max, rlen, RESP_TIMEOUT_MS);
+    return txn_to(op, pl, len, rtype, rpl, rpl_max, rlen, RESP_TIMEOUT_MS);
 }
+
+// WiFi-bridge requests poll constantly and are non-critical: a short timeout
+// keeps a non-responding/old MCU from starving the httpd worker on the shared
+// link mutex (an MCU without the WIFI_* opcodes would otherwise block 2s each).
+#define WIFI_TO_MS 250
 
 static uint32_t rd_u32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -286,4 +298,62 @@ esp_err_t proto_mv(const char *from, const char *to, uint8_t *status) {
 esp_err_t proto_abort(void) {
     uint8_t r[1]; uint16_t rl = 0;
     return txn(UP_OP_ABORT, NULL, 0, NULL, r, sizeof(r), &rl);
+}
+
+// ---- WiFi-in-menu bridge ----------------------------------------------------
+
+static uint16_t put_cstr(uint8_t *p, const char *s, uint16_t max) {
+    uint16_t i = 0;
+    while (s[i] && i < max) { p[i] = (uint8_t)s[i]; i++; }
+    p[i++] = 0;
+    return i;
+}
+
+esp_err_t proto_wifi_report(uint8_t connected, int8_t rssi, const char *ssid, const char *ip) {
+    uint8_t req[2 + UP_WIFI_SSID_MAX + 1 + 16]; uint16_t n = 0;
+    req[n++] = connected ? 1 : 0;
+    req[n++] = (uint8_t)rssi;
+    n += put_cstr(req + n, ssid ? ssid : "", UP_WIFI_SSID_MAX);
+    n += put_cstr(req + n, ip ? ip : "", 15);
+    uint8_t r[1]; uint16_t rl = 0;
+    return txn_to(UP_OP_WIFI_REPORT, req, n, NULL, r, sizeof(r), &rl, WIFI_TO_MS);
+}
+
+esp_err_t proto_wifi_poll(uint8_t *action, char *ssid, size_t ssz, char *pass, size_t psz) {
+    uint8_t r[UP_MAX_PAYLOAD]; uint16_t rl = 0;
+    if (ssid && ssz) ssid[0] = 0;
+    if (pass && psz) pass[0] = 0;
+    esp_err_t e = txn_to(UP_OP_WIFI_POLL, NULL, 0, NULL, r, sizeof(r), &rl, WIFI_TO_MS);
+    if (e) return e;
+    if (rl < 1) { if (action) *action = UP_WIFI_NONE; return ESP_OK; }
+    if (action) *action = r[0];
+    if (r[0] == UP_WIFI_CONNECT) {
+        uint16_t i = 1, j = 0;
+        while (i < rl && r[i] && ssid && j + 1 < ssz) ssid[j++] = (char)r[i++];
+        if (ssid && ssz) ssid[j] = 0;
+        while (i < rl && r[i]) i++;            // skip to NUL
+        if (i < rl) i++;                        // consume NUL
+        j = 0;
+        while (i < rl && r[i] && pass && j + 1 < psz) pass[j++] = (char)r[i++];
+        if (pass && psz) pass[j] = 0;
+    }
+    return ESP_OK;
+}
+
+esp_err_t proto_wifi_scan_push(const wifi_ap_t *aps, int n) {
+    uint8_t req[UP_MAX_PAYLOAD]; uint16_t o = 1;   // [0] = count (patched below)
+    if (n > UP_WIFI_MAX_APS) n = UP_WIFI_MAX_APS;
+    int put = 0;
+    for (int i = 0; i < n; i++) {
+        uint16_t sl = strlen(aps[i].ssid);
+        if (sl > UP_WIFI_SSID_MAX) sl = UP_WIFI_SSID_MAX;
+        if (o + 2 + sl + 1 > UP_MAX_PAYLOAD) break;   // frame full
+        req[o++] = (uint8_t)aps[i].rssi;
+        req[o++] = aps[i].enc ? 1 : 0;
+        memcpy(req + o, aps[i].ssid, sl); o += sl; req[o++] = 0;
+        put++;
+    }
+    req[0] = (uint8_t)put;
+    uint8_t r[1]; uint16_t rl = 0;
+    return txn(UP_OP_WIFI_SCAN, req, o, NULL, r, sizeof(r), &rl);
 }

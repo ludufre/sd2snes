@@ -64,6 +64,15 @@ static ESPLINK_BUF char     up_lfn[256];   /* LFN buffer (>= _MAX_LFN+1) */
 static ESPLINK_BUF uint8_t  ls_carry[1 + 4 + UP_LS_NAMEMAX + 1];
 static uint16_t ls_carry_len;
 
+/* ---- WiFi-in-menu bridge ----
+   The menu queues a request (wifi_pending + ssid/pass); the ESP picks it up via
+   WIFI_POLL and pushes status (WIFI_REPORT) and scan results (WIFI_SCAN) back,
+   which land in `ws` for main.c to mirror into the SNES SRAM block. */
+static volatile uint8_t wifi_pending;                    /* UP_WIFI_* queued by menu */
+static ESPLINK_BUF char wifi_req_ssid[UP_WIFI_SSID_MAX + 1];
+static ESPLINK_BUF char wifi_req_pass[UP_WIFI_PASS_MAX + 1];
+static ESPLINK_BUF uart_wifi_state_t ws;                 /* status + scan, read by main.c */
+
 void uart_proto_init(void) {
   ps = PS_SOF;
   out_ready = 0;
@@ -71,6 +80,19 @@ void uart_proto_init(void) {
   up_dir_open = 0;
   ls_carry_len = 0;
   up_last_active = 0;
+  /* AHB SRAM is not zeroed at startup - clear the WiFi state explicitly. */
+  wifi_pending = UP_WIFI_NONE;
+  wifi_req_ssid[0] = 0;
+  wifi_req_pass[0] = 0;
+  memset(&ws, 0, sizeof(ws));
+}
+
+/* copy a NUL-terminated string, clamped to max chars (+NUL); returns chars copied */
+static int copy_str(char *dst, const char *src, int max) {
+  int i = 0;
+  while (src[i] && i < max) { dst[i] = src[i]; i++; }
+  dst[i] = 0;
+  return i;
 }
 
 /* assemble a frame into txframe[]; the poll loop flushes it to UART0 */
@@ -270,6 +292,52 @@ static void handle_frame(void) {
     reply_status(op, seq, 0);
     break;
 
+  case UP_OP_WIFI_POLL: {
+    /* hand the queued menu request to the ESP (delivered once, then cleared) */
+    uint16_t n = 0;
+    resp[n++] = wifi_pending;
+    if (wifi_pending == UP_WIFI_CONNECT) {
+      n += copy_str((char *)resp + n, wifi_req_ssid, UP_WIFI_SSID_MAX); resp[n++] = 0;
+      n += copy_str((char *)resp + n, wifi_req_pass, UP_WIFI_PASS_MAX); resp[n++] = 0;
+    }
+    build_frame(UP_TYPE_RESP, op, seq, resp, n);
+    wifi_pending = UP_WIFI_NONE;
+    break;
+  }
+
+  case UP_OP_WIFI_REPORT: {
+    /* pl: u8 connected, i8 rssi, ssid\0, ip\0 */
+    ws.connected = pl[0];
+    ws.rssi = (int8_t)pl[1];
+    const char *s = (const char *)(pl + 2);
+    copy_str(ws.ssid, s, UP_WIFI_SSID_MAX);
+    const char *ip = s + strlen(s) + 1;
+    copy_str(ws.ip, ip, (int)sizeof(ws.ip) - 1);
+    reply_status(op, seq, 0);
+    break;
+  }
+
+  case UP_OP_WIFI_SCAN: {
+    /* pl: u8 count, count*{i8 rssi, u8 enc, ssid\0} */
+    uint16_t i = 0;
+    uint8_t want = pl[i++];
+    if (want > UP_WIFI_MAX_APS) want = UP_WIFI_MAX_APS;
+    uint8_t k = 0;
+    while (k < want && i + 2 < plen) {
+      ws.aps[k].rssi = (int8_t)pl[i++];
+      ws.aps[k].enc  = pl[i++];
+      int j = 0;
+      while (i < plen && pl[i] && j < UP_WIFI_SSID_MAX) ws.aps[k].ssid[j++] = (char)pl[i++];
+      ws.aps[k].ssid[j] = 0;
+      if (i < plen && pl[i] == 0) i++;   /* consume the NUL terminator */
+      k++;
+    }
+    ws.scan_count = k;
+    ws.scan_seq++;
+    reply_status(op, seq, 0);
+    break;
+  }
+
   default:
     reply_status(op, seq, 0xFF);   /* unknown opcode */
     break;
@@ -340,4 +408,16 @@ int uart_proto_active(void) {
   /* a frame completed within the last ~100ms -> a transfer is actively flowing,
      so the caller should service the link continuously instead of sleeping. */
   return (tick_t)(getticks() - up_last_active) < UP_ACTIVE_TICKS;
+}
+
+/* ---- WiFi-in-menu bridge API (called by the menu-command layer in main.c) ---- */
+const uart_wifi_state_t *uart_wifi_state(void) { return &ws; }
+
+void uart_wifi_request_scan(void)   { wifi_pending = UP_WIFI_SCAN_REQ; }
+void uart_wifi_request_forget(void) { wifi_pending = UP_WIFI_FORGET; }
+
+void uart_wifi_request_connect(const char *ssid, const char *pass) {
+  copy_str(wifi_req_ssid, ssid, UP_WIFI_SSID_MAX);
+  copy_str(wifi_req_pass, pass ? pass : "", UP_WIFI_PASS_MAX);
+  wifi_pending = UP_WIFI_CONNECT;
 }

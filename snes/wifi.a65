@@ -1,0 +1,1035 @@
+.link page $c0
+#include "memmap.i65"
+
+; wifi.a65: WiFi config screen reached from Settings (MTYPE_FUNC target, entered
+; with a window already pushed+greyed; returns via rtl).
+;
+; Talks to the MCU with the same SNES_CMD/MCU_CMD handshake as sysinfo/cover:
+;   - CMD_WIFI_SCAN     queue an AP scan on the ESP
+;   - CMD_WIFI_GET      MCU writes status + scan list into WIFI_BLK
+;   - CMD_WIFI_CONNECT  connect using ssid/pass the menu wrote into WIFI_BLK
+; The ESP runs the actual WiFi work and reports back; the MCU just buffers it
+; (see src/uart_proto.c + esp32/src/wifi_bridge.c). Block layout: memmap.i65.
+
+; Window must sit BELOW the logo/header banner (rows 0..8), like every other
+; menu window (mainmenu/sysinfo use Y=9). Y<9 corrupts the header tiles.
+#define WIFI_WIN_X   6
+#define WIFI_WIN_Y   9
+#define WIFI_WIN_W   50
+#define WIFI_WIN_H   18
+#define WIFI_CX      8       ; content left column (WIN_X+2)
+#define WIFI_STATUS_Y 11     ; WIN_Y+2
+#define WIFI_IPCOL   39      ; column where the IP is shown on the status line (15 chars -> ends col 53)
+#define WIFI_LIST_Y0 13      ; first network row (13..20 for 8 APs)
+#define WIFI_HINT_Y  25
+#define WIFI_SIG_COL 38      ; column for the signal/lock marker
+#define WIFI_HL_PAL  2       ; palette for the highlighted network row
+#define WIFI_MSG_Y   15      ; centred status message (scanning/connecting/result)
+#define WIFI_MSG2_Y  17
+
+; keyboard layout (6 rows x 8 glyphs)
+#define WIFI_KBD_X   10
+#define WIFI_KBD_Y   14
+#define WIFI_PASS_LBL_Y 11
+#define WIFI_PASS_Y  12
+#define WIFI_KH1_Y   23
+#define WIFI_KH2_Y   24
+
+.byt "===WIFI_MENU==="
+wifi_menu_screen:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; disable the hardware select bar (we draw our own marker)
+  stz bar_wl : dec bar_wl
+  stz bar_xl : dec bar_xl
+  stz bar_yl : dec bar_yl
+  ; our window
+  lda #^wifi_s_title : sta window_tbank
+  ldx #!wifi_s_title : stx window_taddr
+  lda #WIFI_WIN_X : sta window_x
+  lda #WIFI_WIN_Y : sta window_y
+  lda #WIFI_WIN_W : sta window_w
+  lda #WIFI_WIN_H : sta window_h
+  jsr push_window
+  jsr draw_window
+  ; init state
+  stz wifi_pass_len
+  stz wifi_shift
+  stz wifi_cursor
+  ; initial scan
+  jsr wifi_do_scan
+  jsr wifi_draw_list
+
+wifi_list_loop:
+  jsr wifi_vsync
+  jsr read_pad
+  lda pad_b
+  beq wll_nob
+  jmp wifi_quit
+wll_nob:
+  lda pad_x
+  beq wll_noresc
+  jsr wifi_do_scan
+  jsr wifi_draw_list
+  jmp wifi_list_loop
+wll_noresc:
+  lda wifi_scan_cnt
+  bne wll_havenets
+  jmp wifi_list_loop          ; empty list: only B / X do anything
+wll_havenets:
+  lda pad_up
+  beq wll_nodown
+  lda wifi_cursor
+  beq wll_nodown              ; already at top
+  dec wifi_cursor
+  jsr wifi_draw_markers       ; move the '>' only (no full redraw -> no flicker)
+wll_nodown:
+  lda pad_down
+  beq wll_noa
+  lda wifi_cursor
+  inc
+  cmp wifi_scan_cnt
+  bcs wll_noa                 ; would pass the last row
+  inc wifi_cursor
+  jsr wifi_draw_markers
+wll_noa:
+  lda pad_a
+  bne wll_doa
+  jmp wifi_list_loop
+wll_doa:
+  jsr wifi_pick
+  lda wifi_ok
+  bne wifi_quit               ; connected ok -> leave the screen, back to the menu
+  jsr wifi_draw_list          ; cancelled/failed -> stay on the list
+  jmp wifi_list_loop
+
+wifi_quit:
+  jsr pop_window
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------
+; wifi_cmd: issue command A to the MCU and wait for completion (SNES_CMD back to
+; CMD_MCU_RDY). A = command byte (8-bit). Clobbers A.
+; ---------------------------------------------------------------------------
+wifi_cmd:
+  pha
+wcmd_rdy:
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  bne wcmd_rdy
+  lda #$00
+  sta @SNES_CMD               ; clear ready so we can detect the next $55
+  pla
+  sta @MCU_CMD
+wcmd_done:
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  bne wcmd_done
+  rts
+
+; wait one frame + keep the clock alive
+wifi_vsync:
+  sep #$20 : .as
+wvs_w:
+  lda isr_done
+  beq wvs_w
+  stz isr_done
+  jsr printtime
+  rts
+
+; ---------------------------------------------------------------------------
+; wifi_do_scan: snapshot seq, request a scan, poll GET until the seq changes or
+; a timeout. Caches wifi_scan_cnt and resets the cursor.
+; ---------------------------------------------------------------------------
+wifi_do_scan:
+  jsr wifi_clear_body
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_STATUS_Y : sta print_y
+  stz print_pal
+  lda #40 : sta print_count
+  ldx #!wifi_s_scan
+  lda #^wifi_s_scan
+  jsr wifi_puts
+  ; remember the current scan seq
+  lda #CMD_WIFI_GET
+  jsr wifi_cmd
+  lda @WIFI_BLK+WIFI_OFF_SCAN_SEQ
+  sta wifi_last_seq
+  ; request a fresh scan
+  lda #CMD_WIFI_SCAN
+  jsr wifi_cmd
+  ; poll for ~10s (600 frames)
+  rep #$20 : .al
+  lda #600
+  sta wifi_wait
+  sep #$20 : .as
+wds_wait:
+  jsr wifi_vsync
+  jsr read_pad
+  lda pad_b
+  bne wds_done
+  lda #CMD_WIFI_GET
+  jsr wifi_cmd
+  lda @WIFI_BLK+WIFI_OFF_SCAN_SEQ
+  cmp wifi_last_seq
+  bne wds_done                ; fresh results arrived
+  rep #$20 : .al
+  dec wifi_wait
+  sep #$20 : .as
+  lda wifi_wait
+  ora wifi_wait+1
+  bne wds_wait
+wds_done:
+  lda @WIFI_BLK+WIFI_OFF_SCAN_CNT
+  sta wifi_scan_cnt
+  stz wifi_cursor
+  rts
+
+; ---------------------------------------------------------------------------
+; wifi_draw_list: status line + network list + hint.
+; ---------------------------------------------------------------------------
+wifi_draw_list:
+  jsr wifi_clear_body
+  ; --- status line ---
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_STATUS_Y : sta print_y
+  stz print_pal
+  lda #40 : sta print_count
+  lda @WIFI_BLK+WIFI_OFF_CONNECTED
+  bne wdl_conn
+  ; not connected
+  ldx #!wifi_s_curoff
+  lda #^wifi_s_curoff
+  jsr wifi_puts
+  jmp wdl_list
+wdl_conn:
+  ldx #!wifi_s_curconn
+  lda #^wifi_s_curconn
+  jsr wifi_puts                ; "Connected: " -> print_done = label width
+  ; ssid starts right after the label; reserve the right end of the line for the IP
+  lda print_done
+  clc
+  adc #WIFI_CX
+  sta window_tmp               ; ssid_col
+  lda #(WIFI_IPCOL-1)
+  sec
+  sbc window_tmp
+  sta window_tmp+1             ; maxw = (IPCOL-1) - ssid_col  (1-col gap before the IP)
+  ; copy the ssid into linebuf, ellipsizing if it would reach the IP field
+  lda window_tmp+1
+  sta wifi_kxc                 ; remaining char budget
+  ldx #WIFI_OFF_SSID
+  ldy #$0000
+wdl_ssid:
+  lda @WIFI_BLK, x
+  beq wdl_ssterm               ; ssid shorter than the field
+  sta wifi_linebuf, y
+  inx
+  iny
+  dec wifi_kxc
+  bne wdl_ssid
+  lda @WIFI_BLK, x
+  beq wdl_ssterm               ; fits exactly
+  ; truncated: overwrite the last 3 chars with "..."
+  dey
+  lda #$2e
+  sta wifi_linebuf, y
+  dey
+  sta wifi_linebuf, y
+  dey
+  sta wifi_linebuf, y
+  lda window_tmp+1
+  rep #$20 : .al
+  and #$00ff
+  tay
+  sep #$20 : .as
+wdl_ssterm:
+  lda #$00
+  sta wifi_linebuf, y
+  lda window_tmp : sta print_x
+  lda #WIFI_STATUS_Y : sta print_y
+  stz print_pal
+  lda window_tmp+1 : sta print_count
+  ldx #!wifi_linebuf
+  lda #^wifi_linebuf
+  jsr wifi_puts
+  ; IP at the right end of the same line (always shown)
+  lda #WIFI_IPCOL : sta print_x
+  lda #WIFI_STATUS_Y : sta print_y
+  stz print_pal
+  lda #16 : sta print_count
+  ldx #$1223                   ; WIFI_BLK + WIFI_OFF_IP (low word)
+  lda #$ff                     ; WIFI_BLK bank
+  jsr wifi_puts
+wdl_list:
+  lda wifi_scan_cnt
+  bne wdl_rows
+  ; no networks
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_LIST_Y0 : sta print_y
+  stz print_pal
+  lda #40 : sta print_count
+  ldx #!wifi_s_nonet
+  lda #^wifi_s_nonet
+  jsr wifi_puts
+  bra wdl_hint
+wdl_rows:
+  stz wifi_rowi
+wdl_loop:
+  lda wifi_rowi
+  cmp wifi_scan_cnt
+  bcs wdl_hint
+  ; row Y = WIFI_LIST_Y0 + rowi
+  lda wifi_rowi
+  clc
+  adc #WIFI_LIST_Y0
+  sta print_y
+  ; marker (">" if selected, else " ")
+  lda #WIFI_CX : sta print_x
+  lda wifi_rowi
+  cmp wifi_cursor
+  bne wdl_nomark
+  lda #$3e                    ; '>'
+  bra wdl_mark
+wdl_nomark:
+  lda #$20
+wdl_mark:
+  jsr wifi_putc_at
+  ; ssid for row rowi: offset = APS + rowi*35 + 2
+  jsr wifi_row_apoff           ; X = byte offset within the block
+  ; print ssid from block at CX+2
+  rep #$20 : .al
+  txa
+  clc
+  adc #$1200                   ; + WIFI_BLK low word
+  tax
+  sep #$20 : .as
+  stx print_src
+  lda #$ff                     ; WIFI_BLK bank
+  sta print_bank
+  lda #WIFI_CX+2 : sta print_x
+  ; print_y already set; selection is shown by the '>' marker (no per-row repaint)
+  stz print_pal
+  lda #28 : sta print_count
+  jsr hiprint
+  ; signal + lock at a fixed column
+  jsr wifi_draw_sig
+  inc wifi_rowi
+  bra wdl_loop
+wdl_hint:
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_HINT_Y : sta print_y
+  stz print_pal
+  lda #44 : sta print_count
+  ldx #!wifi_s_hint
+  lda #^wifi_s_hint
+  jsr wifi_puts
+  rts
+
+; redraw only the cursor column ('>' on the selected row, ' ' on the rest) -
+; cheap per-keypress repaint that never blanks the list (no flicker).
+wifi_draw_markers:
+  stz wifi_rowi
+wdm_loop:
+  lda wifi_rowi
+  cmp wifi_scan_cnt
+  bcs wdm_done
+  lda #WIFI_CX
+  sta print_x
+  lda wifi_rowi
+  clc
+  adc #WIFI_LIST_Y0
+  sta print_y
+  lda wifi_rowi
+  cmp wifi_cursor
+  bne wdm_space
+  lda #$3e                     ; '>'
+  bra wdm_put
+wdm_space:
+  lda #$20
+wdm_put:
+  jsr wifi_putc_at
+  inc wifi_rowi
+  bra wdm_loop
+wdm_done:
+  rts
+
+; X = byte offset (within block) of the ssid of network wifi_rowi:
+;     WIFI_OFF_APS + rowi*WIFI_AP_STRIDE + 2
+wifi_row_apoff:
+  sep #$20 : .as
+  lda wifi_rowi
+  rep #$20 : .al
+  and #$00ff
+  sta window_tmp               ; t = rowi
+  asl : asl : asl : asl : asl  ; rowi*32
+  clc : adc window_tmp         ; *33
+  clc : adc window_tmp         ; *34
+  clc : adc window_tmp         ; *35
+  clc : adc #(WIFI_OFF_APS+2)
+  tax
+  sep #$20 : .as
+  rts
+
+; draw the signal bars + lock marker for network wifi_rowi at WIFI_SIG_COL
+wifi_draw_sig:
+  ; X = AP base (rssi byte) = APS + rowi*35
+  sep #$20 : .as
+  lda wifi_rowi
+  rep #$20 : .al
+  and #$00ff
+  sta window_tmp
+  asl : asl : asl : asl : asl
+  clc : adc window_tmp
+  clc : adc window_tmp
+  clc : adc window_tmp
+  clc : adc #WIFI_OFF_APS
+  tax
+  sep #$20 : .as
+  ; build "<lock> <bars>" into linebuf
+  ldy #$0000
+  lda @WIFI_BLK+1, x           ; enc byte (rssi at +0, enc at +1)
+  beq wds_noenc
+  lda #$2a                     ; '*'
+  sta wifi_linebuf, y
+  iny
+  bra wds_bars
+wds_noenc:
+  lda #$20
+  sta wifi_linebuf, y
+  iny
+wds_bars:
+  lda #$20
+  sta wifi_linebuf, y
+  iny
+  ; bars from rssi (signed): u = rssi+128
+  lda @WIFI_BLK, x
+  clc
+  adc #128
+  ; bars count -> append that many '#'
+  cmp #73
+  bcs wds_b4
+  cmp #63
+  bcs wds_b3
+  cmp #53
+  bcs wds_b2
+  ldx #1
+  bra wds_emit
+wds_b2:
+  ldx #2
+  bra wds_emit
+wds_b3:
+  ldx #3
+  bra wds_emit
+wds_b4:
+  ldx #4
+wds_emit:
+  lda #$23                     ; '#'
+  sta wifi_linebuf, y
+  iny
+  dex
+  bne wds_emit
+  lda #$00
+  sta wifi_linebuf, y
+  ; print it
+  lda #WIFI_SIG_COL : sta print_x
+  ; print_y still = this row
+  stz print_pal
+  lda #8 : sta print_count
+  ldx #!wifi_linebuf
+  lda #^wifi_linebuf
+  jsr wifi_puts
+  rts
+
+; ---------------------------------------------------------------------------
+; wifi_pick: a network was chosen. Copy its ssid; if encrypted, run the
+; keyboard for a password; then connect and show the result.
+; ---------------------------------------------------------------------------
+wifi_pick:
+  stz wifi_ok                  ; only set if a connection actually succeeds
+  ; copy selected ssid into wifi_ssid_buf
+  lda wifi_cursor
+  sta wifi_rowi
+  jsr wifi_row_apoff           ; X = ssid offset in block
+  ldy #$0000
+wpk_copy:
+  lda @WIFI_BLK, x
+  beq wpk_copydone
+  sta wifi_ssid_buf, y
+  inx
+  iny
+  cpy #32
+  bne wpk_copy
+wpk_copydone:
+  lda #$00
+  sta wifi_ssid_buf, y
+  ; reset password
+  stz wifi_pass_len
+  lda #$00
+  sta wifi_pass_buf
+  ; encrypted? (enc byte at AP base +1)
+  lda wifi_cursor
+  sta wifi_rowi
+  jsr wifi_ap_enc              ; A = enc
+  beq wpk_connect              ; open network: no password
+  jsr wifi_keyboard            ; fills wifi_pass_buf; returns A=1 to connect, 0 to cancel
+  beq wpk_out
+wpk_connect:
+  jsr wifi_connect
+wpk_out:
+  rts
+
+; A = enc byte of network wifi_rowi
+wifi_ap_enc:
+  sep #$20 : .as
+  lda wifi_rowi
+  rep #$20 : .al
+  and #$00ff
+  sta window_tmp
+  asl : asl : asl : asl : asl
+  clc : adc window_tmp
+  clc : adc window_tmp
+  clc : adc window_tmp
+  clc : adc #WIFI_OFF_APS
+  tax
+  sep #$20 : .as
+  lda @WIFI_BLK+1, x
+  rts
+
+; ---------------------------------------------------------------------------
+; wifi_connect: write ssid+pass into the block, issue CONNECT, poll status.
+; ---------------------------------------------------------------------------
+wifi_connect:
+  ; write ssid -> WIFI_OFF_REQ_SSID
+  ldx #WIFI_OFF_REQ_SSID
+  ldy #$0000
+wcn_ssid:
+  lda wifi_ssid_buf, y
+  sta @WIFI_BLK, x
+  beq wcn_pass
+  inx
+  iny
+  bra wcn_ssid
+wcn_pass:
+  ; write pass -> WIFI_OFF_REQ_PASS
+  ldx #WIFI_OFF_REQ_PASS
+  ldy #$0000
+wcn_passl:
+  lda wifi_pass_buf, y
+  sta @WIFI_BLK, x
+  beq wcn_go
+  inx
+  iny
+  bra wcn_passl
+wcn_go:
+  lda #CMD_WIFI_CONNECT
+  jsr wifi_cmd
+  ; show "Connecting..."
+  jsr wifi_clear_body
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_MSG_Y : sta print_y
+  stz print_pal
+  lda #40 : sta print_count
+  ldx #!wifi_s_connecting
+  lda #^wifi_s_connecting
+  jsr wifi_puts
+  ; phase 1: wait for the OLD link to drop, so we don't latch its stale IP as the
+  ; "new" connection (the ESP reports the disconnect a moment after CONNECT). If
+  ; we were already disconnected this passes immediately; on timeout, proceed.
+  rep #$20 : .al
+  lda #240                     ; ~4s
+  sta wifi_wait
+  sep #$20 : .as
+wcn_drop:
+  jsr wifi_vsync
+  jsr read_pad
+  lda pad_b
+  beq wcn_drop_nob
+  jmp wcn_result
+wcn_drop_nob:
+  lda #CMD_WIFI_GET
+  jsr wifi_cmd
+  lda @WIFI_BLK+WIFI_OFF_CONNECTED
+  beq wcn_dropped              ; old link is down -> now wait for the new one
+  rep #$20 : .al
+  dec wifi_wait
+  sep #$20 : .as
+  lda wifi_wait
+  ora wifi_wait+1
+  bne wcn_drop
+wcn_dropped:
+  ; phase 2: poll up to ~15s for the new connection
+  rep #$20 : .al
+  lda #900
+  sta wifi_wait
+  sep #$20 : .as
+  stz wifi_ok
+wcn_poll:
+  jsr wifi_vsync
+  jsr read_pad
+  lda pad_b
+  bne wcn_result
+  lda #CMD_WIFI_GET
+  jsr wifi_cmd
+  lda @WIFI_BLK+WIFI_OFF_CONNECTED
+  beq wcn_tick
+  ; connected -> verify it's our ssid? good enough: connected flag set
+  lda #$01
+  sta wifi_ok
+  bra wcn_result
+wcn_tick:
+  rep #$20 : .al
+  dec wifi_wait
+  sep #$20 : .as
+  lda wifi_wait
+  ora wifi_wait+1
+  bne wcn_poll
+wcn_result:
+  jsr wifi_clear_body
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_MSG_Y : sta print_y
+  stz print_pal
+  lda #44 : sta print_count
+  lda wifi_ok
+  beq wcn_fail
+  ldx #!wifi_s_ok
+  lda #^wifi_s_ok
+  jsr wifi_puts
+  ; show IP on the next line
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_MSG2_Y : sta print_y
+  lda #4 : sta print_count
+  ldx #!wifi_s_ipl
+  lda #^wifi_s_ipl
+  jsr wifi_puts
+  lda print_done
+  clc
+  adc #WIFI_CX
+  sta print_x
+  lda #WIFI_MSG2_Y : sta print_y
+  lda #16 : sta print_count
+  ldx #$1223                   ; WIFI_BLK + WIFI_OFF_IP (low word)
+  lda #$ff                     ; WIFI_BLK bank
+  jsr wifi_puts
+  ; "press any button to go back"
+  lda #WIFI_CX : sta print_x
+  lda #(WIFI_MSG2_Y+2) : sta print_y
+  stz print_pal
+  lda #44 : sta print_count
+  ldx #!wifi_s_anykey
+  lda #^wifi_s_anykey
+  jsr wifi_puts
+  bra wcn_waitkey
+wcn_fail:
+  ldx #!wifi_s_fail
+  lda #^wifi_s_fail
+  jsr wifi_puts
+wcn_waitkey:
+  jsr wifi_vsync
+  jsr read_pad
+  lda pad_a
+  ora pad_b
+  ora pad_x
+  ora pad_y
+  ora pad_start
+  beq wcn_waitkey
+  rts
+
+; ---------------------------------------------------------------------------
+; wifi_keyboard: on-screen ABC grid. Fills wifi_pass_buf / wifi_pass_len.
+;   A: type   B: backspace   X: space   Y: toggle case   START: connect   SELECT: cancel
+; Returns A=1 to connect, A=0 to cancel.
+; ---------------------------------------------------------------------------
+wifi_keyboard:
+  stz wifi_kx
+  stz wifi_ky
+  jsr wifi_kbd_draw
+wkb_loop:
+  jsr wifi_vsync
+  jsr read_pad
+  lda pad_start
+  beq wkb_nstart
+  jmp wkb_ok
+wkb_nstart:
+  lda pad_select
+  beq wkb_nsel
+  jmp wkb_cancel
+wkb_nsel:
+  lda pad_left
+  beq wkb_nr
+  lda wifi_kx
+  beq wkb_nr
+  jsr wifi_kbd_savexy
+  dec wifi_kx
+  jsr wifi_kbd_marks          ; move the [ ] brackets only -> no flicker
+wkb_nr:
+  lda pad_right
+  beq wkb_nu
+  lda wifi_kx
+  cmp #7
+  bcs wkb_nu
+  jsr wifi_kbd_savexy
+  inc wifi_kx
+  jsr wifi_kbd_marks
+wkb_nu:
+  lda pad_up
+  beq wkb_nd
+  lda wifi_ky
+  beq wkb_nd
+  jsr wifi_kbd_savexy
+  dec wifi_ky
+  jsr wifi_kbd_marks
+wkb_nd:
+  lda pad_down
+  beq wkb_ny
+  lda wifi_ky
+  cmp #5
+  bcs wkb_ny
+  jsr wifi_kbd_savexy
+  inc wifi_ky
+  jsr wifi_kbd_marks
+wkb_ny:
+  lda pad_y
+  beq wkb_nx
+  lda wifi_shift
+  eor #$01
+  sta wifi_shift
+  jsr wifi_kbd_grid           ; case changed: repaint glyphs (+brackets), no clear
+wkb_nx:
+  lda pad_x
+  beq wkb_nb
+  lda #$20
+  jsr wifi_pass_add
+  jsr wifi_kbd_pass           ; only the password line changes
+wkb_nb:
+  lda pad_b
+  beq wkb_na
+  jsr wifi_pass_del
+  jsr wifi_kbd_pass
+wkb_na:
+  lda pad_a
+  bne wkb_doa
+  jmp wkb_loop
+wkb_doa:
+  jsr wifi_kbd_glyph           ; A = selected glyph
+  jsr wifi_pass_add
+  jsr wifi_kbd_pass
+  jmp wkb_loop
+wkb_ok:
+  lda #$01
+  rts
+wkb_cancel:
+  lda #$00
+  rts
+
+; append A to the password (max 63)
+wifi_pass_add:
+  pha                          ; save the glyph
+  lda wifi_pass_len
+  cmp #63
+  bcs wpa_full
+  rep #$20 : .al
+  and #$00ff
+  tay                          ; Y = current length
+  sep #$20 : .as
+  pla                          ; restore glyph
+  sta wifi_pass_buf, y
+  iny
+  lda #$00
+  sta wifi_pass_buf, y         ; keep it NUL-terminated
+  lda wifi_pass_len
+  inc
+  sta wifi_pass_len
+  rts
+wpa_full:
+  pla
+  rts
+
+wifi_pass_del:
+  lda wifi_pass_len
+  beq wpd_out
+  dec
+  sta wifi_pass_len
+  rep #$20 : .al
+  and #$00ff
+  tay
+  sep #$20 : .as
+  lda #$00
+  sta wifi_pass_buf, y
+wpd_out:
+  rts
+
+; A = glyph at (wifi_kx, wifi_ky) from the active table
+wifi_kbd_glyph:
+  sep #$20 : .as
+  lda wifi_ky
+  rep #$20 : .al
+  and #$00ff
+  asl : asl : asl                ; ky*8
+  sta window_tmp
+  sep #$20 : .as
+  lda wifi_kx
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc window_tmp
+  tax                            ; X = ky*8 + kx
+  sep #$20 : .as
+  lda wifi_shift
+  bne wkg_hi
+  lda @wifi_keys_lo, x
+  rts
+wkg_hi:
+  lda @wifi_keys_hi, x
+  rts
+
+; ---------------------------------------------------------------------------
+; wifi_kbd_draw: password label + typed text + the grid with the selected cell
+; bracketed.
+; ---------------------------------------------------------------------------
+wifi_kbd_draw:
+  jsr wifi_clear_body
+  ; label
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_PASS_LBL_Y : sta print_y
+  stz print_pal
+  lda #16 : sta print_count
+  ldx #!wifi_s_passlbl
+  lda #^wifi_s_passlbl
+  jsr wifi_puts
+  ; hint lines
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_KH1_Y : sta print_y
+  stz print_pal
+  lda #40 : sta print_count
+  ldx #!wifi_s_kbd1
+  lda #^wifi_s_kbd1
+  jsr wifi_puts
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_KH2_Y : sta print_y
+  lda #40 : sta print_count
+  ldx #!wifi_s_kbd2
+  lda #^wifi_s_kbd2
+  jsr wifi_puts
+  jsr wifi_kbd_pass
+  jsr wifi_kbd_grid
+  rts
+
+; redraw only the typed-password line, padded full-width so it overwrites the
+; previous text in place (one hiprint, never blanks -> no flicker)
+wifi_kbd_pass:
+  ldy #$0000
+wkp_copy:
+  lda wifi_pass_buf, y
+  beq wkp_caret
+  sta wifi_linebuf, y
+  iny
+  bra wkp_copy
+wkp_caret:
+  lda #$5f                     ; '_'
+  sta wifi_linebuf, y
+  iny
+wkp_pad:
+  cpy #38
+  bcs wkp_term
+  lda #$20
+  sta wifi_linebuf, y
+  iny
+  bra wkp_pad
+wkp_term:
+  lda #$00
+  sta wifi_linebuf, y
+  lda #WIFI_CX : sta print_x
+  lda #WIFI_PASS_Y : sta print_y
+  stz print_pal
+  lda #40 : sta print_count
+  ldx #!wifi_linebuf
+  lda #^wifi_linebuf
+  jsr wifi_puts
+  rts
+
+; repaint the 6 glyph rows + the selection brackets (each row overwrites in
+; place; no clear)
+wifi_kbd_grid:
+  stz wifi_rowi
+wkg_rows:
+  lda wifi_rowi
+  cmp #6
+  bcs wkg_brk
+  jsr wifi_kbd_row
+  inc wifi_rowi
+  bra wkg_rows
+wkg_brk:
+  jsr wifi_kbd_drawbrk
+  rts
+
+; draw '[' / ']' around the cell at (wifi_kx, wifi_ky)
+wifi_kbd_drawbrk:
+  lda wifi_ky
+  clc
+  adc #WIFI_KBD_Y
+  sta print_y
+  lda wifi_kx
+  asl
+  clc
+  adc #WIFI_KBD_X
+  sta window_tmp               ; selcol
+  lda window_tmp
+  sec
+  sbc #1
+  sta print_x
+  lda #$5b                     ; '['
+  jsr wifi_putc_at
+  lda window_tmp
+  clc
+  adc #1
+  sta print_x
+  lda #$5d                     ; ']'
+  jsr wifi_putc_at
+  rts
+
+; cursor moved: erase the brackets at the old cell, draw them at the new one
+wifi_kbd_marks:
+  lda wifi_oky
+  clc
+  adc #WIFI_KBD_Y
+  sta print_y
+  lda wifi_okx
+  asl
+  clc
+  adc #WIFI_KBD_X
+  sta window_tmp
+  lda window_tmp
+  sec
+  sbc #1
+  sta print_x
+  lda #$20
+  jsr wifi_putc_at
+  lda window_tmp
+  clc
+  adc #1
+  sta print_x
+  lda #$20
+  jsr wifi_putc_at
+  jsr wifi_kbd_drawbrk
+  rts
+
+wifi_kbd_savexy:
+  lda wifi_kx
+  sta wifi_okx
+  lda wifi_ky
+  sta wifi_oky
+  rts
+
+; draw one keyboard row (wifi_rowi) as "g g g g g g g g"
+wifi_kbd_row:
+  ; base index = rowi*8
+  sep #$20 : .as
+  lda wifi_rowi
+  rep #$20 : .al
+  and #$00ff
+  asl : asl : asl
+  sta window_tmp               ; base
+  sep #$20 : .as
+  ldy #$0000                   ; linebuf pos
+  stz wifi_kxc
+wkr_col:
+  ; X = base + kxc
+  sep #$20 : .as
+  lda wifi_kxc
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc window_tmp               ; + base (ky*8)
+  tax
+  sep #$20 : .as
+  ; glyph
+  lda wifi_shift
+  bne wkr_hi
+  lda @wifi_keys_lo, x
+  bra wkr_put
+wkr_hi:
+  lda @wifi_keys_hi, x
+wkr_put:
+  sta wifi_linebuf, y
+  iny
+  lda #$20
+  sta wifi_linebuf, y
+  iny
+  lda wifi_kxc
+  inc
+  sta wifi_kxc
+  cmp #8
+  bne wkr_col
+  lda #$00
+  sta wifi_linebuf, y
+  ; print at (KBD_X, KBD_Y + rowi)
+  lda #WIFI_KBD_X : sta print_x
+  lda wifi_rowi
+  clc
+  adc #WIFI_KBD_Y
+  sta print_y
+  stz print_pal
+  lda #20 : sta print_count
+  ldx #!wifi_linebuf
+  lda #^wifi_linebuf
+  jsr wifi_puts
+  rts
+
+; ---------------------------------------------------------------------------
+; small helpers
+; ---------------------------------------------------------------------------
+; print const string: X=addr(lo), A=bank. print_x/print_y/print_pal/print_count set.
+wifi_puts:
+  stx print_src
+  sta print_bank
+  jsr hiprint
+  rts
+
+; print single char A at print_x/print_y (pal 0)
+wifi_putc_at:
+  sta wifi_linebuf
+  lda #$00
+  sta wifi_linebuf+1
+  lda #$01
+  sta print_count
+  stz print_pal
+  ldx #!wifi_linebuf
+  stx print_src
+  lda #^wifi_linebuf
+  sta print_bank
+  jsr hiprint
+  rts
+
+; clear the window interior (rows WIFI_WIN_Y+2 .. WIFI_WIN_Y+WIFI_WIN_H-1) with spaces
+wifi_clear_body:
+  ; build a full-width blank line once
+  ldy #$0000
+wcb_fill:
+  lda #$20
+  sta wifi_linebuf, y
+  iny
+  cpy #(WIFI_WIN_W-3)
+  bne wcb_fill
+  lda #$00
+  sta wifi_linebuf, y
+  ; print it on each interior row
+  lda #(WIFI_WIN_Y+2)
+  sta wifi_rowi
+wcb_rows:
+  lda wifi_rowi
+  cmp #(WIFI_WIN_Y+WIFI_WIN_H-1)
+  bcs wcb_done
+  lda #WIFI_CX : sta print_x
+  lda wifi_rowi : sta print_y
+  stz print_pal
+  lda #(WIFI_WIN_W-3) : sta print_count
+  ldx #!wifi_linebuf
+  lda #^wifi_linebuf
+  jsr wifi_puts
+  inc wifi_rowi
+  bra wcb_rows
+wcb_done:
+  rts

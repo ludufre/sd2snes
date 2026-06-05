@@ -18,6 +18,7 @@
 #include "proto.h"
 #include "proto_client.h"
 #include "wifi.h"
+#include "wifi_bridge.h"
 #include "webui_http.h"
 
 static const char *TAG = "sd2snes-esp";
@@ -63,6 +64,7 @@ void app_main(void) {
 
     proto_init();          // UART2 link to the MCU
     wifi_start();          // WiFi AP (+ STA auto-connect from NVS)
+    wifi_bridge_start();   // bridge the SNES menu's WiFi requests to the WiFi stack
     webui_http_start();    // HTTP file manager + WiFi config
 
     // Probe the MCU link once so the log shows whether it's wired up.

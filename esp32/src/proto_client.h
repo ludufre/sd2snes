@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "esp_err.h"
+#include "wifi.h"                     // wifi_ap_t for the WiFi bridge push
 
 void      proto_init(void);          // UART2 @921600 (GPIO16 RX / GPIO17 TX) + mutex
 void      proto_lock(void);
@@ -33,3 +34,8 @@ esp_err_t proto_rm(const char *path, uint8_t *status);
 esp_err_t proto_mv(const char *from, const char *to, uint8_t *status);
 esp_err_t proto_mkdir(const char *path, uint8_t *status);
 esp_err_t proto_abort(void);
+
+// WiFi-in-menu bridge (ESP is the client here too; the MCU buffers for the menu).
+esp_err_t proto_wifi_report(uint8_t connected, int8_t rssi, const char *ssid, const char *ip);
+esp_err_t proto_wifi_poll(uint8_t *action, char *ssid, size_t ssz, char *pass, size_t psz);
+esp_err_t proto_wifi_scan_push(const wifi_ap_t *aps, int n);

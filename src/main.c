@@ -344,6 +344,46 @@ int main(void) {
           sysinfo_loop();
           cmd=0; /* stay in menu loop */
           break;
+        case SNES_CMD_WIFI_SCAN:
+          uart_wifi_request_scan();
+          cmd=0; /* stay in menu loop; ESP runs the scan async */
+          break;
+        case SNES_CMD_WIFI_FORGET:
+          uart_wifi_request_forget();
+          cmd=0;
+          break;
+        case SNES_CMD_WIFI_CONNECT: {
+          /* the menu wrote ssid/pass into the WiFi SRAM block before issuing */
+          char wssid[UP_WIFI_SSID_MAX + 1], wpass[UP_WIFI_PASS_MAX + 1];
+          sram_readstrn(wssid, SRAM_SYSINFO_ADDR + WIFI_OFF_REQ_SSID, sizeof(wssid));
+          sram_readstrn(wpass, SRAM_SYSINFO_ADDR + WIFI_OFF_REQ_PASS, sizeof(wpass));
+          uart_wifi_request_connect(wssid, wpass);
+          cmd=0;
+          break;
+        }
+        case SNES_CMD_WIFI_GET: {
+          /* snapshot the bridge state into the SRAM block for the menu to read */
+          const uart_wifi_state_t *w = uart_wifi_state();
+          uint8_t fld[WIFI_AP_STRIDE - 2 + 1];   /* 33-byte ssid field (zero-padded) */
+          uint32_t base = SRAM_SYSINFO_ADDR;
+          sram_writebyte(w->connected, base + WIFI_OFF_CONNECTED);
+          sram_writebyte((uint8_t)w->rssi, base + WIFI_OFF_RSSI);
+          memset(fld, 0, 33); strncpy((char *)fld, w->ssid, 32);
+          sram_writeblock(fld, base + WIFI_OFF_SSID, 33);
+          memset(fld, 0, 16); strncpy((char *)fld, w->ip, 15);
+          sram_writeblock(fld, base + WIFI_OFF_IP, 16);
+          sram_writebyte(w->scan_count, base + WIFI_OFF_SCAN_CNT);
+          sram_writebyte(w->scan_seq, base + WIFI_OFF_SCAN_SEQ);
+          for(int i = 0; i < UP_WIFI_MAX_APS; i++) {
+            uint32_t a = base + WIFI_OFF_APS + (uint32_t)i * WIFI_AP_STRIDE;
+            sram_writebyte((uint8_t)w->aps[i].rssi, a + 0);
+            sram_writebyte(w->aps[i].enc, a + 1);
+            memset(fld, 0, 33); strncpy((char *)fld, w->aps[i].ssid, 32);
+            sram_writeblock(fld, a + 2, 33);
+          }
+          cmd=0;
+          break;
+        }
         case SNES_CMD_LOADSPC:
           /* load SPC file */
           get_selected_name(file_lfn);
