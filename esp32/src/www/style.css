@@ -64,6 +64,17 @@ tr:hover .act a { visibility:visible; }
          font-variant-numeric:tabular-nums; }
 .card .row { display:flex; justify-content:flex-end; gap:10px; margin-top:16px; }
 .card .msg.err { color:var(--danger); }
+/* firmware update (OTA) modal */
+.otalist { max-height:46vh; overflow:auto; margin:8px 0 4px; border:1px solid var(--line); border-radius:8px; }
+.otarow { display:flex; align-items:center; gap:10px; padding:9px 12px; cursor:pointer; border-bottom:1px solid #232a38; }
+.otarow:last-child { border-bottom:none; }
+.otarow:hover { background:#222a3a; }
+.otarow input { width:16px; height:16px; flex:none; accent-color:var(--accent); }
+.otarow .of { flex:1; word-break:break-all; font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.otarow .os { color:var(--mut); white-space:nowrap; font-variant-numeric:tabular-nums; font-size:12px; }
+.otarow.req .of { color:var(--accent); font-weight:600; }
+.card .msg.warn { color:var(--dir); }
+.card .msg.ok   { color:#7fe0a3; }
 /* WiFi modal */
 .wlist { max-height:46vh; overflow:auto; margin:12px 0 4px; border:1px solid var(--line); border-radius:8px; }
 .wrow { display:flex; align-items:center; gap:10px; padding:10px 12px; cursor:pointer; border-bottom:1px solid #232a38; }

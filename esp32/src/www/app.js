@@ -1,5 +1,6 @@
 const $ = s => document.querySelector(s);
 let cwd = "/";
+let devName = "";   // sd2snes device name from /api/ping (drives the OTA preselection)
 
 /* ---- i18n (language comes from the sd2snes: 0=EN, 1=PT-BR, 2=ES) ---- */
 const LANGS = ["en", "pt", "es"];
@@ -24,7 +25,14 @@ const I18N = {
     noNets:"No networks found", scanFail:"Scan failed",
     connFail:"Could not connect to {0} - check password/signal",
     opening:"Connected: {0} ({1}) - opening {2}...",
-    cfmForget:"Forget the saved network?", mcuNo:"MCU not responding"
+    cfmForget:"Forget the saved network?", mcuNo:"MCU not responding",
+    otaBtn:"Firmware", otaTitle:"Firmware update",
+    otaPick:"Select what to write (replaces files on the SD):",
+    otaWrite:"Write", otaNone:"Select at least one file",
+    otaZipErr:"Could not read the ZIP: {0}", otaEmpty:"No files in the ZIP",
+    otaWriting:"Writing ({0}/{1}) {2}", otaFail:"Failed on {0}: {1}",
+    otaDoneMenu:"Done. Restart to load the new menu.",
+    otaDonePower:"Done. Turn the console OFF and ON (a Reset is NOT enough) to apply the new firmware."
   },
   pt: {
     refresh:"Atualizar", newFolder:"Nova pasta", upload:"Enviar", wifi:"WiFi",
@@ -45,7 +53,14 @@ const I18N = {
     noNets:"Nenhuma rede encontrada", scanFail:"Falha ao procurar",
     connFail:"Não conectou a {0} - verifique a senha/sinal",
     opening:"Conectado: {0} ({1}) - abrindo {2}...",
-    cfmForget:"Esquecer a rede salva?", mcuNo:"MCU sem resposta"
+    cfmForget:"Esquecer a rede salva?", mcuNo:"MCU sem resposta",
+    otaBtn:"Firmware", otaTitle:"Atualizar firmware",
+    otaPick:"Selecione o que gravar (substitui arquivos no SD):",
+    otaWrite:"Gravar", otaNone:"Selecione ao menos um arquivo",
+    otaZipErr:"Não foi possível ler o ZIP: {0}", otaEmpty:"Nenhum arquivo no ZIP",
+    otaWriting:"Gravando ({0}/{1}) {2}", otaFail:"Falha em {0}: {1}",
+    otaDoneMenu:"Concluído. Reinicie para carregar o novo menu.",
+    otaDonePower:"Concluído. Desligue e ligue o console (um Reset NÃO basta) para aplicar o novo firmware."
   },
   es: {
     refresh:"Actualizar", newFolder:"Nueva carpeta", upload:"Subir", wifi:"WiFi",
@@ -66,7 +81,14 @@ const I18N = {
     noNets:"No se encontraron redes", scanFail:"Error al buscar",
     connFail:"No se pudo conectar a {0} - revisa contraseña/señal",
     opening:"Conectado: {0} ({1}) - abriendo {2}...",
-    cfmForget:"¿Olvidar la red guardada?", mcuNo:"MCU sin respuesta"
+    cfmForget:"¿Olvidar la red guardada?", mcuNo:"MCU sin respuesta",
+    otaBtn:"Firmware", otaTitle:"Actualizar firmware",
+    otaPick:"Selecciona qué grabar (reemplaza archivos en la SD):",
+    otaWrite:"Grabar", otaNone:"Selecciona al menos un archivo",
+    otaZipErr:"No se pudo leer el ZIP: {0}", otaEmpty:"No hay archivos en el ZIP",
+    otaWriting:"Grabando ({0}/{1}) {2}", otaFail:"Error en {0}: {1}",
+    otaDoneMenu:"Hecho. Reinicia para cargar el nuevo menú.",
+    otaDonePower:"Hecho. Apaga y enciende la consola (un Reset NO basta) para aplicar el nuevo firmware."
   }
 };
 function t(k){
@@ -79,6 +101,7 @@ function applyI18n(){
   $("#b_reload").textContent = "↻ " + t("refresh");
   $("#b_mkdir").textContent  = "📁 " + t("newFolder");
   $("#b_upload").textContent = "⬆ " + t("upload");
+  $("#b_ota").textContent    = "🔄 " + t("otaBtn");
   $("#b_wifi").textContent   = "📶 " + t("wifi");
   $("#drop").textContent     = t("dropHint");
   $("#b_cname").textContent  = t("colName");
@@ -223,6 +246,134 @@ const drop=$("#drop");
 ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("over");}));
 drop.addEventListener("drop",e=>{ if(e.dataTransfer.files.length) upload(e.dataTransfer.files); });
 
+/* ---- firmware update (OTA): open the release ZIP in the browser, decompress
+        with the native DecompressionStream, write the chosen files to /sd2snes/ ---- */
+const OTA_DIR = "/sd2snes/";
+const OTA_SETS = {                       // device_name -> files preselected for it
+  "sd2snes mk.ii":   ["firmware.img", "menu.bin"],
+  "sd2snes mk.iii":  ["firmware.im3", "m3nu.bin"],
+  "fxpak pro stm32": ["m3nu.bin", "firmware.stm"]
+};
+const baseName = p => { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); };
+const reqSet = () => OTA_SETS[(devName || "").trim().toLowerCase()] || [];
+const isFirmware = n => /^firmware\.[^.]+$/i.test(n);
+
+let otaEntries = null, otaBuf = null, otaDV = null;
+
+function findEOCD(dv, len){                                   // End Of Central Directory
+  const min = Math.max(0, len - 22 - 0xFFFF);
+  for(let i = len - 22; i >= min; i--) if(dv.getUint32(i, true) === 0x06054b50) return i;
+  return -1;
+}
+function parseZip(buf){
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const eocd = findEOCD(dv, buf.length);
+  if(eocd < 0) throw new Error("EOCD");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);                     // central directory offset
+  const dec = new TextDecoder();
+  const out = [];
+  for(let n = 0; n < count && p + 46 <= buf.length; n++){
+    if(dv.getUint32(p, true) !== 0x02014b50) break;          // central file header sig
+    const method = dv.getUint16(p + 10, true);
+    const csize  = dv.getUint32(p + 20, true);
+    const usize  = dv.getUint32(p + 24, true);
+    const nlen   = dv.getUint16(p + 28, true);
+    const elen   = dv.getUint16(p + 30, true);
+    const clen   = dv.getUint16(p + 32, true);
+    const lho    = dv.getUint32(p + 42, true);               // local header offset
+    const name   = dec.decode(buf.subarray(p + 46, p + 46 + nlen));
+    if(!name.endsWith("/")) out.push({ name, base: baseName(name), method, csize, usize, lho });
+    p += 46 + nlen + elen + clen;
+  }
+  return { entries: out, dv };
+}
+async function inflateRaw(bytes){
+  if(!("DecompressionStream" in window)) throw new Error("no inflate");
+  const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function entryBytes(e){
+  if(otaDV.getUint32(e.lho, true) !== 0x04034b50) throw new Error("LFH");   // local file header
+  const nlen = otaDV.getUint16(e.lho + 26, true);
+  const elen = otaDV.getUint16(e.lho + 28, true);
+  const start = e.lho + 30 + nlen + elen;
+  const comp = otaBuf.subarray(start, start + e.csize);
+  if(e.method === 0) return comp.slice();        // stored
+  if(e.method === 8) return inflateRaw(comp);     // deflate
+  throw new Error("method " + e.method);
+}
+
+function otaClose(){ $("#otaov").classList.remove("show"); otaEntries = otaBuf = otaDV = null; }
+async function otaPicked(file){
+  $("#b_otatitle").textContent = t("otaTitle");
+  $("#otaname").textContent    = file.name;
+  $("#b_otago").textContent    = t("otaWrite");
+  $("#b_otacancel").textContent= t("cancel");
+  $("#b_otago").disabled = false; $("#b_otago").style.display = "";
+  $("#otabarwrap").style.display = "none"; $("#otastat").style.display = "none";
+  $("#otamsg").className = "msg"; $("#otamsg").textContent = "";
+  $("#otalist").innerHTML = "";
+  $("#otaov").classList.add("show");
+  try{
+    otaBuf = new Uint8Array(await file.arrayBuffer());
+    const z = parseZip(otaBuf); otaEntries = z.entries; otaDV = z.dv;
+  }catch(err){ $("#otamsg").className="msg err"; $("#otamsg").textContent=t("otaZipErr", err.message); $("#b_otago").style.display="none"; return; }
+  if(!otaEntries.length){ $("#otamsg").className="msg err"; $("#otamsg").textContent=t("otaEmpty"); $("#b_otago").style.display="none"; return; }
+  $("#otamsg").textContent = t("otaPick");
+  const want = reqSet();
+  otaEntries.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  const list = $("#otalist");
+  otaEntries.forEach((e,i)=>{
+    e.dest = OTA_DIR + e.base;
+    const pre = want.includes(e.base.toLowerCase());
+    const row=document.createElement("label"); row.className="otarow"+(pre?" req":"");
+    const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=pre; cb.dataset.i=i;
+    const nm=document.createElement("span"); nm.className="of"; nm.textContent=e.name;
+    const sz=document.createElement("span"); sz.className="os"; sz.textContent=human(e.usize);
+    row.append(cb,nm,sz); list.appendChild(row);
+  });
+}
+function otaPut(dest, bytes){ return new Promise((res,rej)=>{
+  const xhr=new XMLHttpRequest(); const t0=performance.now();
+  xhr.open("POST","/api/up?path="+encodeURIComponent(dest));
+  xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){
+    const pct=Math.min(100,ev.loaded/ev.total*100);
+    $("#otaBar").style.width=pct+"%"; $("#otaPct").textContent=pct.toFixed(0)+"%";
+    const secs=(performance.now()-t0)/1000, sp=secs>0?ev.loaded/secs:0;
+    $("#otaInfo").textContent=human(ev.loaded)+" / "+human(ev.total)+(sp?"  |  "+human(sp)+"/s":"");
+  }};
+  xhr.onload=()=>{ let ok=false,st=0; try{const j=JSON.parse(xhr.responseText); ok=j.ok; st=j.status;}catch{ ok=xhr.status<300; }
+    ok?res():rej(new Error("status "+st)); };
+  xhr.onerror=()=>rej(new Error("net"));
+  xhr.send(new Blob([bytes]));
+}); }
+async function otaWrite(){
+  const boxes = [...$("#otalist").querySelectorAll("input:checked")];
+  if(!boxes.length){ $("#otamsg").className="msg err"; $("#otamsg").textContent=t("otaNone"); return; }
+  const sel = boxes.map(b=>otaEntries[+b.dataset.i]);
+  $("#b_otago").disabled = true; $("#b_otacancel").style.display="none";
+  $("#otabarwrap").style.display=""; $("#otastat").style.display="";
+  $("#otamsg").className="msg";
+  let firmware = false;
+  for(let k=0; k<sel.length; k++){
+    const e = sel[k];
+    $("#otamsg").textContent = t("otaWriting", k+1, sel.length, e.base);
+    $("#otaBar").style.width="0"; $("#otaPct").textContent="0%"; $("#otaInfo").textContent="";
+    let bytes;
+    try{ bytes = await entryBytes(e); await otaPut(e.dest, bytes); }
+    catch(err){ $("#otamsg").className="msg err"; $("#otamsg").textContent=t("otaFail", e.base, err.message);
+      $("#b_otago").disabled=false; $("#b_otacancel").style.display=""; return; }
+    if(isFirmware(e.base)) firmware = true;
+  }
+  $("#otaBar").style.width="100%"; $("#otaPct").textContent="100%"; $("#otaInfo").textContent="";
+  $("#b_otago").style.display="none"; $("#b_otacancel").style.display=""; $("#b_otacancel").textContent=t("close");
+  $("#otamsg").className = firmware ? "msg warn" : "msg ok";
+  $("#otamsg").textContent = firmware ? t("otaDonePower") : t("otaDoneMenu");
+  reload();
+}
+$("#zip").onchange=e=>{ if(e.target.files.length) otaPicked(e.target.files[0]); e.target.value=""; };
+
 /* ---- WiFi ---- */
 const wov=$("#wov");
 function wclose(){ wov.classList.remove("show"); }
@@ -289,6 +440,6 @@ let _lt=0; document.addEventListener("touchend",e=>{ const n=Date.now(); if(n-_l
 
 applyI18n();   /* English defaults until the sd2snes language arrives */
 (async()=>{ try{ const j=await(await fetch("/api/ping")).json();
-  if(j.ok){ lang = LANGS[j.lang] || "en"; applyI18n(); $("#dev").textContent=j.name+" | proto v"+j.ver; }
+  if(j.ok){ lang = LANGS[j.lang] || "en"; devName = j.name || ""; applyI18n(); $("#dev").textContent=j.name+" | proto v"+j.ver; }
   else $("#dev").textContent=t("mcuNo");
 }catch{ $("#dev").textContent=t("mcuNo"); } go("/"); })();
