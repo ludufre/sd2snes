@@ -1,6 +1,7 @@
 # List platform specific C source files here. (C dependencies are automatically generated.)
 SRC += lpc175x/clock.c
 SRC += lpc175x/uart.c
+SRC += lpc175x/uart0.c   # ESP32 link byte transport (esplink) on UART0
 SRC += lpc175x/power.c
 SRC += lpc175x/led.c
 SRC += lpc175x/timer.c

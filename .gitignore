@@ -52,7 +52,6 @@ utils/derle
 *.xrpt
 *.ngm
 *.xml
-*.html
 *.zip
 *.stratfile
 *.xds

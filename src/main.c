@@ -3,6 +3,8 @@
 #include "version.h"
 #include "clock.h"
 #include "uart.h"
+#include "esplink.h"
+#include "uart_proto.h"
 #include "bits.h"
 #include "power.h"
 #include "timer.h"
@@ -99,6 +101,9 @@ int main(void) {
   snes_reset(1);
   timer_init();
   uart_init();
+#if ESPLINK_ENABLE
+  esplink_init();      /* ESP32 link transport; LPC needs the PLL-disconnected window */
+#endif
   fpga_spi_init();
   spi_preinit();
   led_init();
@@ -124,6 +129,9 @@ int main(void) {
   printf("PCONP=%lx\n", LPC_SC->PCONP);
 #endif
   file_init();
+#if ESPLINK_ENABLE
+  uart_proto_init();   /* ESP32 link file server (SD now mounted) */
+#endif
 
   cic_preinit();
   cic_init(0);
@@ -550,6 +558,9 @@ int main(void) {
       cli_entrycheck();
       //usb upload/boot/lock  
       usb_cmd |= usbint_handler();
+#if ESPLINK_ENABLE
+      uart_proto_poll();   /* service the ESP32 link (non-blocking) */
+#endif
       if (usb_cmd == SNES_CMD_GAMELOOP) usb_cmd = 0;
 
 //        sleep_ms(250);

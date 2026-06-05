@@ -1,0 +1,96 @@
+:root { color-scheme: dark; --bg:#15171c; --panel:#1d2230; --line:#2a3140;
+        --txt:#e6e9ef; --mut:#8a99b3; --accent:#6cc6ff; --dir:#ffd479; --danger:#ff7a85; }
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; overflow-x:hidden; max-width:100%; }
+body { font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt);
+       touch-action:manipulation; -webkit-text-size-adjust:100%; text-size-adjust:100%;
+       overscroll-behavior:none; }
+.wrap { max-width:1000px; margin:0 auto; padding:0 16px 40px; }
+header { background:#1a1f2b; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+header .wrap { display:flex; align-items:center; gap:12px; padding:12px 16px; }
+header h1 { margin:0; font-size:16px; font-weight:700; letter-spacing:.5px; }
+header .dev { margin-left:auto; font-size:12px; color:var(--mut); }
+.toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:14px 0 10px; }
+.crumbs { flex:1; min-width:0; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:#9fb4d6; }
+.crumbs a { color:var(--accent); cursor:pointer; text-decoration:none; }
+.crumbs a:hover { text-decoration:underline; }
+.crumbs .sep { color:var(--mut); margin:0 2px; }
+button, label.btn { display:inline-flex; align-items:center; gap:6px; background:#283143;
+  border:1px solid #3a4760; color:#dbe6f5; padding:7px 12px;
+  border-radius:8px; cursor:pointer; font-size:13px; white-space:nowrap; }
+button:hover, label.btn:hover { background:#33405a; }
+.drop { border:1.5px dashed #3a4760; border-radius:10px; padding:10px 14px; text-align:center;
+        color:var(--mut); font-size:13px; margin-bottom:12px; transition:.15s; }
+.drop.over { border-color:var(--accent); background:#1b2636; color:#cfe4ff; }
+table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line);
+        border-radius:10px; overflow:hidden; }
+thead th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.6px;
+           color:var(--mut); font-weight:600; padding:10px 14px; background:#1a2030;
+           border-bottom:1px solid var(--line); }
+th.c-size { text-align:right; width:130px; }
+th.c-act { text-align:right; width:230px; }
+tbody td { padding:9px 14px; border-bottom:1px solid #222a38; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:hover td { background:#222a3a; }
+.name { display:flex; align-items:center; gap:9px; min-width:0; }
+.name .lbl { overflow-wrap:anywhere; word-break:break-word; }
+.name .ic { width:18px; text-align:center; flex:none; }
+.name.dir { color:var(--dir); cursor:pointer; font-weight:600; }
+.name.dir:hover { text-decoration:underline; }
+.size { text-align:right; color:var(--mut); white-space:nowrap; font-variant-numeric:tabular-nums; }
+.act { text-align:right; white-space:nowrap; }
+.act a { color:var(--accent); cursor:pointer; margin-left:14px; font-size:13px; visibility:hidden; }
+.act a.danger { color:var(--danger); }
+tr:hover .act a { visibility:visible; }
+.act a.always { visibility:visible; }
+#status { padding:10px 2px; font-size:12px; color:var(--mut); min-height:18px; }
+.empty { padding:30px; text-align:center; color:var(--mut); }
+.spin { display:inline-block; width:15px; height:15px; border:2px solid #3a4760;
+        border-top-color:var(--accent); border-radius:50%; animation:sp .7s linear infinite;
+        vertical-align:-3px; margin-right:8px; }
+@keyframes sp { to { transform:rotate(360deg); } }
+/* progress modal */
+.ov { position:fixed; inset:0; background:rgba(8,10,14,.66); display:none; align-items:center;
+      justify-content:center; z-index:20; }
+.ov.show { display:flex; }
+.card { background:#1e2433; border:1px solid var(--line); border-radius:14px; width:min(440px,92vw);
+        padding:20px 22px; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+.card h3 { margin:0 0 2px; font-size:15px; }
+.card .fn { color:var(--mut); font-size:12px; word-break:break-all; margin-bottom:14px; }
+.pbar { height:10px; border-radius:6px; background:#10141d; overflow:hidden; border:1px solid #2a3344; }
+.pbar > i { display:block; height:100%; width:0; background:linear-gradient(90deg,#3aa0ff,#6cc6ff);
+            transition:width .15s; }
+.pstat { display:flex; justify-content:space-between; font-size:12px; color:var(--mut); margin-top:9px;
+         font-variant-numeric:tabular-nums; }
+.card .row { display:flex; justify-content:flex-end; gap:10px; margin-top:16px; }
+.card .msg.err { color:var(--danger); }
+/* WiFi modal */
+.wlist { max-height:46vh; overflow:auto; margin:12px 0 4px; border:1px solid var(--line); border-radius:8px; }
+.wrow { display:flex; align-items:center; gap:10px; padding:10px 12px; cursor:pointer; border-bottom:1px solid #232a38; }
+.wrow:last-child { border-bottom:none; }
+.wrow:hover { background:#222a3a; }
+.wsig { font-family:ui-monospace,monospace; color:#7fd1ff; letter-spacing:-1px; width:42px; }
+.wssid { flex:1; word-break:break-all; }
+.wlock { color:var(--mut); }
+.wform { display:flex; gap:8px; padding:10px 12px; background:#161c28; border-bottom:1px solid #232a38; }
+.wform input { flex:1; background:#10141d; border:1px solid #2a3344; color:var(--txt); border-radius:7px; padding:7px 10px; }
+.wmsg { padding:16px; text-align:center; color:var(--mut); }
+/* mobile: stack each row - name on its own full line, size + actions below */
+@media (max-width:600px) {
+  .wrap { padding:0 10px 40px; }
+  #drop { display:none; }   /* sem drag-and-drop no touch - já há o botão Enviar */
+  .crumbs { flex:0 0 100%; }   /* breadcrumb na própria linha, acima dos botões */
+  table { border:none; background:transparent; border-radius:0; }
+  thead { display:none; }
+  tbody { display:block; }
+  tbody tr { display:flex; flex-wrap:wrap; align-items:center;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    margin-bottom:8px; padding:10px 12px; }
+  tbody td { display:block; border:none !important; padding:0; }
+  tbody tr:hover td { background:transparent; }
+  tbody td:first-child { flex:0 0 100%; padding-bottom:8px; }  /* nome (1ª coluna) ocupa a linha inteira */
+  td.size { flex:0 0 auto; text-align:left; }
+  td.act { flex:1 1 auto; text-align:right; }
+  .act a { visibility:visible; margin-left:18px; }
+  .empty { background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+}

@@ -42,6 +42,8 @@
 #include "rtc.h"
 #include "cfg.h"
 #include "usbinterface.h"
+#include "esplink.h"
+#include "uart_proto.h"
 #include "sgb.h"
 #include "version.h"
 #include "hwinfo.h"
@@ -363,7 +365,20 @@ uint8_t menu_main_loop() {
     if(get_snes_reset()) {
       cmd = 0;
     }
+#if ESPLINK_ENABLE
+    if(uart_proto_active()) {
+      /* file transfer in flight: spend the ~20ms idle window servicing the link
+         continuously instead of sleeping (one chunk per poll otherwise caps it
+         to ~12KB/s). The menu's ~20ms command-check cadence is preserved. */
+      tick_t t0 = getticks();
+      do { uart_proto_poll(); } while((tick_t)(getticks() - t0) < 2);
+    } else {
+      sleep_ms(20);
+      uart_proto_poll();   /* service the ESP32 link while the menu idles */
+    }
+#else
     sleep_ms(20);
+#endif
     cli_entrycheck();
     if (!cmd) {
       cmd = usbint_handler();

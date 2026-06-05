@@ -1,6 +1,7 @@
 # List platform specific C source files here. (C dependencies are automatically generated.)
 SRC += stm32f4xx/clock.c
 SRC += stm32f4xx/uart.c
+SRC += stm32f4xx/usart_stm32.c   # ESP32 link byte transport (esplink) on USART6 - built but OFF by default
 SRC += stm32f4xx/power.c
 SRC += stm32f4xx/led.c
 SRC += stm32f4xx/timer.c

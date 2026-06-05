@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>sd2snes</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div class="wrap">
+  <h1>sd2snes</h1>
+  <span class="dev" id="dev">...</span>
+</div></header>
+
+<div class="wrap">
+  <div class="toolbar">
+    <div class="crumbs" id="crumbs"></div>
+    <button id="b_reload" onclick="reload()"></button>
+    <button id="b_mkdir" onclick="mkdir()"></button>
+    <label class="btn"><span id="b_upload"></span><input type="file" id="file" multiple hidden></label>
+    <button id="b_wifi" onclick="wifiOpen()"></button>
+  </div>
+
+  <div class="drop" id="drop"></div>
+
+  <table>
+    <thead><tr><th id="b_cname"></th><th class="c-size" id="b_csize"></th><th class="c-act"></th></tr></thead>
+    <tbody id="list"></tbody>
+  </table>
+  <div id="status"></div>
+</div>
+
+<div class="ov" id="ov"><div class="card">
+  <h3 id="ovTitle"></h3>
+  <div class="fn" id="ovName"></div>
+  <div class="pbar"><i id="ovBar"></i></div>
+  <div class="pstat"><span id="ovPct">0%</span><span id="ovInfo"></span></div>
+  <div class="msg err" id="ovErr"></div>
+  <div class="row"><button id="ovBtn"></button></div>
+</div></div>
+
+<div class="ov" id="wov"><div class="card">
+  <h3 id="b_wtitle"></h3>
+  <div class="fn" id="wstat">...</div>
+  <div class="wlist" id="wlist"></div>
+  <div class="row">
+    <button id="wforget" onclick="wifiForget()"></button>
+    <button id="wscan" onclick="wifiScan()"></button>
+    <button id="b_wclose" onclick="wclose()"></button>
+  </div>
+</div></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
