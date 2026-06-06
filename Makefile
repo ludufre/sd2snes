@@ -83,9 +83,35 @@ release: version bsxpage
 	cd $(TARGETPARENT) && zip -r sd2snes_firmware_v$(CONFIG_VERSION).zip sd2snes
 
 bsxpage:
+	$(MAKE) -C $(UTILS)
+	mkdir -p bin
 	cd bin && ../$(UTILS)/genbsxpage
 
 version:
 	@echo Version: $(CONFIG_VERSION)
 
-.PHONY: version release bsxpage $(MK2FPGA) $(MK3FPGA) $(MK2MINI) $(MK3MINI) $(MK2CLEAN) $(MK3CLEAN)
+# ---- ludufre PT-BR fork: mk3-only targets (no mk2 = no Xilinx ISE) ----
+# `mk3`     : full from-scratch mk3 release (FPGA cores via Quartus [Make-cached]
+#             + firmware mk3/stm32 + menu + bsxpage), assembled + zipped. Nothing
+#             from the official zip. Needs QUARTUS_ROOTDIR in the env (prepare.sh).
+# `mk3-fw`  : just menu + firmware (mk3 + stm32) — fast, for device-update
+#             iteration; skips the big FPGA cores (only needs the mini cfgware).
+mk3: version $(MK3FPGA) $(MK3MINI) bsxpage mk3-fw
+	rm -rf $(TARGETPARENT)
+	mkdir -p $(TARGET)
+	cp bin/*.bin $(TARGET)
+	cp $(README) $(TARGET)
+	cp $(MK3FPGA) $(TARGET)
+	cp $(MK3MCUPATH)/$(MK3MCU) $(TARGET)
+	cp $(STMMCUPATH)/$(STMMCU) $(TARGET)
+	cp $(MENUPATH)/$(MK3MENU) $(TARGET)
+	cp $(MENUPATH)/$(MK2MENU) $(TARGET)
+	cp $(SAVESTATEPATH)/$(SAVESTATEFILES) $(TARGET)
+	cd $(TARGETPARENT) && zip -r sd2snes_firmware_v$(CONFIG_VERSION).zip sd2snes
+
+mk3-fw: $(MK3MINI)
+	$(MAKE) -C snes
+	$(MAKE) -C src CONFIG=config-mk3
+	$(MAKE) -C src CONFIG=config-mk3-stm32
+
+.PHONY: version release bsxpage mk3 mk3-fw $(MK2FPGA) $(MK3FPGA) $(MK2MINI) $(MK3MINI) $(MK2CLEAN) $(MK3CLEAN)

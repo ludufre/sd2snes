@@ -223,6 +223,34 @@ El editor oficial de temas espera el layout original de sd2snes, con el logo ocu
 
 Por eso, el editor oficial no puede leer ni escribir correctamente el `m3nu.bin` de este fork.
 
+### Compilar desde el código fuente
+
+Todos los binarios de la release se compilan localmente con Docker. El único requisito en tu máquina es el propio Docker:
+
+```
+./build-docker.sh
+```
+
+Esto compila todo de una vez: el firmware del MCU (`firmware.img` para Mk.II, `firmware.im3` para Mk.III, `firmware.stm` para FXPAK PRO STM32), el menú de SNES (`menu.bin` / `m3nu.bin`) y el companion ESP (`esp32.bin` / `esp8266.bin`). Luego arma dos zips en `release/`:
+
+- `sd2snes_firmware_v<VER>.zip`: solo los binarios modificados del fork
+- `sd2snes_firmware_v<VER>-full.zip`: la base oficial de sd2snes más los binarios del fork
+
+`<VER>` viene de `RELEASE_VERSION` en `src/VERSION`.
+
+En el día a día, `./build-docker.sh` es todo lo que necesitas. La imagen de build y los cores de la FPGA quedan en caché, así que cada ejecución solo recompila el MCU, el menú y el companion. Otras flags:
+
+- `--reuse`: omite la compilación y solo reempaqueta lo que ya está en `bin/`
+- `--rebuild-image`: fuerza la reconstrucción de la imagen de build de Docker
+
+El firmware incrusta el core de arranque de la FPGA (cfgware). El core del Mk.III/STM32 (`fpga_mini.bi3`, Cyclone IV) se sintetiza con Intel Quartus y se incrusta en la imagen de build automáticamente. El core del Mk.II (`fpga_mini.bit`, Spartan-3) se reutiliza del árbol por defecto. Para re-sintetizarlo con Xilinx ISE dentro de Docker:
+
+```
+./build-docker.sh --with-ise
+```
+
+Ese paso es pesado y necesita el instalador de Xilinx ISE 14.7 y una licencia WebPACK en `XILINX_SRC` (por defecto `~/Downloads`). Como el fork no cambia la FPGA, rara vez lo necesitas.
+
 ### Créditos
 
 El soporte para parches IPS/BPS y el trabajo original de reset al menú vienen de [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293), con cambios realizados en este fork.

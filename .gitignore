@@ -130,10 +130,15 @@ utils/mem2lorom
 utils/palremap
 utils/palreorder
 release
+dist
 src/obj-mk2
 src/obj-mk3
+src/obj-mk3-stm32
+companion/.pio
 .dep
 .dep-*
+src/.ARG_VERSION
+verilog/sd2snes_mini/fpga_mini.bi3
 verilog/*/output_files
 verilog/*/simulation
 verilog/*/smartxplorer
