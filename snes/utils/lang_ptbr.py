@@ -166,6 +166,7 @@ TRANSLATIONS = {
     'text_loading': 'Carregando{127}{128}                     ',
     'text_saving': 'Salvando{127}{128}                       ',
     'text_cheat': 'Trapaças para ',
+    'text_ips_nopatch': '[Sem patch]',
     'cheat_tab_head': 'Nome                         # códigos   Ativado',
     'cheat_detail_head': 'PAR       GG        Endereço Valor',
     'mtext_browser_showcov': 'Mostrar capas',

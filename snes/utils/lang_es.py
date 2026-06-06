@@ -168,6 +168,7 @@ TRANSLATIONS = {
     'text_loading': 'Cargando{127}{128}                       ',
     'text_saving': 'Guardando{127}{128}                      ',
     'text_cheat': 'Trucos para ',
+    'text_ips_nopatch': '[Sin patch]',
     'cheat_tab_head': 'Nombre                       # códigos   Activo',
     'cheat_detail_head': 'PAR       GG        Direc.  Valor',
     'mtext_browser_showcov': 'Mostrar carátulas',
