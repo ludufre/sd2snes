@@ -1,0 +1,21 @@
+# Keep the Docker build context lean. The FPGA build stage only needs verilog/
+# and utils/; the firmware/menu/companion sources are bind-mounted at run time,
+# not COPYed, so most of the tree is irrelevant to image builds.
+.git
+**/obj-*
+**/.dep
+**/.dep-*
+companion/.pio
+release
+dist/*
+!dist/quartus
+!dist/python
+!dist/xilinx
+bin
+*.zip
+**/.DS_Store
+**/__pycache__
+verilog/*/output_files
+verilog/*/db
+verilog/*/incremental_db
+verilog/*/simulation
