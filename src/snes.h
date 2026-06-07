@@ -56,6 +56,8 @@
 #define SNES_CMD_LOAD_MENU_SPC       (0x1e) /* stage /sd2snes/menu.spc for background menu music */
 #define SNES_CMD_LOAD_COVER_RECENT   (0x1f) /* stage downscaled .cov for recent game (index in MCU_PARAM) */
 #define SNES_CMD_LOAD_COVER_FAVORITE (0x20) /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
+#define SNES_CMD_DELETE_FILE         (0x21) /* delete selected file */
+#define SNES_CMD_DELETE_SRM          (0x22) /* delete SRM save file for selected ROM */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)

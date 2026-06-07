@@ -486,6 +486,26 @@ int main(void) {
           snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
           cmd=0;
           break;
+        case SNES_CMD_DELETE_FILE:
+          get_selected_name(file_lfn);
+          printf("Delete file: %s\n", file_lfn);
+          if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cmd=0;
+          break;
+        case SNES_CMD_DELETE_SRM: {
+          uint8_t srmfile[256] = SAVE_BASEDIR;
+          get_selected_name(file_lfn);
+          printf("Delete SRM for: %s\n", file_lfn);
+          append_file_basename((char*)srmfile, (char*)file_lfn, ".srm", sizeof(srmfile));
+          printf("SRM path: %s\n", srmfile);
+          if(f_unlink((TCHAR*)srmfile) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cmd=0;
+          break;
+        }
         case SNES_CMD_LOAD_COVER:
           /* MCU_PARAM was filled by the menu (cover_fill_param_for_current_sel)
              to look exactly like LOADROM's params, so get_selected_name works.
