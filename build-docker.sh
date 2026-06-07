@@ -38,8 +38,8 @@ SNESCOM_VER="${SNESCOM_VER:-1.8.1.1}"
 # ISE 14.7 installer parts + WebPACK license live here (login-gated; user-provided):
 #   Xilinx_ISE_DS_14.7_1015_1-1.tar + -2/-3/-4.zip.xz + Xilinx.lic
 XILINX_SRC="${XILINX_SRC:-$HOME/Downloads}"
-QUARTUS_VER="${QUARTUS_VER:-20.1.0.711}"   # Quartus Lite for the mk3 FPGA bootstrap synth
-QUARTUS_BASE="${QUARTUS_BASE:-https://downloads.intel.com/akdlm/software/acdsinst/20.1std/711/ib_installers}"
+QUARTUS_VER="${QUARTUS_VER:-23.1std.0.991}"   # Quartus Lite for the mk3 FPGA bootstrap synth
+QUARTUS_BASE="${QUARTUS_BASE:-https://downloads.intel.com/akdlm/software/acdsinst/23.1std/991/ib_installers}"
 # Relocatable Python for the PlatformIO venv (the base image's 3.6 is too old for
 # the current esptool's cryptography dependency).
 PYBS_TAG="${PYBS_TAG:-20260602}"
