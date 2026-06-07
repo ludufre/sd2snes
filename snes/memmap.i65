@@ -105,6 +105,9 @@
 
 #define NUM_CHEATS                  $CFFFFE
 #define CHEAT_ADDR                  $D00000
+#define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
+#define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
+#define CHEAT_FLAGS                 $FF0500 /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle, MCU also keeps it in sync. */
 
 #define SPC_DATA                    $FD0000
 #define SPC_HEADER                  $FE0000
@@ -154,6 +157,9 @@
 #define CMD_LOAD_COVER_FAVORITE     $20 /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
 #define CMD_DELETE_FILE             $21 /* delete selected file */
 #define CMD_DELETE_SRM              $22 /* delete SRM save file for selected ROM */
+#define CMD_TOGGLE_CHT              $23 /* MCU_PARAM low byte: cheat index. MCU XORs the flag bit in PSRAM record. */
+#define CMD_LOAD_CHT_FAV            $24 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
+#define CMD_SAVE_CHT_FAV            $25 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */

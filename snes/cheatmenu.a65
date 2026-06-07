@@ -1,0 +1,1042 @@
+.link page $c0
+
+#include "memmap.i65"
+#include "stack.i65"
+
+; Cheat menu
+; ----------------------------------------------------------------------
+; Single-level UI: a list of cheats loaded from the YAML file on the
+; SD card for the currently selected ROM.
+;
+;   Level 1: cheat list   (cheatmenu_input_loop)
+;     A = toggle Enabled/Disabled for the selected cheat
+;     B = save YAML and exit
+;
+; PSRAM record layout (512 bytes per cheat, see firmware src/cheat.h):
+;   +$000      flag byte (bit 7 = enabled)
+;   +$001..$0FE description, null-terminated
+;   +$0FF      numpatches (0..40)
+;   +$100..    patch records, 4 bytes each, little-endian uint32_t.
+;
+; The BSRAM mirror at CHEAT_FLAGS = $FF0500+idx holds a SNES-writable
+; copy of the flag byte for instant Yes/No display updates without an
+; FPGA round trip. The PSRAM record's flag is the canonical state for
+; save.
+; ----------------------------------------------------------------------
+
+; CHEATS_PER_SCREEN is one less than the available row space inside the
+; window.  The bottom of the window's interior is left as a blank
+; "comfort" row between the last cheat and the hint line, so cheat rows
+; do not visually butt up against the bottom border.
+#define CHEATS_PER_SCREEN       10
+; Description prints in cols CHEAT_NAME_COL..CHEAT_NAME_COL+CHEAT_NAME_WIDTH-1.
+; The Yes/No flag prints at CHEAT_FLAG_COL.  Keep at least one blank
+; column between them so a maximum-length description does not butt up
+; against the "Y" or "N" in the Enabled column.
+#define CHEAT_NAME_WIDTH        42
+#define CHEAT_NAME_COL          8
+#define CHEAT_FLAG_COL          51
+
+
+; ======================================================================
+; LEVEL 1: cheat list
+; ======================================================================
+; Public entry point. Called via long pointer from the file-selector
+; context menu (see menu_enttab_filesel_context_file in menudata.a65).
+; The selected ROM's path was already saved to MCU_PARAM by
+; open_context_menu / ctx_is_file before this routine runs.
+; ----------------------------------------------------------------------
+cheat_menu_for_selected_file:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz cm_source                     ; $00 = filesel session
+  bra cheat_menu_run
+
+; ----------------------------------------------------------------------
+; Public entry point. Called via long pointer from the favorites
+; context menu (see menu_enttab_filesel_favorites_context in
+; menudata.a65).  MCU_PARAM low byte holds the favorite-list index;
+; select_favorite_file stored it there before opening the context menu.
+; We snapshot it into cm_fav_idx because the toggle command clobbers
+; MCU_PARAM during normal menu use.
+; ----------------------------------------------------------------------
+cheat_menu_for_favorite_file:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @MCU_PARAM
+  sta cm_fav_idx
+  lda #$01
+  sta cm_source                     ; $01 = favorite session
+  bra cheat_menu_run
+
+; ----------------------------------------------------------------------
+; Shared cheat menu body.  The load/save MCU wrappers below dispatch on
+; cm_source so this code is identical for both entry points.
+; ----------------------------------------------------------------------
+cheat_menu_run:
+  jsr cheatmenu_load_from_mcu       ; CMD_LOAD_CHT or CMD_LOAD_CHT_FAV
+
+; r15 layout: cheats live at $D0..$D3 (512 records * 512 bytes
+; = 256 KB), per-code display strings at $D40000+ (moved out of $D2
+; in r15).  cm_total / cm_top / cm_sel / cm_visible / cm_tmp
+; are .word storage so cheat indices 0..511 are tracked correctly.
+; Clamp the count at 512.
+  rep #$20 : .al
+  lda @NUM_CHEATS
+  cmp #$0200
+  bcc cheatmenu_count_ok
+  lda #$0200
+cheatmenu_count_ok:
+  sta cm_total                      ; 16-bit store
+  bne cheatmenu_have_data16
+
+  sep #$20 : .as
+  jsr cheatmenu_show_empty_popup
+  jmp cheatmenu_done
+
+cheatmenu_have_data16:
+  .al                               ; reached with M=0 from bne above
+; 16-bit clear of cm_top / cm_sel / cm_tmp so draw_row's 16-bit reads
+; pick up clean values regardless of any previous code path that ran.
+  stz cm_top
+  stz cm_sel
+  stz cm_tmp
+  sep #$20 : .as
+
+cheatmenu_have_data:
+; Description scroll state must start zeroed since WRAM contents are
+; undefined at first entry to the menu.  Without this the scroll
+; ticker sees garbage in cm_fits / cm_xscroll_state and starts every
+; row scrolling.
+  stz cm_xscroll
+  stz cm_xscroll_state
+  stz cm_xscroll_wait
+  stz cm_fits_idx
+  ldx #$0000
+- stz !cm_fits, x
+  inx
+  cpx #CHEATS_PER_SCREEN
+  bne -
+
+; cm_visible = min(cm_total, CHEATS_PER_SCREEN), 16-bit comparison
+; so cm_total values >255 are not truncated to their low byte.
+  rep #$20 : .al
+  lda cm_total
+  cmp #CHEATS_PER_SCREEN
+  bcc cheatmenu_visible_ok
+  lda #CHEATS_PER_SCREEN
+cheatmenu_visible_ok:
+  sta cm_visible                    ; 16-bit store (high byte is 0)
+  sep #$20 : .as
+
+  jsr cheatmenu_open_window
+  jsr cheatmenu_redraw_all
+  jsr cheatmenu_input_loop          ; runs until user presses B
+
+  jsr cheatmenu_save_to_mcu         ; CMD_SAVE_CHT or CMD_SAVE_CHT_FAV
+  jsr pop_window                    ; close cheat list window
+
+cheatmenu_done:
+  plb
+  plp
+  rtl
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_load_from_mcu / cheatmenu_save_to_mcu: MCU command wrappers
+; ----------------------------------------------------------------------
+cheatmenu_load_from_mcu:
+  php
+  sep #$20 : .as
+  lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+; Dispatch on cm_source so the right addressing scheme reaches the MCU.
+; The toggle command clobbers MCU_PARAM byte 0 during normal menu use,
+; so we rebuild it here just before sending LOAD.
+  lda cm_source
+  bne cheatmenu_load_fav
+; cm_source = $00: filesel session.  Re-write MCU_PARAM[0..3] with
+; FILESEL_CWD long pointer; get_selected_name() reads this to resolve
+; the selected ROM path.
+  rep #$20 : .al
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+  lda #CMD_LOAD_CHT
+  bra cheatmenu_load_send
+cheatmenu_load_fav:
+; cm_source = $01: favorite session.  MCU_PARAM low byte = favorite
+; index; the MCU resolves it via cfg_get_listed_game(FAVORITES_FILE, ...).
+  lda cm_fav_idx
+  sta @MCU_PARAM
+  lda #CMD_LOAD_CHT_FAV
+cheatmenu_load_send:
+  pha
+  lda #$00
+  sta @SNES_CMD
+  pla
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  bne -
+  lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+; Wait one vblank so cheat_yaml_load's PSRAM writes have time to
+; propagate to the SNES read path before we redraw.
+  jsr waitblank
+  plp
+  rts
+
+
+cheatmenu_save_to_mcu:
+  php
+  sep #$20 : .as
+  lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda cm_source
+  bne cheatmenu_save_fav
+; cm_source = $00: filesel session.
+  rep #$20 : .al
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+  lda #CMD_SAVE_CHT
+  bra cheatmenu_save_send
+cheatmenu_save_fav:
+; cm_source = $01: favorite session.
+  lda cm_fav_idx
+  sta @MCU_PARAM
+  lda #CMD_SAVE_CHT_FAV
+cheatmenu_save_send:
+  pha
+  lda #$00
+  sta @SNES_CMD
+  pla
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  bne -
+  lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_open_window: open the cheat list window with the title from
+; PSRAM, draw the column header and the bottom hint line, configure the
+; cursor bar.
+; ----------------------------------------------------------------------
+cheatmenu_open_window:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+
+  lda @cheat_win_x
+  sta window_x
+  lda @cheat_win_y
+  sta window_y
+  lda @cheat_win_w
+  sta window_w
+  lda @cheat_win_h
+  sta window_h
+; Window title at PSRAM CHEAT_TITLE ($D80000), set by firmware during
+; CMD_LOAD_CHT.
+  lda #$d8
+  sta window_tbank
+  ldx #$0000
+  stx window_taddr
+  jsr push_window
+  jsr draw_window
+
+; Column header just below the title row
+  lda #^cheat_tab_head
+  sta print_bank
+  ldx #!cheat_tab_head
+  stx print_src
+  stz print_pal
+  lda #52
+  sta print_count
+  lda window_y
+  inc
+  inc
+  sta print_y
+  lda window_x
+  inc
+  inc
+  sta print_x
+  jsr hiprint
+
+; Hint line at the bottom of the window, just above the lower border.
+  jsr cheatmenu_draw_l1_hint
+
+; cursor bar configuration
+  lda window_x
+  inc
+  sta bar_xl
+  lda window_w
+  sec
+  sbc #$02
+  sta bar_wl
+  lda window_y
+  clc
+  adc #$03
+  sta bar_yl
+
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_draw_l1_hint: print the L1 button-hint string ON the row
+; where the window's bottom border lives.  Drawn in three segments so
+; the bars on each side use palette 3 (the same blue the window border
+; uses) while the centre button text stays in palette 0 (white):
+;   left bars  | text  | right bars
+;   8 chars      35       7
+; ----------------------------------------------------------------------
+cheatmenu_draw_l1_hint:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+
+; print_y = window_y + window_h - 1  (the bottom border row)
+  lda window_y
+  clc
+  adc window_h
+  sec
+  sbc #$01
+  sta print_y
+
+; --- left bars: palette 3, 8 chars at window_x+1 -----------------------
+  lda #$03
+  sta print_pal
+  lda #^cheat_tab_hint_bars
+  sta print_bank
+  ldx #!cheat_tab_hint_bars
+  stx print_src
+  lda #$08
+  sta print_count
+  lda window_x
+  inc
+  sta print_x
+  jsr hiprint
+
+; --- centre text: palette 0, 34 chars, advanced from previous segment --
+  stz print_pal
+  lda #^cheat_tab_hint_text
+  sta print_bank
+  ldx #!cheat_tab_hint_text
+  stx print_src
+  lda #$22                            ; 34
+  sta print_count
+  lda print_x
+  clc
+  adc print_done
+  sta print_x
+  jsr hiprint
+
+; --- right bars: palette 3, 8 chars, advanced from previous segment ----
+  lda #$03
+  sta print_pal
+  lda #^cheat_tab_hint_bars
+  sta print_bank
+  ldx #!cheat_tab_hint_bars
+  stx print_src
+  lda #$08
+  sta print_count
+  lda print_x
+  clc
+  adc print_done
+  sta print_x
+  jsr hiprint
+
+  plp
+  rts
+
+
+cheatmenu_redraw_all:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+; cm_tmp is .word and is read 16-bit in draw_row to compute
+; (cm_top + cm_tmp).  Clear both bytes here so the high byte is not
+; whatever stale value an earlier code path left behind.
+  rep #$20 : .al
+  stz cm_tmp
+  sep #$20 : .as
+  lda #$00
+  sta cm_fits_idx                ; reset fits[] write cursor to row 0
+cheatmenu_redraw_loop:
+  lda cm_tmp
+  cmp cm_visible
+  bcs cheatmenu_redraw_done
+  jsr cheatmenu_draw_row
+  inc cm_tmp
+  inc cm_fits_idx                ; advance fits[] write cursor
+  bra cheatmenu_redraw_loop
+cheatmenu_redraw_done:
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_draw_row: draws one row of the cheat list.
+; Inputs: cm_tmp = on-screen row (0..cm_visible-1)
+; ----------------------------------------------------------------------
+cheatmenu_draw_row:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+
+; idx = cm_top + cm_tmp.  Both .word storage.  Must be 16-bit add so
+; cm_top values >255 produce correct cheat indices.
+  rep #$20 : .al
+  lda cm_top
+  clc
+  adc cm_tmp
+  jsr cheatmenu_calc_record_ptr     ; -> cm_record_offs/bank
+  sep #$20 : .as
+
+; screen y for this row: window_y + 4 + cm_tmp
+  lda window_y
+  clc
+  adc #$04
+  clc
+  adc cm_tmp
+  sta print_y
+
+; blank the row first
+  lda #^space64
+  sta print_bank
+  ldx #!space64
+  stx print_src
+  stz print_pal
+  lda window_w
+  sec
+  sbc #$02
+  sta print_count
+  lda window_x
+  inc
+  sta print_x
+  jsr hiprint
+
+; description: print starts at record offset +1.  For the SELECTED
+; row only, also add the current horizontal scroll offset so the
+; visible text walks across the description over time.
+  lda cm_record_bank
+  sta print_bank
+  rep #$20 : .al
+  lda cm_record_offs
+  inc                            ; +1 to skip the flags byte
+  sta print_src                  ; default: no horizontal offset
+  sep #$20 : .as
+  lda cm_tmp
+  cmp cm_sel
+  bne cheatmenu_draw_row_descprint
+; selected row: print_src += cm_xscroll  (zero-extended to 16 bits)
+  lda cm_xscroll
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc print_src
+  sta print_src
+  sep #$20 : .as
+cheatmenu_draw_row_descprint:
+  stz print_pal
+  lda #CHEAT_NAME_WIDTH
+  sta print_count
+  lda #CHEAT_NAME_COL
+  sta print_x
+  jsr hiprint
+; Record whether the description fully fit (print_over == 0) or got
+; clipped (non-zero), so cheatmenu_scroll_tick can decide whether to
+; scroll this row when it becomes selected.  cm_fits_idx is a single
+; byte but Y is 16-bit here, so explicitly zero-extend through A.
+  rep #$20 : .al
+  lda cm_fits_idx
+  and #$00ff
+  tay
+  sep #$20 : .as
+  lda print_over
+  sta !cm_fits, y
+
+; Yes/No from the BSRAM flag mirror at CHEAT_FLAGS+idx.  16-bit add
+; so the index is correct for cheats 256..511 (CHEAT_FLAGS region
+; was widened to 512 bytes alongside the cm_total cap).
+  rep #$20 : .al
+  lda cm_top
+  clc
+  adc cm_tmp
+  tax                            ; X is .xl mode, 16-bit index
+  sep #$20 : .as
+  lda @CHEAT_FLAGS, x
+  bmi cheatmenu_print_yes
+  lda #^text_cheat_no
+  ldx #!text_cheat_no
+  bra cheatmenu_print_flag
+cheatmenu_print_yes:
+  lda #^text_cheat_yes
+  ldx #!text_cheat_yes
+cheatmenu_print_flag:
+  sta print_bank
+  stx print_src
+  stz print_pal
+  lda #$04
+  sta print_count
+  lda #CHEAT_FLAG_COL
+  sta print_x
+  jsr hiprint
+
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_calc_record_ptr: build a 24-bit pointer to the cheat record
+; at the index passed in A.  Result in cm_record_offs (word) +
+; cm_record_bank (byte).
+;
+; Input contract (CheatMenuG, 16-bit): A is in .al mode and holds the
+; full 16-bit cheat index 0..511.  The function preserves caller M/X
+; via PHP/PLP.
+;
+; Math:
+;   offset = (idx & $7F) << 9      (0..127 * 512 = $0000..$FE00)
+;   bank   = $D0 + (idx >> 7)      (0..3 -> $D0..$D3)
+;
+; Verified by hand for idx = 0, 255, 256, 304, 511:
+;   idx 0    -> $D0:0000
+;   idx 255  -> $D1:FE00  ($D00000 + 255*512 = $D1FE00)
+;   idx 256  -> $D2:0000  ($D00000 + 256*512 = $D20000)
+;   idx 304  -> $D2:6000  ($D00000 + 304*512 = $D26000)
+;   idx 511  -> $D3:FE00  ($D00000 + 511*512 = $D3FE00)
+; ----------------------------------------------------------------------
+cheatmenu_calc_record_ptr:
+  php
+  rep #$20 : .al
+  pha                               ; save full 16-bit index for the bank step
+  and #$007f                        ; isolate low 7 bits (0..127)
+  asl                               ; *2
+  asl                               ; *4
+  asl                               ; *8
+  asl                               ; *16
+  asl                               ; *32
+  asl                               ; *64
+  asl                               ; *128
+  asl                               ; *256
+  asl                               ; *512 (0..127 -> $0000..$FE00, no overflow)
+  sta cm_record_offs
+  pla                               ; full index back
+  lsr
+  lsr
+  lsr
+  lsr
+  lsr
+  lsr
+  lsr                               ; A = idx >> 7 (0..3 for idx 0..511)
+  sep #$20 : .as
+  clc
+  adc #$d0
+  sta cm_record_bank
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_scroll_reset: clear cm_xscroll / cm_xscroll_state /
+; cm_xscroll_wait so the next draw of the selected row starts the
+; description at character 0.
+; ----------------------------------------------------------------------
+cheatmenu_scroll_reset:
+  stz cm_xscroll
+  stz cm_xscroll_state
+  stz cm_xscroll_wait
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_redraw_sel: redraw the currently selected row (cm_sel).
+; Used after cheatmenu_scroll_reset to clear residual scrolled text
+; from a row that is about to become unselected.
+; ----------------------------------------------------------------------
+cheatmenu_redraw_sel:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda cm_sel
+  sta cm_tmp
+  sta cm_fits_idx
+  jsr cheatmenu_draw_row
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_scroll_tick: advance the horizontal scroll of the currently
+; selected row's description.  Modelled on filesel's scroll_direntry:
+; if the description was clipped on its last draw (cm_fits[cm_sel] is
+; non-zero), step cm_xscroll forward one char per cm_xscroll_wait
+; frames until the text fully fits, pause, then step backward to 0,
+; pause again, and repeat.
+; ----------------------------------------------------------------------
+cheatmenu_scroll_tick:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+
+; Already mid-cycle?  Skip the idle check.
+  lda cm_xscroll_state
+  bne cheatmenu_scroll_tick_active
+
+; Idle: only kick off a cycle if the selected row was clipped.
+  rep #$20 : .al
+  lda cm_sel
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda !cm_fits, x
+  beq cheatmenu_scroll_tick_done
+  lda #$01
+  sta cm_xscroll_state
+  stz cm_xscroll_wait
+
+cheatmenu_scroll_tick_active:
+; If still waiting between steps, just decrement the counter.
+  lda cm_xscroll_wait
+  beq cheatmenu_scroll_tick_step
+  dec
+  sta cm_xscroll_wait
+  bra cheatmenu_scroll_tick_done
+
+cheatmenu_scroll_tick_step:
+; Pick the next wait: slow ($28 frames) when sitting at offset 0,
+; fast ($10 frames) while actually moving.
+  lda cm_xscroll
+  bne +
+  lda #$28
+  bra ++
++ lda #$10
+++
+  sta cm_xscroll_wait
+
+; Redraw the selected row with the current cm_xscroll.  draw_row also
+; updates cm_fits[cm_fits_idx] with this draw's print_over value.
+  lda cm_sel
+  sta cm_tmp
+  sta cm_fits_idx
+  jsr cheatmenu_draw_row
+
+; Did the description now fit entirely?  If so we've scrolled far
+; enough to show the tail; flip direction and pause at the far end.
+  rep #$20 : .al
+  lda cm_sel
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda !cm_fits, x
+  bne +
+  lda #$ff
+  sta cm_xscroll_state
+  lda #$28
+  sta cm_xscroll_wait
++
+; Advance cm_xscroll by cm_xscroll_state (+1 or -1 as signed byte).
+  lda cm_xscroll_state
+  clc
+  adc cm_xscroll
+  sta cm_xscroll
+; If we landed back at 0 (after reversing), restart forward.
+  bne cheatmenu_scroll_tick_done
+  lda #$01
+  sta cm_xscroll_state
+
+cheatmenu_scroll_tick_done:
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_input_loop: own input loop for the cheat list.
+;   A           = toggle Enabled/Disabled (BSRAM mirror + MCU PSRAM update)
+;   B           = exit (caller saves and pops window)
+;   up/down     = navigate one row
+;   left/right  = page navigation, modelled on filesel's left/right.
+;                 Right pages down by CHEATS_PER_SCREEN and snaps to
+;                 the bottom of the list when overshooting; pressing
+;                 right when the last cheat is already visible moves
+;                 the cursor to that last row.  Left is the mirror.
+; ----------------------------------------------------------------------
+cheatmenu_input_loop:
+- lda isr_done
+  beq -
+  stz isr_done
+  jsr printtime
+  jsr cheatmenu_scroll_tick
+  jsr read_pad
+
+; DiagG: dispatch via beq+jmp instead of bne to avoid any 8-bit
+; branch range issue.  bne has a +127/-128 byte offset; the long-form
+; JMP is 16-bit absolute and reaches anywhere in the same bank.
+  lda pad_b
+  beq cheatmenu_disp_b_skip
+  jmp cheatmenu_in_b
+cheatmenu_disp_b_skip:
+  lda pad_a
+  beq cheatmenu_disp_a_skip
+  jmp cheatmenu_in_a
+cheatmenu_disp_a_skip:
+  lda pad_up
+  beq cheatmenu_disp_up_skip
+  jmp cheatmenu_in_up
+cheatmenu_disp_up_skip:
+  lda pad_down
+  beq cheatmenu_disp_down_skip
+  jmp cheatmenu_in_down
+cheatmenu_disp_down_skip:
+  lda pad_left
+  beq cheatmenu_disp_left_skip
+  jmp cheatmenu_in_left
+cheatmenu_disp_left_skip:
+  lda pad_right
+  beq cheatmenu_disp_right_skip
+  jmp cheatmenu_in_right
+cheatmenu_disp_right_skip:
+  bra -
+
+cheatmenu_in_b:
+  rts
+
+cheatmenu_in_a:
+; A = Enable/Disable: XOR the BSRAM flag mirror so the row's Yes/No
+; updates instantly without waiting for the MCU round trip.  Only the
+; selected row's state changed, so redraw just that row instead of
+; the whole list.  This avoids the bottom-row flicker caused by a
+; full redraw straddling the next VBlank.
+  jsr cheatmenu_toggle_selected
+  jsr waitblank
+  jsr cheatmenu_scroll_reset
+  jsr cheatmenu_redraw_sel
+  jmp cheatmenu_input_loop
+
+cheatmenu_in_up:
+  lda cm_sel
+  beq cheatmenu_in_up_scroll
+; redraw the row we are leaving so any partial scroll is cleared
+  jsr cheatmenu_scroll_reset
+  jsr cheatmenu_redraw_sel
+  dec cm_sel
+  lda bar_yl
+  dec
+  sta bar_yl
+  jmp cheatmenu_input_loop
+
+cheatmenu_in_up_scroll:
+; 16-bit zero test so cm_top values whose low byte is 0 but high byte
+; is not (e.g. $0100) do not look like "at top".
+  rep #$20 : .al
+  lda cm_top
+  bne cheatmenu_in_up_scroll_decrement
+  sep #$20 : .as
+  jmp cheatmenu_input_loop
+cheatmenu_in_up_scroll_decrement:
+  .al                              ; reached with M=0 from bne above
+  dec
+  sta cm_top
+  sep #$20 : .as
+  jsr cheatmenu_scroll_reset
+  jsr cheatmenu_redraw_all
+  jmp cheatmenu_input_loop
+
+cheatmenu_in_down:
+  lda cm_sel
+  inc
+  cmp cm_visible
+  bcs cheatmenu_in_down_scroll
+; Is the cursor already on the last cheat?  Check cm_top + cm_sel + 1
+; against cm_total.  Needs 16-bit arithmetic so cm_top values >255
+; do not wrap.
+  rep #$20 : .al
+  lda cm_top
+  clc
+  adc cm_sel
+  inc
+  cmp cm_total
+  bcc cheatmenu_in_down_advance
+  sep #$20 : .as
+  jmp cheatmenu_input_loop
+cheatmenu_in_down_advance:
+  .al                              ; reached with M=0 from bcc above
+  sep #$20 : .as
+; redraw the row we are leaving so any partial scroll is cleared
+  jsr cheatmenu_scroll_reset
+  jsr cheatmenu_redraw_sel
+  inc cm_sel
+  lda bar_yl
+  inc
+  sta bar_yl
+  jmp cheatmenu_input_loop
+
+cheatmenu_in_down_scroll:
+; 16-bit: if cm_top + cm_visible >= cm_total the bottom of the list
+; is already on screen, no scroll.  Otherwise advance cm_top by 1.
+  rep #$20 : .al
+  lda cm_top
+  clc
+  adc cm_visible
+  cmp cm_total
+  bcc cheatmenu_in_down_scroll_ok
+  sep #$20 : .as
+  jmp cheatmenu_input_loop
+cheatmenu_in_down_scroll_ok:
+  .al                              ; reached with M=0 from bcc above
+  lda cm_top
+  inc
+  sta cm_top
+  sep #$20 : .as
+  jsr cheatmenu_scroll_reset
+  jsr cheatmenu_redraw_all
+  jmp cheatmenu_input_loop
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_in_right: page down.  If the last cheat is already on
+; screen, just move the cursor to that last visible row.  Otherwise
+; advance cm_top by CHEATS_PER_SCREEN, snapping cm_top to
+; (cm_total - cm_visible) if that would overshoot.
+;
+; All arithmetic is 16-bit since cm_top and cm_total can each exceed
+; 255 in CheatMenuG.  The new_top value is kept on the stack rather
+; than in cm_tmp, since cm_tmp is also used by redraw_all.
+; ----------------------------------------------------------------------
+cheatmenu_in_right:
+  jsr cheatmenu_scroll_reset
+
+  rep #$20 : .al
+
+; Is the last cheat already visible?  cm_top + cm_visible == cm_total
+  lda cm_top
+  clc
+  adc cm_visible
+  cmp cm_total
+  beq cheatmenu_in_right_atend
+
+; Try advancing by a page: new_top = cm_top + CHEATS_PER_SCREEN.
+; Overshoot if new_top + cm_visible > cm_total; otherwise use new_top.
+  lda cm_top
+  clc
+  adc #CHEATS_PER_SCREEN
+  pha                                ; save new_top
+  clc
+  adc cm_visible
+  cmp cm_total
+  bcc cheatmenu_in_right_advance     ; new_top + cm_visible < cm_total
+  beq cheatmenu_in_right_advance     ; new_top + cm_visible == cm_total
+
+; Overshoot: cm_top = cm_total - cm_visible, cursor on last visible row.
+  pla                                ; discard saved new_top
+  lda cm_total
+  sec
+  sbc cm_visible
+  sta cm_top
+  sep #$20 : .as
+  lda cm_visible
+  dec
+  sta cm_sel
+  bra cheatmenu_in_right_done
+
+cheatmenu_in_right_advance:
+  .al                                ; reached with M=0 from bcc/beq above
+  pla
+  sta cm_top
+  sep #$20 : .as
+; cm_sel unchanged: cursor stays in the same row of the new page.
+  bra cheatmenu_in_right_done
+
+cheatmenu_in_right_atend:
+  .al                                ; reached with M=0 from beq above
+  sep #$20 : .as
+; End already visible: cm_top does not change, so only the previously
+; selected row needs a redraw to clear any partial horizontal scroll.
+; Drop the cursor to the bottom visible row.
+  jsr cheatmenu_redraw_sel
+  lda cm_visible
+  dec
+  sta cm_sel
+  jsr cheatmenu_set_bar_yl_from_sel
+  jmp cheatmenu_input_loop
+
+cheatmenu_in_right_done:
+  jsr cheatmenu_set_bar_yl_from_sel
+  jsr cheatmenu_redraw_all
+  jmp cheatmenu_input_loop
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_in_left: page up.  If we are already at the top of the
+; list (cm_top == 0), just move the cursor to the first row.  If
+; cm_top is less than one full page from zero, snap to zero and put
+; the cursor at row 0.  Otherwise step cm_top back by CHEATS_PER_SCREEN.
+;
+; 16-bit cm_top in CheatMenuG.
+; ----------------------------------------------------------------------
+cheatmenu_in_left:
+  jsr cheatmenu_scroll_reset
+
+  rep #$20 : .al
+  lda cm_top
+  bne cheatmenu_in_left_page
+  sep #$20 : .as
+
+; Already at the top of the list.  cm_top does not change, so the
+; only row whose display state needs refreshing is the previously
+; selected row (to clear any partial horizontal scroll).
+  jsr cheatmenu_redraw_sel
+  stz cm_sel
+  jsr cheatmenu_set_bar_yl_from_sel
+  jmp cheatmenu_input_loop
+
+cheatmenu_in_left_page:
+  .al                              ; reached with M=0 from the bne above
+; A has cm_top (16-bit).
+  cmp #CHEATS_PER_SCREEN
+  bcs cheatmenu_in_left_full_page
+; Less than one full page from the start: snap cm_top to 0 and put
+; the cursor on the first row.
+  stz cm_top                       ; 16-bit clear
+  sep #$20 : .as
+  stz cm_sel
+  bra cheatmenu_in_left_done
+
+cheatmenu_in_left_full_page:
+  .al                              ; reached with M=0 from the bcs above
+  sec
+  sbc #CHEATS_PER_SCREEN
+  sta cm_top                       ; 16-bit store
+  sep #$20 : .as
+; cm_sel stays unchanged
+
+cheatmenu_in_left_done:
+  jsr cheatmenu_set_bar_yl_from_sel
+  jsr cheatmenu_redraw_all
+  jmp cheatmenu_input_loop
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_set_bar_yl_from_sel: compute the cursor bar y-position
+; from cm_sel and the window's y origin.  bar_yl = window_y + 3 + cm_sel
+; matches the inline inc/dec pattern in cheatmenu_in_up/cheatmenu_in_down.
+; ----------------------------------------------------------------------
+cheatmenu_set_bar_yl_from_sel:
+  php
+  sep #$20 : .as
+  lda window_y
+  clc
+  adc #$03
+  clc
+  adc cm_sel
+  sta bar_yl
+  plp
+  rts
+
+
+; ----------------------------------------------------------------------
+; cheatmenu_toggle_selected: XOR the BSRAM flag mirror for the instant
+; visual flip, then send CMD_TOGGLE_CHT so the firmware XORs the PSRAM
+; record (canonical state for save).
+;
+; In CheatMenuG the cheat index is 16-bit, so MCU_PARAM low two bytes
+; carry the index (low at +0, high at +1) and the matching main.c
+; handler masks with 0xffff.
+; ----------------------------------------------------------------------
+cheatmenu_toggle_selected:
+  php
+  rep #$30 : .al : .xl
+  lda cm_top
+  clc
+  adc cm_sel
+  sta @MCU_PARAM                  ; 16-bit: low byte at +0, high at +1
+  tax                             ; X = 16-bit cheat index for BSRAM access
+  sep #$20 : .as
+  lda @CHEAT_FLAGS, x
+  eor #$80
+  sta @CHEAT_FLAGS, x
+; Zero the upper two bytes of the 32-bit MCU_PARAM.
+  lda #$00
+  sta @MCU_PARAM+2
+  sta @MCU_PARAM+3
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_TOGGLE_CHT
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  bne -
+  lda #$55
+  sta @MCU_CMD
+  plp
+  rts
+
+
+cheatmenu_show_empty_popup:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$0e
+  sta window_x
+  lda #$0e
+  sta window_y
+  lda #$24
+  sta window_w
+  lda #$01
+  sta window_h
+  lda #^text_cheat_none_title
+  sta window_tbank
+  ldx #!text_cheat_none_title
+  stx window_taddr
+  jsr push_window
+  jsr draw_window
+  lda #^text_cheat_none_msg
+  sta print_bank
+  ldx #!text_cheat_none_msg
+  stx print_src
+  stz print_pal
+  lda #$22
+  sta print_count
+  lda #$0f
+  sta print_y
+  lda #$0f
+  sta print_x
+  jsr hiprint
+
+- lda isr_done
+  beq -
+  stz isr_done
+  jsr read_pad
+  lda pad_a
+  ora pad_b
+  ora pad_y
+  ora pad_start
+  beq -
+  jsr pop_window
+  plp
+  rts
+

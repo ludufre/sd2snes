@@ -1025,6 +1025,19 @@ menu_enttab_filesel_favorites_context:
  .byt  0,0,0
 
  .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_cheats
+ .byt  ^text_filesel_context_cheats
+ .word !cheat_menu_for_favorite_file-1
+ .byt  ^cheat_menu_for_favorite_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_cheats
+ .byt  ^mdesc_filesel_context_cheats
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_set_as_autoboot
  .byt  ^text_filesel_set_as_autoboot
  .word !set_favorite_as_autoboot_rom-1
