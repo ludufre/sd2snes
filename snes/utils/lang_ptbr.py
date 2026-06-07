@@ -127,7 +127,7 @@ TRANSLATIONS = {
     'text_cheat_yes': 'Sim',
     'text_cheat_no': 'Não',
     'text_cheat_none_title': 'Trapaças',
-    'text_cheat_none_desc': ' Nenhuma trapaça definida para esta ROM ',
+    'text_cheat_none_msg': 'Nenhuma trapaça para esta ROM',
     'text_confirm_delete_file': 'Deletar este arquivo?',
     'text_confirm_delete_srm': 'Deletar o arquivo de save?',
     'text_confirm_hint': 'A:Confirmar  B:Cancelar',

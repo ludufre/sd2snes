@@ -626,6 +626,24 @@ int main(void) {
           cheat_yaml_save(file_lfn);
           cmd=0; /* stay in menu loop */
           break;
+        case SNES_CMD_LOAD_CHT_RECENT:
+          /* load cheats for a recent-list entry. MCU_PARAM low byte holds
+             the recent index; resolve the path via LAST_FILE like LOADLAST,
+             then reuse the standard cheat_yaml_load flow. */
+          cfg_get_listed_game(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          printf("Load cheats for recent: %s\n", file_lfn);
+          cheat_yaml_load(file_lfn);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_SAVE_CHT_RECENT:
+          /* save cheats for a recent-list entry. Same lookup as
+             LOAD_CHT_RECENT; the SNES side rewrites MCU_PARAM with the
+             recent index before sending this command. */
+          cfg_get_listed_game(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          printf("Save cheats for recent: %s\n", file_lfn);
+          cheat_yaml_save(file_lfn);
+          cmd=0; /* stay in menu loop */
+          break;
         case SNES_CMD_TOGGLE_CHT: {
           /* toggle the enabled flag for the cheat at the index passed
              in MCU_PARAM low two bytes (16-bit index, supports 0..511).

@@ -42,7 +42,7 @@ extern char current_filename[];
 #define SRAM_DB_ADDR                 (0xC80000L)
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 
-#define SRAM_NUM_CHEATS              (0xCFFFFEL)
+#define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
 #define SRAM_CHEAT_CODE_STRINGS_ADDR (0xD40000L) /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans D4..D7, leaving D0..D3 free for up to 512 cheat records. */
 

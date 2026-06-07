@@ -1536,7 +1536,8 @@ ffp_nonempty:
   cmp @dirptr_idx
   bcc ffp_clamped                  ; old_abs < new_last
   beq ffp_clamped
-  ldx @dirptr_idx                  ; clamp old_abs to new_last
+  lda @dirptr_idx                  ; old_abs > new_last: clamp X to new_last
+  tax                              ; (ldx has no long/@ addressing mode)
 ffp_clamped:
   lda @dirptr_addr
   lsr

@@ -327,7 +327,7 @@ mdesc_filesel_context_cheats .byt "View, enable or disable cheats from this ROM'
 text_cheat_yes  .byt "Yes ", 0
 text_cheat_no   .byt "No  ", 0
 text_cheat_none_title .byt "Cheats", 0
-text_cheat_none_msg   .byt "  No cheats found for this ROM  ", 0
+text_cheat_none_msg   .byt "No cheats found for this ROM", 0
 
 ; delete-confirmation dialog (see confirm_delete in filesel.a65)
 text_confirm_delete_file .byt "Delete this file?", 0

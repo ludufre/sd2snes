@@ -129,7 +129,7 @@ TRANSLATIONS = {
     'text_cheat_yes': 'Sí',
     'text_cheat_no': 'No',
     'text_cheat_none_title': 'Trucos',
-    'text_cheat_none_desc': ' Ningún truco definido para esta ROM ',
+    'text_cheat_none_msg': 'No hay trucos para esta ROM',
     'text_confirm_delete_file': '¿Borrar este archivo?',
     'text_confirm_delete_srm': '¿Borrar el archivo de guardado?',
     'text_confirm_hint': 'A:Confirmar  B:Cancelar',

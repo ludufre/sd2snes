@@ -65,6 +65,8 @@
 #define SNES_CMD_DELETE_SRM_FAV      (0x27) /* MCU_PARAM low byte: favorite index. Resolve path via FAVORITES_FILE, delete only the .srm (ROM stays in favorites). */
 #define SNES_CMD_DELETE_FILE_RECENT  (0x28) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete the ROM, then drop the list entry. */
 #define SNES_CMD_DELETE_SRM_RECENT   (0x29) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete only the .srm (ROM stays in recents). */
+#define SNES_CMD_LOAD_CHT_RECENT     (0x2a) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_load. */
+#define SNES_CMD_SAVE_CHT_RECENT     (0x2b) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_save. */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)
