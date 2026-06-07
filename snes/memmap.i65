@@ -60,6 +60,17 @@
 #define COVER_C9_META_H             $C93A02    /* h_spr */
 #define COVER_C9_META_NPAL          $C93A03    /* n_palettes */
 #define COVER_STATUS_OK             $01
+/* ---- small (half-size) cover: WRAM scratch + downscale LUT ----
+   When ShowCovers == 2 the menu resamples the staged 16x16-block tiles down to
+   one 8x8 tile per block (nearest-neighbour, even pixels) into COVER_SMALL_TILEBUF,
+   then draws the cover as 8x8 OBJ sprites (COVER_OBSEL already selects the 8/16
+   size pair). COVER_PACKTBL is a 256-byte LUT that gathers a byte's 4 even bits
+   into the low nibble; it is built once at boot. Both live in free WRAM after the
+   cover OAM shadow ($7EC000+256) and below WRAM_ROUTINE ($7EF000). */
+#define COVER_SMALL_TILEBUF         $7EC100    /* resampled 8x8 tiles (dense, <= w*h*32 = 2048 B) */
+#define COVER_PACKTBL               $7ED100    /* 256-byte even-bit-pack LUT (built at init) */
+#define COVER_PACKTBL_W             $D100      /* low 16 of COVER_PACKTBL for abs,Y reads (DB=$7E) */
+#define COVER_SMALL_OBJ_STEP        8          /* small sprite pitch in px (8x8 OBJ) */
 
 #define MCU_CMD                     $002A00
 #define SNES_CMD                    $002A02

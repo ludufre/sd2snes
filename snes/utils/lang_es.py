@@ -149,6 +149,8 @@ TRANSLATIONS = {
     'text_on_p2': 'Sí: P2',
     'text_on': 'Sí',
     'text_off': 'No',
+    'text_cover_large': 'Grande',
+    'text_cover_small': 'Pequeño',
     'text_nav_folder': 'Carpeta',
     'text_nav_rom': 'ROM',
     'text_enabled': 'Activo',

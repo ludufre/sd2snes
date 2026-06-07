@@ -4,6 +4,7 @@ version         .byt "                            v0.1",0
 zero            .word  0
 oamhide         .word  $f0f0   ; OAM fill: Y=$f0 (off-screen) hides every sprite
 oamlarge        .word  $aaaa   ; OAM hi-table fill: size=1 (16x16) + X bit8=0 for 4 sprites
+oamsmall        .word  $0000   ; OAM hi-table fill: size=0 (8x8) + X bit8=0 (small cover)
 bg2tile         .byt $20
 hdma_pal_src
   .byt 44
@@ -352,6 +353,8 @@ text_on_p1      .byt "On: P1", 0
 text_on_p2      .byt "On: P2", 0
 text_on         .byt "On", 0
 text_off        .byt "Off", 0
+text_cover_large .byt "Large", 0
+text_cover_small .byt "Small", 0
 text_nav_folder .byt "Folder", 0
 text_nav_rom    .byt "ROM", 0
 text_enabled    .byt "Enabled", 0

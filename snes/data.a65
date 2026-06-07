@@ -17,6 +17,7 @@ dirlog_idx      .byt 0,0,0  ; long ptr
 direntry_fits_idx .byt 0,0
 longptr         .byt 0,0,0  ; general purpose long ptr
 cover_ptr       .byt 0,0,0  ; cover: direct-page long ptr for reading bank C9
+cover_dst       .byt 0,0,0  ; cover: direct-page long ptr for writing the resampled 8x8 tiles (WRAM)
 ;----------parameters for text output----------
 print_x         .word 0     ; x coordinate
 print_y         .word 0     ; y coordinate
@@ -307,6 +308,9 @@ cover_tilerow          .byt 0    ; OAM build scratch: base tile of the row (sy*3
 cover_scr              .byt 0    ; OAM build scratch
 cover_sx               .byt 0    ; OAM build scratch: sprite column
 cover_sy               .byt 0    ; OAM build scratch: sprite row
+cover_src_base         .word 0   ; small resample: C9 byte offset of the current block's top-left tile
+cover_loff             .word 0   ; small resample: C9 byte offset of the current source (left) byte
+cover_tmp              .byt 0    ; small resample: packed left nibble scratch
 listcover_active       .byt 0    ; 1 while a Recent/Favorite list is open (enables the per-frame hook)
 listcover_which        .byt 0    ; 0 = recent (CMD_LOAD_COVER_RECENT), 1 = favorite (CMD_LOAD_COVER_FAVORITE)
 listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (debounce)

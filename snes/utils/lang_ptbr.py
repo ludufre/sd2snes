@@ -147,6 +147,8 @@ TRANSLATIONS = {
     'text_on_p2': 'Lig: P2',
     'text_on': 'Lig',
     'text_off': 'Des',
+    'text_cover_large': 'Grande',
+    'text_cover_small': 'Pequeno',
     'text_nav_folder': 'Pasta',
     'text_nav_rom': 'ROM',
     'text_enabled': 'Ativado',

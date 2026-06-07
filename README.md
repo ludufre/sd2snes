@@ -97,7 +97,7 @@ The easiest way to create `.cov` files is with the cover generator app:
 
 Use **sd2snes-covers v1.1.0 or newer**. If you made covers with an older version, regenerate them with the newer app.
 
-You can turn covers on or off in the menu with **Mostrar capas** / **Show covers**.
+In the menu, **Mostrar capas** / **Show covers** has three settings: **Large** (the full box art), **Small** (half size — handy when a cover overlaps the file list) and **Off**. *Large* is the default, so existing setups are unaffected.
 
 ## IPS/BPS Patches
 

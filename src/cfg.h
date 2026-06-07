@@ -101,7 +101,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  show_tribute;            /* reserved: keeps cfg_t aligned with the menu's CFG offset map (CFG_SHOW_TRIBUTE @ $B3) */
   uint8_t  enable_autosave;         /* enable automatic saving when SRAM contents change */
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
-  uint8_t  show_covers;             /* show per-ROM cover preview (Game.cov) in the file browser */
+  uint8_t  show_covers;             /* per-ROM cover preview (Game.cov) in the browser (0: off, 1: large, 2: small) */
   uint8_t  language;                /* menu/firmware language (0: English, 1: Portugues BR, 2: Spanish) */
   uint8_t  patch_verify_integrity;  /* CFG @ $B8: re-read+CRC the patched ROM after IPS/BPS (slow) */
   uint8_t  enable_menu_music;       /* play background menu music (/sd2snes/menu.spc) */

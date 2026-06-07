@@ -97,7 +97,7 @@ A forma mais fácil de criar arquivos `.cov` é usando o aplicativo gerador de c
 
 Use o **sd2snes-covers v1.1.0 ou mais novo**. Se você criou capas com uma versão mais antiga, gere as capas novamente com o app mais novo.
 
-Você pode ligar ou desligar as capas no menu em **Mostrar capas** / **Show covers**.
+No menu, **Mostrar capas** tem três opções: **Grande** (capa inteira), **Pequeno** (metade do tamanho — útil quando a capa cobre a lista de arquivos) e **Desligado**. O padrão é **Grande**, então quem já usava as capas não precisa mudar nada.
 
 ## Patches IPS/BPS
 

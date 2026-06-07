@@ -97,7 +97,7 @@ La forma más fácil de crear archivos `.cov` es usando la aplicación generador
 
 Usa **sd2snes-covers v1.1.0 o más reciente**. Si creaste carátulas con una versión anterior, vuelve a generarlas con la aplicación más nueva.
 
-Puedes activar o desactivar las carátulas desde el menú con **Mostrar carátulas**.
+En el menú, **Mostrar carátulas** tiene tres opciones: **Grande** (la carátula completa), **Pequeño** (la mitad del tamaño — útil cuando la carátula tapa la lista de archivos) y **No** (desactivadas). El valor por defecto es **Grande**, así que las configuraciones existentes no cambian.
 
 ## Parches IPS/BPS
 
