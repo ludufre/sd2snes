@@ -21,6 +21,7 @@ utils/rle
 utils/derle
 *.bit
 *.bi3
+*.stm
 *.i
 *.s
 *.txt
