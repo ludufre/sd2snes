@@ -1,4 +1,4 @@
-<h1> sd2snes ❤️ covers</h1>
+<h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Showcase">
 <img src="gfx/langs.gif" width="384" alt="The main menu shown in English, Brazilian Portuguese and Spanish">
@@ -34,6 +34,8 @@ You need:
 - **Game covers:** show each game's box art while browsing your ROM list.
 - **Menu music:** play an `.spc` track in the background while browsing.
 - **IPS/BPS patches:** choose translation, hack or fix patches before a game starts, without changing the ROM file on the SD card.
+- **Cheat manager:** the original sd2snes already applies cheats — this fork adds a menu to **enable and disable** a game's codes on the console (from `/sd2snes/cheats/<rom>.yml`), without editing the YAML on a PC. Ready-made cheats can be exported from [gamehacking.org](https://gamehacking.org/system/snes) as "FXPak Pro 1.7 (.yml)".
+- **Delete file and savegame:** delete the selected file or just its save (`.srm`) straight from the menu, without removing the SD card.
 - **Reset to menu improvements:** return to the same folder or even the same ROM after a short reset.
 - **Custom themes:** edit the logo, font, palette, background and selector colors with the theme editor made for this fork.
 
@@ -141,6 +143,45 @@ You can turn menu music on or off in **Configuration → Browser Settings → Me
 
 > [!TIP]
 > Some soundtracks are downloaded as `.rsn` files. An `.rsn` is usually an archive that contains several `.spc` files. Extract it and choose one `.spc` from inside.
+
+## Cheats
+
+The original sd2snes firmware already **applies** cheats per game. What this fork adds is a **cheat manager in the menu**, so you can enable and disable individual codes on the console — without editing the YAML on a PC.
+
+Cheats are read from a **YAML** file (`.yml`) in the `/sd2snes/cheats/` folder, named after the ROM (its extension replaced by `.yml`):
+
+```text
+/sd2snes/A/Aladdin (USA).sfc        ← the ROM (in any folder)
+/sd2snes/cheats/Aladdin (USA).yml   ← its cheats
+```
+
+To manage them, highlight a ROM in the file browser, press **Y** for the context menu and choose **Cheats**. The list shows every code in the file:
+
+- **A** enables or disables the highlighted code.
+- **B** saves your changes and exits.
+
+Enabled codes are applied the next time you start that game.
+
+To get ready-made cheat files:
+
+1. Open [gamehacking.org/system/snes](https://gamehacking.org/system/snes) and find your game.
+2. Export its codes using the **FXPak Pro 1.7 (.yml)** format.
+3. Rename the file to match the ROM and drop it in `/sd2snes/cheats/` on the SD card.
+
+> [!NOTE]
+> If a ROM has no `.yml` in `/sd2snes/cheats/` (or the file has no codes), the menu shows a "no cheats for this ROM" message.
+
+## Delete File and Savegame
+
+You can delete files and saves straight from the menu, without removing the SD card or using a computer.
+
+Highlight a file in the browser and press **Y** for the context menu:
+
+- **Delete:** removes the selected file.
+- **Delete save:** removes only the `.srm` savegame for that ROM, keeping the ROM itself.
+
+> [!WARNING]
+> Deletion is permanent — there is no recycle bin on the SD card. Double-check the selected file before confirming.
 
 ## Reset to Menu
 

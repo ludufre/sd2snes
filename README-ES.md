@@ -1,4 +1,4 @@
-<h1> sd2snes ❤️ carátulas</h1>
+<h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Demostración">
 <img src="gfx/langs.gif" width="384" alt="El menú principal en Inglés, Portugués de Brasil y Español">
@@ -34,6 +34,8 @@ Necesitas:
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
 - **Música en el menú:** reproduce una pista `.spc` de fondo mientras navegas.
 - **Parches IPS/BPS:** elige parches de traducción, hacks o correcciones antes de iniciar un juego, sin modificar la ROM en la tarjeta SD.
+- **Gestor de cheats:** el sd2snes original ya aplica trucos — este fork añade un menú para **activar y desactivar** los códigos de un juego en la consola (desde `/sd2snes/cheats/<rom>.yml`), sin editar el YAML en el PC. Puedes descargar cheats listos en [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)".
+- **Borrar archivo y partida:** borra el archivo seleccionado o solo su partida (`.srm`) directamente desde el menú, sin sacar la tarjeta SD.
 - **Mejoras en el regreso al menú:** vuelve a la misma carpeta o incluso a la misma ROM después de un reset corto.
 - **Temas personalizados:** edita el logo, la fuente, la paleta, el fondo y los colores del selector con el editor de temas hecho para este fork.
 
@@ -141,6 +143,45 @@ Puedes activar o desactivar la música en **Configuración → Opciones del Nave
 
 > [!TIP]
 > Algunas bandas sonoras vienen como archivos `.rsn`. Un `.rsn` suele ser un archivo comprimido con varios `.spc` dentro. Extrae el `.rsn` y elige uno de los archivos `.spc`.
+
+## Trucos (cheats)
+
+El firmware original de sd2snes ya **aplica** trucos por juego. Lo que este fork añade es un **gestor de trucos en el menú**, para activar y desactivar cada código en la propia consola — sin editar el YAML en el PC.
+
+Los trucos se leen de un archivo **YAML** (`.yml`) en la carpeta `/sd2snes/cheats/`, con el nombre de la ROM (su extensión reemplazada por `.yml`):
+
+```text
+/sd2snes/A/Aladdin (USA).sfc        ← la ROM (en cualquier carpeta)
+/sd2snes/cheats/Aladdin (USA).yml   ← sus trucos
+```
+
+Para gestionarlos, resalta una ROM en el navegador de archivos, pulsa **Y** para abrir el menú contextual y elige **Trucos**. La lista muestra cada código del archivo:
+
+- **A** activa o desactiva el código resaltado.
+- **B** guarda los cambios y sale.
+
+Los códigos activados se aplican la próxima vez que inicies ese juego.
+
+Para conseguir archivos de trucos listos:
+
+1. Abre [gamehacking.org/system/snes](https://gamehacking.org/system/snes) y busca tu juego.
+2. Exporta sus códigos usando el formato **FXPak Pro 1.7 (.yml)**.
+3. Renombra el archivo para que coincida con la ROM y colócalo en `/sd2snes/cheats/` en la tarjeta SD.
+
+> [!NOTE]
+> Si una ROM no tiene un `.yml` en `/sd2snes/cheats/` (o el archivo no tiene códigos), el menú muestra el mensaje "no hay trucos para esta ROM".
+
+## Borrar archivo y partida guardada
+
+Puedes borrar archivos y partidas directamente desde el menú, sin sacar la tarjeta SD ni usar una computadora.
+
+Resalta un archivo en el navegador y pulsa **Y** para abrir el menú contextual:
+
+- **Borrar:** elimina el archivo seleccionado.
+- **Borrar partida:** elimina solo la partida `.srm` de esa ROM, conservando la ROM.
+
+> [!WARNING]
+> El borrado es permanente — no hay papelera en la tarjeta SD. Revisa el archivo seleccionado antes de confirmar.
 
 ## Reset al menú
 
