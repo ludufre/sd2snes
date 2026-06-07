@@ -273,8 +273,16 @@ cm_fits_idx      .byt 0     ; cm_fits[] write index used during a redraw pass
 ;-- r16: source of the current cheat menu session, so the LOAD/SAVE
 ;-- wrappers know whether to address the file via FILESEL_CWD (filesel
 ;-- context) or via favorite-index (favorites context).
-cm_source        .byt 0     ; $00 = filesel, $01 = favorite
+cm_source        .byt 0     ; $00 = filesel, $01 = favorite, $02 = recent
 cm_fav_idx       .byt 0     ; favorite list index for cm_source=$01
+cm_rec_idx       .byt 0     ; recent list index for cm_source=$02
+
+;-- delete-confirmation dialog (see confirm_delete in filesel.a65)
+confirm_sel         .byt 0   ; current option: $00 = No (default), $01 = Yes
+confirm_prompt_addr .word 0  ; prompt-line string pointer (resolved by hiprint)
+confirm_prompt_bank .byt 0
+confirm_name_addr   .word 0  ; file-name string pointer ($00 bank -> blank line)
+confirm_name_bank   .byt 0
 
 ;----------cover preview state (8bpp BG1 cover in the header band)
 cover_dirty            .byt 0    ; 1 if selection changed and a (re)load is needed

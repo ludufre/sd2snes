@@ -897,6 +897,32 @@ menu_enttab_filesel_context_file:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_selected_file-1
+ .byt  ^delete_selected_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_srm
+ .byt  ^text_filesel_context_delete_srm
+ .word !delete_selected_srm-1
+ .byt  ^delete_selected_srm-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_srm
+ .byt  ^mdesc_filesel_context_delete_srm
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  0
 
 menu_enttab_recent_context:
@@ -947,8 +973,8 @@ menu_enttab_recent_context:
  .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_context_delete_file
  .byt  ^text_filesel_context_delete_file
- .word !delete_selected_file-1
- .byt  ^delete_selected_file-1
+ .word !delete_recent_file-1
+ .byt  ^delete_recent_file-1
  .byt  0
  .byt  0,0,0
  .word !mdesc_filesel_context_delete_file
@@ -960,8 +986,8 @@ menu_enttab_recent_context:
  .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_context_delete_srm
  .byt  ^text_filesel_context_delete_srm
- .word !delete_selected_srm-1
- .byt  ^delete_selected_srm-1
+ .word !delete_recent_srm-1
+ .byt  ^delete_recent_srm-1
  .byt  0
  .byt  0,0,0
  .word !mdesc_filesel_context_delete_srm
@@ -1046,6 +1072,32 @@ menu_enttab_filesel_favorites_context:
  .byt  0,0,0
  .word !mdesc_filesel_set_as_autoboot
  .byt  ^mdesc_filesel_set_as_autoboot
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_favorite_file-1
+ .byt  ^delete_favorite_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_srm
+ .byt  ^text_filesel_context_delete_srm
+ .word !delete_favorite_srm-1
+ .byt  ^delete_favorite_srm-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_srm
+ .byt  ^mdesc_filesel_context_delete_srm
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0

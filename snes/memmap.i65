@@ -160,6 +160,10 @@
 #define CMD_TOGGLE_CHT              $23 /* MCU_PARAM low byte: cheat index. MCU XORs the flag bit in PSRAM record. */
 #define CMD_LOAD_CHT_FAV            $24 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
 #define CMD_SAVE_CHT_FAV            $25 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
+#define CMD_DELETE_FILE_FAV         $26 /* MCU_PARAM low byte: favorite index. Delete the ROM, then drop the favorites list entry. */
+#define CMD_DELETE_SRM_FAV          $27 /* MCU_PARAM low byte: favorite index. Delete only the .srm (ROM stays in favorites). */
+#define CMD_DELETE_FILE_RECENT      $28 /* MCU_PARAM low byte: recent index. Delete the ROM, then drop the recents list entry. */
+#define CMD_DELETE_SRM_RECENT       $29 /* MCU_PARAM low byte: recent index. Delete only the .srm (ROM stays in recents). */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */

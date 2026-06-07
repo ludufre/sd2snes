@@ -329,6 +329,15 @@ text_cheat_no   .byt "No  ", 0
 text_cheat_none_title .byt "Cheats", 0
 text_cheat_none_msg   .byt "  No cheats found for this ROM  ", 0
 
+; delete-confirmation dialog (see confirm_delete in filesel.a65)
+text_confirm_delete_file .byt "Delete this file?", 0
+text_confirm_delete_srm  .byt "Delete the save file?", 0
+text_confirm_hint        .byt "A:Confirm  B:Cancel", 0
+text_confirm_no_sel      .byt "[No]", 0
+text_confirm_no_unsel    .byt " No ", 0
+text_confirm_yes_sel     .byt "[Yes]", 0
+text_confirm_yes_unsel   .byt " Yes ", 0
+
 text_statusbar_play .byt "A:Play B:Back X:Menu", 0
 text_statusbar_keys .byt "A:Select B:Back X:Menu Y:Context", 0
 text_statusbar_spc  .byt "B:Back", 0

@@ -962,12 +962,36 @@ ctx_is_spc
   bra open_context_menu_cont
 
 delete_selected_file:
-; have MCU delete the selected file
-; the file path should already have been saved to MCU_PARAM before calling
-; this routine
+; Browser context.  MCU_PARAM already holds the FILESEL_CWD pointer +
+; the selected direntry (set by ctx_is_file / ctx_is_spc), which is what
+; get_selected_name() reads on the MCU.  Ask for confirmation first; on
+; ACK, refresh the listing but keep the cursor near the deleted file
+; instead of jumping back to the top.
   php
   phb
   sep #$20 : .as
+  rep #$10 : .xl
+; confirm name = direntry file name: addr (MCU_PARAM+4)+6, bank (MCU_PARAM+6)+$C0
+  rep #$20 : .al
+  lda @MCU_PARAM+4
+  clc
+  adc #$0006
+  sta confirm_name_addr
+  sep #$20 : .as
+  lda @MCU_PARAM+6
+  clc
+  adc #$c0
+  sta confirm_name_bank
+  lda #^text_confirm_delete_file
+  sta confirm_prompt_bank
+  ldx #!text_confirm_delete_file
+  stx confirm_prompt_addr
+  jsr confirm_delete
+  bcs delete_file_go
+  plb
+  plp
+  rtl
+delete_file_go:
   lda #$01
   jsr hide_cursor
   jsr draw_loading_window
@@ -991,14 +1015,11 @@ delete_file_ack:
   pla               ; restore ACK/NACK value
   cmp #$55
   bne delete_file_done  ; NACK: skip refresh
-; ACK: refresh the directory listing (file is gone)
+; ACK: refresh the directory listing (file is gone), keep cursor position
   jsr filesel_request_filelist
-  rep #$20 : .al
-  lda #$0000
-  sta @dirptr_addr
-  sta @dirstart_addr
+  jsr filesel_fix_pos_after_delete
   sep #$20 : .as
-  sta @filesel_sel
+  lda #$00
   sta @direntry_xscroll
   sta @direntry_xscroll_state
   lda #$01
@@ -1009,12 +1030,33 @@ delete_file_done:
   rtl
 
 delete_selected_srm:
-; have MCU delete the SRM save file for the selected ROM
-; the file path should already have been saved to MCU_PARAM before calling
-; this routine
+; Browser context.  MCU_PARAM holds the selected ROM path (set by
+; ctx_is_file).  Confirm, then delete only the .srm; the ROM list does
+; not change so no refresh is needed.
   php
   phb
   sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda @MCU_PARAM+4
+  clc
+  adc #$0006
+  sta confirm_name_addr
+  sep #$20 : .as
+  lda @MCU_PARAM+6
+  clc
+  adc #$c0
+  sta confirm_name_bank
+  lda #^text_confirm_delete_srm
+  sta confirm_prompt_bank
+  ldx #!text_confirm_delete_srm
+  stx confirm_prompt_addr
+  jsr confirm_delete
+  bcs delete_srm_go
+  plb
+  plp
+  rtl
+delete_srm_go:
   lda #$01
   jsr hide_cursor
   jsr draw_loading_window
@@ -1023,13 +1065,10 @@ delete_selected_srm:
   sta @SNES_CMD
   lda #CMD_DELETE_SRM
   sta @MCU_CMD
-; wait for ACK/NACK
 - lda @SNES_CMD
   cmp #$55
-; success
   beq +
   cmp #$aa
-; failure
   beq +
   bra -
 + lda #$55
@@ -1038,6 +1077,498 @@ delete_selected_srm:
   plb
   plp
   rtl
+
+; ----------------------------------------------------------------------
+; Favorites context deletes.  MCU_PARAM low byte = favorite list index
+; (set by select_favorite_file).  The firmware resolves the path via
+; cfg_get_listed_game(FAVORITES_FILE, ...).  Deleting the ROM also drops
+; the favorites entry (firmware side), so the list is marked dirty for a
+; redraw; deleting only the save leaves the entry in place.
+; ----------------------------------------------------------------------
+delete_favorite_file:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+; confirm name = FAVORITE_GAMES + idx*256
+  rep #$20 : .al
+  lda @MCU_PARAM
+  and #$00ff
+  xba                          ; idx -> idx*256
+  clc
+  adc #!FAVORITE_GAMES
+  sta confirm_name_addr
+  sep #$20 : .as
+  lda #^FAVORITE_GAMES
+  sta confirm_name_bank
+  lda #^text_confirm_delete_file
+  sta confirm_prompt_bank
+  ldx #!text_confirm_delete_file
+  stx confirm_prompt_addr
+  jsr confirm_delete
+  bcs +
+  plb
+  plp
+  rtl
++ lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_DELETE_FILE_FAV
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  sta listsel_dirty            ; entry removed -> redraw the favorites list
+  jsr pop_window
+; The deleted ROM may still be listed in the browser's current folder
+; (the directory buffer is stale).  Re-read it now so the file vanishes
+; there too; otherwise opening the now-missing ROM hangs on "Loading...".
+  jsr filesel_request_filelist
+  jsr filesel_fix_pos_after_delete
+  sep #$20 : .as
+  lda #$01
+  sta @filesel_dirty
+  plb
+  plp
+  rtl
+
+delete_favorite_srm:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda @MCU_PARAM
+  and #$00ff
+  xba
+  clc
+  adc #!FAVORITE_GAMES
+  sta confirm_name_addr
+  sep #$20 : .as
+  lda #^FAVORITE_GAMES
+  sta confirm_name_bank
+  lda #^text_confirm_delete_srm
+  sta confirm_prompt_bank
+  ldx #!text_confirm_delete_srm
+  stx confirm_prompt_addr
+  jsr confirm_delete
+  bcs +
+  plb
+  plp
+  rtl
++ lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_DELETE_SRM_FAV
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plb
+  plp
+  rtl
+
+; ----------------------------------------------------------------------
+; Recents context deletes.  MCU_PARAM low byte = recent list index (set
+; by select_last_file).  Firmware resolves the path via
+; cfg_get_listed_game(LAST_FILE, ...).  Same dirty/no-dirty split as
+; favorites.
+; ----------------------------------------------------------------------
+delete_recent_file:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+; confirm name = LAST_GAME + idx*256
+  rep #$20 : .al
+  lda @MCU_PARAM
+  and #$00ff
+  xba
+  clc
+  adc #!LAST_GAME
+  sta confirm_name_addr
+  sep #$20 : .as
+  lda #^LAST_GAME
+  sta confirm_name_bank
+  lda #^text_confirm_delete_file
+  sta confirm_prompt_bank
+  ldx #!text_confirm_delete_file
+  stx confirm_prompt_addr
+  jsr confirm_delete
+  bcs +
+  plb
+  plp
+  rtl
++ lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_DELETE_FILE_RECENT
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  sta listsel_dirty            ; entry removed -> redraw the recents list
+  jsr pop_window
+; Same as the favorites case: drop the now-stale browser entry so the
+; deleted ROM can't be opened (and hang) from the current folder.
+  jsr filesel_request_filelist
+  jsr filesel_fix_pos_after_delete
+  sep #$20 : .as
+  lda #$01
+  sta @filesel_dirty
+  plb
+  plp
+  rtl
+
+delete_recent_srm:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda @MCU_PARAM
+  and #$00ff
+  xba
+  clc
+  adc #!LAST_GAME
+  sta confirm_name_addr
+  sep #$20 : .as
+  lda #^LAST_GAME
+  sta confirm_name_bank
+  lda #^text_confirm_delete_srm
+  sta confirm_prompt_bank
+  ldx #!text_confirm_delete_srm
+  stx confirm_prompt_addr
+  jsr confirm_delete
+  bcs +
+  plb
+  plp
+  rtl
++ lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_DELETE_SRM_RECENT
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plb
+  plp
+  rtl
+
+; ----------------------------------------------------------------------
+; confirm_delete: modal Yes/No confirmation box, default "No".
+;   in:  confirm_prompt_bank/confirm_prompt_addr = prompt line
+;        confirm_name_bank/confirm_name_addr     = file name to show
+;                                                  ($00 bank -> blank line)
+;   out: carry set   = confirmed (Yes)
+;        carry clear = cancelled (No / B)
+; Enters and exits in .as/.xl.  Draws its own window and parks the
+; hardware selection bar so nothing bleeds through the popup.
+; ----------------------------------------------------------------------
+confirm_delete:
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz confirm_sel                  ; default = No
+; park the selection bar off-screen
+  lda bar_xl
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #$ff
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+; closed-border box: 44 wide, x=10, y=11, h=7
+; rows: top | prompt | name | blank | options | hint | bottom
+  lda #10
+  sta window_x
+  lda #11
+  sta window_y
+  lda #44
+  sta window_w
+  lda #$07
+  sta window_h
+  lda #^zero
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsr push_window
+  jsr draw_window
+; prompt on window_y+1
+  lda confirm_prompt_bank
+  sta print_bank
+  ldx confirm_prompt_addr
+  stx print_src
+  lda window_y
+  inc
+  sta print_y
+  jsr confirm_center_print
+; file name on window_y+2 (skip if bank 0)
+  lda confirm_name_bank
+  beq confirm_no_name
+  sta print_bank
+  ldx confirm_name_addr
+  stx print_src
+  lda window_y
+  clc
+  adc #$02
+  sta print_y
+  jsr confirm_center_print
+confirm_no_name:
+; hint on window_y+5
+  lda #^text_confirm_hint
+  sta print_bank
+  ldx #!text_confirm_hint
+  stx print_src
+  lda window_y
+  clc
+  adc #$05
+  sta print_y
+  jsr confirm_center_print
+; options on window_y+4
+  jsr confirm_redraw_opts
+  jsr enable_screen_update
+confirm_loop:
+  lda isr_done
+  beq confirm_loop
+  stz isr_done
+  jsr printtime
+  jsr read_pad
+  lda pad_b
+  bne confirm_cancel
+  lda pad_a
+  bne confirm_finish               ; A accepts the current option
+  lda pad_left
+  ora pad_right
+  ora pad_up
+  ora pad_down
+  bne confirm_toggle
+  bra confirm_loop
+confirm_toggle:
+  lda confirm_sel
+  eor #$01
+  sta confirm_sel
+  jsr confirm_redraw_opts
+  bra confirm_loop
+confirm_cancel:
+  stz confirm_sel                  ; B -> No
+confirm_finish:
+  jsr pop_window
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  lda confirm_sel
+  beq confirm_ret_no
+  sec
+  rts
+confirm_ret_no:
+  clc
+  rts
+
+; ----------------------------------------------------------------------
+; confirm_redraw_opts: (re)draw the [No]/[Yes] option line.  The selected
+; option uses the bracketed string, the other the spaced one; both states
+; are the same width so toggling overwrites cleanly.  print_y is computed
+; from window_y so it tracks the box.
+; ----------------------------------------------------------------------
+confirm_redraw_opts:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda window_y
+  clc
+  adc #$04
+  sta print_y
+; No option at col 22
+  lda confirm_sel
+  bne cro_no_unsel
+  lda #^text_confirm_no_sel
+  sta print_bank
+  ldx #!text_confirm_no_sel
+  stx print_src
+  bra cro_no_draw
+cro_no_unsel:
+  lda #^text_confirm_no_unsel
+  sta print_bank
+  ldx #!text_confirm_no_unsel
+  stx print_src
+cro_no_draw:
+  stz print_pal
+  lda #$06
+  sta print_count
+  lda #22
+  sta print_x
+  jsr hiprint
+; Yes option at col 36
+  lda confirm_sel
+  beq cro_yes_unsel
+  lda #^text_confirm_yes_sel
+  sta print_bank
+  ldx #!text_confirm_yes_sel
+  stx print_src
+  bra cro_yes_draw
+cro_yes_unsel:
+  lda #^text_confirm_yes_unsel
+  sta print_bank
+  ldx #!text_confirm_yes_unsel
+  stx print_src
+cro_yes_draw:
+  stz print_pal
+  lda #$06
+  sta print_count
+  lda #36
+  sta print_x
+  jsr hiprint
+  plp
+  rts
+
+; ----------------------------------------------------------------------
+; confirm_center_print: center print_bank/print_src (a const_lang or raw
+; pointer) on row print_y inside the current window_x/window_w box.
+; Mirrors the centering in show_empty_msg.  Enters/exits in .as/.xl.
+; ----------------------------------------------------------------------
+confirm_center_print:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda print_bank
+  ldy print_src
+  jsr resolve_yx                   ; resolves print_*; A=bank, Y=addr
+  phb
+  pha
+  plb
+  jsr strlen                       ; Y = length
+  plb
+  sep #$20 : .as
+  tya
+  sta window_tmp
+  lda window_w
+  sec
+  sbc window_tmp                   ; window_w - length
+  bcs +
+  lda #$02                         ; longer than the box -> small left margin
++ lsr                              ; /2
+  clc
+  adc window_x
+  sta print_x
+  stz print_pal
+  lda #56
+  sta print_count
+  jsr hiprint
+  plp
+  rts
+
+; ----------------------------------------------------------------------
+; filesel_fix_pos_after_delete: after a browser delete + filesel refresh,
+; keep the cursor on (roughly) the same list position instead of jumping
+; to the top.  dirstart_addr is always 0 here, so:
+;   old_abs   = dirptr_addr/4 + filesel_sel
+;   new_count = dirend_addr/4
+; Clamp old_abs to new_count-1, then recompute the page top so the cursor
+; stays visible.  dirptr_idx is reused as scratch (filesel_updates rebuilds
+; it from filesel_sel next frame).
+; ----------------------------------------------------------------------
+filesel_fix_pos_after_delete:
+  php
+  rep #$30 : .al : .xl
+; X = old_abs
+  lda @dirptr_addr
+  lsr
+  lsr
+  clc
+  adc @filesel_sel
+  tax
+; new_count = dirend_addr/4
+  lda @dirend_addr
+  lsr
+  lsr
+  bne ffp_nonempty
+; empty directory -> top
+  lda #$0000
+  sta @dirptr_addr
+  sta @filesel_sel
+  plp
+  rts
+ffp_nonempty:
+  dec                              ; A = new_last = new_count-1
+  sta @dirptr_idx
+  txa
+  cmp @dirptr_idx
+  bcc ffp_clamped                  ; old_abs < new_last
+  beq ffp_clamped
+  ldx @dirptr_idx                  ; clamp old_abs to new_last
+ffp_clamped:
+  lda @dirptr_addr
+  lsr
+  lsr
+  sta @dirptr_idx                  ; page_top
+  txa
+  cmp @dirptr_idx
+  bcc ffp_recompute                ; cursor above page top
+  sec
+  sbc @dirptr_idx                  ; old_abs - page_top
+  cmp @listdisp
+  bcc ffp_keep                     ; still on screen -> keep page top
+ffp_recompute:
+  txa
+  sec
+  sbc @listdisp
+  inc                              ; page_top = old_abs - (listdisp-1)
+  bpl ffp_topok
+  lda #$0000
+ffp_topok:
+  sta @dirptr_idx
+ffp_keep:
+  lda @dirptr_idx
+  asl
+  asl
+  sta @dirptr_addr                 ; page_top*4
+  txa
+  sec
+  sbc @dirptr_idx
+  sta @filesel_sel                 ; old_abs - page_top
+  plp
+  rts
 
 setup_224:
   php
@@ -1320,6 +1851,9 @@ select_last_file_play:
   jsr game_handshake
   bra select_favorite_file_done
 select_last_file_context_menu:
+  jsr cover_menu_off         ; hide the floating box-art cover so it doesn't
+                             ; float over the context / cheat windows (it
+                             ; reloads when we return to the recents list)
   jsr filesel_recent_contextmenu
   lda listsel_dirty
   bne +
@@ -1440,6 +1974,9 @@ select_favorite_file_play
   jsr game_handshake
   bra select_favorite_file_done
 select_favorite_file_context_menu
+  jsr cover_menu_off         ; hide the floating box-art cover so it doesn't
+                             ; float over the context / cheat windows (it
+                             ; reloads when we return to the favorites list)
   jsr filesel_favorites_contextmenu
   lda listsel_dirty          ; need redraw?
   bne +

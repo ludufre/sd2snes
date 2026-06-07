@@ -507,6 +507,65 @@ int main(void) {
           cmd=0;
           break;
         }
+        case SNES_CMD_DELETE_FILE_FAV: {
+          /* delete the ROM behind a favorites entry (index in MCU_PARAM),
+             then drop the now-dangling list entry so it disappears from
+             the favorites window the same way REMOVE_FAVORITE_ROM does. */
+          uint8_t idx = snes_get_mcu_param() & 0xff;
+          cfg_get_listed_game(FAVORITES_FILE, file_lfn, idx);
+          printf("Delete favorite file: %s\n", file_lfn);
+          if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cfg_remove_listed_game(FAVORITES_FILE, idx);
+          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
+          status_load_to_menu();
+          cmd=0;
+          break;
+        }
+        case SNES_CMD_DELETE_SRM_FAV: {
+          /* delete only the .srm for a favorites entry; the ROM (and the
+             favorites entry itself) stay in place. */
+          uint8_t srmfile[256] = SAVE_BASEDIR;
+          cfg_get_listed_game(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          printf("Delete SRM for favorite: %s\n", file_lfn);
+          append_file_basename((char*)srmfile, (char*)file_lfn, ".srm", sizeof(srmfile));
+          printf("SRM path: %s\n", srmfile);
+          if(f_unlink((TCHAR*)srmfile) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cmd=0;
+          break;
+        }
+        case SNES_CMD_DELETE_FILE_RECENT: {
+          /* delete the ROM behind a recents entry (index in MCU_PARAM),
+             then drop the list entry like REMOVE_RECENT_ROM. */
+          uint8_t idx = snes_get_mcu_param() & 0xff;
+          cfg_get_listed_game(LAST_FILE, file_lfn, idx);
+          printf("Delete recent file: %s\n", file_lfn);
+          if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cfg_remove_listed_game(LAST_FILE, idx);
+          STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
+          status_load_to_menu();
+          cmd=0;
+          break;
+        }
+        case SNES_CMD_DELETE_SRM_RECENT: {
+          /* delete only the .srm for a recents entry; the ROM (and the
+             recents entry itself) stay in place. */
+          uint8_t srmfile[256] = SAVE_BASEDIR;
+          cfg_get_listed_game(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          printf("Delete SRM for recent: %s\n", file_lfn);
+          append_file_basename((char*)srmfile, (char*)file_lfn, ".srm", sizeof(srmfile));
+          printf("SRM path: %s\n", srmfile);
+          if(f_unlink((TCHAR*)srmfile) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cmd=0;
+          break;
+        }
         case SNES_CMD_LOAD_COVER:
           /* MCU_PARAM was filled by the menu (cover_fill_param_for_current_sel)
              to look exactly like LOADROM's params, so get_selected_name works.

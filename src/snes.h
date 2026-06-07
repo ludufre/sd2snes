@@ -61,6 +61,10 @@
 #define SNES_CMD_TOGGLE_CHT          (0x23) /* MCU_PARAM low byte: cheat index. XORs flag bit in PSRAM record. */
 #define SNES_CMD_LOAD_CHT_FAV        (0x24) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
 #define SNES_CMD_SAVE_CHT_FAV        (0x25) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
+#define SNES_CMD_DELETE_FILE_FAV     (0x26) /* MCU_PARAM low byte: favorite index. Resolve path via FAVORITES_FILE, delete the ROM, then drop the list entry. */
+#define SNES_CMD_DELETE_SRM_FAV      (0x27) /* MCU_PARAM low byte: favorite index. Resolve path via FAVORITES_FILE, delete only the .srm (ROM stays in favorites). */
+#define SNES_CMD_DELETE_FILE_RECENT  (0x28) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete the ROM, then drop the list entry. */
+#define SNES_CMD_DELETE_SRM_RECENT   (0x29) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete only the .srm (ROM stays in recents). */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)
