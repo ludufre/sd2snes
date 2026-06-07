@@ -335,6 +335,20 @@ mdesc_recent_context_remove_from_recent .byt "Remove selected file from the rece
 text_filesel_set_as_autoboot .byt "Set as autoboot", 0
 mdesc_filesel_set_as_autoboot .byt "Boot this ROM automatically on next power-on (hold START during powerup/reset to cancel)", 0
 
+text_filesel_context_delete_file .byt "Delete", 0
+mdesc_filesel_context_delete_file .byt "Delete the selected file", 0
+
+text_filesel_context_delete_srm .byt "Delete save file", 0
+mdesc_filesel_context_delete_srm .byt "Delete the SRM save file for this ROM", 0
+
+text_filesel_context_cheats .byt "Cheats", 0
+mdesc_filesel_context_cheats .byt "View, enable or disable cheats from this ROM's YAML file", 0
+
+text_cheat_yes  .byt "Yes ", 0
+text_cheat_no   .byt "No  ", 0
+text_cheat_none_title .byt "Cheats", 0
+text_cheat_none_msg   .byt "  No cheats found for this ROM  ", 0
+
 text_statusbar_play .byt "A:Play B:Back X:Menu", 0
 text_statusbar_keys .byt "A:Select B:Back X:Menu Y:Context", 0
 text_statusbar_spc  .byt "B:Back", 0
@@ -444,17 +458,17 @@ text_ips_nopatch .byt "[No patch]", 0
 cheat_win_x     .byt 6
 cheat_win_y     .byt 11
 cheat_win_w     .byt 52
-cheat_win_h     .byt 15
+cheat_win_h     .byt 16
 
-cheat_tab_head  .byt "Name                         # of codes  Enabled", 0
-cheat_tab_line  .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
-                .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
-                .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,0
-
-cheat_detail_head .byt "PAR       GG        Address Value", 0
-cheat_detail_line .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
-                  .byt 24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24
-                  .byt 24,0
+cheat_tab_head  .byt "Description                              Enabled", 0
+; Hint line drawn over the bottom border row.
+; Tile $19 (decimal 25) = window_sh (south horizontal bar), drawn in
+; palette 3 so it reads as one continuous frame with the corner tiles.
+; The text in the middle stays in palette 0 (white). cheat_tab_hint_bars
+; is sized for the longer (left) side; the draw routine prints just 7
+; of these for the right side.
+cheat_tab_hint_bars .byt 25,25,25,25,25,25,25,25,0
+cheat_tab_hint_text .byt " A:Enable/Disable   B:Save & Exit ", 0
 
 text_spcid      .byt "SNES-SPC700"
 text_easter_egg  .byt "Traduzido por Luan Freitas (@ludufre)", 0

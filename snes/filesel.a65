@@ -941,7 +941,103 @@ ctx_is_parent
 ctx_is_dir
   bra open_context_menu_cont
 ctx_is_spc
+; set up MCU_PARAM with the SPC file path (same layout as ctx_is_file)
+  dey
+  rep #$20 : .al
+  lda [dirptr_addr], y
+  and #$00ff
+  sta @MCU_PARAM+6
+  dey
+  dey
+  lda [dirptr_addr], y
+  sta @MCU_PARAM+4
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+  jsr filesel_contextmenu_spc
   bra open_context_menu_cont
+
+delete_selected_file:
+; have MCU delete the selected file
+; the file path should already have been saved to MCU_PARAM before calling
+; this routine
+  php
+  phb
+  sep #$20 : .as
+  lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_DELETE_FILE
+  sta @MCU_CMD
+; wait for ACK/NACK
+- lda @SNES_CMD
+  cmp #$55
+  beq delete_file_ack
+  cmp #$aa
+  beq delete_file_ack
+  bra -
+delete_file_ack:
+  pha               ; save ACK/NACK value
+  lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  pla               ; restore ACK/NACK value
+  cmp #$55
+  bne delete_file_done  ; NACK: skip refresh
+; ACK: refresh the directory listing (file is gone)
+  jsr filesel_request_filelist
+  rep #$20 : .al
+  lda #$0000
+  sta @dirptr_addr
+  sta @dirstart_addr
+  sep #$20 : .as
+  sta @filesel_sel
+  sta @direntry_xscroll
+  sta @direntry_xscroll_state
+  lda #$01
+  sta @filesel_dirty
+delete_file_done:
+  plb
+  plp
+  rtl
+
+delete_selected_srm:
+; have MCU delete the SRM save file for the selected ROM
+; the file path should already have been saved to MCU_PARAM before calling
+; this routine
+  php
+  phb
+  sep #$20 : .as
+  lda #$01
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_DELETE_SRM
+  sta @MCU_CMD
+; wait for ACK/NACK
+- lda @SNES_CMD
+  cmp #$55
+; success
+  beq +
+  cmp #$aa
+; failure
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plb
+  plp
+  rtl
 
 setup_224:
   php

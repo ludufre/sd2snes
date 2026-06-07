@@ -256,6 +256,26 @@ fade_speed      .byt 0
 fade_count      .byt 0
 idle_count      .word 0
 
+;-- cheat menu (see snes/cheatmenu.a65)
+cm_total        .word 0     ; total cheat count (16-bit, capped at 512 in r15)
+cm_visible      .word 0     ; rows currently drawn (1..CHEATS_PER_SCREEN). High byte always 0.
+cm_top          .word 0     ; index of first visible record. 16-bit, supports 0..511.
+cm_sel          .word 0     ; cursor offset within visible rows (0..cm_visible-1). High byte always 0.
+cm_tmp          .word 0     ; row counter for redraw. High byte always 0.
+cm_record_offs  .word 0     ; 16-bit offset within base bank
+cm_record_bank  .byt 0      ; bank byte for current record
+;-- horizontal description scroll, mirrors filesel direntry_xscroll
+cm_xscroll       .byt 0     ; current scroll offset of the SELECTED row (0..N)
+cm_xscroll_state .byt 0     ; $00 = idle, $01 = forward (right), $FF = backward
+cm_xscroll_wait  .byt 0     ; frame countdown before next scroll step
+cm_fits          .byt 0,0,0,0,0,0,0,0,0,0 ; per-row print_over flag from last description draw
+cm_fits_idx      .byt 0     ; cm_fits[] write index used during a redraw pass
+;-- r16: source of the current cheat menu session, so the LOAD/SAVE
+;-- wrappers know whether to address the file via FILESEL_CWD (filesel
+;-- context) or via favorite-index (favorites context).
+cm_source        .byt 0     ; $00 = filesel, $01 = favorite
+cm_fav_idx       .byt 0     ; favorite list index for cm_source=$01
+
 ;----------cover preview state (8bpp BG1 cover in the header band)
 cover_dirty            .byt 0    ; 1 if selection changed and a (re)load is needed
 cover_debounce         .byt 0    ; frames remaining before firing the request

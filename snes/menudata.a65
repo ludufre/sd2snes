@@ -885,6 +885,19 @@ menu_enttab_filesel_context_file:
  .byt  0,0,0
 
  .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_cheats
+ .byt  ^text_filesel_context_cheats
+ .word !cheat_menu_for_selected_file-1
+ .byt  ^cheat_menu_for_selected_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_cheats
+ .byt  ^mdesc_filesel_context_cheats
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_set_as_autoboot
  .byt  ^text_filesel_set_as_autoboot
  .word !set_selected_as_autoboot_rom-1
@@ -944,6 +957,65 @@ menu_enttab_recent_context:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_selected_file-1
+ .byt  ^delete_selected_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_srm
+ .byt  ^text_filesel_context_delete_srm
+ .word !delete_selected_srm-1
+ .byt  ^delete_selected_srm-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_srm
+ .byt  ^mdesc_filesel_context_delete_srm
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  0
+
+menu_enttab_filesel_context_spc:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_filesel_selected_file ; window title
+ .byt  ^text_filesel_selected_file ; for this menu
+; ENTRIES
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_add_to_favorites
+ .byt  ^text_filesel_context_add_to_favorites
+ .word !add_selected_file_to_favorites-1
+ .byt  ^add_selected_file_to_favorites-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_add_to_favorites
+ .byt  ^mdesc_filesel_context_add_to_favorites
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_selected_file-1
+ .byt  ^delete_selected_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
  .byt  0
 
 menu_enttab_filesel_favorites_context:
@@ -961,6 +1033,19 @@ menu_enttab_filesel_favorites_context:
  .byt  0,0,0
  .word !mdesc_filesel_context_remove_from_favorites
  .byt  ^mdesc_filesel_context_remove_from_favorites
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_cheats
+ .byt  ^text_filesel_context_cheats
+ .word !cheat_menu_for_favorite_file-1
+ .byt  ^cheat_menu_for_favorite_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_cheats
+ .byt  ^mdesc_filesel_context_cheats
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0

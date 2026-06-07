@@ -8,6 +8,7 @@
 #include "yaml.h"
 #include "cfg.h"
 #include "sgb.h"
+#include "lang.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -24,6 +25,75 @@ uint8_t cheat_is_wram_cheat(uint32_t code) {
   return ((code & 0xfe000000) == 0x7e000000)
         || (!(code & 0x40000000)
             && ((code & 0xffff00) < 0x200000));
+}
+
+/* Write a code's display string into the PSRAM string region.
+   Slot: SRAM_CHEAT_CODE_STRINGS_ADDR + cheat_idx*512 + code_idx*12.
+   Each slot is 12 bytes: 9 visible chars (padded with spaces),
+   then 3 trailing nulls. The SNES editor menu prints the first 9
+   chars; the trailing nulls let save logic tell empty slots
+   (buf[0]==0) apart from real ones. */
+static void cheat_write_code_string(int cheat_idx, int code_idx, const char *s) {
+  if(cheat_idx < 0 || cheat_idx >= 512) return;
+  if(code_idx < 0 || code_idx >= CHEAT_NUM_CODES_PER_CHEAT) return;
+
+  char buf[12];
+  int len = 0;
+  memset(buf, 0, sizeof(buf));
+  if(s) {
+    /* stop at null, '#' (yaml inline comment), or whitespace at end */
+    while(s[len] && s[len] != '#' && len < 11) len++;
+    while(len > 0 && (s[len-1] == ' ' || s[len-1] == '\t')) len--;
+    if(len > 9) len = 9;
+    memcpy(buf, s, len);
+  }
+  /* pad to 9 visible chars */
+  for(int j = len; j < 9; j++) buf[j] = ' ';
+
+  uint32_t slot = SRAM_CHEAT_CODE_STRINGS_ADDR
+                + 512u * (uint32_t)cheat_idx
+                + 12u  * (uint32_t)code_idx;
+  sram_writeblock(buf, slot, sizeof(buf));
+}
+
+/* Regenerate the display string from a raw 32-bit code as 8 hex
+   digits + 1 space pad. Called after the SNES hex editor commits
+   a new value, since the original Game Genie label is lost. */
+/* Read a code's display string into the supplied 12-byte buffer.
+   Trims trailing spaces and null-terminates. Returns the trimmed
+   length; 0 means the slot is empty (never populated). */
+static int cheat_read_code_string(int cheat_idx, int code_idx, char *out) {
+  uint32_t slot = SRAM_CHEAT_CODE_STRINGS_ADDR
+                + 512u * (uint32_t)cheat_idx
+                + 12u  * (uint32_t)code_idx;
+  sram_readblock(out, slot, 12);
+  int len = 0;
+  while(len < 9 && out[len] != 0) len++;
+  while(len > 0 && out[len-1] == ' ') len--;
+  out[len] = 0;
+  return len;
+}
+
+/* Decode common HTML character entity references in place. Some
+   community cheat YAML files (gamehacking.org dumps in particular)
+   contain entities like &quot; in description strings; the menu would
+   otherwise show them verbatim. The output is always no longer than
+   the input, so an in-place rewrite is safe. */
+static void cheat_decode_html_entities(char *s) {
+  if(!s) return;
+  char *r = s;
+  char *w = s;
+  while(*r) {
+    if(*r == '&') {
+      if(!strncmp(r, "&quot;", 6)) { *w++ = '"';  r += 6; continue; }
+      if(!strncmp(r, "&amp;",  5)) { *w++ = '&';  r += 5; continue; }
+      if(!strncmp(r, "&apos;", 6)) { *w++ = '\''; r += 6; continue; }
+      if(!strncmp(r, "&lt;",   4)) { *w++ = '<';  r += 4; continue; }
+      if(!strncmp(r, "&gt;",   4)) { *w++ = '>';  r += 4; continue; }
+    }
+    *w++ = *r++;
+  }
+  *w = 0;
 }
 
 void cheat_init(void) {
@@ -164,6 +234,45 @@ void cheat_yaml_load(uint8_t* romfilename) {
   char line[256] = CHEAT_BASEDIR;
   cheat_record_t cheat;
 
+/* Build "Cheats for <basename without extension>" in PSRAM at
+  SRAM_CHEAT_TITLE_ADDR ($D80000) so the SNES menu can use it as the
+  window title. Always written, even if the YAML is missing/empty.
+  The address is well past any plausible cheat record (cheats live
+  at $D00000+512*N for N up to 511, spanning banks D0..D3, and the
+  per-code display strings start at $D40000), and is in the same
+  PSRAM region as the cheat records, reachable from both MCU and
+  SNES. */
+  {
+    char title[64];
+    memset(title, 0, sizeof(title));
+    const char *p = strrchr((const char*)romfilename, '/');
+    p = p ? p + 1 : (const char*)romfilename;
+    strncpy(title, cheatmenu_l[lang_idx()][0], sizeof(title));
+    title[sizeof(title) - 1] = 0;
+    int prefix_len = strlen(title);
+    int copy_max = sizeof(title) - prefix_len - 1;
+    int n = strlen(p);
+    if (n > copy_max) n = copy_max;
+    memcpy(title + prefix_len, p, n);
+    title[prefix_len + n] = 0;
+    /* strip trailing extension (.smc/.sfc/.fig/etc.) if any */
+    char *dot = strrchr(title + prefix_len, '.');
+    if (dot) *dot = 0;
+
+    /* The cheat window is 52 chars wide. Cap the visible title length
+       at 46 chars so it never collides with the window's right border.
+       If the full string is longer, replace the last 3 chars with
+       "..." so the user can see the title was clipped. */
+    if (strlen(title) > 46) {
+      title[43] = '.';
+      title[44] = '.';
+      title[45] = '.';
+      title[46] = 0;
+    }
+
+    sram_writeblock(title, SRAM_CHEAT_TITLE_ADDR, sizeof(title));
+  }
+
   append_file_basename(line, (char*)romfilename, ".yml", sizeof(line));
   check_or_create_folder(CHEAT_BASEDIR);
   printf("Cheat YAML file: %s\n", line);
@@ -175,8 +284,25 @@ void cheat_yaml_load(uint8_t* romfilename) {
   int cheat_idx = 0;
   while(yaml_next_item()) {
     int i=0;
+    /* Defensive: zero the local cheat record at the start of each
+       iteration so a parse failure on any field cannot leak data from
+       the previous iteration. */
+    memset(&cheat, 0, sizeof(cheat));
     if(yaml_get_itemvalue("Name", &token)) {
       strncpy(cheat.description, token.stringvalue, 254);
+      cheat.description[253] = 0;
+      /* Some YAML sources (gamehacking.org in particular) contain HTML
+         character entity references in cheat descriptions, e.g. &quot;
+         instead of a literal " character. Decode the common ones in
+         place so the menu shows the text the way a human would expect. */
+      cheat_decode_html_entities(cheat.description);
+    }
+    /* If the cheat's Name is empty after parsing + HTML decoding,
+       substitute a visible placeholder so the row in the menu is not
+       just a blank line. cheat_yaml_save reverses this substitution so
+       the placeholder never ends up in the YAML on disk. */
+    if(cheat.description[0] == 0) {
+      strncpy(cheat.description, cheatmenu_l[lang_idx()][1], 254);
       cheat.description[253] = 0;
     }
     printf("%s\n", token.stringvalue);
@@ -189,10 +315,12 @@ void cheat_yaml_load(uint8_t* romfilename) {
         if(!yaml_get_next(&token)) break;
         if(token.type == YAML_LIST_END) break;
         cheat.patches[i].code = cheat_str2bin(token.stringvalue);
+        cheat_write_code_string(cheat_idx, i, token.stringvalue);
       }
       cheat.numpatches = i;
     } else if (token.type != YAML_NONE) {
       cheat.patches[0].code = cheat_str2bin(token.stringvalue);
+      cheat_write_code_string(cheat_idx, 0, token.stringvalue);
       cheat.numpatches = 1;
     } else {
       /* empty list */
@@ -204,6 +332,11 @@ void cheat_yaml_load(uint8_t* romfilename) {
     }
     /* a single cheat + codes have been read, put in RAM */
     cheat_load_to_menu(cheat_idx, &cheat);
+    /* Mirror the flag byte to BSRAM so the SNES side has a writable
+       memory it can XOR for the visual toggle without an MCU round
+       trip. The PSRAM record at $D00000+512*idx remains the canonical
+       state that save reads. */
+    sram_writebyte(cheat.flags, SRAM_CHEAT_FLAGS_ADDR + cheat_idx);
     cheat_idx++;
   }
   sram_writeshort((uint16_t)cheat_idx, SRAM_NUM_CHEATS);
@@ -212,25 +345,131 @@ void cheat_yaml_load(uint8_t* romfilename) {
   printf("Total number of cheats: %d\n", cheat_idx);
 }
 
+/* Toggle bit 7 of the flag byte in the PSRAM cheat record at the given
+   index. Called from the SNES menu via CMD_TOGGLE_CHT. The flag byte
+   lives at offset 0 of the 512-byte cheat record. */
+void cheat_toggle_flag(int index) {
+  uint32_t addr = SRAM_CHEAT_ADDR + 512 * index;
+  uint8_t flag = sram_readbyte(addr);
+  sram_writebyte(flag ^ CHEAT_FLAG_ENABLE, addr);
+}
+
+/* Inverse of cheat_decode_html_entities. Writes the supplied string to
+   the given FatFs file handle, re-encoding the two characters that would
+   otherwise break a load-save round trip:
+     '"' -> &quot;  (mandatory: an unescaped quote inside a YAML
+                    double-quoted scalar terminates the value early and
+                    corrupts the Name field)
+     '&' -> &amp;   (mandatory: a literal '&' followed by 'quot;', 'amp;',
+                    'apos;', 'lt;' or 'gt;' would be re-decoded by the
+                    next load and lose the original ampersand)
+   '<', '>' and '\'' are left literal so YAML stays human-readable; the
+   load side accepts both literal and entity forms for those. */
+static void cheat_write_yaml_string(FIL *fp, const char *s) {
+  if(!fp || !s) return;
+  char one[2];
+  one[1] = 0;
+  while(*s) {
+    if(*s == '"') {
+      f_puts("&quot;", fp);
+    } else if(*s == '&') {
+      f_puts("&amp;", fp);
+    } else {
+      one[0] = *s;
+      f_puts(one, fp);
+    }
+    s++;
+  }
+}
+
 /* save cheats to YAML file from ROM/menu */
 void cheat_yaml_save(uint8_t *romfilename) {
   cheat_record_t cheat;
   char line[256] = CHEAT_BASEDIR;
-  int numcheats = sram_readshort(SRAM_CHEAT_ADDR);
+  int numcheats = sram_readshort(SRAM_NUM_CHEATS);
 
   append_file_basename(line, (char*)romfilename, ".yml", sizeof(line));
   printf("Cheat YAML file: %s\n", line);
 
+  /* Mirror what save_sram and save_backup_state do. Any prior FPGA SPI
+     transaction that did not clean up its chip-select would corrupt
+     the SD card SPI traffic, so explicitly release before any FatFs
+     call. Also make sure the directory exists. */
+  FPGA_DESELECT();
+
+  /* DEBUG: capture the result of check_or_create_folder at $FF04FD */
+  FRESULT chk_res = check_or_create_folder(CHEAT_BASEDIR);
+  sram_writebyte((uint8_t)chk_res, 0xFF04FDL);
+
+  /* DEBUG: try to clear any read-only / hidden / system attribute on
+     the existing YAML file before unlinking. If the file does not
+     exist this fails silently, which is OK. Result captured at
+     $FF04FC. */
+  FRESULT chmod_res = f_chmod((TCHAR*)line, 0, AM_RDO | AM_HID | AM_SYS);
+  sram_writebyte((uint8_t)chmod_res, 0xFF04FCL);
+
+  /* If the YAML already exists with a read-only attribute, or any
+     other state that makes FA_CREATE_ALWAYS return FR_DENIED, an
+     unlink first lets us recreate it cleanly. Capture the unlink
+     result at $FF04FE so we can see if it actually removed the file
+     or hit its own permission error. */
+  FRESULT unl_res = f_unlink((TCHAR*)line);
+  sram_writebyte((uint8_t)unl_res, 0xFF04FEL);
+
   file_open((uint8_t*)line, FA_WRITE | FA_CREATE_ALWAYS);
+  /* DEBUG: record the file_open result in PSRAM so SNI can see if it
+     succeeded. byte at $FF04FF = file_res (0 = OK, non-zero = error). */
+  sram_writebyte((uint8_t)file_res, 0xFF04FFL);
+
+  /* If FA_CREATE_ALWAYS still failed, retry with FA_OPEN_ALWAYS plus
+     manual truncation. This handles the case where the directory or
+     volume rejects truncate-on-open semantics. Result of the retry is
+     written at $FF04FB. */
+  if(file_res) {
+    file_open((uint8_t*)line, FA_WRITE | FA_OPEN_ALWAYS);
+    sram_writebyte((uint8_t)file_res, 0xFF04FBL);
+    if(!file_res) {
+      f_lseek(&file_handle, 0);
+      f_truncate(&file_handle);
+    }
+  } else {
+    sram_writebyte(0xFF, 0xFF04FBL); /* sentinel: not attempted */
+  }
   f_puts("---\n# Generated by sd2snes\n", &file_handle);
   for(int cheat_idx = 0; cheat_idx < numcheats; cheat_idx++) {
     cheat_save_from_menu(cheat_idx, &cheat);
-    f_printf(&file_handle, "- Name: \"%s\"\n", cheat.description);
+    /* DEBUG: write the flag byte we just read into a known PSRAM
+       address so SNI can inspect what cheat_save_from_menu observed.
+       $FF0500+idx holds the byte for cheat #idx. */
+    sram_writebyte(cheat.flags, 0xFF0500L + (uint32_t)cheat_idx);
+    /* Reverse the (empty) placeholder substitution from cheat_yaml_load
+       so a YAML round trip (load then save) preserves cheats with
+       intentionally empty Names. */
+    const char *desc_for_yaml = cheat.description;
+    if(!strcmp(cheat.description, cheatmenu_l[lang_idx()][1])) {
+      desc_for_yaml = "";
+    }
+    /* Emit the Name with HTML entity re-encoding so descriptions
+       containing '"' or '&' survive the round trip. The previous code
+       used f_printf with "%s" which would emit a literal quote into a
+       YAML double-quoted scalar and silently corrupt the file. */
+    f_puts("- Name: \"", &file_handle);
+    cheat_write_yaml_string(&file_handle, desc_for_yaml);
+    f_puts("\"\n", &file_handle);
     f_printf(&file_handle, "  Enabled: %s\n", cheat.flags & CHEAT_FLAG_ENABLE ? "true" : "false");
     f_printf(&file_handle, "  Code:\n");
     for(int i = 0; i < cheat.numpatches; i++) {
       uint32_t gg_code = cheat_raw2gg(cheat.patches[i].code);
-      f_printf(&file_handle, "  - \"%08lX\"    ", cheat.patches[i].code);
+      char str_buf[12];
+      int slen = cheat_read_code_string(cheat_idx, i, str_buf);
+      if(slen == 0) {
+        /* fallback: slot was never populated, write raw form */
+        f_printf(&file_handle, "  - \"%08lX\"    ", cheat.patches[i].code);
+      } else {
+        /* keep the column for the trailing GG comment aligned: pad
+           the field to 9 visible chars regardless of slen */
+        f_printf(&file_handle, "  - \"%-9s\"   ", str_buf);
+      }
       if(cheat_is_wram_cheat(cheat.patches[i].code)) {
         f_printf(&file_handle, "# GG code: N/A (WRAM cheat)\n");
       } else {

@@ -43,7 +43,11 @@ extern char current_filename[];
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 
 #define SRAM_NUM_CHEATS              (0xCFFFFEL)
-#define SRAM_CHEAT_ADDR              (0xD00000L) /* banks D0-DF for 2048 cheats per YML file */
+#define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
+#define SRAM_CHEAT_CODE_STRINGS_ADDR (0xD40000L) /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans D4..D7, leaving D0..D3 free for up to 512 cheat records. */
+
+#define SRAM_CHEAT_TITLE_ADDR        (0xD80000L) /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
+#define SRAM_CHEAT_FLAGS_ADDR        (0xFF0500L) /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle. */
 
 #define SRAM_SKIN_ADDR               (0xF00000L)
 

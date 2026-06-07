@@ -32,6 +32,7 @@
 #include "cfg.h"
 #include "savestate.h"
 #include "patch.h"
+#include "cheat.h"
 
 //usb
 #include "usb.h"
@@ -534,6 +535,26 @@ int main(void) {
           snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
           cmd=0;
           break;
+        case SNES_CMD_DELETE_FILE:
+          get_selected_name(file_lfn);
+          printf("Delete file: %s\n", file_lfn);
+          if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cmd=0;
+          break;
+        case SNES_CMD_DELETE_SRM: {
+          uint8_t srmfile[256] = SAVE_BASEDIR;
+          get_selected_name(file_lfn);
+          printf("Delete SRM for: %s\n", file_lfn);
+          append_file_basename((char*)srmfile, (char*)file_lfn, ".srm", sizeof(srmfile));
+          printf("SRM path: %s\n", srmfile);
+          if(f_unlink((TCHAR*)srmfile) != FR_OK) {
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          }
+          cmd=0;
+          break;
+        }
         case SNES_CMD_LOAD_COVER:
           /* MCU_PARAM was filled by the menu (cover_fill_param_for_current_sel)
              to look exactly like LOADROM's params, so get_selected_name works.
@@ -557,14 +578,55 @@ int main(void) {
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_LOAD_CHT:
-          /* load cheats */
+          /* load cheats from YAML file into PSRAM for the menu to edit.
+             Filename is provided by the menu via MCU_PARAM (path) plus
+             the selected directory entry, the same way the favorites
+             and autoboot handlers retrieve it. */
+          get_selected_name(file_lfn);
+          printf("Load cheats for: %s\n", file_lfn);
+          cheat_yaml_load(file_lfn);
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_SAVE_CHT:
-          /* save cheats */
-// XXX          cheat_save_from_menu()
+          /* save the (possibly edited) cheat records from PSRAM back
+             to the YAML file on the SD card. */
+          get_selected_name(file_lfn);
+          printf("Save cheats for: %s\n", file_lfn);
+          cheat_yaml_save(file_lfn);
           cmd=0; /* stay in menu loop */
           break;
+        case SNES_CMD_LOAD_CHT_FAV:
+          /* load cheats for a favorite-list entry. MCU_PARAM low byte
+             holds the favorite index; we resolve the path the same
+             way LOADFAVORITE / SET_AUTOBOOT_FAV do, then reuse the
+             standard cheat_yaml_load flow. */
+          cfg_get_listed_game(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          printf("Load cheats for favorite: %s\n", file_lfn);
+          cheat_yaml_load(file_lfn);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_SAVE_CHT_FAV:
+          /* save cheats for a favorite-list entry. Same lookup as
+             LOAD_CHT_FAV; the SNES side rewrites MCU_PARAM with the
+             favorite index before sending this command, because the
+             toggle handler clobbers it during normal menu use. */
+          cfg_get_listed_game(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          printf("Save cheats for favorite: %s\n", file_lfn);
+          cheat_yaml_save(file_lfn);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_TOGGLE_CHT: {
+          /* toggle the enabled flag for the cheat at the index passed
+             in MCU_PARAM low two bytes (16-bit index, supports 0..511).
+             The MCU does the bit flip directly in the PSRAM cheat
+             record at $D00000+512*idx because the SNES menu mapper
+             makes that region read-only. */
+          uint32_t idx = snes_get_mcu_param() & 0xffff;
+          printf("Toggle cheat idx=%lu\n", (unsigned long)idx);
+          cheat_toggle_flag((int)idx);
+          cmd=0; /* stay in menu loop */
+          break;
+        }
         case SNES_CMD_RESET_TO_MENU:
           /* USB-triggered menu reload: leave the menu loop so the outer loop
              re-runs load_rom(MENU_FILENAME) and reboots into the fresh menu.bin.

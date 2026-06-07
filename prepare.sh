@@ -5,7 +5,7 @@
 # Run this ONCE on a fresh server (from the Mac; it SSHes in and installs):
 #   - dnf deps + ARM toolchain (arm-none-eabi-gcc-cs, EL9/EPEL) for the MCU firmware
 #   - Bisqwit's snescom/sneslink (65816 assembler/linker) for the SNES menu
-#   - Intel Quartus Prime Lite 20.1 + Cyclone IV E device support for the FPGA
+#   - Intel Quartus Prime Lite 23.1 + Cyclone IV E device support for the FPGA
 #     cores (the FXPAK PRO / mk3 FPGA is an EP4CE15F17C8, "Cyclone IV E")
 #   - QUARTUS_ROOTDIR in the server's environment
 #   - (optional, mk2) the sd2snes-ise:14.7 runtime image for synthesizing the
@@ -17,8 +17,8 @@
 #
 # Env overrides:
 #   SD2SNES_SERVER=root@172.29.8.103
-#   QUARTUS_VER=20.1.0.711         Quartus Lite build to install
-#   QUARTUS_DIR=/opt/intelFPGA_lite/20.1
+#   QUARTUS_VER=23.1std.0.991      Quartus Lite build to install
+#   QUARTUS_DIR=/opt/intelFPGA_lite/23.1std
 #   QUARTUS_RUN_URL=...            full URL to QuartusLiteSetup-<ver>-linux.run
 #   QUARTUS_CYCLONE_URL=...        full URL to cyclone-<ver>.qdz (Cyclone IV/V support)
 #   SNESCOM_VER=1.8.1.1
@@ -30,12 +30,12 @@ set -euo pipefail
 
 SERVER="${SD2SNES_SERVER:-root@172.29.8.103}"
 SNESCOM_VER="${SNESCOM_VER:-1.8.1.1}"
-QUARTUS_VER="${QUARTUS_VER:-20.1.0.711}"
-QUARTUS_DIR="${QUARTUS_DIR:-/opt/intelFPGA_lite/20.1}"
+QUARTUS_VER="${QUARTUS_VER:-23.1std.0.991}"
+QUARTUS_DIR="${QUARTUS_DIR:-/opt/intelFPGA_lite/23.1std}"
 # Intel/Altera direct download links (no login). These DO move occasionally — if
 # the download 404s, grab the files manually from the Intel/Altera download
 # center and re-run with QUARTUS_RUN_URL=/QUARTUS_CYCLONE_URL= pointing at them.
-QUARTUS_BASE="${QUARTUS_BASE:-https://downloads.intel.com/akdlm/software/acdsinst/20.1std/711/ib_installers}"
+QUARTUS_BASE="${QUARTUS_BASE:-https://downloads.intel.com/akdlm/software/acdsinst/23.1std/991/ib_installers}"
 QUARTUS_RUN_URL="${QUARTUS_RUN_URL:-${QUARTUS_BASE}/QuartusLiteSetup-${QUARTUS_VER}-linux.run}"
 QUARTUS_CYCLONE_URL="${QUARTUS_CYCLONE_URL:-${QUARTUS_BASE}/cyclone-${QUARTUS_VER}.qdz}"
 
@@ -79,7 +79,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Intel Quartus Prime Lite 20.1 + Cyclone IV E device support.
+# 3. Intel Quartus Prime Lite 23.1 + Cyclone IV E device support.
 #    (Big download ~5GB; best-effort. The FPGA cores are pure hardware with no
 #    strings — needed only to (re)build the .bi3 cores from verilog/.)
 # ---------------------------------------------------------------------------

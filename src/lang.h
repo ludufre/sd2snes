@@ -33,10 +33,17 @@ enum {
   SGB_W_COUNT
 };
 
+enum {
+  CHEAT_FOR,
+  CHEAT_NO_NAME,
+  CHEATMENU_COUNT
+};
+
 extern const char *const cicstatefriendly_l[NUM_LANG][4];
 extern const char *const fresult_friendly_names_l[NUM_LANG][20];
 extern const char *const sysinfo_msg[NUM_LANG][SI_COUNT];
 extern const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT];
+extern const char *const cheatmenu_l[NUM_LANG][CHEATMENU_COUNT];
 
 /* current language, clamped to a valid index */
 uint8_t lang_idx(void);

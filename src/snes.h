@@ -56,6 +56,11 @@
 #define SNES_CMD_LOAD_MENU_SPC       (0x1e) /* stage /sd2snes/menu.spc for background menu music */
 #define SNES_CMD_LOAD_COVER_RECENT   (0x1f) /* stage downscaled .cov for recent game (index in MCU_PARAM) */
 #define SNES_CMD_LOAD_COVER_FAVORITE (0x20) /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
+#define SNES_CMD_DELETE_FILE         (0x21) /* delete selected file */
+#define SNES_CMD_DELETE_SRM          (0x22) /* delete SRM save file for selected ROM */
+#define SNES_CMD_TOGGLE_CHT          (0x23) /* MCU_PARAM low byte: cheat index. XORs flag bit in PSRAM record. */
+#define SNES_CMD_LOAD_CHT_FAV        (0x24) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
+#define SNES_CMD_SAVE_CHT_FAV        (0x25) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
 
 /* WiFi-in-menu (bridged to the ESP via uart_proto WIFI_* opcodes). The status +
    scan block and the connect params live in the SRAM sysinfo block (modal, so

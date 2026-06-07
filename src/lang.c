@@ -101,3 +101,9 @@ const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT] = {
   /* LANG_PTBR */ { "ausente", "errado", "ok", "lendo" },
   /* LANG_ES   */ { "ausente", "err\x89neo", "ok", "leyendo" },
 };
+
+const char *const cheatmenu_l[NUM_LANG][CHEATMENU_COUNT] = {
+  /* LANG_EN   */ { "Cheats for ", "(no name)" },
+  /* LANG_PTBR */ { "Trapa\x8d""as para ", "(sem nome)" },
+  /* LANG_ES   */ { "Trucos para ", "(sin nombre)" },
+};

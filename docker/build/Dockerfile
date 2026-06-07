@@ -22,8 +22,8 @@ ARG BUILD_PLATFORM=linux/amd64
 # ============================================================================
 FROM --platform=${BUILD_PLATFORM} stronglytyped/arm-none-eabi-gcc:latest AS fpga
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
-ARG QUARTUS_VER=20.1.0.711
-ARG QUARTUS_DIR=/opt/intelFPGA_lite/20.1
+ARG QUARTUS_VER=23.1std.0.991
+ARG QUARTUS_DIR=/opt/intelFPGA_lite/23.1std
 
 # host compiler (for utils/rle) + Quartus runtime libs + the locale it expects.
 RUN apt-get update && apt-get install -y --no-install-recommends \

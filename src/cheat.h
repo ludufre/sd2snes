@@ -73,6 +73,9 @@ void cheat_yaml_load(uint8_t *romfilename);
 /* save SNES structure as YAML file */
 void cheat_yaml_save(uint8_t *romfilename);
 
+/* toggle bit 7 of the flag byte for a cheat record (CMD_TOGGLE_CHT) */
+void cheat_toggle_flag(int index);
+
 /* convert cheat code in string format to binary */
 uint32_t cheat_str2bin(char *string);
 
