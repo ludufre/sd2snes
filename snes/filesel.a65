@@ -1556,7 +1556,8 @@ filesel_fix_pos_after_delete:
   lsr                              ; A = entry count
   cmp #18                          ; listdisp (visible rows)
   bcs +                            ; count >= one page -> last page = (count-18)*4
-  stz @dirptr_addr                 ; whole dir fits on one page -> top
+  lda #0                           ; stz has no long (@) addressing mode on 65816;
+  sta @dirptr_addr                 ; A is 16-bit here & dead after -> lda#0/sta@ == stz
   bra fix_pos_done
 + sec
   sbc #18

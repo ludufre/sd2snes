@@ -341,7 +341,15 @@ int cfg_validity_check_listed_games(const uint8_t *listfilename) {
     index_max = index;
   file_close();
   for(index = 0; index < index_max; index++) {
-    file_open((uint8_t*)fntmp[index], FA_READ);
+    /* Patch-aware entries are "<rom>\t<patch>"; validate by the base ROM's
+       existence ONLY (a temporarily-missing patch must not evict the entry).
+       Strip a COPY at the tab — the rewrite below keeps the original tag. */
+    TCHAR base[256];
+    strncpy(base, fntmp[index], 255);
+    base[255] = 0;
+    char *tab = strchr(base, '\t');
+    if(tab) *tab = 0;
+    file_open((uint8_t*)base, FA_READ);
     write_indices[index] = file_status;
     if(file_status != FILE_OK)
       rewrite_listfile = 1;
@@ -364,7 +372,8 @@ int cfg_validity_check_listed_games(const uint8_t *listfilename) {
   return err;
 }
 
-int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_oldest) {
+int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn,
+                                const char *patch_basename, bool evict_oldest) {
   int err = 0, index, index2, found = 0, foundindex = 0, written = 0;
   TCHAR fqfn[256];
   TCHAR fntmp[10][256];
@@ -375,6 +384,17 @@ int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_old
     fqfn[255] = 0;
   }
   strncat(fqfn, (const char*)fn, 256 - strlen(fqfn) - 1);
+  /* Patch-aware: append "\t<patch_basename>" when it fits the 255-char entry cap
+     (graceful degrade to base-only otherwise; bounded strncat, never snprintf —
+     keeps -Werror=format-truncation happy).  The dedup/write below operate on the
+     whole fqfn, so a patched entry stays distinct from the plain ROM. */
+  if(patch_basename && patch_basename[0]) {
+    size_t cur = strlen(fqfn);
+    if(cur + 1 + strlen(patch_basename) < 255) {
+      strncat(fqfn, "\t", 256 - cur - 1);
+      strncat(fqfn, patch_basename, 256 - strlen(fqfn) - 1);
+    }
+  }
   for(index = 0; index < 10; index++) {
     f_gets(fntmp[index], 255, &file_handle);
     if((*fntmp[index] == 0) || (*fntmp[index] == '\n')) {
@@ -414,6 +434,10 @@ int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_old
   return err;
 }
 
+int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_oldest) {
+  return cfg_add_listed_game_patched(listfilename, fn, NULL, evict_oldest);
+}
+
 int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove) {
   int err = 0, index, index2, written = 0;
   TCHAR fntmp[10][256];
@@ -442,7 +466,7 @@ int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove)
   return err;
 }
 
-int cfg_get_listed_game(const uint8_t *listfilename, uint8_t *fn, uint8_t index) {
+int cfg_get_listed_game_raw(const uint8_t *listfilename, uint8_t *fn, uint8_t index) {
   int err = 0;
   file_open(listfilename, FA_READ);
   do {
@@ -450,6 +474,43 @@ int cfg_get_listed_game(const uint8_t *listfilename, uint8_t *fn, uint8_t index)
   } while (index--);
   file_close();
   return err;
+}
+
+int cfg_get_listed_game(const uint8_t *listfilename, uint8_t *fn, uint8_t index) {
+  int err = cfg_get_listed_game_raw(listfilename, fn, index);
+  /* List entries may carry a "<rom>\t<patch>" tag (patch-aware Recents/
+     Favorites).  Callers that consume the entry as a plain ROM path get just
+     the base ROM here; patch-aware callers use cfg_get_listed_game_raw +
+     cfg_parse_patch_entry to recover the patch. */
+  char *tab = strchr((char*)fn, '\t');
+  if(tab) *tab = 0;
+  return err;
+}
+
+/* Split a raw list entry of the form "<rom_path>\t<patch_basename>" in place.
+   Truncates `entry` at the tab so it becomes the bare base ROM path, and builds
+   the patch's full SD path into `patchpath` (= the ROM's directory + the stored
+   patch basename; patches always live alongside their ROM, see ips_find_patches).
+   Returns 1 when a patch tag was present, 0 otherwise (entry left untouched). */
+int cfg_parse_patch_entry(char *entry, char *patchpath, int size) {
+  char *tab = strchr(entry, '\t');
+  if(!tab) {
+    if(size) patchpath[0] = 0;
+    return 0;
+  }
+  *tab = 0;                            /* entry -> base ROM path */
+  const char *patch_basename = tab + 1;
+  int n = 0;
+  char *slash = strrchr(entry, '/');
+  if(slash) {
+    int dirlen = (int)(slash - entry) + 1;   /* keep the trailing '/' */
+    for(int i = 0; i < dirlen && n < size - 1; i++) patchpath[n++] = entry[i];
+  } else if(n < size - 1) {
+    patchpath[n++] = '/';
+  }
+  for(const char *p = patch_basename; *p && n < size - 1; p++) patchpath[n++] = *p;
+  patchpath[n] = 0;
+  return 1;
 }
 
 /**
@@ -476,7 +537,21 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
   file_open(listfilename, FA_READ);
   for(index = 0; index < 10 && !f_eof(&file_handle); index++) {
     f_gets(fntmp, 255, &file_handle);
-    sram_writestrn(strrchr((const char*)fntmp, '/')+1, address+256*index, 256);
+    /* Patch-aware entries are "<rom>\t<patch_basename>": display the patch name
+       (without the .ips/.bps extension); plain entries display the ROM basename.
+       Only the patch region of fntmp is modified, so the LAST_GAME_DIR block
+       below (which scans the base part for the last '/') stays correct. */
+    char *disp;
+    char *tab = strchr((char*)fntmp, '\t');
+    if(tab) {
+      disp = tab + 1;
+      char *dot = strrchr(disp, '.');
+      if(dot) *dot = 0;
+    } else {
+      char *slash = strrchr((const char*)fntmp, '/');
+      disp = slash ? slash + 1 : fntmp;
+    }
+    sram_writestrn((uint8_t*)disp, address+256*index, 256);
     if(write_lastdir && index == 0) {
       /* write directory of most recent game for reset_to_menu >= 2 (Folder/Rom) navigation */
       char *slash = strrchr((const char*)fntmp, '/');

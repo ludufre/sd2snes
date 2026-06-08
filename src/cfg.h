@@ -112,8 +112,11 @@ int cfg_load(void);
 
 int cfg_validity_check_listed_games(const uint8_t *listfilename);
 int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_oldest);
+int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn, const char *patch_basename, bool evict_oldest);
 int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove);
 int cfg_get_listed_game(const uint8_t *listfilename, uint8_t *fn, uint8_t index);
+int cfg_get_listed_game_raw(const uint8_t *listfilename, uint8_t *fn, uint8_t index);
+int cfg_parse_patch_entry(char *entry, char *patchpath, int size);
 uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t address, uint8_t write_lastdir);
 
 uint8_t cfg_is_autoboot_enabled(void);
