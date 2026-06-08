@@ -1315,15 +1315,15 @@ confirm_delete:
   sta bar_xl
   sta bar_yl
   sta bar_wl
-; closed-border box: 44 wide, x=10, y=11, h=7
-; rows: top | prompt | name | blank | options | hint | bottom
+; closed-border box: 44 wide, x=10, y=11, h=8
+; rows: top | prompt | name | blank | options | blank | hint | bottom
   lda #10
   sta window_x
   lda #11
   sta window_y
   lda #44
   sta window_w
-  lda #$07
+  lda #$08
   sta window_h
   lda #^zero
   sta window_tbank
@@ -1352,14 +1352,14 @@ confirm_delete:
   sta print_y
   jsr confirm_center_print
 confirm_no_name:
-; hint on window_y+5
+; hint on window_y+6 (blank row at window_y+5 separates it from the options)
   lda #^text_confirm_hint
   sta print_bank
   ldx #!text_confirm_hint
   stx print_src
   lda window_y
   clc
-  adc #$05
+  adc #$06
   sta print_y
   jsr confirm_center_print
 ; options on window_y+4
@@ -1481,13 +1481,20 @@ confirm_center_print:
   plb
   sep #$20 : .as
   tya
-  sta window_tmp
+  sta window_tmp                   ; window_tmp = string length
+; Keep a 1-col blank margin inside each border.  If the string is wider than the
+; padded interior (window_w - 4), truncate it to (window_w - 7) chars and append
+; "..." so it never spills past the margin/border.
+  lda window_w
+  sec
+  sbc #$04                         ; padded interior width (1-col margin each side)
+  cmp window_tmp
+  bcc confirm_print_trunc          ; padded interior < length -> truncate + ellipsis
+; fits: centre it
   lda window_w
   sec
   sbc window_tmp                   ; window_w - length
-  bcs +
-  lda #$02                         ; longer than the box -> small left margin
-+ lsr                              ; /2
+  lsr                              ; /2
   clc
   adc window_x
   sta print_x
@@ -1497,6 +1504,33 @@ confirm_center_print:
   jsr hiprint
   plp
   rts
+confirm_print_trunc:
+  lda window_x                     ; left edge + 1-col margin
+  clc
+  adc #$02
+  sta print_x
+  stz print_pal
+  lda window_w
+  sec
+  sbc #$07                         ; name chars = padded interior - 3 ("...")
+  sta print_count
+  jsr hiprint                      ; print_bank/print_src still point at the name
+  lda window_x                     ; "..." right after the truncated name
+  clc
+  adc window_w
+  sec
+  sbc #$05                         ; = window_x + window_w - 5 (1-col right margin)
+  sta print_x
+  lda #^confirm_ellipsis
+  sta print_bank
+  ldx #!confirm_ellipsis
+  stx print_src
+  lda #$03
+  sta print_count
+  jsr hiprint
+  plp
+  rts
+confirm_ellipsis .byt "...", 0
 
 ; ----------------------------------------------------------------------
 ; filesel_fix_pos_after_delete: keep the cursor near the deleted entry.  Keep the
