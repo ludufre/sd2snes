@@ -63,6 +63,20 @@ extern volatile snes_status_t STS;
 
 const char fwhdr[CONFIG_FW_HEADERSIZE] __attribute__ ((section(".fwhdr")));
 
+/* Drop any Recent/Favorite list entries whose ROM file no longer exists, then
+   re-publish both lists + status to the SNES.  Called after every ROM delete
+   (browser / favorites / recents) so a now-missing game can't linger in those
+   lists and hang the loader when opened.  The boot-time check (main) covers
+   files removed on a PC between sessions.  cfg_validity_check rewrites a .cfg
+   (keeping a .bak) only when something actually changed. */
+static void revalidate_game_lists(void) {
+  cfg_validity_check_listed_games(LAST_FILE);
+  STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
+  cfg_validity_check_listed_games(FAVORITES_FILE);
+  STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
+  status_load_to_menu();
+}
+
 void menu_cmd_readdir(void) {
   uint8_t path[256];
   SNES_FTYPE filetypes[16];
@@ -72,7 +86,13 @@ void menu_cmd_readdir(void) {
 printf("path=%s tgt=%06lx types=", path, tgt_addr);
 uart_puts_hex((char*)filetypes);
 uart_putc('\n');
-  scan_dir(path, tgt_addr, filetypes);
+  uint16_t n = scan_dir(path, tgt_addr, filetypes);
+  /* Hand the authoritative entry count back to the menu through the snescmd
+     param region (BRAM-backed, reliable to read from the SNES immediately).
+     The menu sets dirend_addr = n*4 from this instead of scanning the SDRAM dir
+     table at $C1 itself, which can read a stale/partial buffer in the short
+     window right after this write -> bogus short dirend -> broken pagination. */
+  snescmd_writeshort(n, SNESCMD_MCU_PARAM);
 }
 
 int main(void) {
@@ -493,6 +513,9 @@ int main(void) {
           if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
             snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
           }
+          /* the deleted ROM may also be in Recents/Favorites -> drop any now-dead
+             entries so they can't hang the loader when opened later. */
+          revalidate_game_lists();
           cmd=0;
           break;
         case SNES_CMD_DELETE_SRM: {
@@ -508,18 +531,16 @@ int main(void) {
           break;
         }
         case SNES_CMD_DELETE_FILE_FAV: {
-          /* delete the ROM behind a favorites entry (index in MCU_PARAM),
-             then drop the now-dangling list entry so it disappears from
-             the favorites window the same way REMOVE_FAVORITE_ROM does. */
+          /* delete the ROM behind a favorites entry (index in MCU_PARAM).
+             revalidate_game_lists() then drops it from BOTH lists by file
+             existence, so it also disappears from Recents if listed there. */
           uint8_t idx = snes_get_mcu_param() & 0xff;
           cfg_get_listed_game(FAVORITES_FILE, file_lfn, idx);
           printf("Delete favorite file: %s\n", file_lfn);
           if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
             snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
           }
-          cfg_remove_listed_game(FAVORITES_FILE, idx);
-          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
-          status_load_to_menu();
+          revalidate_game_lists();
           cmd=0;
           break;
         }
@@ -538,17 +559,16 @@ int main(void) {
           break;
         }
         case SNES_CMD_DELETE_FILE_RECENT: {
-          /* delete the ROM behind a recents entry (index in MCU_PARAM),
-             then drop the list entry like REMOVE_RECENT_ROM. */
+          /* delete the ROM behind a recents entry (index in MCU_PARAM).
+             revalidate_game_lists() drops it from BOTH lists by file
+             existence, so it also disappears from Favorites if listed there. */
           uint8_t idx = snes_get_mcu_param() & 0xff;
           cfg_get_listed_game(LAST_FILE, file_lfn, idx);
           printf("Delete recent file: %s\n", file_lfn);
           if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
             snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
           }
-          cfg_remove_listed_game(LAST_FILE, idx);
-          STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
-          status_load_to_menu();
+          revalidate_game_lists();
           cmd=0;
           break;
         }
