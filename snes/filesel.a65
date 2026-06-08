@@ -1514,11 +1514,23 @@ filesel_fix_pos_after_delete:
   rep #$20 : .al
   lda @dirptr_addr
   cmp @dirend_addr
-  bcc +                            ; page top still within the dir -> keep position
-  lda #$0000                       ; page top now past the shrunken dir -> back to top
+  bcc fix_pos_done                 ; page top still within the dir -> keep position
+; page top is past the new (shrunken) end -> snap to the LAST page so the cursor
+; stays near the bottom, instead of jumping all the way to the top.
+  lda @dirend_addr
+  lsr
+  lsr                              ; A = entry count
+  cmp #18                          ; listdisp (visible rows)
+  bcs +                            ; count >= one page -> last page = (count-18)*4
+  stz @dirptr_addr                 ; whole dir fits on one page -> top
+  bra fix_pos_done
++ sec
+  sbc #18
+  asl
+  asl
   sta @dirptr_addr
-  sta @filesel_sel
-+ sep #$20 : .as
+fix_pos_done:
+  sep #$20 : .as
   plp
   rts
 
