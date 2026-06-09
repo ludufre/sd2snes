@@ -68,13 +68,6 @@ coldboot:       ; Regular, cold-start init
   jsr killdma
   jsr clear_wram
   jsr apu_ram_init
-  ; fork: apu_ram_init just put the S-SMP back at IPL, so nothing is playing.
-  ; Reset BGM_STATE so bgm_update reloads the menu music. EVERY non-warm reset
-  ; lands here (only our deliberate warm resets take the warmboot path), and the
-  ; $2A FPGA region is NOT touched by clear_wram, so without this a reset would
-  ; leave BGM_STATE=1 and the music would never restart. (snescom: no long stz.)
-  lda #$00
-  sta @BGM_STATE
   jsr waitblank
   jsr snes_init
   jsr setup_gfx
@@ -86,10 +79,6 @@ coldboot:       ; Regular, cold-start init
   jsr detect_ultra16
   jsr detect_satellaview
   jsr wait_mcu_ready
-  sep #$20 : .as
-  lda @SNES_CMD
-  cmp #$55
-  bne emu_mode
   ; Check autoboot flag (set by MCU if autoboot.cfg is present)
   ; Screen is still black (tgt_bright set in video_init)
   ; If autoboot is inactive, START is held, or the ROM can't be loaded:
@@ -108,25 +97,7 @@ coldboot_bypass_autoboot:         ; clear autoboot flag, continue to menu
   jsr clr_autoboot_at_boot
 coldboot_autoboot_out:
   jsr screen_on
-  ; load the persisted language (mirrored from config.yml by the MCU) so the
-  ; whole menu draws in the right language from the first frame.
-  sep #$20 : .as
-  lda @CFG_LANGUAGE
-  cmp #$03
-  bcc +
-  lda #$00              ; unknown -> English
-+ sta @cur_lang
   jsr filesel_init
-  ; If reset_to_menu >= 2 (Folder/Rom) AND this was a reset-to-menu (not cold power-on):
-  ; navigate to last game's directory and optionally pre-select the ROM.
-  sep #$20 : .as
-  lda @CFG_ENABLE_RST_TO_MENU
-  cmp #$02
-  bcc +                          ; < 2 → Off or On, skip nav
-  lda @ST_RESET_TO_MENU_ACTIVE
-  beq +                          ; not a reset-to-menu boot → skip nav
-  jsr filesel_nav_last
-+
   sep #$20 : .as
   lda @ST_RTC_VALID
   beq +
@@ -136,75 +107,6 @@ coldboot_autoboot_out:
   sei
   stz $4200
   jmp @infloop  ; infinite loop in WRAM
-
-emu_mode:
-  sep #$20 : .as
-  rep #$10 : .xl
-  lda #$0f
-  sta cur_bright
-  sta tgt_bright
-  sta menu_brightness
-  sta $2100
-  ; Simulate the menu's adjacent-row layout with accented PT-BR strings.
-  lda #10
-  sta print_y
-  lda #2
-  sta print_x
-  lda #^emu_str1
-  sta print_bank
-  ldx #!emu_str1
-  stx print_src
-  stz print_pal
-  lda #36
-  sta print_count
-  jsr hiprint
-  lda #11
-  sta print_y
-  lda #2
-  sta print_x
-  lda #^emu_str2
-  sta print_bank
-  ldx #!emu_str2
-  stx print_src
-  stz print_pal
-  lda #36
-  sta print_count
-  jsr hiprint
-  lda #12
-  sta print_y
-  lda #2
-  sta print_x
-  lda #^emu_str3
-  sta print_bank
-  ldx #!emu_str3
-  stx print_src
-  stz print_pal
-  lda #36
-  sta print_count
-  jsr hiprint
-  lda #13
-  sta print_y
-  lda #2
-  sta print_x
-  lda #^emu_str4
-  sta print_bank
-  ldx #!emu_str4
-  stx print_src
-  stz print_pal
-  lda #36
-  sta print_count
-  jsr hiprint
-- lda isr_done
-  lsr
-  bcc -
-  stz isr_done
-  bra -
-
-; Simulating the real menu: a few accented items at consecutive rows.
-emu_str1  .byt "Configura", 141, 139, "es", 0
-emu_str2  .byt "Ajustar Rel", 137, "gio", 0
-emu_str3  .byt "Op", 141, 139, "es BS-X", 0
-emu_str4  .byt "Op", 141, 139, "es do Navegador", 0
 
 colortest:
   sep #$20 : .as
@@ -238,25 +140,43 @@ setup_gfx:
   stx $2116
   DMA7(#$09, #$1000, #^zero, #!zero, #$18)
 
-; hide all sprites. The cover replaces the logo and uses BG1 (not OBJ); the old
-; logo splash sprites are gone. Fill OAM with $f0 so every sprite Y = 240, off
-; the bottom of the 224-line screen.
+; clear OAM tables
   ldx #$0000
   stx $2102
-  DMA7(#$08, #$220, #^oamhide, #!oamhide, #$04)
+  DMA7(#$08, #$220, #^zero, #!zero, #$04)
 
-; (logo tiles / tilemap / splash sprites removed - the cover owns the header now)
+; copy logo tiles
+  ldx #$2000
+  stx $2116
+  DMA7(#$01, #$4000, #^logo, #!logo, #$18)
+
+; generate logo tilemap
+  ldx #BG1_TILE_BASE
+  stx $2116
+  ldx #$0100
+- stx $2118
+  inx
+  cpx #$01e0
+  bne -
+
+
+; copy sprites tiles
+  ldx #OAM_TILE_BASE
+  stx $2116
+  DMA7(#$01, #$500, #^logospr, #!logospr, #$18)
+
+; set OAM tables
+  ldx #$0000
+  stx $2102
+  DMA7(#$00, #$60, #^oam_data_l, #!oam_data_l, #$04)
+  ldx #$0100
+  stx $2102
+  DMA7(#$00, #$09, #^oam_data_h, #!oam_data_h, #$04)
 
 ; set palette
   stz $2121
   DMA7(#$00, #$200, #^palette, #!palette, #$22)
   stz $2121
-
-; init cover preview AFTER the palette load: clears the cover VRAM region, loads
-; the header logo (tiles -> VRAM $6000, palette -> CGRAM 64) and builds the header
-; (logo cols 0..15 + blank cover area). Must run AFTER the palette DMA above so
-; the logo palette at CGRAM 64 is not overwritten. Still forced blank, NMI off.
-  jsr cover_init
 
 ; copy hdma tables so we can work "without" the cartridge
 ; palette
@@ -386,7 +306,7 @@ video_init:
   lda #$fe
   sta $2127
   jsr setup_224
-  lda #$10
+  lda #$11       ; CGWSEL: + D0=1 = CG Direct Select ON (Direct-Color logo on BG1/Mode3)
   sta $2130
   lda #$1f
   sta $212e
@@ -432,7 +352,7 @@ snes_init:
   stz $420c
   lda #$8f
   sta $2100     ; INIDISP: force blank
-  lda #COVER_OBSEL ; 8x8/16x16; name sel 0; OBJ base $2000 (cover owns OBJ; cover_init re-sets)
+  lda #$03      ; 8x8+16x16; name=0; base=3
   sta $2101
   stz $2102
   stz $2103
@@ -499,7 +419,7 @@ snes_init:
   stz $212d
   stz $212e
   stz $212f
-  lda #$30
+  lda #$31       ; CGWSEL: + D0=1 = CG Direct Select ON (Direct-Color logo on BG1/Mode3)
   sta $2130
   stz $2131
   lda #$e0
@@ -695,8 +615,6 @@ game_handshake:
   php
   sep #$20 : .as
   pha
-  jsr cover_sync_before_cmd ; idle the MCU channel: drain any in-flight cover
-                            ; request so its $55 can't be read as this cmd's ACK
   jsr hide_cursor
   jsr draw_loading_window
   jsr waitblank
@@ -732,14 +650,10 @@ wait_mcu_ready:
   sep #$20 : .as
   lda #$00
   sta @MCU_CMD
-  rep #$10 : .xl
-  ldx #$0000
 - lda @SNES_CMD
   cmp #$55
-  beq +
-  dex
   bne -
-+ plp
+  plp
   rts
 
 ; autoboot_cmd_handshake: run game_handshake with CMD_LOAD_AUTOBOOT

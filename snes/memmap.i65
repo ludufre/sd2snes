@@ -21,11 +21,10 @@
 #define COVER_OBJ_VRAM_BASE         $2000      /* OBJ name-table base (VRAM words) */
 #define COVER_OBJ_CLEAR_LEN         $2000      /* bytes cleared at init (256 4bpp tiles) */
 #define COVER_OBSEL                 $01        /* $2101: size tbl0 (8/16), name sel 0, base $2000 */
-/* The old BG-cover used char $100 (word $2000) as a zeroed transparent tile, but
-   that word is now the OBJ name table. So the header BG (cols 16..31) uses a
-   dedicated blank char in free VRAM after the logo ($6000..$6DFF). */
-#define COVER_BLANK_VRAM            $7800      /* VRAM word of the zeroed header blank tile */
-#define COVER_BLANK_CHAR            $03C0      /* BG1 char of the blank tile ($7800 / $20) */
+/* (unused) the old cropped-header blank tile. The Direct-Color logo is now shown in
+   FULL always (the cover floats over it as OBJ), so nothing in the header is blanked. */
+#define COVER_BLANK_VRAM            $7C00      /* (unused) */
+#define COVER_BLANK_CHAR            $03E0      /* (unused) */
 #define COVER_OBJ_X_RIGHT           256        /* right edge of the cover = screen edge; a w=8
                                                   cover fills cols 16..31 (logo owns 0..15). The
                                                   256 wrap is handled in cover_build_oam (lda #0). */
@@ -40,16 +39,20 @@
                                                   > the 3-frame d-pad auto-repeat so held scrolling
                                                   never fires a cover; 6 = faster load, still safe) */
 #define COVER_TIMEOUT               180        /* frames before giving up on the MCU */
-/* ---- header logo (8bpp BG1, left side; baked tiles in logo_gfx.a65) ----
-   The logo lives permanently in BG1_TILE_BUF cols 0..15 (written once at init);
-   the OBJ cover floats on the right, so the logo is never overwritten. */
+/* ---- header logo: original 256x56 in CG DIRECT SELECT (Direct Color) on BG1 ----
+   BG1 in Mode 3 with $2130 D0=1 uses the character data AS the colour (no CGRAM, see
+   SNES manual Book I ch.8 / p.A-17), so the cover OBJ owns the whole CGRAM 128..255
+   and there is NO palette conflict. The full logo is shown ALWAYS; the cover just
+   floats over it (OBJ priority 3), so the logo fills right up to the cover with no
+   gap. logo.a65 is baked for Direct Color (utils/bake_logo.py): logo_charmap holds
+   the per-cell BG1 tilemap words (pal3<<10 | char), logo_tiles the deduped tiles. */
 #define COVER_LOGO_VRAM            $6000      /* VRAM word dest for logo tile 0 (= char $300) */
 #define COVER_LOGO_CHAR            $0300      /* BG1 char number of logo tile 0 */
-#define COVER_LOGO_CGB             $40        /* CGRAM 64: logo palette base (pal 4+5, free) */
-#define COVER_LOGO_COLS            16         /* logo width in 8px tiles (128px, cols 0..15) */
-#define COVER_LOGO_TILEBYTES       $1C00      /* 16*7*64 = 7168 bytes */
-#define COVER_LOGO_PALBYTES        $0040      /* 32 colours * 2 = 64 bytes */
-#define COVER_AREA_COL             16         /* logo owns cols 0..15 of the header tilemap */
+#define COVER_LOGO_CGB             $40        /* (unused) old private logo palette base */
+#define COVER_LOGO_COLS            32         /* full logo width in 8px tiles (256px, cols 0..31) */
+#define COVER_LOGO_TILEBYTES       $2C40      /* unique Direct-Color tiles * 64 (deduped; see utils/bake_logo.py output) */
+#define COVER_LOGO_PALBYTES        $0040      /* (unused) old private logo palette size */
+#define COVER_AREA_COL             19         /* (unused) old cover-crop boundary */
 /* bank-C9 staging layout (must match src/cover.h COVER_OFF_*) */
 #define SRAM_COVER_ADDR             $C90000
 #define COVER_C9_TILES              $C90000    /* 4bpp tiles (name-grid order) */

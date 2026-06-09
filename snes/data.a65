@@ -16,8 +16,6 @@ dirend_onscreen .byt 0
 dirlog_idx      .byt 0,0,0  ; long ptr
 direntry_fits_idx .byt 0,0
 longptr         .byt 0,0,0  ; general purpose long ptr
-cover_ptr       .byt 0,0,0  ; cover: direct-page long ptr for reading bank C9
-cover_dst       .byt 0,0,0  ; cover: direct-page long ptr for writing the resampled 8x8 tiles (WRAM)
 ;----------parameters for text output----------
 print_x         .word 0     ; x coordinate
 print_y         .word 0     ; y coordinate
@@ -29,10 +27,6 @@ print_ptr       .byt 0,0,0  ; read pointer
 print_count     .word 0     ; how many characters may be printed?
 print_done      .word 0     ; how many characters were printed?
 print_over      .byt 0      ; was the string printed incompletely?
-;----------language selection----------
-cur_lang        .byt 0      ; active menu language (0=EN, 1=pt-BR); mirrors CFG_LANGUAGE
-resolve_ptr     .byt 0,0,0  ; resolve_str: zero-page long ptr to read a dispatch-table entry
-kv_len_tmp      .byt 0      ; menu_kv_value_len: resolved kv-value length out-param
 ;----------parameters for dma----------
 dma_a_bank      .byt 0
 dma_a_addr      .word 0
@@ -107,7 +101,6 @@ listsel_max         .byt 0
 listsel_pickbutton  .byt 0
 listsel_dirty       .byt 0
 listsel_backup      .byt 0
-ips_idx_tmp         .byt 0      ; IPS menu: loop counter / result temp
 
 screen_dma_disable  .word 0
 
@@ -244,9 +237,6 @@ pad_a           .byt 0
 pad_x           .byt 0
 pad_l           .byt 0
 pad_r           .byt 0
-mainmenu_active .byt 0
-egg_shown       .byt 0
-egg_hold        .byt 0
 
 ;------------------------
 snes_system_config
@@ -256,66 +246,4 @@ dbg_ptr         .word 0
 fade_speed      .byt 0
 fade_count      .byt 0
 idle_count      .word 0
-
-;-- cheat menu (see snes/cheatmenu.a65)
-cm_total        .word 0     ; total cheat count (16-bit, capped at 512 in r15)
-cm_visible      .word 0     ; rows currently drawn (1..CHEATS_PER_SCREEN). High byte always 0.
-cm_top          .word 0     ; index of first visible record. 16-bit, supports 0..511.
-cm_sel          .word 0     ; cursor offset within visible rows (0..cm_visible-1). High byte always 0.
-cm_tmp          .word 0     ; row counter for redraw. High byte always 0.
-cm_record_offs  .word 0     ; 16-bit offset within base bank
-cm_record_bank  .byt 0      ; bank byte for current record
-;-- horizontal description scroll, mirrors filesel direntry_xscroll
-cm_xscroll       .byt 0     ; current scroll offset of the SELECTED row (0..N)
-cm_xscroll_state .byt 0     ; $00 = idle, $01 = forward (right), $FF = backward
-cm_xscroll_wait  .byt 0     ; frame countdown before next scroll step
-cm_fits          .byt 0,0,0,0,0,0,0,0,0,0 ; per-row print_over flag from last description draw
-cm_fits_idx      .byt 0     ; cm_fits[] write index used during a redraw pass
-;-- r16: source of the current cheat menu session, so the LOAD/SAVE
-;-- wrappers know whether to address the file via FILESEL_CWD (filesel
-;-- context) or via favorite-index (favorites context).
-cm_source        .byt 0     ; $00 = filesel, $01 = favorite, $02 = recent
-cm_fav_idx       .byt 0     ; favorite list index for cm_source=$01
-cm_rec_idx       .byt 0     ; recent list index for cm_source=$02
-
-;-- delete-confirmation dialog (see confirm_delete in filesel.a65)
-confirm_sel         .byt 0   ; current option: $00 = No (default), $01 = Yes
-confirm_prompt_addr .word 0  ; prompt-line string pointer (resolved by hiprint)
-confirm_prompt_bank .byt 0
-confirm_name_addr   .word 0  ; file-name string pointer ($00 bank -> blank line)
-confirm_name_bank   .byt 0
-
-;----------cover preview state (8bpp BG1 cover in the header band)
-cover_dirty            .byt 0    ; 1 if selection changed and a (re)load is needed
-cover_debounce         .byt 0    ; frames remaining before firing the request
-cover_request_pending  .byt 0    ; 1 while a CMD_LOAD_COVER is in flight
-cover_timeout          .word 0   ; frames left before abandoning a stuck request
-cover_last_sel         .word 0   ; last filesel_sel a cover was requested for
-cover_loaded           .byt 0    ; 1 if a real cover is currently shown
-cover_w                .byt 0    ; staged cover width  in 16x16 sprites (from C9 meta)
-cover_h                .byt 0    ; staged cover height in 16x16 sprites (from C9 meta)
-cover_npal             .byt 0    ; staged cover palette count (from C9 meta)
-cover_ty               .byt 0    ; logo tilemap write scratch: row counter
-cover_char             .word 0   ; logo tilemap write scratch: running char number
-cover_tilebytes        .word 0   ; OBJ tile DMA length  = h_spr*1024
-cover_palbytes         .word 0   ; OBJ palette DMA length = n_palettes*32
-cover_halfbytes        .word 0   ; half the tile DMA (h*512) - split across 2 VBlanks
-cover_chunk2_vram      .word 0   ; VRAM word addr of the 2nd tile chunk ($2000 + h*256)
-cover_nspr             .byt 0    ; sprite count = w_spr*h_spr
-cover_x0               .byt 0    ; left X of the cover grid = 248 - w*16
-cover_yrow             .byt 0    ; OAM build scratch: Y of the current sprite row
-cover_tilerow          .byt 0    ; OAM build scratch: base tile of the row (sy*32)
-cover_scr              .byt 0    ; OAM build scratch
-cover_sx               .byt 0    ; OAM build scratch: sprite column
-cover_sy               .byt 0    ; OAM build scratch: sprite row
-cover_src_base         .word 0   ; small resample: C9 byte offset of the current block's top-left tile
-cover_loff             .word 0   ; small resample: C9 byte offset of the current source (left) byte
-cover_tmp              .byt 0    ; small resample: packed left nibble scratch
-listcover_active       .byt 0    ; 1 while a Recent/Favorite list is open (enables the per-frame hook)
-listcover_which        .byt 0    ; 0 = recent (CMD_LOAD_COVER_RECENT), 1 = favorite (CMD_LOAD_COVER_FAVORITE)
-listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (debounce)
-
-;----------language switch redraw bookkeeping
-menu_drawn_lang        .byt 0    ; language the current show_menu window was drawn in
-mainmenu_relang        .byt 0    ; set when the language changed -> main menu re-shows
 _END            .byt 0
