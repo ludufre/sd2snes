@@ -279,6 +279,9 @@ void cheat_yaml_load(uint8_t* romfilename) {
   yaml_file_open(line, FA_READ);
   if(file_res) {
     printf("no cheat list YML found\n");
+    sram_writeshort(0, SRAM_NUM_CHEATS);
+    file_res = 0; /* soft fail, suppress LED blink */
+    return;
   }
   /* read cheat entries */
   int cheat_idx = 0;

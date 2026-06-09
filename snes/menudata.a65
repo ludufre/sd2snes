@@ -396,8 +396,8 @@ menu_enttab_browser:
  .byt  MTYPE_VALUE
  .word !mtext_browser_showcov
  .byt  ^mtext_browser_showcov
- .word !kv_onoff
- .byt  ^kv_onoff
+ .word !kv_cover_size
+ .byt  ^kv_cover_size
  .byt  OPTTYPE_KVBYTE
  .word !CFG_SHOW_COVERS
  .byt  ^CFG_SHOW_COVERS
@@ -910,6 +910,32 @@ menu_enttab_filesel_context_file:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_selected_file-1
+ .byt  ^delete_selected_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_srm
+ .byt  ^text_filesel_context_delete_srm
+ .word !delete_selected_srm-1
+ .byt  ^delete_selected_srm-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_srm
+ .byt  ^mdesc_filesel_context_delete_srm
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  0
 
 menu_enttab_recent_context:
@@ -958,10 +984,23 @@ menu_enttab_recent_context:
  .byt  0,0,0
 
  .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_cheats
+ .byt  ^text_filesel_context_cheats
+ .word !cheat_menu_for_recent_file-1
+ .byt  ^cheat_menu_for_recent_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_cheats
+ .byt  ^mdesc_filesel_context_cheats
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_context_delete_file
  .byt  ^text_filesel_context_delete_file
- .word !delete_selected_file-1
- .byt  ^delete_selected_file-1
+ .word !delete_recent_file-1
+ .byt  ^delete_recent_file-1
  .byt  0
  .byt  0,0,0
  .word !mdesc_filesel_context_delete_file
@@ -973,8 +1012,8 @@ menu_enttab_recent_context:
  .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_context_delete_srm
  .byt  ^text_filesel_context_delete_srm
- .word !delete_selected_srm-1
- .byt  ^delete_selected_srm-1
+ .word !delete_recent_srm-1
+ .byt  ^delete_recent_srm-1
  .byt  0
  .byt  0,0,0
  .word !mdesc_filesel_context_delete_srm
@@ -1059,6 +1098,32 @@ menu_enttab_filesel_favorites_context:
  .byt  0,0,0
  .word !mdesc_filesel_set_as_autoboot
  .byt  ^mdesc_filesel_set_as_autoboot
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_favorite_file-1
+ .byt  ^delete_favorite_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_srm
+ .byt  ^text_filesel_context_delete_srm
+ .word !delete_favorite_srm-1
+ .byt  ^delete_favorite_srm-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_srm
+ .byt  ^mdesc_filesel_context_delete_srm
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0
@@ -1152,6 +1217,15 @@ kv_bsx_timesource:
 kv_onoff:
 .word $0000, !text_off : .byt ^text_off
 .word $0001, !text_on : .byt ^text_on
+.word $ffff
+
+; cover size: 1=large (legacy "on"), 2=small (half, 8x8 sprites), 0=off. Cycle
+; order large->small->off; CFG default is 1 so an existing "ShowCovers: true"
+; config (parsed to 1) shows "Large".
+kv_cover_size:
+.word $0001, !text_cover_large : .byt ^text_cover_large
+.word $0002, !text_cover_small : .byt ^text_cover_small
+.word $0000, !text_off : .byt ^text_off
 .word $ffff
 
 kv_rst_to_menu:

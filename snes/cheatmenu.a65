@@ -74,6 +74,25 @@ cheat_menu_for_favorite_file:
   bra cheat_menu_run
 
 ; ----------------------------------------------------------------------
+; Public entry point. Called via long pointer from the recent games
+; context menu (see menu_enttab_recent_context in menudata.a65).
+; MCU_PARAM low byte holds the recent-list index; select_last_file
+; stored it there before opening the context menu.  Snapshot it into
+; cm_rec_idx because the toggle command clobbers MCU_PARAM during
+; normal menu use.
+; ----------------------------------------------------------------------
+cheat_menu_for_recent_file:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @MCU_PARAM
+  sta cm_rec_idx
+  lda #$02
+  sta cm_source                     ; $02 = recent session
+  bra cheat_menu_run
+
+; ----------------------------------------------------------------------
 ; Shared cheat menu body.  The load/save MCU wrappers below dispatch on
 ; cm_source so this code is identical for both entry points.
 ; ----------------------------------------------------------------------
@@ -92,6 +111,11 @@ cheat_menu_run:
   lda #$0200
 cheatmenu_count_ok:
   sta cm_total                      ; 16-bit store
+; STA does not affect the flags, so a plain BNE here would test the Z flag
+; left by CMP #$0200 above (i.e. "count == 512?"), NOT whether the count is
+; zero.  That made the empty popup only ever show for exactly 512 cheats and
+; the empty/garbage list show for 0 cheats.  Re-test the count itself.
+  cmp #$0000
   bne cheatmenu_have_data16
 
   sep #$20 : .as
@@ -160,7 +184,23 @@ cheatmenu_load_from_mcu:
 ; The toggle command clobbers MCU_PARAM byte 0 during normal menu use,
 ; so we rebuild it here just before sending LOAD.
   lda cm_source
-  bne cheatmenu_load_fav
+  beq cheatmenu_load_filesel        ; $00 = filesel
+  cmp #$02
+  beq cheatmenu_load_recent         ; $02 = recent
+; cm_source = $01: favorite session.  MCU_PARAM low byte = favorite
+; index; the MCU resolves it via cfg_get_listed_game(FAVORITES_FILE, ...).
+  lda cm_fav_idx
+  sta @MCU_PARAM
+  lda #CMD_LOAD_CHT_FAV
+  bra cheatmenu_load_send
+cheatmenu_load_recent:
+; cm_source = $02: recent session.  MCU_PARAM low byte = recent index;
+; the MCU resolves it via cfg_get_listed_game(LAST_FILE, ...).
+  lda cm_rec_idx
+  sta @MCU_PARAM
+  lda #CMD_LOAD_CHT_RECENT
+  bra cheatmenu_load_send
+cheatmenu_load_filesel:
 ; cm_source = $00: filesel session.  Re-write MCU_PARAM[0..3] with
 ; FILESEL_CWD long pointer; get_selected_name() reads this to resolve
 ; the selected ROM path.
@@ -173,13 +213,6 @@ cheatmenu_load_from_mcu:
   lda #$00
   sta @MCU_PARAM+3
   lda #CMD_LOAD_CHT
-  bra cheatmenu_load_send
-cheatmenu_load_fav:
-; cm_source = $01: favorite session.  MCU_PARAM low byte = favorite
-; index; the MCU resolves it via cfg_get_listed_game(FAVORITES_FILE, ...).
-  lda cm_fav_idx
-  sta @MCU_PARAM
-  lda #CMD_LOAD_CHT_FAV
 cheatmenu_load_send:
   pha
   lda #$00
@@ -207,7 +240,21 @@ cheatmenu_save_to_mcu:
   jsr draw_loading_window
   jsr waitblank
   lda cm_source
-  bne cheatmenu_save_fav
+  beq cheatmenu_save_filesel        ; $00 = filesel
+  cmp #$02
+  beq cheatmenu_save_recent         ; $02 = recent
+; cm_source = $01: favorite session.
+  lda cm_fav_idx
+  sta @MCU_PARAM
+  lda #CMD_SAVE_CHT_FAV
+  bra cheatmenu_save_send
+cheatmenu_save_recent:
+; cm_source = $02: recent session.
+  lda cm_rec_idx
+  sta @MCU_PARAM
+  lda #CMD_SAVE_CHT_RECENT
+  bra cheatmenu_save_send
+cheatmenu_save_filesel:
 ; cm_source = $00: filesel session.
   rep #$20 : .al
   lda #!FILESEL_CWD
@@ -218,12 +265,6 @@ cheatmenu_save_to_mcu:
   lda #$00
   sta @MCU_PARAM+3
   lda #CMD_SAVE_CHT
-  bra cheatmenu_save_send
-cheatmenu_save_fav:
-; cm_source = $01: favorite session.
-  lda cm_fav_idx
-  sta @MCU_PARAM
-  lda #CMD_SAVE_CHT_FAV
 cheatmenu_save_send:
   pha
   lda #$00
@@ -997,39 +1038,79 @@ cheatmenu_toggle_selected:
 
 
 cheatmenu_show_empty_popup:
+; Properly sized "no cheats" popup.  The old version set window_h=1,
+; which makes draw_window's body-row loop count Y = window_h-2 = $FFFF
+; and flood the screen with ~65535 rows.  This mirrors show_empty_msg:
+; park the hardware selection bar (push_window can't hide it), draw a
+; closed-border box wide enough for the translated text, center the
+; message and wait for a button.
   php
   sep #$20 : .as
   rep #$10 : .xl
-  lda #$0e
+; park the selection bar off-screen so it doesn't bleed under the popup
+  lda bar_xl
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #$ff
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+; closed-border box: 40 wide, centered (x=12), y=13, 3 tall
+  lda #12
   sta window_x
-  lda #$0e
+  lda #13
   sta window_y
-  lda #$24
+  lda #40
   sta window_w
-  lda #$01
+  lda #$03
   sta window_h
-  lda #^text_cheat_none_title
+  lda #^zero                 ; empty title -> closed top border
   sta window_tbank
-  ldx #!text_cheat_none_title
+  ldx #!zero
   stx window_taddr
   jsr push_window
   jsr draw_window
+; resolve the message for the active language, then center it inside the box
   lda #^text_cheat_none_msg
   sta print_bank
   ldx #!text_cheat_none_msg
   stx print_src
-  stz print_pal
-  lda #$22
-  sta print_count
-  lda #$0f
-  sta print_y
-  lda #$0f
+  lda print_bank
+  ldy print_src
+  jsr resolve_yx             ; A=resolved bank, Y=resolved addr; print_* resolved
+  phb
+  pha
+  plb                        ; DB = resolved string bank for strlen
+  jsr strlen                 ; Y = string length
+  plb
+  sep #$20 : .as
+  tya                        ; A = length (<256)
+  sta window_tmp
+  lda window_w
+  sec
+  sbc window_tmp             ; window_w - length
+  bcs +                      ; box wide enough
+  lda #$02                   ; message wider than box: small left margin
++ lsr                        ; /2
+  clc
+  adc window_x               ; print_x = window_x + (window_w-length)/2
   sta print_x
+  lda window_y
+  inc                        ; body row (window_y+1, for h=3)
+  sta print_y
+  stz print_pal
+  lda #56
+  sta print_count
   jsr hiprint
-
+  jsr enable_screen_update
+; wait for a button, then close and restore the selection bar
 - lda isr_done
   beq -
   stz isr_done
+  jsr printtime
   jsr read_pad
   lda pad_a
   ora pad_b
@@ -1037,6 +1118,12 @@ cheatmenu_show_empty_popup:
   ora pad_start
   beq -
   jsr pop_window
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
   plp
   rts
 

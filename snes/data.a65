@@ -17,6 +17,7 @@ dirlog_idx      .byt 0,0,0  ; long ptr
 direntry_fits_idx .byt 0,0
 longptr         .byt 0,0,0  ; general purpose long ptr
 cover_ptr       .byt 0,0,0  ; cover: direct-page long ptr for reading bank C9
+cover_dst       .byt 0,0,0  ; cover: direct-page long ptr for writing the resampled 8x8 tiles (WRAM)
 ;----------parameters for text output----------
 print_x         .word 0     ; x coordinate
 print_y         .word 0     ; y coordinate
@@ -273,8 +274,16 @@ cm_fits_idx      .byt 0     ; cm_fits[] write index used during a redraw pass
 ;-- r16: source of the current cheat menu session, so the LOAD/SAVE
 ;-- wrappers know whether to address the file via FILESEL_CWD (filesel
 ;-- context) or via favorite-index (favorites context).
-cm_source        .byt 0     ; $00 = filesel, $01 = favorite
+cm_source        .byt 0     ; $00 = filesel, $01 = favorite, $02 = recent
 cm_fav_idx       .byt 0     ; favorite list index for cm_source=$01
+cm_rec_idx       .byt 0     ; recent list index for cm_source=$02
+
+;-- delete-confirmation dialog (see confirm_delete in filesel.a65)
+confirm_sel         .byt 0   ; current option: $00 = No (default), $01 = Yes
+confirm_prompt_addr .word 0  ; prompt-line string pointer (resolved by hiprint)
+confirm_prompt_bank .byt 0
+confirm_name_addr   .word 0  ; file-name string pointer ($00 bank -> blank line)
+confirm_name_bank   .byt 0
 
 ;----------cover preview state (8bpp BG1 cover in the header band)
 cover_dirty            .byt 0    ; 1 if selection changed and a (re)load is needed
@@ -299,6 +308,9 @@ cover_tilerow          .byt 0    ; OAM build scratch: base tile of the row (sy*3
 cover_scr              .byt 0    ; OAM build scratch
 cover_sx               .byt 0    ; OAM build scratch: sprite column
 cover_sy               .byt 0    ; OAM build scratch: sprite row
+cover_src_base         .word 0   ; small resample: C9 byte offset of the current block's top-left tile
+cover_loff             .word 0   ; small resample: C9 byte offset of the current source (left) byte
+cover_tmp              .byt 0    ; small resample: packed left nibble scratch
 listcover_active       .byt 0    ; 1 while a Recent/Favorite list is open (enables the per-frame hook)
 listcover_which        .byt 0    ; 0 = recent (CMD_LOAD_COVER_RECENT), 1 = favorite (CMD_LOAD_COVER_FAVORITE)
 listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (debounce)

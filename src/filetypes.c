@@ -83,8 +83,11 @@ printf("start\n");
           case TYPE_SPC:
           case TYPE_SUBDIR:
           case TYPE_PARENT:
-            /* omit entries with hidden or system attribute */
-            if(fno.fattrib & (AM_HID | AM_SYS)) continue;
+            /* omit entries with hidden or system attribute -- but NEVER the
+               parent "..": dirs created/copied on other OSes (e.g. macOS) can
+               mark their "." and ".." entries hidden, and we still need ".."
+               for navigation back up. */
+            if(type != TYPE_PARENT && (fno.fattrib & (AM_HID | AM_SYS))) continue;
             if(fno.fattrib & AM_DIR) {
               /* omit dot directories except '..' */
               if(fn[0]=='.' && fn[1]!='.') continue;

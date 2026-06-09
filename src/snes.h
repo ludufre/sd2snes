@@ -56,19 +56,21 @@
 #define SNES_CMD_LOAD_MENU_SPC       (0x1e) /* stage /sd2snes/menu.spc for background menu music */
 #define SNES_CMD_LOAD_COVER_RECENT   (0x1f) /* stage downscaled .cov for recent game (index in MCU_PARAM) */
 #define SNES_CMD_LOAD_COVER_FAVORITE (0x20) /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
-/* WiFi-in-menu (bridged to the ESP via uart_proto WIFI_* opcodes). The status +
-   scan block and the connect params live in the SRAM sysinfo block (modal, so
-   it never overlaps the sysinfo screen). See WIFI_OFF_* below. */
-#define SNES_CMD_WIFI_SCAN           (0x21) /* queue an AP scan on the ESP */
-#define SNES_CMD_WIFI_GET            (0x22) /* write current status + scan list to SRAM */
-#define SNES_CMD_WIFI_CONNECT        (0x23) /* connect using ssid/pass the menu wrote to SRAM */
-#define SNES_CMD_WIFI_FORGET         (0x24) /* forget the saved network */
-#define SNES_CMD_DELETE_FILE         (0x25) /* delete selected file */
-#define SNES_CMD_DELETE_SRM          (0x26) /* delete SRM save file for selected ROM */
-#define SNES_CMD_TOGGLE_CHT          (0x27) /* MCU_PARAM low byte: cheat index. XORs flag bit in PSRAM record. */
-#define SNES_CMD_LOAD_CHT_FAV        (0x28) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
-#define SNES_CMD_SAVE_CHT_FAV        (0x29) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
-
+#define SNES_CMD_DELETE_FILE         (0x21) /* delete selected file */
+#define SNES_CMD_DELETE_SRM          (0x22) /* delete SRM save file for selected ROM */
+#define SNES_CMD_TOGGLE_CHT          (0x23) /* MCU_PARAM low byte: cheat index. XORs flag bit in PSRAM record. */
+#define SNES_CMD_LOAD_CHT_FAV        (0x24) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
+#define SNES_CMD_SAVE_CHT_FAV        (0x25) /* MCU_PARAM low byte: favorite index. Resolve path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
+#define SNES_CMD_DELETE_FILE_FAV     (0x26) /* MCU_PARAM low byte: favorite index. Resolve path via FAVORITES_FILE, delete the ROM, then drop the list entry. */
+#define SNES_CMD_DELETE_SRM_FAV      (0x27) /* MCU_PARAM low byte: favorite index. Resolve path via FAVORITES_FILE, delete only the .srm (ROM stays in favorites). */
+#define SNES_CMD_DELETE_FILE_RECENT  (0x28) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete the ROM, then drop the list entry. */
+#define SNES_CMD_DELETE_SRM_RECENT   (0x29) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete only the .srm (ROM stays in recents). */
+#define SNES_CMD_LOAD_CHT_RECENT     (0x2a) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_load. */
+#define SNES_CMD_SAVE_CHT_RECENT     (0x2b) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_save. */
+#define SNES_CMD_WIFI_SCAN           (0x2c) /* queue an AP scan on the ESP */
+#define SNES_CMD_WIFI_GET            (0x2d) /* write current status + scan list to SRAM */
+#define SNES_CMD_WIFI_CONNECT        (0x2e) /* connect using ssid/pass the menu wrote to SRAM */
+#define SNES_CMD_WIFI_FORGET         (0x2f) /* forget the saved network */
 
 /* WiFi SRAM block layout (base = SRAM_SYSINFO_ADDR; menu side = WIFI_BLK $FF1200) */
 #define WIFI_OFF_CONNECTED  0    /* u8  */

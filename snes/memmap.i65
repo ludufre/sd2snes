@@ -60,6 +60,17 @@
 #define COVER_C9_META_H             $C93A02    /* h_spr */
 #define COVER_C9_META_NPAL          $C93A03    /* n_palettes */
 #define COVER_STATUS_OK             $01
+/* ---- small (half-size) cover: WRAM scratch + downscale LUT ----
+   When ShowCovers == 2 the menu resamples the staged 16x16-block tiles down to
+   one 8x8 tile per block (nearest-neighbour, even pixels) into COVER_SMALL_TILEBUF,
+   then draws the cover as 8x8 OBJ sprites (COVER_OBSEL already selects the 8/16
+   size pair). COVER_PACKTBL is a 256-byte LUT that gathers a byte's 4 even bits
+   into the low nibble; it is built once at boot. Both live in free WRAM after the
+   cover OAM shadow ($7EC000+256) and below WRAM_ROUTINE ($7EF000). */
+#define COVER_SMALL_TILEBUF         $7EC100    /* resampled 8x8 tiles (dense, <= w*h*32 = 2048 B) */
+#define COVER_PACKTBL               $7ED100    /* 256-byte even-bit-pack LUT (built at init) */
+#define COVER_PACKTBL_W             $D100      /* low 16 of COVER_PACKTBL for abs,Y reads (DB=$7E) */
+#define COVER_SMALL_OBJ_STEP        8          /* small sprite pitch in px (8x8 OBJ) */
 
 #define MCU_CMD                     $002A00
 #define SNES_CMD                    $002A02
@@ -103,7 +114,7 @@
 
 #define ROOT_DIR                    $C10000
 
-#define NUM_CHEATS                  $CFFFFE
+#define NUM_CHEATS                  $FF0700
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
@@ -155,15 +166,21 @@
 #define CMD_LOAD_MENU_SPC           $1e /* stage /sd2snes/menu.spc for background menu music */
 #define CMD_LOAD_COVER_RECENT       $1f /* stage downscaled .cov for recent game (index in MCU_PARAM) */
 #define CMD_LOAD_COVER_FAVORITE     $20 /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
-#define CMD_WIFI_SCAN               $21 /* queue an AP scan on the ESP */
-#define CMD_WIFI_GET                $22 /* write current status + scan list to WIFI_BLK */
-#define CMD_WIFI_CONNECT            $23 /* connect using ssid/pass written to WIFI_BLK */
-#define CMD_WIFI_FORGET             $24 /* forget the saved network */
-#define CMD_DELETE_FILE             $25 /* delete selected file */
-#define CMD_DELETE_SRM              $26 /* delete SRM save file for selected ROM */
-#define CMD_TOGGLE_CHT              $27 /* MCU_PARAM low byte: cheat index. MCU XORs the flag bit in PSRAM record. */
-#define CMD_LOAD_CHT_FAV            $28 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
-#define CMD_SAVE_CHT_FAV            $29 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
+#define CMD_DELETE_FILE             $21 /* delete selected file */
+#define CMD_DELETE_SRM              $22 /* delete SRM save file for selected ROM */
+#define CMD_TOGGLE_CHT              $23 /* MCU_PARAM low byte: cheat index. MCU XORs the flag bit in PSRAM record. */
+#define CMD_LOAD_CHT_FAV            $24 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_load. */
+#define CMD_SAVE_CHT_FAV            $25 /* MCU_PARAM low byte: favorite index. Resolves path via cfg_get_listed_game(FAVORITES_FILE, ...) then cheat_yaml_save. */
+#define CMD_DELETE_FILE_FAV         $26 /* MCU_PARAM low byte: favorite index. Delete the ROM, then drop the favorites list entry. */
+#define CMD_DELETE_SRM_FAV          $27 /* MCU_PARAM low byte: favorite index. Delete only the .srm (ROM stays in favorites). */
+#define CMD_DELETE_FILE_RECENT      $28 /* MCU_PARAM low byte: recent index. Delete the ROM, then drop the recents list entry. */
+#define CMD_DELETE_SRM_RECENT       $29 /* MCU_PARAM low byte: recent index. Delete only the .srm (ROM stays in recents). */
+#define CMD_LOAD_CHT_RECENT         $2a /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_load. */
+#define CMD_SAVE_CHT_RECENT         $2b /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_save. */
+#define CMD_WIFI_SCAN               $2c /* queue an AP scan on the ESP */
+#define CMD_WIFI_GET                $2d /* write current status + scan list to WIFI_BLK */
+#define CMD_WIFI_CONNECT            $2e /* connect using ssid/pass written to WIFI_BLK */
+#define CMD_WIFI_FORGET             $2f /* forget the saved network */
 
 /* WiFi status/scan block + connect params. Aliases SYSINFO_BLK (both modal, so
    they never coexist). Layout MUST match src/snes.h WIFI_OFF_*. */

@@ -4,6 +4,7 @@ version         .byt "                            v0.1",0
 zero            .word  0
 oamhide         .word  $f0f0   ; OAM fill: Y=$f0 (off-screen) hides every sprite
 oamlarge        .word  $aaaa   ; OAM hi-table fill: size=1 (16x16) + X bit8=0 for 4 sprites
+oamsmall        .word  $0000   ; OAM hi-table fill: size=0 (8x8) + X bit8=0 (small cover)
 bg2tile         .byt $20
 hdma_pal_src
   .byt 44
@@ -347,7 +348,16 @@ mdesc_filesel_context_cheats .byt "View, enable or disable cheats from this ROM'
 text_cheat_yes  .byt "Yes ", 0
 text_cheat_no   .byt "No  ", 0
 text_cheat_none_title .byt "Cheats", 0
-text_cheat_none_msg   .byt "  No cheats found for this ROM  ", 0
+text_cheat_none_msg   .byt "No cheats found for this ROM", 0
+
+; delete-confirmation dialog (see confirm_delete in filesel.a65)
+text_confirm_delete_file .byt "Delete this file?", 0
+text_confirm_delete_srm  .byt "Delete the save file?", 0
+text_confirm_hint        .byt "A:Confirm  B:Cancel", 0
+text_confirm_no_sel      .byt "[No]", 0
+text_confirm_no_unsel    .byt " No ", 0
+text_confirm_yes_sel     .byt "[Yes]", 0
+text_confirm_yes_unsel   .byt " Yes ", 0
 
 text_statusbar_play .byt "A:Play B:Back X:Menu", 0
 text_statusbar_keys .byt "A:Select B:Back X:Menu Y:Context", 0
@@ -363,6 +373,8 @@ text_on_p1      .byt "On: P1", 0
 text_on_p2      .byt "On: P2", 0
 text_on         .byt "On", 0
 text_off        .byt "Off", 0
+text_cover_large .byt "Large", 0
+text_cover_small .byt "Small", 0
 text_nav_folder .byt "Folder", 0
 text_nav_rom    .byt "ROM", 0
 text_enabled    .byt "Enabled", 0

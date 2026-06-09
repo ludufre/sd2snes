@@ -1,4 +1,4 @@
-<h1> sd2snes ❤️ capas</h1>
+<h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Demonstração">
 <img src="gfx/langs.gif" width="384" alt="O menu principal em Inglês, Português do Brasil e Espanhol">
@@ -34,6 +34,8 @@ Você precisa de:
 - **Capas dos jogos:** veja a capa de cada jogo enquanto navega pela lista de ROMs.
 - **Música no menu:** toque uma faixa `.spc` de fundo enquanto navega.
 - **Patches IPS/BPS:** escolha patches de tradução, hacks ou correções antes de iniciar um jogo, sem alterar a ROM no cartão SD.
+- **Gerenciador de cheats:** o sd2snes original já aplica trapaças — este fork adiciona um menu pra **ativar e desativar** os códigos de um jogo no console (a partir de `/sd2snes/cheats/<rom>.yml`), sem editar o YAML no PC. Dá para baixar cheats prontos no [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)".
+- **Deletar arquivo e save:** apague o arquivo selecionado ou só o save (`.srm`) direto pelo menu, sem tirar o cartão SD.
 - **Melhorias no reset para o menu:** volte para a mesma pasta ou até para a mesma ROM depois de um reset curto.
 - **Temas personalizados:** edite logo, fonte, paleta, fundo e cores do seletor com o editor de temas feito para este fork.
 
@@ -95,7 +97,7 @@ A forma mais fácil de criar arquivos `.cov` é usando o aplicativo gerador de c
 
 Use o **sd2snes-covers v1.1.0 ou mais novo**. Se você criou capas com uma versão mais antiga, gere as capas novamente com o app mais novo.
 
-Você pode ligar ou desligar as capas no menu em **Mostrar capas** / **Show covers**.
+No menu, **Mostrar capas** tem três opções: **Grande** (capa inteira), **Pequeno** (metade do tamanho — útil quando a capa cobre a lista de arquivos) e **Desligado**. O padrão é **Grande**, então quem já usava as capas não precisa mudar nada.
 
 ## Patches IPS/BPS
 
@@ -141,6 +143,45 @@ Você pode ligar ou desligar a música em **Configurações → Opções do Nave
 
 > [!TIP]
 > Algumas trilhas vêm como arquivos `.rsn`. Um `.rsn` geralmente é um arquivo compactado com vários `.spc` dentro. Extraia o `.rsn` e escolha um dos arquivos `.spc`.
+
+## Trapaças (cheats)
+
+O firmware original do sd2snes já **aplica** trapaças por jogo. O que este fork adiciona é um **gerenciador de trapaças no menu**, pra você ativar e desativar cada código no próprio console — sem editar o YAML no PC.
+
+As trapaças são lidas de um arquivo **YAML** (`.yml`) na pasta `/sd2snes/cheats/`, com o nome da ROM (a extensão dela trocada por `.yml`):
+
+```text
+/sd2snes/A/Aladdin (USA).sfc        ← a ROM (em qualquer pasta)
+/sd2snes/cheats/Aladdin (USA).yml   ← as trapaças dela
+```
+
+Para gerenciar, selecione uma ROM no navegador de arquivos, aperte **Y** para abrir o menu de contexto e escolha **Trapaças**. A lista mostra cada código do arquivo:
+
+- **A** ativa ou desativa o código destacado.
+- **B** salva as alterações e sai.
+
+Os códigos ativados são aplicados na próxima vez que você iniciar aquele jogo.
+
+Para conseguir arquivos de trapaça prontos:
+
+1. Abra [gamehacking.org/system/snes](https://gamehacking.org/system/snes) e encontre o seu jogo.
+2. Exporte os códigos usando o formato **FXPak Pro 1.7 (.yml)**.
+3. Renomeie o arquivo para bater com a ROM e coloque-o em `/sd2snes/cheats/` no cartão SD.
+
+> [!NOTE]
+> Se a ROM não tiver um `.yml` em `/sd2snes/cheats/` (ou o arquivo não tiver códigos), o menu mostra a mensagem "Nenhuma trapaça definida para esta ROM".
+
+## Deletar arquivo e save
+
+Você pode deletar arquivos e saves direto pelo menu, sem tirar o cartão SD nem usar o computador.
+
+Selecione um arquivo no navegador e aperte **Y** para abrir o menu de contexto:
+
+- **Deletar:** remove o arquivo selecionado.
+- **Deletar save:** remove só o save `.srm` daquela ROM, mantendo a ROM.
+
+> [!WARNING]
+> A exclusão é permanente — não existe lixeira no cartão SD. Confira o arquivo selecionado antes de confirmar.
 
 ## Reset para o menu
 

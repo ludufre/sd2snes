@@ -77,6 +77,41 @@ cover_init:
   jsr cover_logo_to_buf
   jsr cover_clear_area
   jsr cover_dma_header
+  jsr cover_build_packtbl   ; build the even-bit-pack LUT used by the small-cover downscale
+  plp
+  rts
+
+; -- cover_build_packtbl: fill COVER_PACKTBL[b] = the 4 even bits of b (positions
+;    7,5,3,1) gathered into the low nibble (positions 3,2,1,0). Built once at boot.
+;    The small-cover resampler halves a byte to a nibble with one LUT read, so a
+;    downscaled output byte is (PACKTBL[left]<<4) | PACKTBL[right]. DB-independent
+;    (long,x store); cover_scr/cover_tmp are the same low-WRAM scratch cover_init uses.
+cover_build_packtbl:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+cbp_loop:
+  txa
+  sta cover_scr             ; b
+  stz cover_tmp             ; result = 0
+  lda cover_scr : and #$02 : beq cbp1
+  lda cover_tmp : ora #$01 : sta cover_tmp
+cbp1:
+  lda cover_scr : and #$08 : beq cbp2
+  lda cover_tmp : ora #$02 : sta cover_tmp
+cbp2:
+  lda cover_scr : and #$20 : beq cbp3
+  lda cover_tmp : ora #$04 : sta cover_tmp
+cbp3:
+  lda cover_scr : and #$80 : beq cbp4
+  lda cover_tmp : ora #$08 : sta cover_tmp
+cbp4:
+  lda cover_tmp
+  sta @COVER_PACKTBL,x
+  inx
+  cpx #$0100
+  bcc cbp_loop
   plp
   rts
 
@@ -409,6 +444,13 @@ cshow_bad:
 cshow_ok:
   jsr cover_calc_sizes_obj   ; -> cover_tilebytes, cover_halfbytes, cover_chunk2_vram,
                              ;    cover_palbytes
+  ; ShowCovers == 2 (small): resample to 8x8 tiles + draw 8x8 sprites instead.
+  ; (jmp, not a branch: the large path below is past the 8-bit branch range.)
+  lda @CFG_SHOW_COVERS
+  cmp #$02
+  bne cshow_large
+  jmp cover_show_small
+cshow_large:
   jsr cover_build_oam        ; build the cover OAM low table in WRAM NOW (main loop)
   ; The full tile DMA (up to 8192 bytes) does NOT fit in one VBlank (~6.5KB budget),
   ; so a single forced-blank window overruns into active display -> a 1-frame black
@@ -439,6 +481,253 @@ cshow_ok:
   stx $2102
   DMA7(#$08, #COVER_OAM_HI_BYTES, #^oamlarge, #!oamlarge, #$04)
   jsr cover_blank_end        ; un-blank + NMI back on
+  plp
+  rts
+
+; -- cover_show_small: small (half-size) cover. Resamples the staged 16x16-block
+;    tiles down to one 8x8 tile per block (dense, nearest-neighbour) into WRAM, then
+;    draws a w x h grid of 8x8 OBJ sprites. The whole upload (palette + <=2048 tile
+;    bytes + OAM) fits one VBlank, so a single forced-blank window suffices (no band).
+;    Reached from cover_show via beq, sharing its php (.as/.xl) and tail plp.
+cover_show_small:
+  jsr cover_resample_small   ; C9 16x16-block tiles -> WRAM dense 8x8 tiles
+  jsr cover_build_oam_small  ; build the 8x8 OAM low table in WRAM (main loop)
+  ; small tile DMA length = w*h*32 bytes (dense). w,h are 1..8 (validated above).
+  sep #$20 : .as
+  lda cover_h
+  sta cover_scr              ; row counter
+  stz cover_tmp              ; nspr = w*h accumulator (<= 64)
+csm_mul:
+  lda cover_tmp
+  clc
+  adc cover_w
+  sta cover_tmp
+  dec cover_scr
+  bne csm_mul
+  rep #$20 : .al
+  lda cover_tmp
+  and #$00ff
+  asl
+  asl
+  asl
+  asl
+  asl                        ; nspr << 5 = nspr*32
+  sta cover_tilebytes
+  sep #$20 : .as
+  ; --- one VBlank window: palette -> CGRAM 128, tiles -> VRAM $2000, OAM (8x8) ---
+  jsr cover_blank_begin
+  lda #$80                   ; CGADD = 128 (OBJ palette region)
+  sta $2121
+  DMA7(#$00, cover_palbytes, #^COVER_C9_PAL, #!COVER_C9_PAL, #$22)
+  ldx #COVER_OBJ_VRAM_BASE
+  stx $2116
+  DMA7(#$01, cover_tilebytes, #^COVER_SMALL_TILEBUF, #!COVER_SMALL_TILEBUF, #$18)
+  ldx #COVER_OAM_FIRST*2
+  stx $2102
+  DMA7(#$00, #COVER_OAM_LO_BYTES, #^COVER_OAM_LO, #!COVER_OAM_LO, #$04)
+  ldx #$0100                 ; OAMADD = $100 -> high table
+  stx $2102
+  DMA7(#$08, #COVER_OAM_HI_BYTES, #^oamsmall, #!oamsmall, #$04)  ; size=0 (8x8), Xbit8=0
+  jsr cover_blank_end
+  plp
+  rts
+
+; -- cover_resample_small: downscale the staged 16x16-block 4bpp tiles (bank C9) to
+;    one 8x8 tile per block (nearest-neighbour: even pixels), written densely (block
+;    row-major, tile index = w*sy+sx) into COVER_SMALL_TILEBUF. Runs in the main loop
+;    (no VBlank cost). Each output byte = (PACKTBL[left]<<4) | PACKTBL[right], where
+;    left/right are the two source plane-bytes whose even bits make the 8 output
+;    pixels; small_srcoff[ob] is the left byte's C9 offset (relative to the block's
+;    top-left tile) and the right byte is always +32 (the next 16-wide-grid tile).
+;    DB=$7E so PACKTBL abs,Y and the low-WRAM scratch vars resolve; C9 source and WRAM
+;    dest use long-indirect pointers (DB-independent).
+cover_resample_small:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb                       ; DB = $7E
+  rep #$20 : .al
+  lda #!COVER_C9_TILES
+  sta cover_ptr             ; source base = C9 tiles
+  lda #!COVER_SMALL_TILEBUF
+  sta cover_dst             ; dest base = WRAM scratch
+  sep #$20 : .as
+  lda #^COVER_C9_TILES
+  sta cover_ptr+2
+  lda #^COVER_SMALL_TILEBUF
+  sta cover_dst+2
+  stz cover_sy
+crs_row:
+  stz cover_sx
+crs_col:
+  ; cover_src_base = top-left tile byte offset = sy*1024 + sx*64
+  rep #$20 : .al
+  lda cover_sy
+  and #$00ff
+  xba                       ; sy << 8
+  asl
+  asl                       ; sy << 10 = sy*1024
+  sta cover_src_base
+  lda cover_sx
+  and #$00ff
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl                       ; sx << 6 = sx*64
+  clc
+  adc cover_src_base
+  sta cover_src_base
+  sep #$20 : .as
+  ldx #$0000                ; X = ob*2 (word index into small_srcoff)
+crs_byte:
+  rep #$20 : .al
+  lda @small_srcoff,x       ; left byte offset, relative to top-left tile
+  clc
+  adc cover_src_base        ; -> absolute C9 offset of the left source byte
+  sta cover_loff
+  sep #$20 : .as
+  ; PACKTBL[left] << 4
+  ldy cover_loff
+  lda [cover_ptr],y         ; left source byte
+  rep #$20 : .al
+  and #$00ff                ; clear high so tay yields a 0..255 index
+  tay
+  sep #$20 : .as
+  lda COVER_PACKTBL_W,y     ; abs,Y (DB=$7E -> COVER_PACKTBL + Y)
+  asl
+  asl
+  asl
+  asl
+  sta cover_tmp
+  ; PACKTBL[right] ; right = left + 32 (next tile in the 16-wide name grid)
+  rep #$20 : .al
+  lda cover_loff
+  clc
+  adc #$0020
+  tay
+  sep #$20 : .as
+  lda [cover_ptr],y         ; right source byte
+  rep #$20 : .al
+  and #$00ff
+  tay
+  sep #$20 : .as
+  lda COVER_PACKTBL_W,y
+  ora cover_tmp
+  sta [cover_dst]           ; output byte = (pack[left]<<4) | pack[right]
+  rep #$20 : .al
+  lda cover_dst
+  inc
+  sta cover_dst             ; advance dest (region < 64K, bank fixed)
+  sep #$20 : .as
+  inx
+  inx
+  cpx #$0040                ; 32 output bytes * 2
+  bcc crs_byte
+  lda cover_sx
+  inc
+  sta cover_sx
+  cmp cover_w
+  bcc crs_col
+  lda cover_sy
+  inc
+  sta cover_sy
+  cmp cover_h
+  bcc crs_row
+  plb
+  plp
+  rts
+
+; small_srcoff[ob] = C9 byte offset (relative to the block's top-left tile) of the
+; LEFT source plane-byte for output byte ob (the right byte is +32). Output tile is
+; standard 4bpp: bytes 0..15 = bitplanes 0/1 (row-interleaved), 16..31 = bitplanes
+; 2/3. Output row oy samples source row 2*oy; oy<4 -> top tiles, oy>=4 -> bottom
+; tiles (+512). See cover.h for the .cov tile layout.
+small_srcoff:
+.word 0,1,4,5,8,9,12,13
+.word 512,513,516,517,520,521,524,525
+.word 16,17,20,21,24,25,28,29
+.word 528,529,532,533,536,537,540,541
+
+; -- cover_build_oam_small: like cover_build_oam but for the small cover - a w x h
+;    grid of 8x8 sprites (pitch 8 px), right-aligned, with tile = the dense sprite
+;    index (cover_resample_small wrote one 8x8 tile per block in that order). The OBJ
+;    size bit comes from the high OAM table (oamsmall = size 0); attr/blockmap match.
+cover_build_oam_small:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda #!COVER_C9_BLOCKMAP
+  sta cover_ptr
+  sep #$20 : .as
+  lda #^COVER_C9_BLOCKMAP
+  sta cover_ptr+2
+  lda cover_w
+  asl
+  asl
+  asl                       ; w*8
+  sta cover_scr
+  lda #0
+  sec
+  sbc cover_scr
+  sta cover_x0              ; x0 = 256 - w*8 (right-aligned to the screen edge)
+  ldx #$0000                ; X = byte offset into cover_oam_lo
+  ldy #$0000                ; Y = sprite index (BLOCKMAP offset = dense tile number)
+  stz cover_sy
+cbos_row:
+  lda cover_sy
+  asl
+  asl
+  asl                       ; sy*8
+  clc
+  adc #COVER_OBJ_Y0
+  sta cover_yrow            ; Y = sy*8 + Y0
+  stz cover_sx
+cbos_col:
+  lda cover_sx
+  asl
+  asl
+  asl                       ; sx*8
+  clc
+  adc cover_x0
+  sta @COVER_OAM_LO, x      ; byte 0: X
+  inx
+  lda cover_yrow
+  sta @COVER_OAM_LO, x      ; byte 1: Y
+  inx
+  tya                       ; byte 2: tile = sprite index (dense 8x8 layout)
+  sta @COVER_OAM_LO, x
+  inx
+  lda [cover_ptr], y
+  and #$07
+  asl
+  ora #COVER_OBJ_ATTR
+  sta @COVER_OAM_LO, x      ; byte 3: attr = $30 | (pal<<1)
+  inx
+  iny
+  lda cover_sx
+  inc
+  sta cover_sx
+  cmp cover_w
+  bcc cbos_col
+  lda cover_sy
+  inc
+  sta cover_sy
+  cmp cover_h
+  bcc cbos_row
+cbos_hide:
+  cpx #COVER_OAM_LO_BYTES
+  bcs cbos_done
+  lda #$f0
+  sta @COVER_OAM_LO, x      ; hide unused slots: Y=$f0 (off-screen)
+  inx
+  bra cbos_hide
+cbos_done:
   plp
   rts
 
