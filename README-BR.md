@@ -34,7 +34,7 @@ Você precisa de:
 - **Capas dos jogos:** veja a capa de cada jogo enquanto navega pela lista de ROMs.
 - **Música no menu:** toque uma faixa `.spc` de fundo enquanto navega.
 - **Patches IPS/BPS:** escolha patches de tradução, hacks ou correções antes de iniciar um jogo, sem alterar a ROM no cartão SD.
-- **Gerenciador de cheats:** o sd2snes original já aplica cheats — este fork adiciona um menu pra **ativar e desativar** os códigos de um jogo no console (a partir de `/sd2snes/cheats/<rom>.yml`), sem editar o YAML no PC. Dá para baixar cheats prontos no [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)".
+- **Gerenciador de cheats:** o sd2snes original já aplica cheats — este fork adiciona um menu pra **ativar e desativar** os códigos de um jogo no console (a partir de `/sd2snes/cheats/<rom>.yml`), sem editar o YAML no PC. Dá para baixar cheats prontos no [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)", ou baixá-los automaticamente pelo app **sd2snes Covers** (identificados por CRC32).
 - **Deletar arquivo e save:** apague o arquivo selecionado ou só o save (`.srm`) direto pelo menu, sem tirar o cartão SD.
 - **Melhorias no reset para o menu:** volte para a mesma pasta ou até para a mesma ROM depois de um reset curto.
 - **Temas (firmware 2.9+):** escolha o tema do menu — logo, cores, fundo e barra de seleção — **direto no console**, a partir de qualquer pasta do cartão. Baixe temas prontos na [galeria](https://sd2snes.ludufre.com/gallery/) ou crie o seu no [editor web](https://sd2snes.ludufre.com/theme/).
@@ -169,7 +169,7 @@ Para conseguir arquivos de cheats prontos:
 3. Renomeie o arquivo para bater com a ROM e coloque-o em `/sd2snes/cheats/` no cartão SD.
 
 > [!TIP]
-> O app **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers)** (v1.5.0+) baixa cheats prontos automaticamente — identifica cada ROM pelo CRC32 e salva os arquivos `<rom>.yml` numa pasta `cheats/`, prontos para copiar em `/sd2snes/cheats/`.
+> O app **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** baixa cheats prontos automaticamente — identifica cada ROM pelo CRC32 e salva os arquivos `<rom>.yml` numa pasta `cheats/`, prontos para copiar em `/sd2snes/cheats/`.
 
 > [!NOTE]
 > Se a ROM não tiver um `.yml` em `/sd2snes/cheats/` (ou o arquivo não tiver códigos), o menu mostra a mensagem "Nenhum cheat definido para esta ROM".

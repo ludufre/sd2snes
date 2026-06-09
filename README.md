@@ -34,7 +34,7 @@ You need:
 - **Game covers:** show each game's box art while browsing your ROM list.
 - **Menu music:** play an `.spc` track in the background while browsing.
 - **IPS/BPS patches:** choose translation, hack or fix patches before a game starts, without changing the ROM file on the SD card.
-- **Cheat manager:** the original sd2snes already applies cheats — this fork adds a menu to **enable and disable** a game's codes on the console (from `/sd2snes/cheats/<rom>.yml`), without editing the YAML on a PC. Ready-made cheats can be exported from [gamehacking.org](https://gamehacking.org/system/snes) as "FXPak Pro 1.7 (.yml)".
+- **Cheat manager:** the original sd2snes already applies cheats — this fork adds a menu to **enable and disable** a game's codes on the console (from `/sd2snes/cheats/<rom>.yml`), without editing the YAML on a PC. Ready-made cheats can be exported from [gamehacking.org](https://gamehacking.org/system/snes) as "FXPak Pro 1.7 (.yml)", or downloaded automatically by the **sd2snes Covers** app (matched by CRC32).
 - **Delete file and savegame:** delete the selected file or just its save (`.srm`) straight from the menu, without removing the SD card.
 - **Reset to menu improvements:** return to the same folder or even the same ROM after a short reset.
 - **Themes (firmware 2.9+):** pick a menu theme — logo, colors, background and selection bar — **right on the console**, from any folder on the card. Download ready-made themes from the [gallery](https://sd2snes.ludufre.com/gallery/) or build your own in the [web editor](https://sd2snes.ludufre.com/theme/).
@@ -169,7 +169,7 @@ To get ready-made cheat files:
 3. Rename the file to match the ROM and drop it in `/sd2snes/cheats/` on the SD card.
 
 > [!TIP]
-> The **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers)** app (v1.5.0+) can fetch ready-made cheats automatically — it matches each ROM by CRC32 and saves `<rom>.yml` files into a `cheats/` folder, ready to copy into `/sd2snes/cheats/`.
+> The **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** app can fetch ready-made cheats automatically — it matches each ROM by CRC32 and saves `<rom>.yml` files into a `cheats/` folder, ready to copy into `/sd2snes/cheats/`.
 
 > [!NOTE]
 > If a ROM has no `.yml` in `/sd2snes/cheats/` (or the file has no codes), the menu shows a "no cheats for this ROM" message.
