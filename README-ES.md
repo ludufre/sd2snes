@@ -168,6 +168,9 @@ Para conseguir archivos de trucos listos:
 2. Exporta sus códigos usando el formato **FXPak Pro 1.7 (.yml)**.
 3. Renombra el archivo para que coincida con la ROM y colócalo en `/sd2snes/cheats/` en la tarjeta SD.
 
+> [!TIP]
+> La app **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers)** (v1.5.0+) descarga trucos listos automáticamente — identifica cada ROM por su CRC32 y guarda los archivos `<rom>.yml` en una carpeta `cheats/`, listos para copiar en `/sd2snes/cheats/`.
+
 > [!NOTE]
 > Si una ROM no tiene un `.yml` en `/sd2snes/cheats/` (o el archivo no tiene códigos), el menú muestra el mensaje "no hay trucos para esta ROM".
 

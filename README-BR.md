@@ -168,6 +168,9 @@ Para conseguir arquivos de trapaça prontos:
 2. Exporte os códigos usando o formato **FXPak Pro 1.7 (.yml)**.
 3. Renomeie o arquivo para bater com a ROM e coloque-o em `/sd2snes/cheats/` no cartão SD.
 
+> [!TIP]
+> O app **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers)** (v1.5.0+) baixa trapaças prontas automaticamente — identifica cada ROM pelo CRC32 e salva os arquivos `<rom>.yml` numa pasta `cheats/`, prontos para copiar em `/sd2snes/cheats/`.
+
 > [!NOTE]
 > Se a ROM não tiver um `.yml` em `/sd2snes/cheats/` (ou o arquivo não tiver códigos), o menu mostra a mensagem "Nenhuma trapaça definida para esta ROM".
 

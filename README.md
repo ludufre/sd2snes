@@ -168,6 +168,9 @@ To get ready-made cheat files:
 2. Export its codes using the **FXPak Pro 1.7 (.yml)** format.
 3. Rename the file to match the ROM and drop it in `/sd2snes/cheats/` on the SD card.
 
+> [!TIP]
+> The **[sd2snes-covers](https://github.com/ludufre/sd2snes-covers)** app (v1.5.0+) can fetch ready-made cheats automatically — it matches each ROM by CRC32 and saves `<rom>.yml` files into a `cheats/` folder, ready to copy into `/sd2snes/cheats/`.
+
 > [!NOTE]
 > If a ROM has no `.yml` in `/sd2snes/cheats/` (or the file has no codes), the menu shows a "no cheats for this ROM" message.
 
