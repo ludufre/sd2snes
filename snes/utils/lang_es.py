@@ -194,6 +194,8 @@ TRANSLATIONS = {
     'mdesc_browser_showcov': 'Mostrar las carátulas de los juegos en el menú',
     'mtext_browser_menumusic': 'Música del menú',
     'mdesc_browser_menumusic': 'Reproducir música de fondo (menu.spc) en el menú',
+    'mtext_browser_restoretheme': 'Restaurar tema',
+    'mdesc_browser_restoretheme': 'Restaurar el tema del menú al predeterminado',
     'text_mm_language': 'Idioma',
     'mdesc_mm_language': 'Definir el idioma del menú/firmware',
 }

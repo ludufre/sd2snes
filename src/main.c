@@ -31,6 +31,7 @@
 #include "savestate.h"
 #include "patch.h"
 #include "cheat.h"
+#include "theme.h"
 
 //usb
 #include "usb.h"
@@ -258,6 +259,10 @@ int main(void) {
     fpga_dspx_reset(1);
     uart_putc('(');
     load_rom((uint8_t*)MENU_FILENAME, SRAM_MENU_ADDR, 0);
+    /* apply the selected menu theme (if any) by patching the gfxptr regions of
+       the just-loaded menu image in PSRAM, before the SNES runs setup_gfx.
+       Fail-safe: a missing/bad theme leaves the baked menu untouched. */
+    theme_apply();
     /* force memory size + mapper */
     set_rom_mask(0x3fffff);
     set_mapper(0x7);
@@ -676,6 +681,20 @@ int main(void) {
           cfg_get_listed_game(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
           load_cover(file_lfn, SRAM_COVER_ADDR);
           cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_SET_THEME:
+          /* a .thm was picked in the browser (any visible folder). MCU_PARAM was
+             set up like LOADROM (cwd + selected entry) so get_selected_name
+             yields the full SD path; store it and reload the menu so theme_apply
+             patches the gfxptr regions of the fresh menu image. */
+          get_selected_name(file_lfn);
+          theme_select((char*)file_lfn);
+          menu_reload = 1; /* leave loop -> outer loop reloads + themes the menu */
+          break;
+        case SNES_CMD_CLR_THEME:
+          /* revert to the baked-in default look */
+          theme_select(NULL);
+          menu_reload = 1;
           break;
         case SNES_CMD_LOAD_CHT:
           /* load cheats from YAML file into PSRAM for the menu to edit.

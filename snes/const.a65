@@ -222,6 +222,7 @@ mtext_browser_showcov             .byt "Show covers", 0
 mtext_cfg_patch                   .byt "Patch Options", 0
 mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
 mtext_browser_menumusic           .byt "Menu music", 0
+mtext_browser_restoretheme        .byt "Restore theme", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
 mtext_ingame_shortreset           .byt "Reset to menu", 0
 mtext_ingame_enable               .byt "In-game hook", 0
@@ -274,6 +275,7 @@ mdesc_browser_showcov             .byt "Show game covers in the menu", 0
 mdesc_cfg_patch                   .byt "Options for IPS/BPS soft-patching", 0
 mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (much slower load)", 0
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0
+mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
 mdesc_ingame_shortreset           .byt "Go back to menu on short reset (Off/On/Folder/ROM). Folder: return to last game folder. ROM: also pre-select the ROM.", 0
 mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
@@ -479,3 +481,4 @@ gfxptr_info     .byt "_GFXPTR_"
                 .word oam_data_l
                 .word oam_data_h
                 .word palette
+                .word logo_tiles

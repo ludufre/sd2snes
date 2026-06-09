@@ -177,6 +177,8 @@
 #define CMD_DELETE_SRM_RECENT       $29 /* MCU_PARAM low byte: recent index. Delete only the .srm (ROM stays in recents). */
 #define CMD_LOAD_CHT_RECENT         $2a /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_load. */
 #define CMD_SAVE_CHT_RECENT         $2b /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_save. */
+#define CMD_SET_THEME               $2c /* selected .thm in a visible folder (MCU_PARAM set like LOADROM): store full path, reload menu */
+#define CMD_CLR_THEME               $2d /* clear menu theme to baked default, reload menu */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */

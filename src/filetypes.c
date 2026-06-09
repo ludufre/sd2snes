@@ -81,6 +81,7 @@ printf("start\n");
         switch(type) {
           case TYPE_ROM:
           case TYPE_SPC:
+          case TYPE_SKIN:   /* theme files (.thm/.skin) are listed like ROMs */
           case TYPE_SUBDIR:
           case TYPE_PARENT:
             /* omit entries with hidden or system attribute -- but NEVER the
@@ -168,8 +169,8 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
   if(!strcasecmp(ext+1, "CHT")) {
     return TYPE_CHT;
   }
-  if(!strcasecmp(ext+1, "SKIN")) {
-    return TYPE_SKIN;
+  if(!strcasecmp(ext+1, "SKIN") || !strcasecmp(ext+1, "THM")) {
+    return TYPE_SKIN;   /* menu theme file (see theme.c) */
   }
   return TYPE_UNKNOWN;
 }

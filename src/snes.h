@@ -67,6 +67,8 @@
 #define SNES_CMD_DELETE_SRM_RECENT   (0x29) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete only the .srm (ROM stays in recents). */
 #define SNES_CMD_LOAD_CHT_RECENT     (0x2a) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_load. */
 #define SNES_CMD_SAVE_CHT_RECENT     (0x2b) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_save. */
+#define SNES_CMD_SET_THEME           (0x2c) /* selected .thm (any visible folder): get_selected_name -> store full path in CFG.skin_name, then reload menu */
+#define SNES_CMD_CLR_THEME           (0x2d) /* clear the menu theme back to the baked default, then reload menu */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)

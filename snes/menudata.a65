@@ -422,6 +422,19 @@ menu_enttab_browser:
 ; .byt  0,0,0
 ; .byt  0,0,0
 
+ .byt  MTYPE_FUNC
+ .word !mtext_browser_restoretheme
+ .byt  ^mtext_browser_restoretheme
+ .word !restore_theme-1
+ .byt  ^restore_theme
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_browser_restoretheme
+ .byt  ^mdesc_browser_restoretheme
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt 0
 
 menu_enttab_chip:
