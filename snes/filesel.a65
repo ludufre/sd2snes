@@ -1198,6 +1198,7 @@ delete_favorite_file:
   bra -
 + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty            ; entry removed -> redraw the favorites list
   jsr pop_window
 ; The deleted ROM may still be listed in the browser's current folder
@@ -1304,6 +1305,7 @@ delete_recent_file:
   bra -
 + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty            ; entry removed -> redraw the recents list
   jsr pop_window
 ; Same as the favorites case: drop the now-stale browser entry so the
@@ -1788,7 +1790,10 @@ show_empty_msg:
   lda window_w
   sec
   sbc window_tmp          ; window_w - length
-  lsr                     ; / 2
+  bcs +                   ; box wide enough
+  lda #$02                ; message wider than box (long translation): small
+                          ; left margin instead of an underflowed print_x
++ lsr                     ; / 2
   clc
   adc window_x            ; print_x = window_x + (window_w - length)/2  (centered)
   sta print_x
@@ -2163,6 +2168,7 @@ remove_selected_recent_file:
   bra -
   + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty
   jsr pop_window
   plb
@@ -2194,6 +2200,7 @@ remove_selected_favorite_file:
   bra -
   + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty
   jsr pop_window
   plb

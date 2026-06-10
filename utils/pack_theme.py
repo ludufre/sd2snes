@@ -25,11 +25,11 @@ packs produce full 64KB menu binaries for older firmwares whose logo/HDMA layout
 is NOT compatible with the fork (different geometry). Only the flat 256-colour
 CGRAM palette ports 1:1, so converted themes are PALETTE-ONLY: the fork keeps its
 own logo and background gradient, the palette recolours text/list/UI per theme.
-The palette is located via the matching stock release in menu/stock/ (the editor
-overwrites it in place, so the offset equals the stock base's palette offset).
+The palette is located directly in each editor binary via the _GFXPTR_ table
+(range-checked) with known per-build offsets as fallback (find_palette_offset).
 
 Usage:
-    pack_theme.py convert-library [--out dist/theme] [--custom menu/custom] [--stock menu/stock]
+    pack_theme.py convert-library [--out dist/theme] [--custom menu/custom]
     pack_theme.py extract <source_menu.bin> -o <name.thm>
     pack_theme.py pack -o <name.thm> [--palette pal.bin] [--logo-pal lp.bin] [--logo-tiles lt.bin] ...
     pack_theme.py verify <fork_m3nu.bin> <theme.thm> [theme.thm ...]
@@ -39,7 +39,6 @@ import os
 import re
 import struct
 import sys
-import zipfile
 
 import snesgfx
 
@@ -122,11 +121,22 @@ def parse_thm(data):
 # palette location in arbitrary editor/stock menu binaries
 # ---------------------------------------------------------------------------
 def gfxptr_words(d, count=12):
+    """Words following the _GFXPTR_ magic. Stops at EOF instead of crashing on
+    a truncated binary. NOTE: the table has no length marker, so entries past
+    the real table (9 in both stock and fork menus) are unrelated code/data --
+    every caller must range/sanity-check the words it uses (see
+    find_palette_offset for the mispick this once caused)."""
     i = d.find(GFXPTR_MAGIC)
     if i < 0:
         return None
     base = i + 8
-    return [struct.unpack("<H", d[base + k * 2:base + k * 2 + 2])[0] for k in range(count)]
+    out = []
+    for k in range(count):
+        o = base + k * 2
+        if o + 2 > len(d):
+            break
+        out.append(struct.unpack("<H", d[o:o + 2])[0])
+    return out
 
 
 def detect_version(d):
@@ -134,60 +144,6 @@ def detect_version(d):
     if i < 0:
         return None
     return d[i + 14:i + 40].split(b" ")[0].decode("ascii", "ignore").strip()
-
-
-def _is_palette_window(d, o):
-    """A 512B CGRAM palette: every word's high bit (bit15) is unused -> high byte < 0x80."""
-    if o < 0 or o + PALETTE_SIZE > len(d):
-        return False
-    return all((d[o + k * 2 + 1] & 0x80) == 0 for k in range(256))
-
-
-def stock_base_for_version(stock_dir, version):
-    zp = os.path.join(stock_dir, "sd2snes_firmware_v%s.zip" % version)
-    if not os.path.exists(zp):
-        return None
-    with zipfile.ZipFile(zp) as z:
-        for n in z.namelist():
-            if n.endswith("m3nu.bin"):
-                return z.read(n)
-    return None
-
-
-def _ref_default_palette(stock_dir):
-    """The default menu palette (identical across versions). Read from v1.11.0 base."""
-    base = stock_base_for_version(stock_dir, "1.11.0")
-    if base is None:
-        return None
-    ws = gfxptr_words(base)
-    if ws:
-        # stock 1.11.0 table: palette is the last entry that is a 512B palette window
-        for w in reversed(ws):
-            if w and _is_palette_window(base, w):
-                return base[w:w + PALETTE_SIZE]
-    return None
-
-
-def palette_offset_in_base(base, ref_pal):
-    """Find the palette offset in a stock base. Use _GFXPTR_ if present, else
-    correlate against the known default palette (the default barely changes
-    between versions, so an exact/near match pins the offset)."""
-    ws = gfxptr_words(base)
-    if ws:
-        for w in reversed(ws):
-            if w and _is_palette_window(base, w):
-                return w
-    if ref_pal is not None:
-        best = None
-        for o in range(0x1400, 0x1E00):
-            if not _is_palette_window(base, o):
-                continue
-            diff = sum(1 for k in range(PALETTE_SIZE) if base[o + k] != ref_pal[k])
-            if best is None or diff < best[0]:
-                best = (diff, o)
-        if best is not None:
-            return best[1]
-    return None
 
 
 def _is_real_palette(d, o):
@@ -226,9 +182,8 @@ def find_palette_offset(d):
     return None
 
 
-def extract_palette(menu_bin, stock_dir=None, ref_pal=None):
-    """Extract the 256-colour palette (512B). stock_dir/ref_pal are unused now
-    (kept for call-site compatibility)."""
+def extract_palette(menu_bin):
+    """Extract the 256-colour palette (512B) from an editor/stock menu binary."""
     version = detect_version(menu_bin)
     off = find_palette_offset(menu_bin)
     if off is None:
@@ -329,11 +284,10 @@ def _fork_hdma_math(fork_menu):
     return d[o:o + SLOT_MAX[SLOT_HDMA_MATH]]
 
 
-def convert_library(custom_dir, stock_dir, out_dir, png_dir=None, with_logo=True,
+def convert_library(custom_dir, out_dir, png_dir=None, with_logo=True,
                     with_bg=True, fork_menu="bin/m3nu.bin"):
     import snesgfx
     os.makedirs(out_dir, exist_ok=True)
-    ref_pal = _ref_default_palette(stock_dir)
     fork_stops = _fork_hdma_pal_stops(fork_menu) if with_bg else None
     fork_math = _fork_hdma_math(fork_menu)
     written, failed, no_bg = 0, [], []
@@ -341,7 +295,7 @@ def convert_library(custom_dir, stock_dir, out_dir, png_dir=None, with_logo=True
         disp = name + BRAND_SUFFIX.get(brand, "")
         try:
             d = open(path, "rb").read()
-            version, off, pal = extract_palette(d, stock_dir, ref_pal)
+            version, off, pal = extract_palette(d)
             regions = [(SLOT_PALETTE, pal)]
             flags = 0
             # background gradient: recolour the fork's own gradient with the
@@ -459,7 +413,6 @@ def main():
 
     c = sub.add_parser("convert-library", help="convert menu/custom/* -> dist/theme/*.thm")
     c.add_argument("--custom", default="menu/custom")
-    c.add_argument("--stock", default="menu/stock")
     c.add_argument("--out", default="dist/theme")
     c.add_argument("--png-out", dest="png_out", default="dist/theme_png",
                    help="dir for full-res logo PNGs (manual editing); '' to skip")
@@ -469,7 +422,6 @@ def main():
     e = sub.add_parser("extract", help="extract palette from one menu binary -> .thm")
     e.add_argument("source")
     e.add_argument("-o", "--out", required=True)
-    e.add_argument("--stock", default="menu/stock")
 
     p = sub.add_parser("pack", help="build a .thm from explicit region blobs / an edited logo PNG")
     p.add_argument("-o", "--out", required=True)
@@ -485,7 +437,6 @@ def main():
     p.add_argument("--hdma-bar", dest="hdma_bar")
     p.add_argument("--oam-l", dest="oam_l")
     p.add_argument("--oam-h", dest="oam_h")
-    p.add_argument("--stock", default="menu/stock")
 
     v = sub.add_parser("verify", help="check .thm slots/sizes against a fork m3nu.bin")
     v.add_argument("fork_menu")
@@ -494,14 +445,14 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "convert-library":
-        _, failed = convert_library(args.custom, args.stock, args.out,
+        _, failed = convert_library(args.custom, args.out,
                                     png_dir=(args.png_out or None),
                                     with_logo=not args.no_logo)
         return 1 if failed else 0
 
     if args.cmd == "extract":
         d = open(args.source, "rb").read()
-        version, off, pal = extract_palette(d, args.stock)
+        version, off, pal = extract_palette(d)
         with open(args.out, "wb") as fh:
             fh.write(build_thm([(SLOT_PALETTE, pal)]))
         print("extracted palette v%s @0x%04X -> %s" % (version, off, args.out))
@@ -516,7 +467,7 @@ def main():
         if args.palette:
             regions.append((SLOT_PALETTE, open(args.palette, "rb").read()))
         elif args.colors_from:
-            _, _, pal = extract_palette(open(args.colors_from, "rb").read(), args.stock)
+            _, _, pal = extract_palette(open(args.colors_from, "rb").read())
             regions.append((SLOT_PALETTE, pal))
         # logo: refit an edited PNG, or take raw logo_pal/logo_tiles blobs
         if args.logo_png:
