@@ -54,9 +54,9 @@ run_case huge-target         1    -      apply  huge-target.bps        rom4k.bin
 run_case overflow-window     1    -      apply  overflow-window.bps    rom7m.bin
 run_case target-overrun      1    -      apply  target-overrun.bps     rom4k.bin
 run_case source-oob          1    -      apply  source-oob.bps         rom4k.bin
-run_case tiny-truncated      1    124    apply  tiny-truncated.bps     rom4k.bin
-run_case vli-straddles-eof   1    124    apply  vli-straddles-eof.bps  rom4k.bin
-run_case probe-tiny          1    124    probe  tiny-truncated.bps     rom4k.bin
+run_case tiny-truncated      1    -      apply  tiny-truncated.bps     rom4k.bin
+run_case vli-straddles-eof   1    -      apply  vli-straddles-eof.bps  rom4k.bin
+run_case probe-tiny          1    -      probe  tiny-truncated.bps     rom4k.bin
 run_case ok-small-ips        0    -      apply  ok-small.ips           rom4k.bin  ok-small.ips.target
 run_case ips-oob-offset      1    125    apply  oob-offset.ips         rom4k.bin
 run_case ips-truncated-noeof 1    0      apply  truncated-noeof.ips    rom4k.bin
