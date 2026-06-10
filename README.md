@@ -34,10 +34,10 @@ You need:
 - **Game covers:** show each game's box art while browsing your ROM list.
 - **Menu music:** play an `.spc` track in the background while browsing.
 - **IPS/BPS patches:** choose translation, hack or fix patches before a game starts, without changing the ROM file on the SD card.
-- **Cheat manager:** the original sd2snes already applies cheats — this fork adds a menu to **enable and disable** a game's codes on the console (from `/sd2snes/cheats/<rom>.yml`), without editing the YAML on a PC. Ready-made cheats can be exported from [gamehacking.org](https://gamehacking.org/system/snes) as "FXPak Pro 1.7 (.yml)".
+- **Cheat manager:** the original sd2snes already applies cheats — this fork adds a menu to **enable and disable** a game's codes on the console (from `/sd2snes/cheats/<rom>.yml`), without editing the YAML on a PC. Ready-made cheats can be exported from [gamehacking.org](https://gamehacking.org/system/snes) as "FXPak Pro 1.7 (.yml)", or downloaded automatically by the **sd2snes Covers** app (matched by CRC32).
 - **Delete file and savegame:** delete the selected file or just its save (`.srm`) straight from the menu, without removing the SD card.
 - **Reset to menu improvements:** return to the same folder or even the same ROM after a short reset.
-- **Custom themes:** edit the logo, font, palette, background and selector colors with the theme editor made for this fork.
+- **Themes (firmware 2.9+):** pick a menu theme — logo, colors, background and selection bar — **right on the console**, from any folder on the card. Download ready-made themes from the [gallery](https://sd2snes.ludufre.com/gallery/) or build your own in the [web editor](https://sd2snes.ludufre.com/theme/).
 
 ## Installation
 
@@ -168,6 +168,9 @@ To get ready-made cheat files:
 2. Export its codes using the **FXPak Pro 1.7 (.yml)** format.
 3. Rename the file to match the ROM and drop it in `/sd2snes/cheats/` on the SD card.
 
+> [!TIP]
+> The **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** app can fetch ready-made cheats automatically — it matches each ROM by CRC32 and saves `<rom>.yml` files into a `cheats/` folder, ready to copy into `/sd2snes/cheats/`.
+
 > [!NOTE]
 > If a ROM has no `.yml` in `/sd2snes/cheats/` (or the file has no codes), the menu shows a "no cheats for this ROM" message.
 
@@ -196,24 +199,26 @@ Set it in **Configuration → In-game Settings → Reset to menu**:
 
 The **Folder** and **ROM** options work after a reset back to the menu. A full power-on still starts from the normal top-level menu.
 
-## Custom Theme
+## Themes
 
-You can customize the menu logo, font, palette, background and selector colors.
+From firmware **2.9** on, you can change the whole menu look — **logo, colors, background and selection bar** — right on the console, no PC needed.
 
-Use the theme editor made for this fork:
+1. Put `.thm` theme files in **any folder** on your SD card — any name works, it just can't be the hidden `/sd2snes` folder.
+2. In the menu, open that folder and press **A** on a theme. The menu reloads themed.
+3. To go back to the default look, go to **Configuration → Browser Settings → Restore theme** in the menu.
+
+You can get themes in two ways:
+
+**Gallery — ready-made themes, one click to download:**
+
+### 👉 [sd2snes.ludufre.com/gallery](https://sd2snes.ludufre.com/gallery/)
+
+**Theme Creator — make your own:** upload a logo (with transparency), pick the colors and download a `.thm`.
 
 ### 👉 [sd2snes.ludufre.com/theme](https://sd2snes.ludufre.com/theme/)
 
-> [!IMPORTANT]
-> The official sd2snes theme editor does not support this fork's theme format. Use the editor above when editing `m3nu.bin` for this firmware.
-
-Basic theme workflow:
-
-1. Open the theme editor.
-2. Upload your `m3nu.bin`.
-3. Upload a **128×56 PNG** if you want to replace the logo.
-4. Choose the parts you want to change.
-5. Download the edited file and copy it back to your SD card.
+> [!NOTE]
+> Advanced: there's also a [`m3nu.bin` editor](https://sd2snes.ludufre.com/theme/) that patches a full menu binary (the older workflow). The official sd2snes theme editor does not support this fork's format.
 
 ## Common Problems
 

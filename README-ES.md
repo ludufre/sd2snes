@@ -34,10 +34,10 @@ Necesitas:
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
 - **Música en el menú:** reproduce una pista `.spc` de fondo mientras navegas.
 - **Parches IPS/BPS:** elige parches de traducción, hacks o correcciones antes de iniciar un juego, sin modificar la ROM en la tarjeta SD.
-- **Gestor de cheats:** el sd2snes original ya aplica trucos — este fork añade un menú para **activar y desactivar** los códigos de un juego en la consola (desde `/sd2snes/cheats/<rom>.yml`), sin editar el YAML en el PC. Puedes descargar cheats listos en [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)".
+- **Gestor de cheats:** el sd2snes original ya aplica trucos — este fork añade un menú para **activar y desactivar** los códigos de un juego en la consola (desde `/sd2snes/cheats/<rom>.yml`), sin editar el YAML en el PC. Puedes descargar cheats listos en [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)", o descargarlos automáticamente con la app **sd2snes Covers** (identificados por CRC32).
 - **Borrar archivo y partida:** borra el archivo seleccionado o solo su partida (`.srm`) directamente desde el menú, sin sacar la tarjeta SD.
 - **Mejoras en el regreso al menú:** vuelve a la misma carpeta o incluso a la misma ROM después de un reset corto.
-- **Temas personalizados:** edita el logo, la fuente, la paleta, el fondo y los colores del selector con el editor de temas hecho para este fork.
+- **Temas (firmware 2.9+):** elige el tema del menú — logo, colores, fondo y barra de selección — **en la propia consola**, desde cualquier carpeta de la tarjeta. Descarga temas listos en la [galería](https://sd2snes.ludufre.com/gallery/) o crea el tuyo en el [editor web](https://sd2snes.ludufre.com/theme/).
 
 ## Instalación
 
@@ -168,6 +168,9 @@ Para conseguir archivos de trucos listos:
 2. Exporta sus códigos usando el formato **FXPak Pro 1.7 (.yml)**.
 3. Renombra el archivo para que coincida con la ROM y colócalo en `/sd2snes/cheats/` en la tarjeta SD.
 
+> [!TIP]
+> La app **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** descarga trucos listos automáticamente — identifica cada ROM por su CRC32 y guarda los archivos `<rom>.yml` en una carpeta `cheats/`, listos para copiar en `/sd2snes/cheats/`.
+
 > [!NOTE]
 > Si una ROM no tiene un `.yml` en `/sd2snes/cheats/` (o el archivo no tiene códigos), el menú muestra el mensaje "no hay trucos para esta ROM".
 
@@ -196,24 +199,26 @@ Configúralo en **Configuración → Opciones en Juego → Reset al menú**:
 
 Las opciones **Carpeta** y **ROM** funcionan después de un reset de vuelta al menú. Al encender la consola desde cero, sigue iniciando en el menú principal normal.
 
-## Tema personalizado
+## Temas
 
-Puedes personalizar el logo, la fuente, la paleta, el fondo y los colores del selector del menú.
+Desde el firmware **2.9**, cambias todo el aspecto del menú — **logo, colores, fondo y barra de selección** — en la propia consola, sin PC.
 
-Usa el editor de temas hecho para este fork:
+1. Pon archivos de tema `.thm` en **cualquier carpeta** de la tarjeta — vale cualquier nombre, solo no puede ser la carpeta oculta `/sd2snes`.
+2. En el menú, entra en esa carpeta y pulsa **A** en un tema. El menú recarga con el tema.
+3. Para volver al aspecto original, usa **Configuración → Opciones del Navegador → Restaurar tema** en el menú.
+
+Puedes conseguir temas de dos formas:
+
+**Galería — temas listos, descarga en un clic:**
+
+### 👉 [sd2snes.ludufre.com/gallery](https://sd2snes.ludufre.com/gallery/)
+
+**Editor de temas — crea el tuyo:** sube un logo (con transparencia), elige los colores y descarga un `.thm`.
 
 ### 👉 [sd2snes.ludufre.com/theme](https://sd2snes.ludufre.com/theme/)
 
-> [!IMPORTANT]
-> El editor oficial de temas de sd2snes no soporta el formato de tema de este fork. Usa el editor anterior al editar el `m3nu.bin` de este firmware.
-
-Flujo básico para editar un tema:
-
-1. Abre el editor de temas.
-2. Sube tu `m3nu.bin`.
-3. Sube un **PNG 128×56** si quieres cambiar el logo.
-4. Elige las partes que quieres modificar.
-5. Descarga el archivo editado y cópialo de nuevo a la tarjeta SD.
+> [!NOTE]
+> Avanzado: también hay un [editor de `m3nu.bin`](https://sd2snes.ludufre.com/theme/) que parchea el menú completo (el flujo antiguo). El editor oficial de temas de sd2snes no soporta el formato de este fork.
 
 ## Problemas comunes
 

@@ -408,6 +408,21 @@ menu_enttab_browser:
  .byt  0,0,0
 
  .byt  MTYPE_VALUE
+ .word !mtext_browser_covlists
+ .byt  ^mtext_browser_covlists
+ .word !kv_yesno
+ .byt  ^kv_yesno
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_COVERS_IN_LISTS
+ .byt  ^CFG_COVERS_IN_LISTS
+ .word !mdesc_browser_covlists
+ .byt  ^mdesc_browser_covlists
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_covers-1)
+ .byt  ^(mfunc_isenabled_covers-1)
+
+ .byt  MTYPE_VALUE
  .word !mtext_browser_menumusic
  .byt  ^mtext_browser_menumusic
  .word !kv_onoff
@@ -434,6 +449,19 @@ menu_enttab_browser:
 ; .byt  0,0,0
 ; .byt  0,0,0
 ; .byt  0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !mtext_browser_restoretheme
+ .byt  ^mtext_browser_restoretheme
+ .word !restore_theme-1
+ .byt  ^restore_theme
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_browser_restoretheme
+ .byt  ^mdesc_browser_restoretheme
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
 
  .byt 0
 
@@ -1161,6 +1189,18 @@ mfunc_isdisabled_hooks:
   lda @CFG_ENABLE_INGAME_HOOK
   eor #$00
   ror
+  rtl
+
+; Grey the "Favorites/Recents" sub-option whenever Show covers is Off. ShowCovers
+; holds 0/1/2 (off/large/small), so the eor/ror trick used above (assumes 0/1)
+; would mis-flag value 2 -> branch on != 0 instead. Carry set = drawn disabled.
+mfunc_isenabled_covers:
+  lda @CFG_SHOW_COVERS
+  bne mfunc_isenabled_covers_on
+  sec                        ; covers off -> grey the sub-option
+  rtl
+mfunc_isenabled_covers_on:
+  clc                        ; covers on (large/small) -> enabled
   rtl
 
 mfunc_isenabled_savestate:

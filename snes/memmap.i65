@@ -181,6 +181,8 @@
 #define CMD_WIFI_GET                $2d /* write current status + scan list to WIFI_BLK */
 #define CMD_WIFI_CONNECT            $2e /* connect using ssid/pass written to WIFI_BLK */
 #define CMD_WIFI_FORGET             $2f /* forget the saved network */
+#define CMD_SET_THEME               $30 /* selected .thm in a visible folder (MCU_PARAM set like LOADROM): store full path, reload menu */
+#define CMD_CLR_THEME               $31 /* clear menu theme to baked default, reload menu */
 
 /* WiFi status/scan block + connect params. Aliases SYSINFO_BLK (both modal, so
    they never coexist). Layout MUST match src/snes.h WIFI_OFF_*. */
@@ -257,6 +259,7 @@
 #define CFG_LANGUAGE                    CFG_ADDR+$00B7
 #define CFG_PATCH_VERIFY_INTEGRITY      CFG_ADDR+$00B8
 #define CFG_ENABLE_MENU_MUSIC           CFG_ADDR+$00B9
+#define CFG_COVERS_IN_LISTS             CFG_ADDR+$00BA
 
 #define MENU_ENTRY_SIZE             23
 

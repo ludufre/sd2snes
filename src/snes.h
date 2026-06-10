@@ -71,6 +71,8 @@
 #define SNES_CMD_WIFI_GET            (0x2d) /* write current status + scan list to SRAM */
 #define SNES_CMD_WIFI_CONNECT        (0x2e) /* connect using ssid/pass the menu wrote to SRAM */
 #define SNES_CMD_WIFI_FORGET         (0x2f) /* forget the saved network */
+#define SNES_CMD_SET_THEME           (0x30) /* selected .thm (any visible folder): get_selected_name -> store full path in CFG.skin_name, then reload menu */
+#define SNES_CMD_CLR_THEME           (0x31) /* clear the menu theme back to the baked default, then reload menu */
 
 /* WiFi SRAM block layout (base = SRAM_SYSINFO_ADDR; menu side = WIFI_BLK $FF1200) */
 #define WIFI_OFF_CONNECTED  0    /* u8  */

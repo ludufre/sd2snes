@@ -569,6 +569,8 @@ select_item:
   beq sel_is_file
   cmp #TYPE_SPC
   beq sel_is_spc
+  cmp #TYPE_SKIN
+  beq sel_is_theme
   cmp #TYPE_SUBDIR
   beq sel_is_dir
   cmp #TYPE_PARENT
@@ -586,6 +588,9 @@ sel_is_dir
   bra select_item_cont
 sel_is_spc
   jsr select_spc
+  bra select_item_cont
+sel_is_theme
+  jsr select_theme
   bra select_item_cont
 
 select_file:
@@ -608,6 +613,73 @@ select_file:
   sta @MCU_PARAM+3
   lda #CMD_LOADROM
   jsr game_handshake
+  rts
+
+select_theme:
+; A .thm theme file was picked. Build MCU_PARAM exactly like select_file (cwd +
+; selected dir entry, using y) FIRST so the MCU's get_selected_name yields the
+; full path, then ask the MCU to apply it (CMD_SET_THEME). The MCU stores the
+; choice and reloads the menu (which resets the SNES), so we use the light
+; handshake like the autoboot setters -- no game_handshake/WRAM trampoline.
+  dey
+  rep #$20 : .al
+  lda [dirptr_addr], y
+  and #$00ff
+  sta @MCU_PARAM+6
+  dey
+  dey
+  lda [dirptr_addr], y
+  sta @MCU_PARAM+4
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+; channel + UI ready (MCU_PARAM is now set; cover_sync_before_cmd preserves it,
+; exactly as game_handshake relies on for LOADROM)
+  jsr cover_sync_before_cmd  ; drain any in-flight cover so its $55 isn't read as our ACK
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_SET_THEME
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  rts
+
+restore_theme:
+; Config-menu action (Browser Options -> Restore Theme): revert the menu to the
+; baked-in default look. No MCU_PARAM needed -- the MCU just clears CFG.skin_name
+; and reloads the menu (which resets the SNES). Same light handshake as
+; select_theme.
+  jsr cover_sync_before_cmd  ; drain any in-flight cover so its $55 isn't read as our ACK
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_CLR_THEME
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
   rts
 
 select_dir:
@@ -1126,6 +1198,7 @@ delete_favorite_file:
   bra -
 + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty            ; entry removed -> redraw the favorites list
   jsr pop_window
 ; The deleted ROM may still be listed in the browser's current folder
@@ -1232,6 +1305,7 @@ delete_recent_file:
   bra -
 + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty            ; entry removed -> redraw the recents list
   jsr pop_window
 ; Same as the favorites case: drop the now-stale browser entry so the
@@ -1716,7 +1790,10 @@ show_empty_msg:
   lda window_w
   sec
   sbc window_tmp          ; window_w - length
-  lsr                     ; / 2
+  bcs +                   ; box wide enough
+  lda #$02                ; message wider than box (long translation): small
+                          ; left margin instead of an underflowed print_x
++ lsr                     ; / 2
   clc
   adc window_x            ; print_x = window_x + (window_w - length)/2  (centered)
   sta print_x
@@ -1821,8 +1898,11 @@ select_last_choose:
   lda #$01
   sta listsel_step
   sta listsel_pickbutton ; allow button Y
-  lda #$01                   ; cover follows the highlighted list entry
-  sta listcover_active
+  jsr listcover_list_enabled ; cover follows the highlighted entry only if allowed
+  lda #$00
+  bcs +
+  lda #$01
++ sta listcover_active
   stz listcover_which        ; 0 = recent
   lda #$ff
   sta listcover_lastsel      ; force a cover load for the current selection
@@ -1944,9 +2024,13 @@ select_favorite_choose:
   lda #$01
   sta listsel_step
   sta listsel_pickbutton ; allow button Y
-  lda #$01                   ; cover follows the highlighted list entry
-  sta listcover_active
+  lda #$01
   sta listcover_which        ; 1 = favorite
+  jsr listcover_list_enabled ; cover follows the highlighted entry only if allowed
+  lda #$00
+  bcs +
+  lda #$01
++ sta listcover_active
   lda #$ff
   sta listcover_lastsel      ; force a cover load for the current selection
   stz cover_request_pending
@@ -2084,6 +2168,7 @@ remove_selected_recent_file:
   bra -
   + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty
   jsr pop_window
   plb
@@ -2115,6 +2200,7 @@ remove_selected_favorite_file:
   bra -
   + lda #$55
   sta @MCU_CMD
+  lda #$01
   sta listsel_dirty
   jsr pop_window
   plb
@@ -2322,8 +2408,10 @@ filesel_request_filelist:
   sta @MCU_PARAM+10
   lda #TYPE_SPC
   sta @MCU_PARAM+11
+  lda #TYPE_SKIN
+  sta @MCU_PARAM+12       ; show .thm/.skin theme files in the browser
   lda #$00
-  sta @MCU_PARAM+12
+  sta @MCU_PARAM+13
   sta @SNES_CMD
   lda #CMD_READDIR
   sta @MCU_CMD

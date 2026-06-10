@@ -104,6 +104,6 @@ const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT] = {
 
 const char *const cheatmenu_l[NUM_LANG][CHEATMENU_COUNT] = {
   /* LANG_EN   */ { "Cheats for ", "(no name)" },
-  /* LANG_PTBR */ { "Trapa\x8d""as para ", "(sem nome)" },
+  /* LANG_PTBR */ { "Cheats para ", "(sem nome)" },
   /* LANG_ES   */ { "Trucos para ", "(sin nombre)" },
 };

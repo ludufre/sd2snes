@@ -34,10 +34,10 @@ Você precisa de:
 - **Capas dos jogos:** veja a capa de cada jogo enquanto navega pela lista de ROMs.
 - **Música no menu:** toque uma faixa `.spc` de fundo enquanto navega.
 - **Patches IPS/BPS:** escolha patches de tradução, hacks ou correções antes de iniciar um jogo, sem alterar a ROM no cartão SD.
-- **Gerenciador de cheats:** o sd2snes original já aplica trapaças — este fork adiciona um menu pra **ativar e desativar** os códigos de um jogo no console (a partir de `/sd2snes/cheats/<rom>.yml`), sem editar o YAML no PC. Dá para baixar cheats prontos no [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)".
+- **Gerenciador de cheats:** o sd2snes original já aplica cheats — este fork adiciona um menu pra **ativar e desativar** os códigos de um jogo no console (a partir de `/sd2snes/cheats/<rom>.yml`), sem editar o YAML no PC. Dá para baixar cheats prontos no [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)", ou baixá-los automaticamente pelo app **sd2snes Covers** (identificados por CRC32).
 - **Deletar arquivo e save:** apague o arquivo selecionado ou só o save (`.srm`) direto pelo menu, sem tirar o cartão SD.
 - **Melhorias no reset para o menu:** volte para a mesma pasta ou até para a mesma ROM depois de um reset curto.
-- **Temas personalizados:** edite logo, fonte, paleta, fundo e cores do seletor com o editor de temas feito para este fork.
+- **Temas (firmware 2.9+):** escolha o tema do menu — logo, cores, fundo e barra de seleção — **direto no console**, a partir de qualquer pasta do cartão. Baixe temas prontos na [galeria](https://sd2snes.ludufre.com/gallery/) ou crie o seu no [editor web](https://sd2snes.ludufre.com/theme/).
 
 ## Instalação
 
@@ -144,32 +144,35 @@ Você pode ligar ou desligar a música em **Configurações → Opções do Nave
 > [!TIP]
 > Algumas trilhas vêm como arquivos `.rsn`. Um `.rsn` geralmente é um arquivo compactado com vários `.spc` dentro. Extraia o `.rsn` e escolha um dos arquivos `.spc`.
 
-## Trapaças (cheats)
+## Cheats
 
-O firmware original do sd2snes já **aplica** trapaças por jogo. O que este fork adiciona é um **gerenciador de trapaças no menu**, pra você ativar e desativar cada código no próprio console — sem editar o YAML no PC.
+O firmware original do sd2snes já **aplica** cheats por jogo. O que este fork adiciona é um **gerenciador de cheats no menu**, pra você ativar e desativar cada código no próprio console — sem editar o YAML no PC.
 
-As trapaças são lidas de um arquivo **YAML** (`.yml`) na pasta `/sd2snes/cheats/`, com o nome da ROM (a extensão dela trocada por `.yml`):
+Os cheats são lidos de um arquivo **YAML** (`.yml`) na pasta `/sd2snes/cheats/`, com o nome da ROM (a extensão dela trocada por `.yml`):
 
 ```text
 /sd2snes/A/Aladdin (USA).sfc        ← a ROM (em qualquer pasta)
-/sd2snes/cheats/Aladdin (USA).yml   ← as trapaças dela
+/sd2snes/cheats/Aladdin (USA).yml   ← os cheats dela
 ```
 
-Para gerenciar, selecione uma ROM no navegador de arquivos, aperte **Y** para abrir o menu de contexto e escolha **Trapaças**. A lista mostra cada código do arquivo:
+Para gerenciar, selecione uma ROM no navegador de arquivos, aperte **Y** para abrir o menu de contexto e escolha **Cheats**. A lista mostra cada código do arquivo:
 
 - **A** ativa ou desativa o código destacado.
 - **B** salva as alterações e sai.
 
 Os códigos ativados são aplicados na próxima vez que você iniciar aquele jogo.
 
-Para conseguir arquivos de trapaça prontos:
+Para conseguir arquivos de cheats prontos:
 
 1. Abra [gamehacking.org/system/snes](https://gamehacking.org/system/snes) e encontre o seu jogo.
 2. Exporte os códigos usando o formato **FXPak Pro 1.7 (.yml)**.
 3. Renomeie o arquivo para bater com a ROM e coloque-o em `/sd2snes/cheats/` no cartão SD.
 
+> [!TIP]
+> O app **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** baixa cheats prontos automaticamente — identifica cada ROM pelo CRC32 e salva os arquivos `<rom>.yml` numa pasta `cheats/`, prontos para copiar em `/sd2snes/cheats/`.
+
 > [!NOTE]
-> Se a ROM não tiver um `.yml` em `/sd2snes/cheats/` (ou o arquivo não tiver códigos), o menu mostra a mensagem "Nenhuma trapaça definida para esta ROM".
+> Se a ROM não tiver um `.yml` em `/sd2snes/cheats/` (ou o arquivo não tiver códigos), o menu mostra a mensagem "Nenhum cheat definido para esta ROM".
 
 ## Deletar arquivo e save
 
@@ -196,24 +199,26 @@ Configure em **Configurações → Opções no Jogo → Reset para o menu**:
 
 As opções **Pasta** e **ROM** funcionam depois de um reset de volta para o menu. Ao ligar o console do zero, ele ainda começa no menu inicial normal.
 
-## Tema personalizado
+## Temas
 
-Você pode personalizar o logo, a fonte, a paleta, o fundo e as cores do seletor do menu.
+A partir do firmware **2.9**, você troca todo o visual do menu — **logo, cores, fundo e barra de seleção** — direto no console, sem PC.
 
-Use o editor de temas feito para este fork:
+1. Coloque arquivos de tema `.thm` em **qualquer pasta** do cartão — qualquer nome serve, só não pode ser a pasta oculta `/sd2snes`.
+2. No menu, entre nessa pasta e aperte **A** num tema. O menu recarrega tematizado.
+3. Para voltar ao padrão, use **Configurações → Opções do Navegador → Restaurar tema** no menu.
+
+Você consegue temas de duas formas:
+
+**Galeria — temas prontos, baixe num clique:**
+
+### 👉 [sd2snes.ludufre.com/gallery](https://sd2snes.ludufre.com/gallery/)
+
+**Editor de temas — crie o seu:** suba uma logo (com transparência), escolha as cores e baixe um `.thm`.
 
 ### 👉 [sd2snes.ludufre.com/theme](https://sd2snes.ludufre.com/theme/)
 
-> [!IMPORTANT]
-> O editor de temas oficial do sd2snes não suporta o formato de tema deste fork. Use o editor acima ao editar o `m3nu.bin` deste firmware.
-
-Fluxo básico para editar um tema:
-
-1. Abra o editor de temas.
-2. Envie o seu `m3nu.bin`.
-3. Envie um **PNG 128×56** se quiser trocar o logo.
-4. Escolha as partes que quer alterar.
-5. Baixe o arquivo editado e copie de volta para o cartão SD.
+> [!NOTE]
+> Avançado: também há um [editor de `m3nu.bin`](https://sd2snes.ludufre.com/theme/) que patcheia o menu inteiro (fluxo antigo). O editor de temas oficial do sd2snes não suporta o formato deste fork.
 
 ## Problemas comuns
 

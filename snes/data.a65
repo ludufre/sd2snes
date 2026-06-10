@@ -246,7 +246,6 @@ pad_l           .byt 0
 pad_r           .byt 0
 mainmenu_active .byt 0
 egg_shown       .byt 0
-egg_hold        .byt 0
 
 ;------------------------
 snes_system_config
