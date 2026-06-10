@@ -21,12 +21,15 @@ from pathlib import Path
 
 FONT = Path(__file__).resolve().parent.parent / "font.a65"
 
-# Codepoints we reserve for Portuguese accented letters.
+# Codepoints reserved for accented letters. MUST match build_const.py ACCENTS
+# (enforced by tests/test_i18n_parity.py) and the glyph tiles in font.a65.
 ACCENT_MAP = {
     "á": 130, "à": 131, "â": 132, "ã": 133, "é": 134, "ê": 135,
     "í": 136, "ó": 137, "ô": 138, "õ": 139, "ú": 140, "ç": 141,
     "Á": 142, "À": 143, "Â": 144, "Ã": 145, "É": 146, "Ê": 147,
     "Í": 148, "Ó": 149, "Ô": 150, "Õ": 151, "Ú": 152, "Ç": 153,
+    # Spanish additions:
+    "ñ": 154, "Ñ": 155, "ü": 156, "Ü": 157, "¿": 158, "¡": 159,
 }
 
 BYTE_RE = re.compile(r"\$([0-9a-fA-F]{2})")
