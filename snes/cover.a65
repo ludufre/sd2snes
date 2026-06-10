@@ -327,21 +327,51 @@ cu_ret:
   plp
   rts
 
+; -- cover_fire_gate: shared dirty/pending/debounce/MCU-ready gate of the two
+;    fire paths (browser + recent/favorite lists). Carry SET = don't fire this
+;    frame (ticks the debounce itself); carry CLEAR = clear to fire
+;    (cover_dirty is left set for the caller). (.as assumed)
+cover_fire_gate:
+  lda cover_dirty
+  beq cfgt_no
+  lda cover_request_pending
+  bne cfgt_no               ; a request is already in flight
+  lda cover_debounce
+  beq cfgt_rdy
+  dec cover_debounce
+  bra cfgt_no
+cfgt_rdy:
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  bne cfgt_no               ; MCU busy - keep dirty, retry next frame
+  clc
+  rts
+cfgt_no:
+  sec
+  rts
+
+; -- cover_fire_send: shared tail of the two fire paths. A = MCU command byte;
+;    MCU_PARAM must already be filled. Clears the ready sentinel BEFORE issuing
+;    the command (so cover_poll waits for the fresh $55), then arms
+;    pending + timeout. (.as assumed)
+cover_fire_send:
+  pha
+  lda #$00                  ; clear ready (STZ has no long mode) so poll waits for $55
+  sta @SNES_CMD
+  pla
+  sta @MCU_CMD
+  lda #$01
+  sta cover_request_pending
+  lda #COVER_TIMEOUT
+  sta cover_timeout
+  stz cover_timeout+1
+  rts
+
 ; -- cover_maybe_fire: when dirty + debounced + nothing in flight, fire
 ;    CMD_LOAD_COVER for ROM/SPC entries (or hide the cover otherwise).
 cover_maybe_fire:
-  lda cover_dirty
-  beq cmf_out
-  lda cover_request_pending
-  bne cmf_out               ; a request is already in flight
-  lda cover_debounce
-  beq cmf_fire
-  dec cover_debounce
-  bra cmf_out
-cmf_fire:
-  lda @SNES_CMD
-  cmp #CMD_MCU_RDY
-  bne cmf_out               ; MCU busy - keep dirty, retry next frame
+  jsr cover_fire_gate
+  bcs cmf_out
   jsr cover_sel_type        ; A = type of highlighted entry
   cmp #TYPE_ROM
   beq cmf_dofire
@@ -357,15 +387,8 @@ cmf_dofire:
   stz cover_dirty
   jsr cover_fill_param_for_current_sel
   sep #$20 : .as
-  lda #$00                  ; clear ready (STZ has no long mode) so poll waits for $55
-  sta @SNES_CMD
   lda #CMD_LOAD_COVER
-  sta @MCU_CMD
-  lda #$01
-  sta cover_request_pending
-  lda #COVER_TIMEOUT
-  sta cover_timeout
-  stz cover_timeout+1
+  jsr cover_fire_send
 cmf_out:
   rts
 
@@ -935,24 +958,13 @@ lcu_out:
 
 ; -- listcover_maybe_fire: dirty + debounced + idle + MCU ready -> fire the
 ;    by-index cover command for the highlighted recent/favorite entry.
+;    Same gate/send protocol as cover_maybe_fire (shared helpers above).
 listcover_maybe_fire:
-  lda cover_dirty
-  beq lcmf_out
-  lda cover_request_pending
-  bne lcmf_out
-  lda cover_debounce
-  beq lcmf_fire
-  dec cover_debounce
-  bra lcmf_out
-lcmf_fire:
-  lda @SNES_CMD
-  cmp #CMD_MCU_RDY
-  bne lcmf_out              ; MCU busy - keep dirty, retry next frame
+  jsr cover_fire_gate
+  bcs lcmf_out
   stz cover_dirty
   lda listsel_sel
   sta @MCU_PARAM            ; highlighted list index
-  lda #$00
-  sta @SNES_CMD             ; clear ready so cover_poll waits for $55
   lda listcover_which
   beq lcmf_recent
   lda #CMD_LOAD_COVER_FAVORITE
@@ -960,12 +972,7 @@ lcmf_fire:
 lcmf_recent:
   lda #CMD_LOAD_COVER_RECENT
 lcmf_send:
-  sta @MCU_CMD
-  lda #$01
-  sta cover_request_pending
-  lda #COVER_TIMEOUT
-  sta cover_timeout
-  stz cover_timeout+1
+  jsr cover_fire_send
 lcmf_out:
   rts
 
