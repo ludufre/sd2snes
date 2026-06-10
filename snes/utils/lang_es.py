@@ -192,6 +192,8 @@ TRANSLATIONS = {
     'cheat_tab_hint_text': ' A:Hab./Desh.   B:Guardar & Salir ',
     'mtext_browser_showcov': 'Mostrar carátulas',
     'mdesc_browser_showcov': 'Mostrar las carátulas de los juegos en el menú',
+    'mtext_browser_covlists': ' {129}Favoritos/Recientes',
+    'mdesc_browser_covlists': 'Mostrar carátulas también en las listas Recientes y Favoritos',
     'mtext_browser_menumusic': 'Música del menú',
     'mdesc_browser_menumusic': 'Reproducir música de fondo (menu.spc) en el menú',
     'mtext_browser_restoretheme': 'Restaurar tema',

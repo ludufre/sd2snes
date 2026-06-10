@@ -219,6 +219,7 @@ mtext_browser_screensaver         .byt "Screensaver", 0
 mtext_browser_screensaver_timeout .byt "Fade screen after", 0
 mtext_browser_ledbright           .byt "LED brightness", 0
 mtext_browser_showcov             .byt "Show covers", 0
+mtext_browser_covlists            .byt " ",129,"Favorites/Recents", 0
 mtext_cfg_patch                   .byt "Patch Options", 0
 mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
 mtext_browser_menumusic           .byt "Menu music", 0
@@ -272,6 +273,7 @@ mdesc_browser_screensaver         .byt "Fade-out the screen after some time", 0
 mdesc_browser_screensaver_timeout .byt "Set time after which to fade the screen", 0
 mdesc_browser_ledbright           .byt "Change brightness of LEDs", 0
 mdesc_browser_showcov             .byt "Show game covers in the menu", 0
+mdesc_browser_covlists            .byt "Show covers in the Recent and Favorite lists too", 0
 mdesc_cfg_patch                   .byt "Options for IPS/BPS soft-patching", 0
 mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (much slower load)", 0
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0

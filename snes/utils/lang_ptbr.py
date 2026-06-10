@@ -190,6 +190,8 @@ TRANSLATIONS = {
     'cheat_tab_hint_text': ' A:Habi./Desab.   B:Salvar & Sair ',
     'mtext_browser_showcov': 'Mostrar capas',
     'mdesc_browser_showcov': 'Exibir capas dos jogos no menu',
+    'mtext_browser_covlists': ' {129}Favoritos/Recentes',
+    'mdesc_browser_covlists': 'Exibir capas também nas listas Recentes e Favoritos',
     'mtext_browser_menumusic': 'Música do menu',
     'mdesc_browser_menumusic': 'Tocar música de fundo (menu.spc) no menu',
     'mtext_browser_restoretheme': 'Restaurar tema',

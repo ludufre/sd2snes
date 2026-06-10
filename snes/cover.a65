@@ -968,3 +968,19 @@ lcmf_send:
   stz cover_timeout+1
 lcmf_out:
   rts
+
+; -- listcover_list_enabled: gate for the Recent/Favorite cover hook. Carry CLEAR
+;    when covers should follow the highlighted list entry (ShowCovers on AND the
+;    "Favorites/Recents" sub-option on); carry SET when they should stay hidden.
+;    Only touches A + flags (mode-agnostic: no immediate/stz width hazard), so the
+;    two callers in filesel.a65 keep their own .as/.xl state.
+listcover_list_enabled:
+  lda @CFG_SHOW_COVERS
+  beq lle_no
+  lda @CFG_COVERS_IN_LISTS
+  beq lle_no
+  clc
+  rts
+lle_no:
+  sec
+  rts

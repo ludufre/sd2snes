@@ -16,6 +16,7 @@
    resizing a field can never silently desync the menu from the firmware. */
 _Static_assert(offsetof(cfg_t, language) == 0xB7, "cfg_t.language must stay at CFG_ADDR+$B7");
 _Static_assert(offsetof(cfg_t, patch_verify_integrity) == 0xB8, "cfg_t.patch_verify_integrity must stay at CFG_ADDR+$B8");
+_Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists must stay at CFG_ADDR+$BA");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -60,7 +61,8 @@ cfg_t CFG_DEFAULT = {
   .show_covers = 1,
   .language = 0,
   .patch_verify_integrity = 0,
-  .enable_menu_music = 1
+  .enable_menu_music = 1,
+  .covers_in_lists = 1
 };
 
 cfg_t CFG;
@@ -164,6 +166,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_AUTOSAVE_MSU1, CFG.enable_autosave_msu1 ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Show per-ROM cover preview (Game.cov) in the file browser (0: off, 1: large, 2: small)\n", CFG_SHOW_COVERS);
   f_printf(&file_handle, "%s: %d\n", CFG_SHOW_COVERS, CFG.show_covers);
+  f_printf(&file_handle, "#  %s: Also show covers in the Recent and Favorite lists (requires ShowCovers)\n", CFG_COVERS_IN_LISTS);
+  f_printf(&file_handle, "%s: %s\n", CFG_COVERS_IN_LISTS, CFG.covers_in_lists ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR, 2: Spanish)\n", CFG_LANGUAGE);
   f_printf(&file_handle, "%s: %d\n", CFG_LANGUAGE, CFG.language);
   f_printf(&file_handle, "\n#  %s: Re-read and CRC-check the ROM after applying an IPS/BPS patch (slow; ~23s for a 4MB BPS)\n", CFG_PATCH_VERIFY_INTEGRITY);
@@ -311,6 +315,9 @@ int cfg_load() {
       } else {
         CFG.show_covers = tok.longvalue > 2 ? 1 : (uint8_t)tok.longvalue;  /* 0: off, 1: large, 2: small */
       }
+    }
+    if(yaml_get_itemvalue(CFG_COVERS_IN_LISTS, &tok)) {
+      CFG.covers_in_lists = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_LANGUAGE, &tok)) {
       CFG.language = tok.longvalue;

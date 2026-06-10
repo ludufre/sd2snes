@@ -1893,8 +1893,11 @@ select_last_choose:
   lda #$01
   sta listsel_step
   sta listsel_pickbutton ; allow button Y
-  lda #$01                   ; cover follows the highlighted list entry
-  sta listcover_active
+  jsr listcover_list_enabled ; cover follows the highlighted entry only if allowed
+  lda #$00
+  bcs +
+  lda #$01
++ sta listcover_active
   stz listcover_which        ; 0 = recent
   lda #$ff
   sta listcover_lastsel      ; force a cover load for the current selection
@@ -2016,9 +2019,13 @@ select_favorite_choose:
   lda #$01
   sta listsel_step
   sta listsel_pickbutton ; allow button Y
-  lda #$01                   ; cover follows the highlighted list entry
-  sta listcover_active
+  lda #$01
   sta listcover_which        ; 1 = favorite
+  jsr listcover_list_enabled ; cover follows the highlighted entry only if allowed
+  lda #$00
+  bcs +
+  lda #$01
++ sta listcover_active
   lda #$ff
   sta listcover_lastsel      ; force a cover load for the current selection
   stz cover_request_pending
