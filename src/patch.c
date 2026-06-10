@@ -404,6 +404,18 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
     adj_max_end = (max_end > adj) ? (max_end - adj) : 0;
 
+    /* Bound every write to the ROM region.  max_end is the maximum offset+len
+       over ALL records (pass 1 scans the same sequence pass 2 applies), so
+       this one check covers the zero-fill below and every pass-2 record.  A
+       corrupt IPS could otherwise write over the menu image / SaveRAM /
+       staging banks above the ROM area (24-bit offsets reach the whole map). */
+    if (adj_max_end > SRAM_SAVE_ADDR - rom_base_addr) {
+        printf("ips_apply: patch exceeds ROM region (end 0x%lx)\n",
+               (unsigned long)adj_max_end);
+        file_close();
+        return 0;
+    }
+
     if (adj_max_end > original_rom_size) {
         uint32_t fill_len = adj_max_end - original_rom_size;
         printf("IPS: zeroing 0x%lx bytes from 0x%lx\n", (unsigned long)fill_len,
@@ -421,7 +433,13 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     for (;;) {
         if (patch_io_err) { err = 1; break; } /* PR#292 fix #1: SDRAM write stalled */
         f_read(&file_handle, rec, 3, &br);
-        if (br != 3) break;  /* truncated or EOF before "EOF" marker */
+        if (br != 3) {
+            /* Ran out of file without ever seeing the "EOF" marker: the patch
+               is truncated and only partially applied — report failure, don't
+               boot a half-patched ROM as if it were fine. */
+            err = 1;
+            break;
+        }
 
         /* IPS EOF marker: bytes 0x45 0x4F 0x46 ('E','O','F') */
         if (rec[0] == 0x45 && rec[1] == 0x4F && rec[2] == 0x46) break;
