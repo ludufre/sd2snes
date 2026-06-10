@@ -182,9 +182,15 @@ def main():
         else:
             out.append(line)
 
-    missing = [l for l in localized if l not in en_args]
-    for l in missing:
-        out.append(f"; WARNING: lang label '{l}' not found in const.a65")
+    # A dict key with no matching label means a label was renamed/removed in
+    # const.a65 without updating the dicts -- from that point on the menu would
+    # silently ship the new label in English. Fail the build instead.
+    missing = sorted(l for l in localized if l not in en_args)
+    if missing:
+        sys.exit(f"build_const.py: {len(missing)} translated label(s) not found "
+                 f"in {base}: {', '.join(missing)}\n"
+                 f"(label renamed/removed in const.a65? update lang_ptbr.py / "
+                 f"lang_es.py to match, or the translation silently ships as English)")
 
     # Intern identical strings so a label whose translations coincide (e.g. an
     # untranslated 'es' that falls back to English) stores each unique byte
@@ -254,8 +260,7 @@ def main():
     out.append("strtab_hi")
 
     out_path.write_text("\n".join(out) + "\n")
-    print(f"generated {out_path}: {len(order)} localized labels, {nlang} language column(s)"
-          + (f", {len(missing)} MISSING: {missing}" if missing else ""))
+    print(f"generated {out_path}: {len(order)} localized labels, {nlang} language column(s)")
 
 
 if __name__ == "__main__":
