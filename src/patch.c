@@ -404,6 +404,18 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
     adj_max_end = (max_end > adj) ? (max_end - adj) : 0;
 
+    /* Bound every write to the ROM region.  max_end is the maximum offset+len
+       over ALL records (pass 1 scans the same sequence pass 2 applies), so
+       this one check covers the zero-fill below and every pass-2 record.  A
+       corrupt IPS could otherwise write over the menu image / SaveRAM /
+       staging banks above the ROM area (24-bit offsets reach the whole map). */
+    if (adj_max_end > SRAM_SAVE_ADDR - rom_base_addr) {
+        printf("ips_apply: patch exceeds ROM region (end 0x%lx)\n",
+               (unsigned long)adj_max_end);
+        file_close();
+        return 0;
+    }
+
     if (adj_max_end > original_rom_size) {
         uint32_t fill_len = adj_max_end - original_rom_size;
         printf("IPS: zeroing 0x%lx bytes from 0x%lx\n", (unsigned long)fill_len,
@@ -421,7 +433,13 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     for (;;) {
         if (patch_io_err) { err = 1; break; } /* PR#292 fix #1: SDRAM write stalled */
         f_read(&file_handle, rec, 3, &br);
-        if (br != 3) break;  /* truncated or EOF before "EOF" marker */
+        if (br != 3) {
+            /* Ran out of file without ever seeing the "EOF" marker: the patch
+               is truncated and only partially applied — report failure, don't
+               boot a half-patched ROM as if it were fine. */
+            err = 1;
+            break;
+        }
 
         /* IPS EOF marker: bytes 0x45 0x4F 0x46 ('E','O','F') */
         if (rec[0] == 0x45 && rec[1] == 0x4F && rec[2] == 0x46) break;
@@ -499,6 +517,12 @@ ips_apply_done:
 static uint8_t  bps_sb[256] __attribute__((section(".ahbram")));
 static uint16_t bps_sb_pos;   /* next byte to consume */
 static uint16_t bps_sb_len;   /* valid bytes in buffer */
+static uint8_t  bps_eof;      /* latched at EOF; checked by bps_decode_vli */
+
+/* Minimum well-formed BPS: "BPS1" + 3 one-byte header VLIs + 12-byte CRC
+   footer.  Anything smaller would underflow `action_end = fsize - 12` and/or
+   run the VLI decoder straight into EOF. */
+#define BPS_MIN_FILE_SIZE 19
 
 /* Logical file position = fptr - (bps_sb_len - bps_sb_pos) */
 #define BPS_LOGICAL_POS() \
@@ -510,7 +534,9 @@ static uint8_t bps_read_byte(void) {
         f_read(&file_handle, bps_sb, sizeof(bps_sb), &br);
         bps_sb_len = (uint16_t)br;
         bps_sb_pos = 0;
-        if (!br) return 0;
+        if (!br) { bps_eof = 1; return 0; } /* latch: a truncated VLI would
+                                               otherwise spin forever on the
+                                               endless 0x00 stream (no bit 7) */
     }
     return bps_sb[bps_sb_pos++];
 }
@@ -520,6 +546,7 @@ static uint32_t bps_decode_vli(void) {
     uint8_t x;
     for (;;) {
         x = bps_read_byte();
+        if (bps_eof) return 0;  /* caller must check bps_eof */
         data += (uint32_t)(x & 0x7f) * shift;
         if (x & 0x80) break;
         shift <<= 7;
@@ -566,6 +593,7 @@ static int bps_run_actions(struct bps_actions *c, uint32_t action_end) {
            && c->output_offset < c->out_limit) {
         if (patch_io_err) { err = 1; break; } /* PR#292 fix #1: SDRAM stalled */
         uint32_t d      = bps_decode_vli();
+        if (bps_eof) { err = 1; break; }      /* action VLI truncated at EOF */
         uint8_t  action = (uint8_t)(d & 3);
         uint32_t length = (d >> 2) + 1;
         c->n_actions++;
@@ -637,6 +665,7 @@ static int bps_run_actions(struct bps_actions *c, uint32_t action_end) {
 
             case 2: { /* SourceCopy: source[source_rel..] -> target. */
                 uint32_t d2    = bps_decode_vli();
+                if (bps_eof) { err = 1; break; }
                 int32_t  delta = (d2 & 1) ? -(int32_t)(d2 >> 1) : (int32_t)(d2 >> 1);
                 source_rel = (uint32_t)((int32_t)source_rel + delta);
                 /* A valid BPS only references source bytes within source_size;
@@ -668,6 +697,7 @@ static int bps_run_actions(struct bps_actions *c, uint32_t action_end) {
                        * General path: copy in chunks of min(length, dist, 512)
                        * so we never read ahead of the write cursor. */
                 uint32_t d2    = bps_decode_vli();
+                if (bps_eof) { err = 1; break; }
                 int32_t  delta = (d2 & 1) ? -(int32_t)(d2 >> 1) : (int32_t)(d2 >> 1);
                 target_rel = (uint32_t)((int32_t)target_rel + delta);
                 /* Spec: TargetCopy may only reference already-written output. */
@@ -732,13 +762,26 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         return 0;
     }
 
+    if (file_handle.fsize < BPS_MIN_FILE_SIZE) {
+        printf("bps_apply: file too small (%lu)\n",
+               (unsigned long)file_handle.fsize);
+        file_close();
+        return 0;  /* also guards the action_end = fsize - 12 underflow */
+    }
+
     /* Activate buffered stream */
     bps_sb_pos = 0;
     bps_sb_len = 0;
+    bps_eof    = 0;
 
     bps_decode_vli();                        /* source_size — unused */
     uint32_t target_size   = bps_decode_vli();
     uint32_t metadata_size = bps_decode_vli();
+    if (bps_eof) {
+        printf("bps_apply: truncated header\n");
+        file_close();
+        return 0;
+    }
 
     /* target_size is an unbounded file VLI.  Reject anything larger than the
        biggest real SNES ROM (8 MB) so a hostile/corrupt header can never push
@@ -813,6 +856,15 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     };
     tick_t t_actions = getticks();
     int err = bps_run_actions(&act, action_end);
+
+    /* A valid BPS writes exactly target_size bytes.  Coming up short means a
+       truncated action stream or a metadata_size that lseek'd past the data
+       (FatFs clamps the seek) — either way the image is incomplete. */
+    if (!err && act.output_offset != target_size) {
+        printf("bps_apply: incomplete target (0x%lx of 0x%lx)\n",
+               (unsigned long)act.output_offset, (unsigned long)target_size);
+        err = 1;
+    }
 
     /* Read the BPS-embedded target CRC32 (at fsize-8..fsize-5) before closing,
        only when integrity verification is enabled. */
@@ -918,12 +970,19 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
         return 0;
     }
 
+    if (file_handle.fsize < BPS_MIN_FILE_SIZE) {
+        file_close();
+        return 0;  /* also guards the action_end = fsize - 12 underflow */
+    }
+
     bps_sb_pos = 0;
     bps_sb_len = 0;
+    bps_eof    = 0;
 
     bps_decode_vli();                        /* source_size — unused */
     uint32_t target_size   = bps_decode_vli();
     uint32_t metadata_size = bps_decode_vli();
+    if (bps_eof) { file_close(); return 0; } /* truncated header */
 
     /* Header must lie within the target image for the probe to be meaningful. */
     if (target_size < out_limit) { file_close(); return 0; }
@@ -968,6 +1027,10 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
 
     file_close();
     if (err) return 0;
+    /* Action stream ended before filling the header window -> the probe
+       didn't materialize the full header; bail to the safe apply-then-detect
+       path instead of advising from a partial image. */
+    if (act.output_offset < out_limit) return 0;
     if (out_scratch_base) *out_scratch_base = scratch_base;
     return target_size;
 }

@@ -182,9 +182,58 @@ def main():
         else:
             out.append(line)
 
-    missing = [l for l in localized if l not in en_args]
-    for l in missing:
-        out.append(f"; WARNING: lang label '{l}' not found in const.a65")
+    # A dict key with no matching label means a label was renamed/removed in
+    # const.a65 without updating the dicts -- from that point on the menu would
+    # silently ship the new label in English. Fail the build instead.
+    missing = sorted(l for l in localized if l not in en_args)
+    if missing:
+        sys.exit(f"build_const.py: {len(missing)} translated label(s) not found "
+                 f"in {base}: {', '.join(missing)}\n"
+                 f"(label renamed/removed in const.a65? update lang_ptbr.py / "
+                 f"lang_es.py to match, or the translation silently ships as English)")
+
+    # Render budgets (encoded bytes, excluding the NUL terminator). A
+    # translation longer than its UI slot overruns a popup border or wraps the
+    # 64-tile row, and nothing at runtime guards that -- enforce it here.
+    # Budgets derived from the render sites:
+    #   text_no_*       show_empty_msg box: window_w=24 -> interior 22
+    #                   (filesel.a65)
+    #   cheat_tab_head  fixed cheat-table column layout, 48 cols incl. the
+    #                   Enabled column (cheatmenu.a65)
+    #   mtext_*         options window is COMPUTED from content: max_label +
+    #                   max_value + 7 must fit the 64-tile screen (menu.a65
+    #                   menu_open) -> keep labels <= 40
+    #   default         hiprint row budget (print_count = 56)
+    WIDTH_LIMITS = (("text_no_", 22), ("cheat_tab_head", 48), ("mtext_", 40))
+    WIDTH_DEFAULT = 56
+
+    def encoded_len(text):
+        n = 0
+        for p in split_args(encode_string(text)):
+            if p.startswith('"'):
+                n += len(p) - 2      # quoted run -> 1 byte per char
+            elif p != "0":
+                n += 1               # raw byte (accent / {NNN} placeholder)
+        return n
+
+    def budget_for(label):
+        for prefix, lim in WIDTH_LIMITS:
+            if label.startswith(prefix):
+                return lim
+        return WIDTH_DEFAULT
+
+    too_wide = []
+    for lang_name, d in (("pt-BR", ptbr), ("es", es)):
+        for label in order:
+            text = d.get(label)
+            if not text:
+                continue
+            n, lim = encoded_len(text), budget_for(label)
+            if n > lim:
+                too_wide.append(f"{label} [{lang_name}]: {n} > {lim} bytes: {text!r}")
+    if too_wide:
+        sys.exit("build_const.py: translation(s) exceed their UI slot:\n  "
+                 + "\n  ".join(too_wide))
 
     # Intern identical strings so a label whose translations coincide (e.g. an
     # untranslated 'es' that falls back to English) stores each unique byte
@@ -254,8 +303,7 @@ def main():
     out.append("strtab_hi")
 
     out_path.write_text("\n".join(out) + "\n")
-    print(f"generated {out_path}: {len(order)} localized labels, {nlang} language column(s)"
-          + (f", {len(missing)} MISSING: {missing}" if missing else ""))
+    print(f"generated {out_path}: {len(order)} localized labels, {nlang} language column(s)")
 
 
 if __name__ == "__main__":

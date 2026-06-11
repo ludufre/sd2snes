@@ -82,6 +82,42 @@ FLAG_HAS_LOGO = 0x0001
 GFXPTR_MAGIC = b"_GFXPTR_"
 
 
+def _firmware_slot_caps(theme_c=None):
+    """Parse theme_slot_max[] out of src/theme.c (the MCU-side copy of
+    SLOT_MAX). Returns {slot: cap}. Raises when the file or the table can't be
+    found -- silently skipping would defeat the parity check below."""
+    if theme_c is None:
+        theme_c = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "src", "theme.c")
+    with open(theme_c) as fh:
+        src = fh.read()
+    m = re.search(r"theme_slot_max\s*\[[^\]]*\]\s*=\s*\{(.*?)\}", src, re.S)
+    if not m:
+        raise RuntimeError("theme_slot_max[] initializer not found in %s" % theme_c)
+    caps = [int(v) for v in re.findall(r"^\s*(\d+)\s*,", m.group(1), re.M)]
+    if not caps:
+        raise RuntimeError("could not parse theme_slot_max[] entries in %s" % theme_c)
+    return dict(enumerate(caps))
+
+
+def check_firmware_caps():
+    """Fail loudly when SLOT_MAX here drifts from src/theme.c theme_slot_max[]
+    (the 'keep in sync' contract was comment-only). A desync either silently
+    truncates a region on the MCU (cap here too big) or rejects valid themes at
+    pack time (cap here too small) -- both break the published gallery."""
+    fw = _firmware_slot_caps()
+    bad = []
+    for slot in sorted(set(fw) | set(SLOT_MAX)):
+        ours = SLOT_MAX.get(slot, 0)   # omitted here == not packable == 0 there
+        theirs = fw.get(slot, 0)
+        if ours != theirs:
+            bad.append("slot %d (%s): pack_theme.py=%d src/theme.c=%d"
+                       % (slot, SLOT_NAME.get(slot, "?"), ours, theirs))
+    if bad:
+        sys.exit("SLOT_MAX out of sync with src/theme.c theme_slot_max[]:\n  "
+                 + "\n  ".join(bad))
+
+
 # ---------------------------------------------------------------------------
 # .thm build / parse
 # ---------------------------------------------------------------------------
@@ -443,6 +479,10 @@ def main():
     v.add_argument("thm", nargs="+")
 
     args = ap.parse_args()
+
+    # Every subcommand produces or validates .thm files against SLOT_MAX, so
+    # always prove SLOT_MAX still matches the firmware before doing anything.
+    check_firmware_caps()
 
     if args.cmd == "convert-library":
         _, failed = convert_library(args.custom, args.out,
