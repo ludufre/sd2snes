@@ -277,7 +277,7 @@ Todos os binários de release são compilados localmente com Docker. O único re
 ./build-docker.sh
 ```
 
-Isso compila tudo de uma vez: o firmware da MCU (`firmware.img` para Mk.II, `firmware.im3` para Mk.III, `firmware.stm` para FXPAK PRO STM32), o menu do SNES (`menu.bin` / `m3nu.bin`) e o companion ESP (`esp32.bin` / `esp8266.bin`). Em seguida monta dois zips em `release/`:
+Isso compila tudo de uma vez: o firmware da MCU (`firmware.img` para Mk.II, `firmware.im3` para Mk.III, `firmware.stm` para FXPAK PRO STM32), o menu do SNES (`menu.bin` / `m3nu.bin`) e o companion ESP (`esp32.bin` / `esp8266.bin` / `esp32c3.bin`). Em seguida monta dois zips em `release/`:
 
 - `sd2snes_firmware_v<VER>.zip`: apenas os binários modificados do fork
 - `sd2snes_firmware_v<VER>-full.zip`: a base oficial do sd2snes mais os binários do fork

@@ -71,6 +71,8 @@ utils/derle
 *.vho
 *.wcfg
 *.ini
+# the ESP companion build config IS version-controlled (the *.ini rule above is for FPGA tooling)
+!companion/platformio.ini
 *.cgp
 *.swn
 *.swo

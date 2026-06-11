@@ -17,13 +17,17 @@
 #include <EEPROM.h>
 #include <string.h>
 
-#if defined(ESP32)
-  #include <Update.h>
-  #define OTA_BIN "/sd2snes/esp32.bin"
-#else
+// OTA_BASENAME comes from platform.h (esp32.bin / esp8266.bin / esp32c3.bin), so
+// each chip self-updates from its own image - the C3 must NOT pull esp32.bin (a
+// WROOM-32 build). The Update library splits ESP8266 (Updater.h) vs the whole
+// ESP32 family incl. the C3 (Update.h); `ESP32` is defined for the C3 too, so the
+// ESP8266 check has to be the positive one.
+#if defined(ESP8266)
   #include <Updater.h>
-  #define OTA_BIN "/sd2snes/esp8266.bin"
+#else
+  #include <Update.h>
 #endif
+#define OTA_BIN "/sd2snes/" OTA_BASENAME
 
 #define FW_MAGIC   "SD2ESPFW"   // 8 bytes, must match tools/append_fwtrailer.py
 #define FW_TRAILER 16           // magic(8) + crc32(4) + pad(4)

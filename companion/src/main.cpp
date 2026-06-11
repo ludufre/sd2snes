@@ -13,6 +13,7 @@
 #include "ota.h"
 #include "net.h"
 #include "web.h"
+#include "display.h"
 #include "version.h"
 
 #define BRIDGE_MS 400
@@ -43,12 +44,14 @@ void setup() {
     link_init();              // MCU UART @921600
     ota_check_and_apply();    // self-update from /sd2snes/espXX.bin if a newer .ver is on the SD
     net_start();              // SoftAP (+ STA auto-reconnect)
+    display_init();           // ST7789 status panel (no-op wiring still boots fine)
     web_start();              // HTTP file manager + WiFi config + OTA
 }
 
 void loop() {
     web_loop();       // serve HTTP
     net_loop();       // AP on/off + connection tracking
+    display_loop();   // ST7789 status panel (throttled, redraw-on-change)
     if ((int32_t)(millis() - s_bridge_at) >= 0) {
         s_bridge_at = millis() + BRIDGE_MS;
         bridge_once();

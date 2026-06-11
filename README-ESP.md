@@ -5,7 +5,7 @@ into a network-managed device: browse and transfer the SD card from a phone/PC
 over Wi-Fi, configure Wi-Fi from the SNES menu itself, with the protocol designed
 so the SNES is **never blocked** during transfers.
 
-One Arduino codebase in `companion/` builds both targets; the only per-chip
+One Arduino codebase in `companion/` builds all three targets; the only per-chip
 differences live in `companion/src/platform.h`. The protocol, WebUI and MCU/menu
 code are identical (the MCU does not know or care which one is connected):
 
@@ -13,6 +13,7 @@ code are identical (the MCU does not know or care which one is connected):
 |---------|------|----------------|
 | ESP32   | ESP32-WROOM-32   | `esp32dev`  |
 | ESP8266 | ESP-12E (NodeMCU) | `nodemcuv2` |
+| ESP32-C3 | ESP32-C3 (Super Mini) | `esp32-c3-supermini` |
 
 ```
 [SNES menu (m3nu)] --SNES_CMD/$55--> [MCU] <==UART 921600 8N1==> [ESP] <--Wi-Fi/HTTP--> [browser]
@@ -40,6 +41,13 @@ ESP side (the chip determines which pins/UART):
 |------------|------|-------------------------|--------------------------|---------------|
 | ESP32   | UART2 | GPIO16 | GPIO17 | UART0 over USB (full `ESP_LOGx`) |
 | ESP8266 | UART0 (swapped) | GPIO13 = D7 | GPIO15 = D8 | UART1 TX = GPIO2, one-way only |
+| ESP32-C3 | UART1 | GPIO20 | GPIO21 | `Serial` over native USB-CDC |
+
+The ESP32-C3 (Super Mini) has only two UARTs and no `Serial2`, so the link is
+`Serial1` (GPIO20/21) and `Serial` is the native USB-Serial-JTAG debug console
+(enabled with `-DARDUINO_USB_CDC_ON_BOOT=1`). It uses the same Arduino-ESP32 WiFi
+stack as the WROOM-32 (the bare `ESP32` macro is defined for it too, so the C3 is
+detected first via `CONFIG_IDF_TARGET_ESP32C3`).
 
 Everything is 3.3 V, no level shifter. Common GND. Power the ESP from its own USB
 on the bench; a permanent install needs a solid 3.3 V supply (Wi-Fi current peaks).
@@ -81,6 +89,38 @@ second UART (UART1) is TX-only (GPIO2), so it can only be a one-way debug log.
 
 ---
 
+## Display (optional 1.54" ST7789, all three targets)
+
+A 1.54" ST7789 240x240 SPI TFT can be wired to the ESP to show a status panel
+(AP/STA SSID + IP + the companion identity). Bring-up only for now - it does **not**
+mirror cover art yet (that is the reserved `0x30` protocol phase). Driver:
+**Adafruit ST7789 + Adafruit GFX** (added to `lib_deps`). Code is in
+`companion/src/display.{h,cpp}`; the per-chip wiring is in `companion/src/platform.h`
+(`TFT_*` macros). Text-only and self-throttled (redraw on change), so it never
+stalls the MCU link.
+
+| Signal | ESP32-C3 (Super Mini) | ESP32-WROOM-32 | ESP8266 (NodeMCU) |
+|--------|-----------------------|----------------|-------------------|
+| SPI    | hardware (FSPI) | hardware (VSPI) | **software** (see note) |
+| SCLK   | GPIO4 | GPIO18 | GPIO4 (D2) |
+| MOSI/SDA | GPIO6 | GPIO23 | GPIO5 (D1) |
+| DC     | GPIO5 | GPIO4 | GPIO0 (D3) |
+| RST    | GPIO7 | GPIO22 | GPIO16 (D0) |
+| CS     | GPIO10 | GPIO5 | tie to **GND** |
+| BL     | GPIO3 | GPIO21 | tie to **3V3** |
+
+These are sensible defaults - adjust the `TFT_*` macros if your wiring differs.
+
+- **ESP8266 uses software SPI** because the chip's hardware HSPI (MOSI=GPIO13,
+  SS=GPIO15) lands exactly on the swapped UART0 MCU link (GPIO13/15). The bit-bang
+  pins above are the only free ones; `DC=GPIO0` is a boot strapping pin, so the
+  display must not hold it low at power-up.
+- If colours look negated on a given panel, flip `TFT_INVERT` in `display.cpp`.
+- The C3 debug log is over USB-CDC (`Serial`); plug the Super Mini in and
+  `pio device monitor -e esp32-c3-supermini` to see it.
+
+---
+
 ## WebUI (shared)
 
 The WebUI is in `companion/src/www/` (`index.html` + `style.css` + `app.js`).
@@ -110,8 +150,8 @@ Connect to Wi-Fi `sd2snes-XXXX` (password `sd2snes0`) and open `http://192.168.4
 The companion updates itself from the SD card over the same UART link - **flash if
 different**, no version numbers, exactly like the sd2snes MCU bootloader re-flashes
 `firmware.imX` when the content differs. After the first install you never re-attach
-USB. It needs just one file: `/sd2snes/espXX.bin` (`esp32.bin` or `esp8266.bin`,
-per chip).
+USB. It needs just one file: `/sd2snes/espXX.bin` (`esp32.bin`, `esp8266.bin` or
+`esp32c3.bin`, per chip).
 
 How it works:
 - The build appends a 16-byte trailer to `firmware.bin` (`tools/append_fwtrailer.py`):
@@ -136,8 +176,9 @@ Release a new ESP firmware:
    ~/.platformio/penv/bin/pio run            # both, or -e esp32dev / -e nodemcuv2
    ```
 3. Copy the image onto the card as `/sd2snes/espXX.bin`:
-   - ESP32:   `.pio/build/esp32dev/firmware.bin`  -> `/sd2snes/esp32.bin`
-   - ESP8266: `.pio/build/nodemcuv2/firmware.bin` -> `/sd2snes/esp8266.bin`
+   - ESP32:   `.pio/build/esp32dev/firmware.bin`           -> `/sd2snes/esp32.bin`
+   - ESP8266: `.pio/build/nodemcuv2/firmware.bin`          -> `/sd2snes/esp8266.bin`
+   - ESP32-C3: `.pio/build/esp32-c3-supermini/firmware.bin` -> `/sd2snes/esp32c3.bin`
 
    via a card reader, the WebUI file manager (upload into `/sd2snes/`), or USB:
    ```sh
@@ -184,9 +225,10 @@ pip3 install -U platformio
 ```
 
 The first `pio run` downloads the right platform automatically (no manual SDK
-install): `espressif32` + Arduino-ESP32 for the `esp32dev` env, `espressif8266` +
-Arduino-ESP8266 for the `nodemcuv2` env. `gen_www.sh` also needs `gzip` and `xxd`
-(standard on macOS/Linux).
+install): `espressif32` + Arduino-ESP32 for the `esp32dev` and `esp32-c3-supermini`
+envs, `espressif8266` + Arduino-ESP8266 for the `nodemcuv2` env, plus the Adafruit
+ST7789/GFX/BusIO libraries. `gen_www.sh` also needs `gzip` and `xxd` (standard on
+macOS/Linux).
 
 MCU side: the standard sd2snes toolchain (`arm-none-eabi-gcc`, plus `snescom` for
 the menu). In this fork the MCU is compiled on a remote build server; the `make`
@@ -224,6 +266,7 @@ Each build writes a flashable image at `companion/.pio/build/<env>/firmware.bin`
 |----------|---------------|---------------|
 | ESP32    | `pio run -e esp32dev`  | `companion/.pio/build/esp32dev/firmware.bin`  |
 | ESP8266  | `pio run -e nodemcuv2` | `companion/.pio/build/nodemcuv2/firmware.bin` |
+| ESP32-C3 | `pio run -e esp32-c3-supermini` | `companion/.pio/build/esp32-c3-supermini/firmware.bin` |
 
 List ports with `ls /dev/cu.*` (macOS), `ls /dev/ttyUSB*` (Linux), or `pio device list`.
 
@@ -257,7 +300,8 @@ Firmware and menu must come from the same build (shared SRAM layout).
 - [x] Non-blocking UART link (LPC UART0 @ 921600), verified clean
 - [x] Compact CRC-framed protocol, arch-neutral (`esplink`)
 - [x] MCU file server over UART (PING/LS/STAT/GET/PUT/RM/MV/MKDIR/ABORT), reusing FatFs, non-blocking
-- [x] Companion firmware: one Arduino codebase for ESP32 and ESP8266 (SoftAP + STA + HTTP server)
+- [x] Companion firmware: one Arduino codebase for ESP32, ESP8266 and ESP32-C3 (SoftAP + STA + HTTP server)
+- [x] ESP32-C3 (Super Mini) target: UART1 link (GPIO20/21), USB-CDC debug, self-update from `esp32c3.bin`
 - [x] ESP8266 single-UART support (UART0 swapped to GPIO13/15, USB free for flashing)
 - [x] WebUI file manager (browse / download / upload with progress / rename / delete / mkdir / up-dir)
 - [x] WebUI polish (mobile reflow, zoom lock, loading spinner, hidden OS junk files)
@@ -271,7 +315,8 @@ Firmware and menu must come from the same build (shared SRAM layout).
 ### To do
 - [ ] Test on mk2 and mk3-stm32. Currently build-validated only (mk3/LPC1756 is the tested unit; mk2 has no hardware here; the STM32 link is `ESPLINK_ENABLE=0` and PC6/PC7 are not confirmed broken out on any PCB).
 - [ ] Wi-Fi status icon in m3nu (show connected/IP on the SNES menu).
-- [ ] Cover (`.cov`) on an IPS/TFT wired to the ESP (decode the cover and mirror the highlighted game). Protocol range `0x30`.
+- [x] 1.54" ST7789 (240x240) status panel on all three targets (AP/STA SSID + IP + identity). Bring-up only.
+- [ ] Cover (`.cov`) on the ST7789 wired to the ESP (decode the cover and mirror the highlighted game). Protocol range `0x30`.
 - [ ] Trigger the ESP self-update from the m3nu menu (it is automatic at boot today).
 - [ ] Update the sd2snes from the WebUI, OTA-style for the MCU flash trigger. Protocol range `0x20`.
 - [ ] Optional ESP8266 OLED (show IP / status). Confirm it is I2C (GPIO4/5) so it does not clash with the UART on GPIO13/15.

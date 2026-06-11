@@ -27,8 +27,8 @@ void link_init(void) {
 #if defined(ESP8266)
     LINK_SERIAL.begin(EXT_BAUD);
     LINK_SERIAL.swap();            // UART0 -> GPIO13(RX)/GPIO15(TX); USB stays free
-#else // ESP32
-    LINK_SERIAL.begin(EXT_BAUD, SERIAL_8N1, 16, 17);   // UART2: GPIO16 RX / GPIO17 TX
+#else // ESP32 (UART2) / ESP32-C3 (UART1) - pins from platform.h
+    LINK_SERIAL.begin(EXT_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
 #endif
     DBG_SERIAL.begin(115200);
     DBG_SERIAL.println(F("\n[sd2snes-companion] MCU link up @921600"));
