@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
-"""Generate a trilingual const_lang.a65 from the English base snes/const.a65.
+"""Generate a multilingual const_lang.a65 from the English base snes/const.a65.
 
 The menu renders strings by label. To support a runtime language switch in a
-single binary, every *localized* label (one that appears in lang_ptbr / lang_es)
+single binary, every *localized* label (one that appears in any lang_*.py)
 is expanded into:
 
     <label>_en   .byt <english>, 0
     <label>_ptbr .byt <portuguese>, 0
     <label>_es   .byt <spanish>, 0
-    <label>:                              ; 3-entry dispatch table (the public label)
-      .word !<label>_en   : .byt ^<label>_en
-      .word !<label>_ptbr : .byt ^<label>_ptbr
-      .word !<label>_es   : .byt ^<label>_es
+    <label>_de   .byt <german>, 0
+    <label>:                              ; dispatch table (the public label)
+      .word !<label>_en
+      .word !<label>_ptbr
+      .word !<label>_es
+      .word !<label>_de
 
 All dispatch tables are emitted contiguously between the exported labels
 `strtab_lo` and `strtab_hi`. The menu's `resolve_str` recognises a dispatch
 table purely by address range: a pointer inside [strtab_lo, strtab_hi) is
-indexed by the active language (cur_lang * 3); any other pointer (a plain,
+indexed by the active language (cur_lang * 2); any other pointer (a plain,
 language-neutral string such as "50Hz") passes through unchanged. This keeps
 menudata.a65 and every existing `!label`/`^label` reference untouched.
 
@@ -24,7 +26,7 @@ Non-localized lines (data tables, window geometry, neutral strings) are copied
 verbatim and keep their original positions.
 
 Usage:
-    build_const.py <const.a65> <lang_ptbr.py> <lang_es.py> -o <const_lang.a65>
+    build_const.py <const.a65> <lang_ptbr.py> <lang_es.py> <lang_de.py> -o <const_lang.a65>
     build_const.py <const.a65> --dump-en <out.py>   # English scaffold for a new lang
 """
 import re
@@ -131,7 +133,7 @@ def parse_base(base_path):
 def dump_en_scaffold(base_path, out_path, keys):
     """Write a translation scaffold (label -> decoded English text) for `keys`."""
     _, en_args = parse_base(base_path)
-    out = ['"""Spanish strings for the sd2snes menu. Translate each value.',
+    out = ['"""Translated strings for the sd2snes menu. Translate each value.',
            '',
            'Pre-seeded with the English source. Any label left in English (or removed)',
            'falls back to English at build time. {129}=submenu icon, {127}{128}=ellipsis.',
@@ -147,6 +149,14 @@ def dump_en_scaffold(base_path, out_path, keys):
     print(f"wrote scaffold {out_path}: {sum(1 for k in keys if k in en_args)} entries")
 
 
+def lang_code(path):
+    """Return the dispatch-table code for utils/lang_<code>.py."""
+    stem = Path(path).stem
+    if stem.startswith("lang_"):
+        return stem[5:]
+    return stem
+
+
 def main():
     base = Path(sys.argv[1])
 
@@ -157,20 +167,18 @@ def main():
         dump_en_scaffold(base, out_py, list(ref.keys()))
         return
 
-    ptbr = load_dict(sys.argv[2])
-    # es (2nd language) is OPTIONAL: omit it to build a smaller EN+PT menu. When
-    # absent, es={} -> every es.get() is None -> es_used False -> nlang drops to 2
-    # and the es column/strings cost nothing (the trilingual table overflowed C0).
-    es = load_dict(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].endswith(".py") else {}
+    out_i = sys.argv.index("-o")
+    lang_paths = [p for p in sys.argv[2:out_i] if p.endswith(".py")]
+    langs = [(lang_code(p), load_dict(p)) for p in lang_paths]
     out_path = Path(sys.argv[sys.argv.index("-o") + 1])
 
     # Item descriptions (mdesc_*) are not rendered by the current menu (no menu
-    # entry offset-11 read exists), so we do NOT expand them into trilingual
+    # entry offset-11 read exists), so we do NOT expand them into multilingual
     # dispatch tables -- they stay as their single English base string. This
-    # keeps the trilingual menu inside one 64K ROM bank. (Their pt-BR/es text
+    # keeps the menu inside one 64K ROM bank. (Their translated text
     # still lives in lang_*.py; drop this skip if descriptions become rendered.)
     SKIP_PREFIXES = ("mdesc_",)
-    localized = {k for k in (set(ptbr) | set(es))
+    localized = {k for _, d in langs for k in d
                  if not k.startswith(SKIP_PREFIXES)}
     lines, en_args = parse_base(base)
 
@@ -187,8 +195,8 @@ def main():
         out.append(f"; WARNING: lang label '{l}' not found in const.a65")
 
     # Intern identical strings so a label whose translations coincide (e.g. an
-    # untranslated 'es' that falls back to English) stores each unique byte
-    # sequence only once. This keeps the trilingual menu inside one 64K bank.
+    # untranslated language that falls back to English) stores each unique byte
+    # sequence only once. This keeps the menu inside one 64K bank.
     pool = {}        # `.byt` args -> shared label
     pool_order = []  # preserve emission order
 
@@ -199,29 +207,29 @@ def main():
         return pool[args]
 
     tabledefs = []
-    plaindefs = []   # labels whose 3 languages coincide -> plain string, no table
+    plaindefs = []   # labels whose languages coincide -> plain string, no table
     for label in order:
         en = en_args[label]
-        pt_text = ptbr.get(label)
-        es_text = es.get(label)
         # Language-neutral? Compare via normalized decode so a translation that
-        # merely repeats the English (or an untranslated 'es' that falls back to
-        # English) collapses to a single plain string with NO 6-byte dispatch
+        # merely repeats the English (or an untranslated language that falls back to
+        # English) collapses to a single plain string with NO dispatch
         # table -- resolve_str passes any pointer outside [strtab_lo,strtab_hi)
-        # straight through. This keeps the trilingual menu inside one 64K bank.
+        # straight through. This keeps the menu inside one 64K bank.
         en_norm = encode_string(decode_args(en))
-        pt_norm = encode_string(pt_text) if pt_text else en_norm
-        es_norm = encode_string(es_text) if es_text else en_norm
-        if en_norm == pt_norm == es_norm:
+        norms = [en_norm]
+        strings = [en]
+        for _, d in langs:
+            text = d.get(label)
+            args = encode_string(text) if text else en
+            norms.append(encode_string(text) if text else en_norm)
+            strings.append(args)
+        if all(n == en_norm for n in norms):
             plaindefs.append((label, en))
             continue
-        en_lbl = intern(en)
-        pt_lbl = intern(encode_string(pt_text) if pt_text else en)
-        es_lbl = intern(encode_string(es_text) if es_text else en)
-        tabledefs.append((label, en_lbl, pt_lbl, es_lbl))
+        tabledefs.append((label, [intern(args) for args in strings]))
 
     if plaindefs:
-        out += ["", "; ==== language-neutral labels (same in all 3 langs): no table ===="]
+        out += ["", "; ==== language-neutral labels (same in all langs): no table ===="]
         for label, args in plaindefs:
             out.append(f"{label} .byt {args}")
 
@@ -230,25 +238,28 @@ def main():
         out.append(f"{pool[args]} .byt {args}")
 
     # Number of language COLUMNS actually present. Trailing columns whose every
-    # entry just repeats English (e.g. an unfilled lang_es scaffold) are dropped
+    # entry just repeats English (e.g. an unfilled scaffold) are dropped
     # so they cost no table space; resolve_str maps cur_lang >= strtab_nlang back
-    # to English (column 0). Order is fixed EN(0), pt-BR(1), es(2): a column is
-    # kept only if it (or a later one) carries a real translation.
+    # to English (column 0). The Makefile argument order fixes the language order:
+    # EN(0), then each lang_*.py in order. A column is kept only if it or a later
+    # one carries a real translation.
     def differs(text, lbl):
         return bool(text) and (encode_string(text)
                                != encode_string(decode_args(en_args.get(lbl, ""))))
-    es_used = any(differs(es.get(l), l) for l in order)
-    pt_used = es_used or any(differs(ptbr.get(l), l) for l in order)
-    nlang = 3 if es_used else (2 if pt_used else 1)
+    nlang = 1
+    for idx, (_, d) in enumerate(langs, start=1):
+        if any(differs(d.get(l), l) for l in order):
+            nlang = idx + 1
 
     out += ["", f"; ==== dispatch tables: resolve_str range [strtab_lo, strtab_hi) ===="]
-    out += [f"; each table = {nlang} x 16-bit address (EN, pt-BR, es)[:{nlang}]; NO bank byte:",
+    lang_names = ", ".join(["EN"] + [code for code, _ in langs])
+    out += [f"; each table = {nlang} x 16-bit address ({lang_names})[:{nlang}]; NO bank byte:",
             "; every pooled string lives in the same bank as strtab_lo, so resolve_str",
             "; uses ^strtab_lo as the bank for all of them. cur_lang >= strtab_nlang -> EN."]
     out.append(f"strtab_nlang .byt {nlang}")
     out.append("strtab_lo")
-    for label, en_lbl, pt_lbl, es_lbl in tabledefs:
-        cols = (en_lbl, pt_lbl, es_lbl)[:nlang]
+    for label, labels in tabledefs:
+        cols = labels[:nlang]
         # `label .word ...` (no colon) matches the proven `label .byt ...` style.
         out.append(f"{label} " + " : ".join(f".word !{c}" for c in cols))
     out.append("strtab_hi")

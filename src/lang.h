@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-typedef enum { LANG_EN = 0, LANG_PTBR = 1, LANG_ES = 2, NUM_LANG } lang_t;
+typedef enum { LANG_EN = 0, LANG_PTBR = 1, LANG_ES = 2, LANG_DE = 3, NUM_LANG } lang_t;
 
 /* sysinfo localized message IDs */
 enum {

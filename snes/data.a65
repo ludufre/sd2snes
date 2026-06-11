@@ -30,7 +30,7 @@ print_count     .word 0     ; how many characters may be printed?
 print_done      .word 0     ; how many characters were printed?
 print_over      .byt 0      ; was the string printed incompletely?
 ;----------language selection----------
-cur_lang        .byt 0      ; active menu language (0=EN, 1=pt-BR); mirrors CFG_LANGUAGE
+cur_lang        .byt 0      ; active menu language (0=EN, 1=BR, 2=ES, 3=DE)
 resolve_ptr     .byt 0,0,0  ; resolve_str: zero-page long ptr to read a dispatch-table entry
 kv_len_tmp      .byt 0      ; menu_kv_value_len: resolved kv-value length out-param
 ;----------parameters for dma----------
