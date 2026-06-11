@@ -301,10 +301,13 @@ This step is heavy and needs the Xilinx ISE 14.7 installer and a WebPACK license
 
 The IPS/BPS patch support and the original reset-to-menu work come from [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293), with changes made in this fork.
 
+The in-game cheat menu work come from [@Relikk](https://github.com/Relikk).
+
 Original sd2snes repository contributors listed by GitHub:
 
 - [@mrehkopf](https://github.com/mrehkopf)
 - [@RedGuyyyy](https://github.com/RedGuyyyy)
+- [@Relikk](https://github.com/Relikk)
 - [@github-user-name](https://github.com/github-user-name)
 - [@furious](https://github.com/furious)
 - [@redacted173](https://github.com/redacted173)

@@ -301,10 +301,13 @@ Esse passo é pesado e precisa do instalador do Xilinx ISE 14.7 e de uma licenç
 
 O suporte a patches IPS/BPS e o trabalho original de reset para o menu vêm de [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293), com alterações feitas neste fork.
 
+O suporte ao menu de cheats vem de [@Relikk](https://github.com/Relikk).
+
 Contribuidores do repositório original do sd2snes listados pelo GitHub:
 
 - [@mrehkopf](https://github.com/mrehkopf)
 - [@RedGuyyyy](https://github.com/RedGuyyyy)
+- [@Relikk](https://github.com/Relikk)
 - [@github-user-name](https://github.com/github-user-name)
 - [@furious](https://github.com/furious)
 - [@redacted173](https://github.com/redacted173)
