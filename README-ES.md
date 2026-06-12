@@ -1,17 +1,17 @@
 <h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Demostración">
-<img src="gfx/langs.gif" width="384" alt="El menú principal en Inglés, Portugués de Brasil y Español">
+<img src="gfx/langs.gif" width="384" alt="El menú principal en Inglés, Portugués de Brasil, Español y Alemán">
 
 Una experiencia de firmware más amigable para sd2snes/FXPAK: idiomas, carátulas de juegos, música en el menú, parches y un regreso al menú más práctico.
 
-**🌐 Idioma:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · Español
+**🌐 Idioma:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · Español · [Deutsch 🇩🇪](README-DE.md)
 
 **Más información:** el sitio [sd2snes.ludufre.com](https://sd2snes.ludufre.com) reúne más detalles, guías y ejemplos visuales sobre este fork.
 
 > **¿Qué es esto?**
 >
-> Este es un fork del [firmware original de sd2snes](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf). Mantiene la base del firmware original y añade mejoras pensadas para quien usa el cartucho: menú en Portugués de Brasil, Inglés y Español, carátulas de juegos, música en el menú, selección de parches IPS/BPS y mejores opciones de regreso al menú.
+> Este es un fork del [firmware original de sd2snes](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf). Mantiene la base del firmware original y añade mejoras pensadas para quien usa el cartucho: menú en Portugués de Brasil, Inglés, Español y Alemán, carátulas de juegos, música en el menú, selección de parches IPS/BPS y mejores opciones de regreso al menú.
 >
 > Usa este repositorio para dudas o errores relacionados con la **traducción**, el **selector de idioma**, las **carátulas**, la **música del menú**, el **selector de parches** o el **editor de temas de este fork**. Para problemas del firmware principal que no estén relacionados con estas funciones, usa el proyecto original.
 
@@ -30,7 +30,7 @@ Necesitas:
 
 ## Qué añade este fork
 
-- **Idiomas:** elige Portugués de Brasil, Inglés o Español directamente desde el menú.
+- **Idiomas:** elige Portugués de Brasil, Inglés, Español o Alemán directamente desde el menú.
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
 - **Música en el menú:** reproduce una pista `.spc` de fondo mientras navegas.
 - **Parches IPS/BPS:** elige parches de traducción, hacks o correcciones antes de iniciar un juego, sin modificar la ROM en la tarjeta SD.
@@ -70,13 +70,14 @@ Para recibir una notificación de GitHub cada vez que se publique una nueva vers
 
 ## Idiomas
 
-<img src="gfx/langs.gif" width="512" alt="El menú principal en Inglés, Portugués de Brasil y Español">
+<img src="gfx/langs.gif" width="512" alt="El menú principal en Inglés, Portugués de Brasil, Español y Alemán">
 
-El menú puede funcionar en tres idiomas:
+El menú puede funcionar en cuatro idiomas:
 
 - **Português:** traducción al Portugués de Brasil para menús, mensajes y pantallas.
 - **English:** idioma original y predeterminado del firmware.
 - **Español:** traducción al Español para menús, mensajes y pantallas.
+- **Deutsch:** traducción al Alemán para menús, mensajes y pantallas.
 
 Abre **Idioma** en el menú principal, elige el idioma que quieras y el menú cambia de inmediato. Tu elección queda guardada para la próxima vez que enciendas la consola.
 
@@ -301,10 +302,13 @@ Ese paso es pesado y necesita el instalador de Xilinx ISE 14.7 y una licencia We
 
 El soporte para parches IPS/BPS y el trabajo original de reset al menú vienen de [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293), con cambios realizados en este fork.
 
+El trabajo del menú de trucos viene de [@Relikk](https://github.com/Relikk).
+
 Contribuidores del repositorio original de sd2snes listados por GitHub:
 
 - [@mrehkopf](https://github.com/mrehkopf)
 - [@RedGuyyyy](https://github.com/RedGuyyyy)
+- [@Relikk](https://github.com/Relikk)
 - [@github-user-name](https://github.com/github-user-name)
 - [@furious](https://github.com/furious)
 - [@redacted173](https://github.com/redacted173)
