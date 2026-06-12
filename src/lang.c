@@ -13,6 +13,7 @@ const char *const cicstatefriendly_l[NUM_LANG][4] = {
   /* LANG_EN   */ { "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used" },
   /* LANG_PTBR */ { "Original ou sem", "CIC original (falhou)", "SuperCIC ampliado", "SuperCIC detect. n/usado" },
   /* LANG_ES   */ { "Original o sin CIC", "CIC original (fall\x89)", "SuperCIC ampliado", "SuperCIC detect. sin uso" },
+  /* LANG_DE   */ { "Original/kein CIC", "Original CIC (Fehler)", "SuperCIC erweitert", "SuperCIC erkannt, ungenutzt" },
 };
 
 /* FatFs FRESULT friendly names (fileops.c) -------------------------------- */
@@ -40,6 +41,14 @@ const char *const fresult_friendly_names_l[NUM_LANG][20] = {
     "Disco inv\x82lido", "Sin \x82rea trab.", "FS inv\x82lido", "mkfs() abortado",
     "Timeout del SD", "Acceso bloqueado", "Sin memoria", "Muchos arch. abiertos",
     "Par\x82m. inv\x82lido"
+  },
+  /* LANG_DE */ {
+    "Kein Fehler", "Karten-I/O Fehler", "Interner FS-Fehler",
+    "Laufwerk nicht bereit", "Datei nicht gefunden", "Ordner nicht gefunden", "Ungueltiger Pfad",
+    "Zugriff verweigert", "Verweigert (existiert)", "Ungueltiges Objekt", "Schreibgeschuetzt",
+    "Ungueltiges Laufwerk", "Kein Arbeitsbereich", "Kein gueltiges FS", "mkfs() abgebrochen",
+    "Laufwerk Timeout", "Zugriff gesperrt", "Nicht genug Speicher", "Zu viele offene Dateien",
+    "Ungueltiger Parameter"
   },
 };
 
@@ -87,6 +96,20 @@ const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
     [SI_SNES_CLK_MEASURING] = "Clock SNES: midiendo\x7f\x80",
     [SI_SNES_CLK]           = "Clock SNES: %ldHz",
   },
+  /* LANG_DE */ {
+    [SI_BUSY_DISK]          = "Berechne Speicherplatz\x7f\x80              ",
+    [SI_FW_VERSION]         = "    Firmware-Version: %s",
+    [SI_SD_REMOVED]         = "    *** SD entfernt/USB belegt ***    ",
+    [SI_SD_MAKER]           = "SD Hersteller:   0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "SD Produktname: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "SD Seriennr.:   %02x%02x%02x%02x, Herst. %d/%02d",
+    [SI_SD_ACC_TIME]        = "SD Zugriff:  %ld.%03ld / %ld.%03ld ms avg/max",
+    [SI_SD_ACC_MEASURING]   = "SD Zugriff:  messe\x7f\x80",
+    [SI_CARD_USAGE]         = "SD Nutzung: %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "CIC Status: %s",
+    [SI_SNES_CLK_MEASURING] = "SNES Takt: messe\x7f\x80",
+    [SI_SNES_CLK]           = "SNES Takt: %ldHz",
+  },
 };
 
 /* SGB BIOS state words (sysinfo.c) ---------------------------------------- */
@@ -94,10 +117,12 @@ const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT] = {
   /* LANG_EN   */ { "missing", "mismatch", "ok", "checking" },
   /* LANG_PTBR */ { "ausente", "errado", "ok", "lendo" },
   /* LANG_ES   */ { "ausente", "err\x89neo", "ok", "leyendo" },
+  /* LANG_DE   */ { "fehlt", "falsch", "ok", "pruefe" },
 };
 
 const char *const cheatmenu_l[NUM_LANG][CHEATMENU_COUNT] = {
   /* LANG_EN   */ { "Cheats for ", "(no name)" },
   /* LANG_PTBR */ { "Cheats para ", "(sem nome)" },
   /* LANG_ES   */ { "Trucos para ", "(sin nombre)" },
+  /* LANG_DE   */ { "Cheats fuer ", "(kein Name)" },
 };

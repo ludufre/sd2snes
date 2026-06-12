@@ -1,17 +1,17 @@
 <h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Showcase">
-<img src="gfx/langs.gif" width="384" alt="The main menu shown in English, Brazilian Portuguese and Spanish">
+<img src="gfx/langs.gif" width="384" alt="The main menu shown in English, Brazilian Portuguese, Spanish and German">
 
 A friendlier sd2snes/FXPAK firmware experience: languages, game covers, menu music, patches and smarter reset-to-menu behavior.
 
-**🌐 Language:** English · [Português 🇧🇷](README-BR.md) · [Español 🇪🇸](README-ES.md)
+**🌐 Language:** English · [Português 🇧🇷](README-BR.md) · [Español 🇪🇸](README-ES.md) · [Deutsch 🇩🇪](README-DE.md)
 
 **More information:** [sd2snes.ludufre.com](https://sd2snes.ludufre.com) has more details, guides and visual examples for this fork.
 
 > **What is this?**
 >
-> This is a fork of the [original sd2snes firmware](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf). It keeps the original firmware base and adds user-facing improvements: a menu in Brazilian Portuguese, English and Spanish, game covers, menu music, IPS/BPS patch selection and better reset-to-menu options.
+> This is a fork of the [original sd2snes firmware](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf). It keeps the original firmware base and adds user-facing improvements: a menu in Brazilian Portuguese, English, Spanish and German, game covers, menu music, IPS/BPS patch selection and better reset-to-menu options.
 >
 > Use this repository for questions or bugs about the **translation**, **language selector**, **covers**, **menu music**, **patch selector** or **theme editor for this fork**. For core firmware issues unrelated to these additions, please use the original project.
 
@@ -30,7 +30,7 @@ You need:
 
 ## What This Fork Adds
 
-- **Languages:** choose Brazilian Portuguese, English or Spanish directly in the menu.
+- **Languages:** choose Brazilian Portuguese, English, Spanish or German directly in the menu.
 - **Game covers:** show each game's box art while browsing your ROM list.
 - **Menu music:** play an `.spc` track in the background while browsing.
 - **IPS/BPS patches:** choose translation, hack or fix patches before a game starts, without changing the ROM file on the SD card.
@@ -70,13 +70,14 @@ To receive a GitHub notification whenever a new firmware version is released:
 
 ## Languages
 
-<img src="gfx/langs.gif" width="512" alt="The main menu shown in English, Brazilian Portuguese and Spanish">
+<img src="gfx/langs.gif" width="512" alt="The main menu shown in English, Brazilian Portuguese, Spanish and German">
 
-The menu can run in three languages:
+The menu can run in four languages:
 
 - **Português:** Brazilian Portuguese translation for menus, messages and screens.
 - **English:** the original and default firmware language.
 - **Español:** Spanish translation for menus, messages and screens.
+- **Deutsch:** German translation for menus, messages and screens.
 
 Open **Language** in the main menu, choose the language you want, and the menu changes immediately. Your choice is saved for the next time you turn on the console.
 
@@ -301,10 +302,13 @@ This step is heavy and needs the Xilinx ISE 14.7 installer and a WebPACK license
 
 The IPS/BPS patch support and the original reset-to-menu work come from [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293), with changes made in this fork.
 
+The in-game cheat menu work come from [@Relikk](https://github.com/Relikk).
+
 Original sd2snes repository contributors listed by GitHub:
 
 - [@mrehkopf](https://github.com/mrehkopf)
 - [@RedGuyyyy](https://github.com/RedGuyyyy)
+- [@Relikk](https://github.com/Relikk)
 - [@github-user-name](https://github.com/github-user-name)
 - [@furious](https://github.com/furious)
 - [@redacted173](https://github.com/redacted173)
