@@ -231,7 +231,7 @@ def main():
         return WIDTH_DEFAULT
 
     too_wide = []
-    for lang_name, d in (("pt-BR", ptbr), ("es", es)):
+    for lang_name, d in langs:   # all loaded translations (pt-BR, es, de): validate each
         for label in order:
             text = d.get(label)
             if not text:
