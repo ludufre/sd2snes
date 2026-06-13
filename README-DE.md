@@ -151,6 +151,8 @@ Gute Orte, um `.spc`-Dateien zu finden:
 
 Du kannst die Musik unter **Einstellungen → Browser-Optionen → Menue-Musik** ein- oder ausschalten.
 
+Du kannst die Musik auch **ohne Umbenennen** wählen: Markiere im Dateibrowser eine beliebige **`.spc`**, drücke **Y** für das Kontextmenü und wähle **Als Menuemusik setzen**. Das Menü lädt mit diesem Titel als neuer Hintergrundmusik neu und merkt sie sich über Neustarts hinweg; `/sd2snes/menu.spc` bleibt als Reserve. Um dorthin zurückzukehren, nutze **Einstellungen → Browser-Optionen → Musik zuruecksetzen**.
+
 > [!TIP]
 > Manche Soundtracks werden als `.rsn`-Dateien heruntergeladen. Eine `.rsn` ist normalerweise ein Archiv mit mehreren `.spc`-Dateien. Entpacke sie und wähle eine `.spc` daraus.
 
