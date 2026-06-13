@@ -69,7 +69,7 @@
 #define SNES_CMD_SAVE_CHT_RECENT     (0x2b) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_save. */
 #define SNES_CMD_SET_THEME           (0x2c) /* selected .thm (any visible folder): get_selected_name -> store full path in CFG.skin_name, then reload menu */
 #define SNES_CMD_CLR_THEME           (0x2d) /* clear the menu theme back to the baked default, then reload menu */
-#define SNES_CMD_SET_MENU_SPC        (0x2e) /* selected .spc (any visible folder): get_selected_name -> store full path in CFG.bgm_name, enable music, restart BGM in place */
+#define SNES_CMD_SET_MENU_SPC        (0x2e) /* selected .spc (any visible folder): get_selected_name -> store full path in CFG.bgm_name, enable music, then reload menu (in-place restart black-screened; see main.c) */
 #define SNES_CMD_CLR_MENU_SPC        (0x2f) /* clear CFG.bgm_name -> revert menu BGM to the /sd2snes/menu.spc fallback */
 
 #define SNES_CMD_SAVESTATE           (0x40)
