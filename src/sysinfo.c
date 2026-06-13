@@ -20,6 +20,7 @@
 #include "lang.h"
 #include "esplink.h"
 #include "uart_proto.h"
+#include "msu1.h"   /* menu_sfx_pump/active: menu sound effects via the MSU-1 DAC */
 
 extern snes_status_t STS;
 extern cfg_t CFG;
@@ -41,6 +42,11 @@ void sysinfo_loop() {
   strncpy(esp_snap_str, uart_esp_string(), sizeof(esp_snap_str) - 1);
   esp_snap_str[sizeof(esp_snap_str) - 1] = 0;
   echo_mcu_cmd();
+  /* sysinfo measures raw SD access times, which races a playing effect's
+     sd_offload streaming (the DAC then loops stale buffer content - a stuck
+     tone for the whole measurement). Cut any effect cleanly on entry; the
+     screen has no sounds of its own. */
+  menu_sfx_stop();
   while(snes_get_mcu_cmd() == SNES_CMD_SYSINFO) {
     sd_measured = write_sysinfo(sd_measured);
     delay_ms(100);

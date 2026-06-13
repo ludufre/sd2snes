@@ -7,6 +7,7 @@
 #include "fileops.h"
 #include "memory.h"
 #include "cover.h"
+#include "msu1.h"   /* menu_sfx_pump: keep a playing effect fed during streams */
 
 /* derived from the rom path by swapping the extension to ".cov" */
 static uint8_t cover_path[260];
@@ -33,6 +34,7 @@ static void cover_set_status(uint32_t base, uint8_t status, uint8_t w,
 static int cover_stream(uint32_t addr, uint32_t size) {
   UINT got = 0;
   while(size) {
+    menu_sfx_pump();  /* keep a playing menu effect fed while streaming a cover */
     UINT want = (size > sizeof(file_buf)) ? sizeof(file_buf) : (UINT)size;
     file_res = f_read(&file_handle, file_buf, want, &got);
     if(file_res || got != want) return 0;

@@ -54,6 +54,7 @@
 #define CFG_PATCH_VERIFY_INTEGRITY       ("PatchVerifyIntegrity")
 #define CFG_ENABLE_MENU_MUSIC            ("EnableMenuMusic")
 #define CFG_COVERS_IN_LISTS              ("ShowCoversInLists")
+#define CFG_ENABLE_MENU_SFX              ("EnableMenuSFX")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -107,6 +108,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  patch_verify_integrity;  /* CFG @ $B8: re-read+CRC the patched ROM after IPS/BPS (slow) */
   uint8_t  enable_menu_music;       /* play background menu music (/sd2snes/menu.spc) */
   uint8_t  covers_in_lists;         /* CFG @ $BA: also show covers in the Recent/Favorite lists (sub-option of show_covers) */
+  uint8_t  enable_menu_sfx;         /* CFG @ $BB: menu navigation sound effects (MSU-1 DAC, /sd2snes/sfx_*.pcm) */
 } cfg_t;
 
 int cfg_save(void);

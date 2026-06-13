@@ -64,7 +64,11 @@ extern volatile cfg_t CFG;
 extern volatile mcu_status_t STM;
 extern volatile snes_status_t STS;
 
-const char fwhdr[CONFIG_FW_HEADERSIZE] __attribute__ ((section(".fwhdr")));
+/* Firmware-header placeholder: never referenced by code (filled post-build via
+   objcopy --update-section .fwhdr). The linker KEEP()s it, but under -flto the
+   whole-program optimizer would drop the unreferenced symbol BEFORE the linker
+   sees it, so `used` is required to make LTO keep .fwhdr alive. */
+const char fwhdr[CONFIG_FW_HEADERSIZE] __attribute__ ((used, section(".fwhdr")));
 
 /* Drop any Recent/Favorite list entries whose ROM file no longer exists, then
    re-publish both lists + status to the SNES.  Called after every ROM delete
@@ -345,6 +349,9 @@ int main(void) {
     uart_putcrlf();
 
     sram_writebyte(0, SRAM_CMD_ADDR);
+    /* menu sound effects: start with an empty SFX mailbox (dedicated byte,
+       outside the command handshake - see snes.c menu_main_loop) */
+    snescmd_writebyte(0, SNESCMD_SFX_MAILBOX);
 
     if((rtc_state = rtc_isvalid()) != RTC_OK) {
       printf("RTC invalid!\n");

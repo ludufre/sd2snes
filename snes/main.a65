@@ -75,6 +75,9 @@ coldboot:       ; Regular, cold-start init
   ; leave BGM_STATE=1 and the music would never restart. (snescom: no long stz.)
   lda #$00
   sta @BGM_STATE
+  ; fork: menu sound effects - start with an empty SFX mailbox ($2A region is
+  ; not touched by clear_wram; a stale value would play one ghost blip at boot).
+  sta @SFX_MAILBOX
   jsr waitblank
   jsr snes_init
   jsr setup_gfx

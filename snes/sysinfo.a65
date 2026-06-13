@@ -148,6 +148,7 @@ sysinfo_printloop:
   pha
   jmp sysinfo_printloop
 + plp
+  jsr snd_fx_back       ; leaving the System Information screen
   lda #CMD_MCU_RDY
   sta @MCU_CMD
 - cmp @SNES_CMD

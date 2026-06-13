@@ -47,6 +47,7 @@
 #include "sgb.h"
 #include "version.h"
 #include "hwinfo.h"
+#include "msu1.h"   /* menu_sfx_* : menu sound effects via the MSU-1 DAC */
 
 uint32_t saveram_crc, saveram_crc_old;
 uint8_t sram_crc_valid;
@@ -361,24 +362,50 @@ uint8_t menu_main_loop() {
     if(!get_snes_reset()) {
       while(!sram_reliable())printf("hurr\n");
       cmd = snes_get_mcu_cmd();
+      {
+        /* navigation sound effects live in their OWN mailbox byte, fully
+           outside the MCU_CMD/SNES_CMD handshake (sharing it raced the real
+           commands - a readdir clobbered blips, and a blip-consume once erased
+           a racing SYSINFO command). Value = effect+1; anything else (e.g.
+           power-on garbage) is consumed and ignored. Missing .pcm files just
+           stay silent (menu_sfx_play). */
+        static const char *menu_sfx_files[4] = {
+          "/sd2snes/sfx_cursor.pcm", "/sd2snes/sfx_confirm.pcm",
+          "/sd2snes/sfx_back.pcm",   "/sd2snes/sfx_error.pcm"
+        };
+        uint8_t fx;
+        fpga_set_snescmd_addr(SNESCMD_SFX_MAILBOX);
+        fx = fpga_read_snescmd();
+        if(fx) {
+          snescmd_writebyte(0, SNESCMD_SFX_MAILBOX);
+          /* "Menu sounds" toggle (CFG_ENABLE_MENU_SFX): gate HERE so flipping
+             the option takes effect instantly, no reload needed. */
+          if(fx <= 4 && CFG.enable_menu_sfx) menu_sfx_play(menu_sfx_files[fx - 1]);
+        }
+      }
     }
     if(get_snes_reset()) {
+      /* console reset sensed: the SNES will re-run the menu in place - full SFX
+         teardown NOW so the feature set is back to the menu's own before its
+         re-init (reset-safety; see menu_sfx_shutdown in msu1.c). */
+      menu_sfx_shutdown();
       cmd = 0;
     }
 #if ESPLINK_ENABLE
     if(uart_proto_active()) {
-      /* file transfer in flight: spend the ~20ms idle window servicing the link
-         continuously instead of sleeping (one chunk per poll otherwise caps it
-         to ~12KB/s). The menu's ~20ms command-check cadence is preserved. */
       tick_t t0 = getticks();
       do { uart_proto_poll(); } while((tick_t)(getticks() - t0) < 2);
+    } else
+#endif
+    if(menu_sfx_active()) {
+      tick_t until = getticks() + MS_TO_TICKS(20);
+      do { menu_sfx_pump(); } while(getticks() < until);
     } else {
       sleep_ms(20);
-      uart_proto_poll();   /* service the ESP32 link while the menu idles */
-    }
-#else
-    sleep_ms(20);
+#if ESPLINK_ENABLE
+      uart_proto_poll();
 #endif
+    }
     cli_entrycheck();
     if (!cmd) {
       cmd = usbint_handler();

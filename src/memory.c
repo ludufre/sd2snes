@@ -252,6 +252,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   tick_t ticksstart, ticks_total=0;
   ticksstart=getticks();
 
+  /* Leaving the menu to load a game/SPC: full SFX teardown so the DAC, SD and
+     feature set are free.  No-op (and harmless for a menu reload) otherwise. */
+  if(!is_menu) menu_sfx_shutdown();
+
   // copy the full name and path
   strncpy(current_filename, (char *)filename, sizeof(current_filename)-1);
 

@@ -122,6 +122,7 @@
 #define SNESCMD_MCU_CMD              (0x2a00)
 #define SNESCMD_SNES_CMD             (0x2a02)
 #define SNESCMD_MCU_PARAM            (0x2a04)
+#define SNESCMD_SFX_MAILBOX          (0x2be0) /* menu sound effects: effect+1 (1-4), 0 = consumed. Dedicated byte in the unreferenced $2BB4-$2BEF gap. NOT 0x2a08: MCU_PARAM is a 12-byte region (0x2a04-0x2a0f; settime uses +11) - parking the mailbox inside it corrupted cover request params and saved garbled favorites names. */
 #define SNESCMD_INGAME_HOOK          (0x2a10)
 #define SNESCMD_RESET_HOOK           (0x2a7d)
 #define SNESCMD_WRAM_CHEATS          (0x2ad8)

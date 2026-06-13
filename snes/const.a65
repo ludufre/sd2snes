@@ -244,6 +244,7 @@ wifi_s_lock                       .byt " *", 0
 wifi_keys_lo                      .byt "abcdefghijklmnopqrstuvwxyz0123456789.-_@!#$%&*()", 0
 wifi_keys_hi                      .byt "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_@!#$%&*()", 0
 mtext_browser_menumusic           .byt "Menu music", 0
+mtext_browser_menusfx             .byt "Menu sounds", 0
 mtext_browser_restoretheme        .byt "Restore theme", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
 mtext_ingame_shortreset           .byt "Reset to menu", 0
@@ -298,6 +299,7 @@ mdesc_browser_covlists            .byt "Show covers in the Recent and Favorite l
 mdesc_cfg_patch                   .byt "Options for IPS/BPS soft-patching", 0
 mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (much slower load)", 0
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0
+mdesc_browser_menusfx             .byt "Play sound effects when navigating the menu", 0
 mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
 mdesc_ingame_shortreset           .byt "Go back to menu on short reset (Off/On/Folder/ROM). Folder: return to last game folder. ROM: also pre-select the ROM.", 0
