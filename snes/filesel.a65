@@ -355,6 +355,7 @@ dirent_type_cont_2
   rts
 
 filesel_key_down:
+  jsr snd_fx_cursor
   jsr scroll_direntry_clean
   lda listdisp
   dec
@@ -389,6 +390,7 @@ down_out
   rts
 
 filesel_key_up:
+  jsr snd_fx_cursor
   jsr scroll_direntry_clean
   lda filesel_sel
   bne up_noscroll
@@ -421,6 +423,7 @@ fileselupd_lastcursor
 
 ; go back one page
 filesel_key_left:
+  jsr snd_fx_cursor
   stz direntry_xscroll
   stz direntry_xscroll_state
   lda #$01        ; must redraw afterwards
@@ -448,6 +451,7 @@ filesel_key_left:
 
 ; go forth one page
 filesel_key_right:
+  jsr snd_fx_cursor
   stz direntry_xscroll
   stz direntry_xscroll_state
   sep #$20 : .as
@@ -489,11 +493,13 @@ filesel_key_a:
   rts
 
 filesel_key_select:
+  jsr snd_fx_confirm    ; opening the favorites window
   jsr cover_menu_off    ; hide the box-art cover behind the favorite games window
   jsl select_favorite_file
   rts
 
 filesel_key_start:
+  jsr snd_fx_confirm    ; opening the recents window
   jsr cover_menu_off    ; hide the box-art cover behind the recent games window
   jsl select_last_file
   rts
@@ -504,6 +510,7 @@ filesel_key_b:
   jmp sel_is_parent
 
 filesel_key_l:
+  jsr snd_fx_cursor
   stz direntry_xscroll
   stz direntry_xscroll_state
   ldx dirstart_addr
@@ -515,6 +522,7 @@ filesel_key_l:
   rts
 
 filesel_key_r:
+  jsr snd_fx_cursor
   stz direntry_xscroll
   stz direntry_xscroll_state
   lda dirend_onscreen
@@ -575,21 +583,26 @@ select_item:
   beq sel_is_dir
   cmp #TYPE_PARENT
   beq sel_is_parent
+  jsr snd_fx_error      ; entry type A can't act on
 select_item_cont
   rts
 sel_is_file
+  jsr snd_fx_confirm
   jsr ips_select_file
   bra select_item_cont
 sel_is_parent
-  jsr select_parent
+  jsr select_parent     ; (back/error blip inside: root plays error)
   bra select_item_cont
 sel_is_dir
-  jsr select_dir
+  jsr select_dir        ; readdir first (synchronous, ~2 ticks): firing the blip
+  jsr snd_fx_confirm    ; before it gets clobbered in MCU_CMD by the readdir
   bra select_item_cont
 sel_is_spc
+  jsr snd_fx_confirm
   jsr select_spc
   bra select_item_cont
 sel_is_theme
+  jsr snd_fx_confirm
   jsr select_theme
   bra select_item_cont
 
@@ -793,9 +806,12 @@ parent_end_found:
   sta @FILESEL_CWD, x
   bra parent_do_chdir
 cwd_is_root:
+  jsr snd_fx_error      ; nothing above the root
   rts
 parent_do_chdir
   jsr filesel_request_filelist
+  jsr snd_fx_back       ; after the readdir (sync): a blip fired before it gets
+                        ; clobbered in MCU_CMD by the readdir command itself
   lda @dirlog_idx
   sec
   sbc #$0008
@@ -904,26 +920,60 @@ bgm_update:
   rep #$10 : .xl
   lda @CFG_ENABLE_MENU_MUSIC
   beq bgm_upd_disabled
-  ; enabled: load once. BGM_STATE 0 = not attempted yet this session.
+  ; --- music enabled ---  BGM_STATE: 0=not attempted, 1=playing, 2=tried-no-
+  ; spc, 3=music off + DSP stub, 4=tried-no-spc + DSP stub (see sfx_dsp_unmute)
   lda @BGM_STATE
-  bne bgm_upd_done         ; 1=playing or 2=tried -> nothing to do
+  beq bgm_upd_load         ; 0 -> fresh load attempt
+  cmp #$02
+  beq bgm_upd_stub24       ; 2 -> no spc, but keep the cart DAC audible (sfx)
+  cmp #$03
+  beq bgm_upd_unstub       ; 3 -> stub running; back to IPL so music can load
+  bra bgm_upd_done         ; 1=playing, 4=tried+stub -> nothing to do
+bgm_upd_load:
   jsr menu_bgm_load        ; list is visible now; sets BGM_STATE to 1 or 2
-  bra bgm_upd_done
-bgm_upd_disabled:
   lda @BGM_STATE
-  cmp #$01
-  bne bgm_upd_setidle      ; nothing playing -> just clear the attempt flag
-  ; music is playing but now disabled -> warm-reset to silence the S-SMP
-  lda #$00                 ; (snescom stz has no long mode -> lda #0 : sta)
-  sta @BGM_STATE           ; will be silent after the reset
+  cmp #$02
+  bne bgm_upd_done
+bgm_upd_stub24:
+  ; no/invalid menu.spc: the S-SMP sits silent at IPL, which gates the cart's
+  ; MSU-1 DAC audio (= menu sound effects). Run the DSP-unmute stub.
+  jsr sfx_dsp_unmute       ; bounded; mark 4 even on timeout (no retry storm)
+  lda #$04
+  sta @BGM_STATE
+  bra bgm_upd_done
+bgm_upd_unstub:
+  ; music re-enabled while the stub runs: warm-reset back to IPL, then the
+  ; next frame (state 0, enabled) does the fresh music load.
+  lda #$00
+  sta @BGM_STATE
   jsr bgm_silence_reset    ; resumes here after the warm boot (APU back at IPL)
   sep #$20 : .as
   lda #$01
   sta filesel_dirty        ; warm boot cleared VRAM -> force a browser repaint
   bra bgm_upd_done
-bgm_upd_setidle:
-  lda #$00                 ; re-enabling later triggers a fresh load attempt
+bgm_upd_disabled:
+  lda @BGM_STATE
+  cmp #$03
+  beq bgm_upd_done         ; stub already running -> nothing to do
+  cmp #$01
+  beq bgm_upd_stop         ; music playing -> silence it first
+  cmp #$04
+  beq bgm_upd_mark3        ; stub already up via the no-spc path -> relabel only
+  ; state 0/2: S-SMP silent at IPL -> upload the DSP-unmute stub so the menu
+  ; sound effects stay audible with the music off
+  jsr sfx_dsp_unmute       ; bounded; mark 3 even on timeout (no retry storm)
+bgm_upd_mark3:
+  lda #$03
   sta @BGM_STATE
+  bra bgm_upd_done
+bgm_upd_stop:
+  ; music is playing but now disabled -> warm-reset to silence the S-SMP
+  lda #$00                 ; (snescom stz has no long mode -> lda #0 : sta)
+  sta @BGM_STATE           ; silent after the reset; next frame uploads the stub
+  jsr bgm_silence_reset    ; resumes here after the warm boot (APU back at IPL)
+  sep #$20 : .as
+  lda #$01
+  sta filesel_dirty        ; warm boot cleared VRAM -> force a browser repaint
 bgm_upd_done:
   plp
   rts
@@ -953,6 +1003,7 @@ bgm_silence_reset:
   bra -
 
 filesel_key_x:
+  jsr snd_fx_confirm    ; opening the main menu
   jsr cover_menu_off    ; hide the box-art cover behind the menu (reloads on close)
   jsr mainmenu
   sep #$20 : .as
@@ -961,6 +1012,7 @@ filesel_key_x:
   rts
 
 filesel_key_y:
+  jsr snd_fx_confirm    ; opening the context menu
   jsr cover_menu_off    ; hide the box-art cover behind the context menu
   jsr open_context_menu
   rts
@@ -1456,6 +1508,7 @@ confirm_loop:
   bne confirm_toggle
   bra confirm_loop
 confirm_toggle:
+  jsr snd_fx_cursor
   lda confirm_sel
   eor #$01
   sta confirm_sel
@@ -1473,9 +1526,11 @@ confirm_finish:
   sta bar_xl
   lda confirm_sel
   beq confirm_ret_no
+  jsr snd_fx_confirm               ; Yes
   sec
   rts
 confirm_ret_no:
+  jsr snd_fx_back                  ; No / B
   clc
   rts
 
@@ -1816,6 +1871,7 @@ show_empty_msg_wait:
   ora pad_start
   ora pad_select
   beq show_empty_msg_wait
+  jsr snd_fx_back         ; dismissing the empty-list popup counts as "leave"
   jsr pop_window
   pla                     ; restore the selection bar for the underlying menu/list
   sta bar_wl

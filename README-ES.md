@@ -33,6 +33,7 @@ Necesitas:
 - **Idiomas:** elige Portugués de Brasil, Inglés, Español o Alemán directamente desde el menú.
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
 - **Música en el menú:** reproduce una pista `.spc` de fondo mientras navegas.
+- **Sonidos del menú:** efectos de sonido de navegación opcionales (cursor, confirmar, volver, error) que suenan en el DAC de audio del cartucho, independientes de la música.
 - **Parches IPS/BPS:** elige parches de traducción, hacks o correcciones antes de iniciar un juego, sin modificar la ROM en la tarjeta SD.
 - **Gestor de cheats:** el sd2snes original ya aplica trucos — este fork añade un menú para **activar y desactivar** los códigos de un juego en la consola (desde `/sd2snes/cheats/<rom>.yml`), sin editar el YAML en el PC. Puedes descargar cheats listos en [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)", o descargarlos automáticamente con la app **sd2snes Covers** (identificados por CRC32).
 - **Borrar archivo y partida:** borra el archivo seleccionado o solo su partida (`.srm`) directamente desde el menú, sin sacar la tarjeta SD.
@@ -120,15 +121,23 @@ Al abrir un juego con parches compatibles, el menú muestra un selector de parch
 - Elige un parche para usarlo en este arranque.
 - Se muestran hasta **8** parches por juego.
 
-## Música del menú
+## Música y sonidos del menú
 
-El menú puede reproducir música de fondo mientras navegas. El archivo debe ser un **`.spc`** llamado `menu.spc` y estar en esta ruta:
+El menú puede reproducir **música de fondo** mientras navegas, además de cuatro **efectos de sonido de navegación** opcionales (cursor, confirmar, volver, error). Solo suenan en el menú y nunca afectan a tus juegos.
+
+La forma más fácil de configurar ambos es el **Creador de Sonidos** en la web: elige la música, crea los efectos y descarga los archivos listos para copiar a la tarjeta. Todo se ejecuta en tu navegador — no se sube nada a ningún sitio.
+
+### 👉 [sd2snes.ludufre.com/sounds](https://sd2snes.ludufre.com/sounds/)
+
+### Música de fondo (`menu.spc`)
+
+La música es un archivo **`.spc`** llamado `menu.spc`, en esta ruta:
 
 ```text
 /sd2snes/menu.spc
 ```
 
-Para añadir música:
+Para añadir música a mano:
 
 1. Descarga un archivo `.spc`.
 2. Renómbralo como `menu.spc`.
@@ -138,12 +147,27 @@ Para añadir música:
 Buenos lugares para encontrar archivos `.spc`:
 
 - [snesmusic.org](https://snesmusic.org)
-- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc)
+- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — tiene una vista previa en MP3 de cada pista, así que puedes escuchar antes de descargar.
 
 Puedes activar o desactivar la música en **Configuración → Opciones del Navegador → Música del menú**.
 
 > [!TIP]
 > Algunas bandas sonoras vienen como archivos `.rsn`. Un `.rsn` suele ser un archivo comprimido con varios `.spc` dentro. Extrae el `.rsn` y elige uno de los archivos `.spc`.
+
+### Sonidos de navegación (efectos)
+
+Cuatro efectos cortos y opcionales suenan mientras te mueves por el menú. Cada uno es un archivo separado en `/sd2snes/`:
+
+| Archivo | Suena cuando |
+| --- | --- |
+| `sfx_cursor.pcm` | el cursor se mueve |
+| `sfx_confirm.pcm` | abres o confirmas (A) |
+| `sfx_back.pcm` | vuelves atrás (B) |
+| `sfx_error.pcm` | una acción no está permitida |
+
+Son archivos **MSU‑1 PCM** (16 bits estéreo, 44,1 kHz). Suenan en el DAC de audio del cartucho, así que nunca interrumpen la música `.spc`. Un conjunto por defecto viene con el firmware, así que el menú ya tiene sonidos de fábrica — usa el Creador de Sonidos de arriba para personalizarlos o cambiarlos. (Si falta un archivo, ese efecto queda en silencio.)
+
+Puedes activar o desactivar los efectos en **Configuración → Opciones del Navegador → Sonidos del menú**.
 
 ## Trucos (cheats)
 
@@ -235,6 +259,10 @@ Comprueba que las carátulas estén activadas, que cada archivo `.cov` tenga el 
 
 Comprueba que el archivo se llame exactamente `menu.spc`, que esté en `/sd2snes/menu.spc` y que realmente sea un archivo `.spc`. MP3 y WAV no funcionan.
 
+**Los sonidos de navegación no suenan.**
+
+Comprueba que la opción **Sonidos del menú** esté activada, y que `sfx_cursor.pcm`, `sfx_confirm.pcm`, `sfx_back.pcm` y `sfx_error.pcm` estén en `/sd2snes/` y sean archivos **MSU‑1 PCM**. Vienen con el firmware; si los borraste, cópialos de nuevo del paquete del release o recréalos en el [Creador de Sonidos](https://sd2snes.ludufre.com/sounds/).
+
 **Un parche no aparece.**
 
 Comprueba que el parche esté en la misma carpeta que la ROM, que empiece con el nombre de la ROM y que termine en `.ips` o `.bps`.
@@ -253,11 +281,13 @@ La verificación de integridad para BPS se puede activar en **Configuración →
 
 Esta opción viene **Desactivada por defecto**. Cuando está activada, el firmware vuelve a leer la ROM después de aplicar un parche BPS para confirmar que se aplicó correctamente. Esto hace que la carga de BPS sea más lenta; por ejemplo, un parche BPS de 4 MB puede añadir unos 15 segundos a la carga, en promedio. Los parches IPS no son verificados por esta opción.
 
-### Limitaciones de la música del menú
+### Limitaciones de la música y los sonidos del menú
 
-Solo se admiten archivos `.spc`. Un archivo `.spc` no es una grabación de audio común; es una instantánea del estado del chip de sonido del SNES y tiene un límite de 64 KB. No existe una conversión directa de MP3 a SPC.
+Para la música, solo se admiten archivos `.spc`. Un archivo `.spc` no es una grabación de audio común; es una instantánea del estado del chip de sonido del SNES y tiene un límite de 64 KB. No existe una conversión directa de MP3 a SPC — el Creador de Sonidos te deja elegir y escuchar un `.spc`, pero no genera uno a partir de otro audio.
 
 Cuando la música se carga al iniciar, después de un reset o después de activar la opción, el menú puede pausarse brevemente mientras el archivo se envía al chip de sonido del SNES. Abrir un `.spc` desde el navegador de archivos pausa la música de fondo y la reanuda cuando vuelves con el botón B.
+
+Los efectos de navegación son aparte: son clips cortos en **MSU‑1 PCM** reproducidos en el DAC de audio del cartucho (16 bits estéreo, 44,1 kHz), así que la música sigue sonando en el chip de sonido del SNES mientras se dispara un efecto. Manténlos cortos (bastante menos de un segundo) para que se sientan ágiles.
 
 ### Formato del tema
 

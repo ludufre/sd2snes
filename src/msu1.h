@@ -40,6 +40,13 @@
 int msu1_check(uint8_t*);
 int msu1_loop(void);
 
+/* Menu navigation sound effects via the MSU-1 DAC, one-shot (see msu1.c). */
+void menu_sfx_play(const char *filename); /* play one MSU-1 PCM once; silent if absent/bad */
+void menu_sfx_pump(void);                 /* top up the DAC; call from menu-owning loops */
+void menu_sfx_stop(void);                 /* pause + close (keeps FEAT_MSU1 for instant retrigger) */
+void menu_sfx_shutdown(void);             /* stop + drop FEAT_MSU1 (game load / console reset) */
+int  menu_sfx_active(void);               /* nonzero while an effect is playing */
+
 uint8_t msu_readbyte(uint16_t addr);
 uint16_t msu_readshort(uint16_t addr);
 uint32_t msu_readlong(uint16_t addr);

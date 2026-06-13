@@ -423,6 +423,20 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_menusfx
+ .byt  ^mtext_browser_menusfx
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_MENU_SFX
+ .byt  ^CFG_ENABLE_MENU_SFX
+ .word !mdesc_browser_menusfx
+ .byt  ^mdesc_browser_menusfx
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
 ; .byt  MTYPE_VALUE
 ; .word !mtext_browser_screensaver_timeout
 ; .byt  ^mtext_browser_screensaver_timeout

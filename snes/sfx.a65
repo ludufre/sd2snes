@@ -1,0 +1,110 @@
+.link page $c0
+#include "memmap.i65"
+
+; ===========================================================================
+; Menu navigation sound effects - fire-and-forget triggers to the MCU.
+;
+; The MCU plays a short PCM through the MSU-1 DAC (src/msu1.c menu_sfx_play):
+; music stays on the SPC700 (menu.spc), effects live on the cart DAC, so both
+; coexist with no APU contention.
+;
+; Transport: ONE DEDICATED mailbox byte (SFX_MAILBOX, $2A08) that nothing else
+; in the protocol touches. The menu just stores effect+1 there (newest wins);
+; the MCU polls it once per menu-loop iteration (~20 ms), clears it and plays.
+; ===========================================================================
+
+.as : .xl
+
+snd_fx_cursor:
+  php
+  sep #$20 : .as
+  pha
+  lda #$01             ; effect 0 (cursor) + 1
+  sta @SFX_MAILBOX
+  pla
+  plp
+  rts
+
+snd_fx_confirm:
+  php
+  sep #$20 : .as
+  pha
+  lda #$02             ; effect 1: confirm
+  sta @SFX_MAILBOX
+  pla
+  plp
+  rts
+
+snd_fx_back:
+  php
+  sep #$20 : .as
+  pha
+  lda #$03             ; effect 2: back
+  sta @SFX_MAILBOX
+  pla
+  plp
+  rts
+
+snd_fx_error:
+  php
+  sep #$20 : .as
+  pha
+  lda #$04             ; effect 3: error
+  sta @SFX_MAILBOX
+  pla
+  plp
+  rts
+
+; ---------------------------------------------------------------------------
+; sfx_dsp_unmute: upload + start a tiny SPC700 program that just unmutes the
+; S-DSP (FLG=$20: soft-reset off, mute off, echo off; master volume $7f) and
+; idles forever. With NO music playing the S-DSP sits in its IPL reset/mute
+; state and the console's audio path gates the cart's MSU-1 DAC output - menu
+; sound effects become inaudible (characterized on hardware 2026-06-12). This
+; stub reproduces the "music is playing" condition minus the music.
+;
+; Standard IPL upload protocol, EVERY wait bounded (~65k polls): on timeout,
+; carry set and the APU is left as-is (fail-safe: silent effects, alive menu).
+; carry clear = stub running. Caller: bgm_update (filesel.a65) - only when the
+; S-SMP is at IPL (boot / after a silence warm-reset / after a failed bgm load).
+; ---------------------------------------------------------------------------
+sfx_dsp_stub_code:
+  .byt $8f, $6c, $f2   ; mov $f2, #$6c   DSP addr = FLG
+  .byt $8f, $20, $f3   ; mov $f3, #$20   soft-reset off, mute OFF, echo off
+  .byt $8f, $0c, $f2   ; mov $f2, #$0c   DSP addr = MVOL_L
+  .byt $8f, $7f, $f3   ; mov $f3, #$7f
+  .byt $8f, $1c, $f2   ; mov $f2, #$1c   DSP addr = MVOL_R
+  .byt $8f, $7f, $f3   ; mov $f3, #$7f
+  .byt $2f, $fe        ; bra *           idle forever
+#define SFX_STUB_LEN  20
+#define SFX_STUB_ADDR $0200
+
+; Mirrors apu_ram_init (spc700.a65) EXACTLY: same stock helpers
+; (spc_begin_upload / spc_upload_byte), same end-of-transfer sequence. The
+; helpers wait for the IPL hello unbounded - the same contract every boot
+; relies on; right after apu_ram_init the S-SMP spends ~0.3-0.5 s clearing
+; ARAM before re-running the IPL, so a bounded wait here would (and did)
+; time out and silently skip the stub.
+sfx_dsp_unmute:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldy #SFX_STUB_ADDR
+  jsr spc_begin_upload
+  ldx #$0000
+- lda @sfx_dsp_stub_code, x
+  jsr spc_upload_byte
+  inx
+  cpx #SFX_STUB_LEN
+  bne -
+  ldx #SFX_STUB_ADDR
+  stx APUIO2
+  stz APUIO1
+  lda APUIO0
+  inc
+  inc
+  sta APUIO0
+- cmp APUIO0
+  bne -
+  plp
+  rts

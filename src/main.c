@@ -341,6 +341,9 @@ int main(void) {
     uart_putcrlf();
 
     sram_writebyte(0, SRAM_CMD_ADDR);
+    /* menu sound effects: start with an empty SFX mailbox (dedicated byte,
+       outside the command handshake - see snes.c menu_main_loop) */
+    snescmd_writebyte(0, SNESCMD_SFX_MAILBOX);
 
     if((rtc_state = rtc_isvalid()) != RTC_OK) {
       printf("RTC invalid!\n");

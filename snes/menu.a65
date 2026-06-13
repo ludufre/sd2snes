@@ -235,6 +235,7 @@ menu_select_no_egg
 menu_select_up
   lda listsel_sel
   beq menu_select_loop1
+  jsr snd_fx_cursor          ; (A/X/Y preserved)
   dec listsel_sel
   lda bar_yl
   sec
@@ -246,6 +247,7 @@ menu_select_down
   inc
   cmp listsel_max
   beq menu_select_loop1
+  jsr snd_fx_cursor          ; (A/X/Y preserved)
   inc listsel_sel
   lda bar_yl
   clc
@@ -253,6 +255,7 @@ menu_select_down
   sta bar_yl
   bra menu_select_loop1
 menu_select_button_a ; always allow button a
+  jsr snd_fx_confirm
   lda #$00
   sta listsel_pickbutton
   lda listsel_sel
@@ -261,11 +264,13 @@ menu_select_button_y ; check if we should allow button y
   lda listsel_pickbutton
   cmp #$01
   bne menu_select_loop1
+  jsr snd_fx_confirm
   lda #$01
   sta listsel_pickbutton
   lda listsel_sel
   bra menu_select_exit
 menu_select_button_b ; cancel
+  jsr snd_fx_back
   lda #$ff
   sta listsel_pickbutton
 menu_select_exit
@@ -1140,6 +1145,7 @@ menu_edit_value:
   sta w_work_value
   jsr (menu_tab_edit_value_dialogs, x)
   bcc +
+  jsr snd_fx_confirm   ; value set (covers EVERY dialog type; preserves carry/regs)
   lda #CMD_SAVE_CFG
 - sta @MCU_CMD
   cmp @SNES_CMD
@@ -1147,7 +1153,8 @@ menu_edit_value:
   lda #$0000
   sta @MCU_CMD
   bra menu_edit_value_skip_reset_chghook
-+ lda [w_value_addr]
++ jsr snd_fx_back      ; value edit cancelled (covers EVERY dialog type)
+  lda [w_value_addr]
   sta w_work_value
   jsr menu_check_change_hook
 menu_edit_value_skip_reset_chghook:
@@ -1210,6 +1217,7 @@ menu_value_dialog_u8_up_nok:
       sta w_work_value
       bra +
 menu_value_dialog_u8_up_ok:
+      jsr snd_fx_cursor
       inc w_work_value
       bra +
 menu_value_dialog_u8_down:
@@ -1222,9 +1230,11 @@ menu_value_dialog_u8_down_nok:
       sta w_work_value
       bra +
 menu_value_dialog_u8_down_ok:
+      jsr snd_fx_cursor
       dec w_work_value
       bra +
 menu_value_dialog_u8_left:
+      jsr snd_fx_cursor
       lda w_work_value
       sec
       sbc #9
@@ -1237,6 +1247,7 @@ menu_value_dialog_u8_left_noclip:
       bcs menu_value_dialog_u8_down_ok
       bra menu_value_dialog_u8_down_nok
 menu_value_dialog_u8_right:
+      jsr snd_fx_cursor
       lda w_work_value
       clc
       adc #9
@@ -1250,10 +1261,12 @@ menu_value_dialog_u8_right_noclip:
       bcc menu_value_dialog_u8_up_ok
       bra menu_value_dialog_u8_up_nok
 menu_value_dialog_u8_l:
+      jsr snd_fx_cursor
       lda [w_preset_addr]
       sta w_work_value
       bra +
 menu_value_dialog_u8_r:
+      jsr snd_fx_cursor
       ldy #$0002
       lda [w_preset_addr], y
       sta w_work_value
@@ -1466,6 +1479,7 @@ menu_value_dialog_kv8_up:
       ldx !$5, y
       cpx #$ffff
       beq +
+      jsr snd_fx_cursor          ; value actually changes (A/X/Y preserved)
       iny
       iny
       iny
@@ -1475,6 +1489,7 @@ menu_value_dialog_kv8_up:
 menu_value_dialog_kv8_down:
       cpy w_preset_addr
       beq +
+      jsr snd_fx_cursor          ; value actually changes (A/X/Y preserved)
       dey
       dey
       dey

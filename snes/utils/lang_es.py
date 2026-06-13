@@ -195,6 +195,7 @@ TRANSLATIONS = {
     'mtext_browser_covlists': ' {129}Favoritos/Recientes',
     'mdesc_browser_covlists': 'Mostrar carátulas también en las listas Recientes y Favoritos',
     'mtext_browser_menumusic': 'Música del menú',
+    'mtext_browser_menusfx': 'Sonidos del menú',
     'mdesc_browser_menumusic': 'Reproducir música de fondo (menu.spc) en el menú',
     'mtext_browser_restoretheme': 'Restaurar tema',
     'mdesc_browser_restoretheme': 'Restaurar el tema del menú al predeterminado',

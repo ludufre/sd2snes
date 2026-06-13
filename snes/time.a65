@@ -842,9 +842,14 @@ rtc_init:
   pla
   pla
   pla
-  bcc +
+  bcc rtci_cancel
+  jsr snd_fx_confirm    ; clock confirmed -> applied
   jsr settime
-+ ; restore text area
+  bra rtci_close
+rtci_cancel:
+  jsr snd_fx_back       ; clock screen cancelled
+rtci_close:
+  ; restore text area
   jsr pop_window
   plp
   rtl

@@ -195,6 +195,7 @@ TRANSLATIONS = {
     'mtext_browser_covlists': ' {129}Favoriten/Letzte',
     'mdesc_browser_covlists': 'Cover auch in Letzte/Favoriten anzeigen',
     'mtext_browser_menumusic': 'Menue-Musik',
+    'mtext_browser_menusfx': 'Menue-Sounds',
     'mdesc_browser_menumusic': 'Hintergrundmusik (menu.spc) im Menue spielen',
     'mtext_browser_restoretheme': 'Theme zuruecksetzen',
     'mdesc_browser_restoretheme': 'Menue-Theme auf Standard zuruecksetzen',

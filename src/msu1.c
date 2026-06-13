@@ -455,6 +455,145 @@ int msu1_loop() {
   return 0;
 }
 
+/* =======================================================================
+   Menu navigation sound effects via the MSU-1 DAC (one-shot).
+
+   Music stays on the SPC700 (menu.spc); the DAC only ever plays a
+   short one-shot effect.
+   ======================================================================= */
+
+static FIL menusfx_fil;
+static DWORD menusfx_cltbl[CLTBL_SIZE] IN_AHBRAM;
+static uint32_t menusfx_loop_point = 0;
+static UINT menusfx_bytes_read = 0;
+static uint16_t menusfx_fpga_prev = 0;
+static uint8_t menusfx_wraps = 0;
+static int menusfx_active = 0;
+static int menusfx_open = 0;               /* menusfx_fil currently holds an open effect */
+static const char *menusfx_open_name = 0;  /* which effect is open (same static strings) */
+static tick_t menusfx_deadline = 0;        /* watchdog: latest tick an effect may run to */
+
+/* Cap on how long one effect may stay "active". Real blips are well under a
+   second; this only matters if the DAC never toggles (e.g. an abnormal FPGA
+   state) - it stops the effect so the menu loop can't busy-spin on it forever. */
+#define MENU_SFX_MAX_TICKS MS_TO_TICKS(4000)
+
+static void menusfx_close(void) {
+  if(menusfx_open) { f_close(&menusfx_fil); menusfx_open = 0; menusfx_open_name = 0; }
+}
+
+int menu_sfx_active(void) {
+  return menusfx_active;
+}
+
+void menu_sfx_stop(void) {
+  if(!menusfx_active) return;
+  dac_pause();
+  menusfx_active = 0;   /* keep the file open for a fast same-effect retrigger */
+}
+
+void menu_sfx_shutdown(void) {
+  menu_sfx_stop();
+  menusfx_close();      /* release the cached handle (game load / console reset) */
+  if(current_features & FEAT_MSU1)
+    fpga_set_features(current_features & ~FEAT_MSU1);
+}
+
+void menu_sfx_play(const char *filename) {
+  UINT br = 0;
+  uint8_t magic[4];
+
+  if(menusfx_active) menu_sfx_stop();
+
+  /* Re-triggering the SAME effect (e.g. a held d-pad blip) reuses the handle
+     left open from last time, skipping the f_open + CREATE_LINKMAP cluster scan
+     - that work per blip is the menu's main responsiveness cost on slow cards.
+     Otherwise (re)open the requested file. */
+  if(!(menusfx_open && menusfx_open_name == filename)) {
+    menusfx_close();
+    if(f_open(&menusfx_fil, (const TCHAR*)filename, FA_READ) != FR_OK) {
+      return;                          /* no effect file -> silent, menu unaffected */
+    }
+    if(f_read(&menusfx_fil, magic, 4, &br) != FR_OK || br != 4
+       || memcmp(magic, "MSU1", 4)) {
+      f_close(&menusfx_fil);           /* not a valid MSU-1 PCM -> silent */
+      return;
+    }
+    /* sd_offload streaming needs a contiguous-cluster linkmap for fast seeks */
+    menusfx_fil.cltbl = menusfx_cltbl;
+    menusfx_cltbl[0] = CLTBL_SIZE;
+    if(f_lseek(&menusfx_fil, CREATE_LINKMAP)) {
+      f_close(&menusfx_fil);           /* too fragmented -> bail, stay silent */
+      return;
+    }
+    /* loop point (in samples) from the PCM header. Validate it: a short read or
+       an out-of-range value (including the *4 multiply overflow) is clamped to
+       EOF, so the loop-region read returns 0 and the one-shot stops cleanly
+       instead of seeking to / DMA'ing arbitrary file bytes to the DAC. */
+    f_lseek(&menusfx_fil, MSU_PCM_OFFSET_LOOPPOINT);
+    f_read(&menusfx_fil, &menusfx_loop_point, sizeof(menusfx_loop_point), &br);
+    {
+      DWORD fsz = f_size(&menusfx_fil);
+      uint32_t max_lp = (fsz > MSU_PCM_OFFSET_WAVEDATA)
+                          ? (uint32_t)((fsz - MSU_PCM_OFFSET_WAVEDATA) / 4) : 0;
+      if(br != sizeof(menusfx_loop_point) || menusfx_loop_point > max_lp)
+        menusfx_loop_point = max_lp;
+    }
+    menusfx_open = 1;
+    menusfx_open_name = filename;
+  }
+
+  if(!(current_features & FEAT_MSU1))
+    fpga_set_features(current_features | FEAT_MSU1);
+  dac_pause();
+  dac_reset(0);
+  set_msu_status(MSU_SNES_STATUS_CLEAR_AUDIO_ERROR | MSU_SNES_STATUS_SET_AUDIO_REPEAT);
+  set_dac_addr(0);
+  ff_sd_offload = 1; sd_offload_tgt = 1;
+  f_lseek(&menusfx_fil, MSU_PCM_OFFSET_WAVEDATA);
+  ff_sd_offload = 1; sd_offload_tgt = 1;
+  f_read(&menusfx_fil, file_buf, MSU_DAC_BUFSIZE, &menusfx_bytes_read);
+
+  menusfx_fpga_prev = fpga_status();
+  menusfx_wraps = 0;
+  menusfx_deadline = getticks() + MENU_SFX_MAX_TICKS;
+  dac_play();
+  menusfx_active = 1;
+  DBG_MSU1 printf("sfx: %s (feat %04x)\n", filename, current_features);
+}
+
+void menu_sfx_pump(void) {
+  uint16_t now;
+  if(!menusfx_active) return;
+  /* Watchdog: terminate if the effect has outlived any real blip. Normal
+     stop is driven by DAC half-buffer toggles below; this guards the case
+     where the DAC never toggles, so menusfx_active can't latch forever and
+     the menu loop can't busy-spin on a stuck effect. */
+  if(time_after(getticks(), menusfx_deadline)) { menu_sfx_stop(); return; }
+  now = fpga_status();
+  /* refill the half the FPGA just finished reading (DAC_READ_MSB toggles) */
+  if((now & MSU_FPGA_STATUS_DAC_READ_MSB) != (menusfx_fpga_prev & MSU_FPGA_STATUS_DAC_READ_MSB)) {
+    set_dac_addr((now & MSU_FPGA_STATUS_DAC_READ_MSB) ? 0 : (MSU_DAC_BUFSIZE / 2));
+    ff_sd_offload = 1; sd_offload_tgt = 1;
+    f_read(&menusfx_fil, file_buf, MSU_DAC_BUFSIZE / 2, &menusfx_bytes_read);
+    if(menusfx_bytes_read < MSU_DAC_BUFSIZE / 2) {
+      /* EOF: seek to the loop point and fill the rest of this half (the FPGA
+         write pointer auto-advanced, so do NOT re-set the DAC address). The
+         loop region of an effect is pure silence; after two wraps the
+         one-shot is over - stop cleanly mid-silence. */
+      UINT br2 = 0;
+      if(++menusfx_wraps >= 2) { DBG_MSU1 printf("sfx: done\n"); menu_sfx_stop(); return; }
+      ff_sd_offload = 0; sd_offload = 0;
+      ff_sd_offload = 1; sd_offload_tgt = 1;
+      f_lseek(&menusfx_fil, MSU_PCM_OFFSET_WAVEDATA + (uint32_t)menusfx_loop_point * 4);
+      ff_sd_offload = 1; sd_offload_tgt = 1;
+      f_read(&menusfx_fil, file_buf, (MSU_DAC_BUFSIZE / 2) - menusfx_bytes_read, &br2);
+      if(!br2) { menu_sfx_stop(); return; }   /* unreadable -> go silent, no hang */
+    }
+  }
+  menusfx_fpga_prev = now;
+}
+
 uint8_t msu_readbyte(uint16_t addr) {
   set_msu_addr(addr);
   FPGA_SELECT();
