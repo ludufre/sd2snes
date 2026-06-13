@@ -39,8 +39,6 @@
 #include "cdcuser.h"
 #include "usbinterface.h"
 
-int i;
-
 int sd_offload = 0, ff_sd_offload = 0, sd_offload_tgt = 0;
 int sd_offload_partial = 0;
 int sd_offload_start_mid = 0;
