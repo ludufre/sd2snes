@@ -1206,18 +1206,11 @@ menu_enttab_filesel_favorites_context:
 
  .byt  0
 
-mfunc_set_bsx_time:
-  php
-  sep #$20 : .as
-  lda #^CFG_BSX_TIME
-  pha
-  pea !CFG_BSX_TIME
-    jsr time_init
-  pla
-  pla
-  pla
-  plp
-  rtl
+; dead code removed: mfunc_set_bsx_time was unreferenced.
+ .as
+ .byt 0,0,0,0,0,0,0,0   ; 8
+ .byt 0,0,0,0,0,0,0,0   ; 8
+ .byt 0                 ; 1  -> 17 bytes
 
 mfunc_isenabled_always:
   sec
@@ -1233,11 +1226,9 @@ mfunc_isenabled_hooks:
   ror
   rtl
 
-mfunc_isdisabled_hooks:
-  lda @CFG_ENABLE_INGAME_HOOK
-  eor #$00
-  ror
-  rtl
+; dead code removed: mfunc_isdisabled_hooks was an unreferenced inverse of
+; mfunc_isenabled_hooks.  8 bytes zero-filled to keep menu-binary alignment.
+ .byt 0,0,0,0,0,0,0,0   ; 8 bytes total
 
 ; Grey the "Favorites/Recents" sub-option whenever Show covers is Off. ShowCovers
 ; holds 0/1/2 (off/large/small), so the eor/ror trick used above (assumes 0/1)
@@ -1334,11 +1325,6 @@ kv_yesno:
 .word $0001, !text_yes : .byt ^text_yes
 .word $ffff
 
-kv_scic_yesno:
-.word $0000, !text_no : .byt ^text_no
-.word $0001, !text_yes : .byt ^text_yes
-.word $ffff
-
 kv_vmode:
 .word $0002, !text_auto : .byt ^text_auto
 kv_vmode_noauto:
@@ -1359,13 +1345,6 @@ kv_gsu_speed:
 kv_sgb_clock:
 .word $0000, !text_sgb_clock1 : .byt ^text_sgb_clock1
 .word $0001, !text_sgb_clock2 : .byt ^text_sgb_clock2
-.word $ffff
-
-kv_region:
-.word $0000, !text_off : .byt ^text_off
-.word $0001, !text_auto : .byt ^text_auto
-.word $0002, !text_pal : .byt ^text_pal
-.word $0003, !text_ntsc : .byt ^text_ntsc
 .word $ffff
 
 kv_screensaver_timeout:
