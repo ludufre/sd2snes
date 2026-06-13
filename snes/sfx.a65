@@ -8,7 +8,7 @@
 ; music stays on the SPC700 (menu.spc), effects live on the cart DAC, so both
 ; coexist with no APU contention.
 ;
-; Transport: ONE DEDICATED mailbox byte (SFX_MAILBOX, $2A08) that nothing else
+; Transport: ONE DEDICATED mailbox byte (SFX_MAILBOX, $2BE0) that nothing else
 ; in the protocol touches. The menu just stores effect+1 there (newest wins);
 ; the MCU polls it once per menu-loop iteration (~20 ms), clears it and plays.
 ; ===========================================================================

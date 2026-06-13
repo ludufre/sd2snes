@@ -786,7 +786,7 @@ cover_calc_sizes_obj:
 ;    MAIN LOOP (no VBlank cost). Writes the w_spr x h_spr grid of 16x16 sprites,
 ;    then hides the remaining slots (so a smaller cover leaves no stray sprites from
 ;    a previous larger one). Per sprite (sx,sy):
-;      X    = 248 - w*16 + sx*16   (right-aligned, 8px right margin)
+;      X    = 256 - w*16 + sx*16   (right-aligned to the screen edge)
 ;      Y    = 8 + sy*16
 ;      tile = (2*sy)*16 + 2*sx     (16-wide OBJ name grid; top-left 8x8 cell)
 ;      attr = $30 | (pal<<1)       (OBJ priority 3 over the list; pal from BLOCKMAP)
