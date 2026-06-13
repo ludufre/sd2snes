@@ -464,6 +464,19 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_FUNC
+ .word !mtext_browser_restoremusic
+ .byt  ^mtext_browser_restoremusic
+ .word !restore_music-1
+ .byt  ^restore_music-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_browser_restoremusic
+ .byt  ^mdesc_browser_restoremusic
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt 0
 
 menu_enttab_chip:
@@ -1059,6 +1072,19 @@ menu_enttab_filesel_context_spc:
  .word !text_filesel_selected_file ; window title
  .byt  ^text_filesel_selected_file ; for this menu
 ; ENTRIES
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_set_as_bgm
+ .byt  ^text_filesel_set_as_bgm
+ .word !set_selected_spc_as_bgm-1
+ .byt  ^set_selected_spc_as_bgm-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_set_as_bgm
+ .byt  ^mdesc_filesel_set_as_bgm
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_context_add_to_favorites
  .byt  ^text_filesel_context_add_to_favorites

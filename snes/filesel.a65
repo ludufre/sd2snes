@@ -868,23 +868,28 @@ wait_spc:
   lda @MCU_CMD
   cmp #$00
   bne wait_spc
-  ; fork: with menu music off the S-SMP is at IPL -> play the chosen .spc
-  ; directly (stock path). With music on the bgm is running on the S-SMP, and
-  ; the only way back to IPL (which spc700_load needs) is a SNES reset. So
-  ; warm-reset here, then RESUME at spc_play_now: the warm boot restores the SP
-  ; and set_bank does plp;rts on the [P][return] frame we push below (the same
-  ; SAVED_SP/WARM_SIGNATURE mechanism the player uses to exit in spc_key_b).
+  ; fork: spc700_load needs the S-SMP at IPL. It is at IPL only in BGM states 0
+  ; (not attempted) and 2 (tried, no spc). In state 1 the bgm is playing and in
+  ; states 3/4 the DSP-unmute stub is running (music off but the cart DAC kept
+  ; audible for SFX) -- in ALL three the S-SMP is busy, and the only way back to
+  ; IPL is a SNES reset (else spc700_load hangs at "Loading SPC into SPC700"). So
+  ; for 1/3/4 warm-reset here, then RESUME at spc_play_now: the warm boot restores
+  ; the SP and set_bank does plp;rts on the [P][return] frame we push below (the
+  ; same SAVED_SP/WARM_SIGNATURE mechanism the player uses to exit in spc_key_b).
   ; apu_ram_init runs during the warm boot, so the S-SMP is back at IPL when we
   ; reach spc_play_now. The .spc staged in SDRAM survives the reset (it lives in
   ; MCU-managed SDRAM, untouched by the SNES reset).
-  lda @BGM_STATE         ; only pause+warm-reset if the bgm is actually playing
-  cmp #$01               ; (config on but no menu.spc -> APU already at IPL)
-  bne spc_play_now
+  lda @BGM_STATE         ; at IPL already (0/2) -> play directly, no reset
+  beq spc_play_now
+  cmp #$02
+  beq spc_play_now       ; 1 (playing) / 3,4 (DSP stub) -> S-SMP busy, must reset
   ; Build the frame set_bank's `plp; rts` will unwind on the warm boot: push the
-  ; resume address (spc_play_now-1, all menu code is bank $c0 so a near rts is
+  ; resume address (spc_play_now_redraw-1, all menu code is bank $c0 so a near rts is
   ; fine) then the P byte, then snapshot SP into SAVED_SP. pea pushes a 16-bit
-  ; value regardless of the M flag (same idiom as `pea !CFG_BSX_TIME`).
-  pea !(spc_play_now-1)
+  ; value regardless of the M flag (same idiom as `pea !CFG_BSX_TIME`). Resume at
+  ; spc_play_now_redraw (NOT spc_play_now): the warm boot cleared VRAM, so the list
+  ; must be repainted before the player so it overlays instead of a blank screen.
+  pea !(spc_play_now_redraw-1)
   php
   rep #$20 : .al
   tsc
@@ -901,6 +906,20 @@ wait_spc:
   sta @MCU_CMD
 -
   bra -
+spc_play_now_redraw:
+; fork: only the warm-reset path lands here. That reset cleared VRAM but the file
+; list's WRAM state survived the warm boot, so repaint it and let ONE NMI DMA it to
+; VRAM before spcplayer saves/greys the screen -- otherwise the player window opens
+; over a blank "new screen" instead of overlaying the listing. NMI is already on
+; (setup_hdma re-enabled it during the warm boot), so the isr_done wait can't hang.
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr filesel_statusbar
+  jsr filesel_redraw
+  jsr filesel_cleanup
+  stz isr_done
+- lda isr_done           ; wait one full NMI so the repaint is DMA'd to VRAM
+  beq -
 spc_play_now:
   jsr spcplayer
   jsr menu_bgm_load     ; back from the player (S-SMP at IPL): restore the bgm.
@@ -2366,6 +2385,70 @@ set_favorite_as_autoboot_rom:
   beq +
   cmp #$aa
 ; failure
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plb
+  plp
+  rtl
+
+set_selected_spc_as_bgm:
+; Context-menu action on an .spc (MTYPE_FUNC_CLOSE): make it the menu background
+; music. MCU_PARAM already holds the file path (set by ctx_is_spc). Same light
+; $55/$aa handshake as select_theme, with cover_sync first -- .spc entries fire
+; cover requests, so a stale cover $55 could be misread as our ACK (cover_sync
+; preserves MCU_PARAM). The MCU stores the path, enables music, and RELOADS the menu
+; (CMD_SET_MENU_SPC -> menu_reload), which cold-boots into the new BGM cleanly -- the
+; only reliable way to (re)start the S-SMP (the in-place warm-reset path black-
+; screened because the warm boot leaves NMI off). The reload resets the SNES, so the
+; rtl below is moot; it's kept correct for the FUNC_CLOSE dispatcher convention.
+  php
+  phb
+  sep #$20 : .as
+  jsr cover_sync_before_cmd
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_SET_MENU_SPC
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plb
+  plp
+  rtl
+
+restore_music:
+; Browser Options action (below Restore Theme): revert the menu background music to
+; the /sd2snes/menu.spc fallback. Mirrors restore_theme exactly -- the MCU clears
+; CFG.bgm_name, persists, and RELOADS the menu (CMD_CLR_MENU_SPC -> menu_reload),
+; which cold-boots into the fallback BGM. Music on/off is left untouched. The reload
+; resets the SNES, so the rtl is moot; kept correct for the dispatcher convention.
+  php
+  phb
+  sep #$20 : .as
+  jsr cover_sync_before_cmd
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_CLR_MENU_SPC
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
   beq +
   bra -
 + lda #$55

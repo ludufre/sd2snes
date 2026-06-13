@@ -479,10 +479,12 @@ int main(void) {
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_LOAD_MENU_SPC:
-          /* stage background menu music from a fixed path (no browser selection).
-             load_spc is graceful: a missing/too-small file zeroes the SPC header,
-             which the menu detects and skips. */
-          filesize = load_spc((uint8_t*)"/sd2snes/menu.spc", SRAM_SPC_DATA_ADDR, SRAM_SPC_HEADER_ADDR);
+          /* stage background menu music. Use the user-chosen .spc (CFG.bgm_name, a
+             full SD path set via SNES_CMD_SET_MENU_SPC) when present, otherwise fall
+             back to the fixed /sd2snes/menu.spc. load_spc is graceful: a missing/
+             too-small file zeroes the SPC header, which the menu detects and skips. */
+          filesize = load_spc((uint8_t*)(CFG.bgm_name[0] == '/' ? CFG.bgm_name : (uint8_t*)"/sd2snes/menu.spc"),
+                              SRAM_SPC_DATA_ADDR, SRAM_SPC_HEADER_ADDR);
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_RESET:
@@ -698,6 +700,28 @@ int main(void) {
         case SNES_CMD_CLR_THEME:
           /* revert to the baked-in default look */
           theme_select(NULL);
+          menu_reload = 1;
+          break;
+        case SNES_CMD_SET_MENU_SPC:
+          /* a .spc was picked in the browser (any visible folder) to become the menu
+             background music. MCU_PARAM was set up like LOADROM (cwd + selected entry)
+             so get_selected_name yields the full SD path; store it, enable music, and
+             persist, then reload the menu (like SET_THEME). The cold reload re-syncs
+             SRAM via cfg_load_to_menu and starts the new BGM cleanly on boot -- the
+             only reliable way to (re)start the S-SMP (the in-place warm-reset path
+             black-screened: the warm boot leaves NMI off). */
+          get_selected_name(file_lfn);
+          strncpy((char*)CFG.bgm_name, (char*)file_lfn, sizeof(CFG.bgm_name) - 1);
+          CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
+          CFG.enable_menu_music = 1;
+          cfg_save();
+          menu_reload = 1; /* leave loop -> outer loop reloads, boots into the new BGM */
+          break;
+        case SNES_CMD_CLR_MENU_SPC:
+          /* "Restore music": drop the chosen .spc so the BGM falls back to
+             /sd2snes/menu.spc, then reload the menu (like CLR_THEME). */
+          CFG.bgm_name[0] = 0;
+          cfg_save();
           menu_reload = 1;
           break;
         case SNES_CMD_LOAD_CHT:

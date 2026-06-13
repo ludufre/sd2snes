@@ -226,6 +226,7 @@ mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
 mtext_browser_menumusic           .byt "Menu music", 0
 mtext_browser_menusfx             .byt "Menu sounds", 0
 mtext_browser_restoretheme        .byt "Restore theme", 0
+mtext_browser_restoremusic        .byt "Restore music", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
 mtext_ingame_shortreset           .byt "Reset to menu", 0
 mtext_ingame_enable               .byt "In-game hook", 0
@@ -281,6 +282,7 @@ mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (mu
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0
 mdesc_browser_menusfx             .byt "Play sound effects when navigating the menu", 0
 mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
+mdesc_browser_restoremusic        .byt "Revert the menu background music to the default (menu.spc)", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
 mdesc_ingame_shortreset           .byt "Go back to menu on short reset (Off/On/Folder/ROM). Folder: return to last game folder. ROM: also pre-select the ROM.", 0
 mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
@@ -322,6 +324,8 @@ mdesc_recent_context_remove_from_recent .byt "Remove selected file from the rece
 
 text_filesel_set_as_autoboot .byt "Set as autoboot", 0
 mdesc_filesel_set_as_autoboot .byt "Boot this ROM automatically on next power-on (hold START during powerup/reset to cancel)", 0
+text_filesel_set_as_bgm .byt "Set as menu music", 0
+mdesc_filesel_set_as_bgm .byt "Use this SPC as the menu background music", 0
 
 text_filesel_context_delete_file .byt "Delete", 0
 mdesc_filesel_context_delete_file .byt "Delete the selected file", 0

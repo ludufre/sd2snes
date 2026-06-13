@@ -120,6 +120,8 @@ TRANSLATIONS = {
     'mdesc_recent_context_remove_from_recent': 'Quita el archivo de la lista de recientes',
     'text_filesel_set_as_autoboot': 'Definir como autoboot',
     'mdesc_filesel_set_as_autoboot': 'Arranca esta ROM en el próximo encendido (mantén START para cancelar)',
+    'text_filesel_set_as_bgm': 'Definir como música del menú',
+    'mdesc_filesel_set_as_bgm': 'Usar este SPC como música de fondo del menú',
     'text_filesel_context_delete_file': 'Eliminar',
     'mdesc_filesel_context_delete_file': 'Elimina el archivo seleccionado',
     'text_filesel_context_delete_srm': 'Eliminar save',
@@ -199,6 +201,8 @@ TRANSLATIONS = {
     'mdesc_browser_menumusic': 'Reproducir música de fondo (menu.spc) en el menú',
     'mtext_browser_restoretheme': 'Restaurar tema',
     'mdesc_browser_restoretheme': 'Restaurar el tema del menú al predeterminado',
+    'mtext_browser_restoremusic': 'Restaurar música',
+    'mdesc_browser_restoremusic': 'Restaurar la música del menú al predeterminado (menu.spc)',
     'text_mm_language': 'Idioma',
     'mdesc_mm_language': 'Definir el idioma del menú/firmware',
 }
