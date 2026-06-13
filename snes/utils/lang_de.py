@@ -190,6 +190,7 @@ TRANSLATIONS = {
     'text_saving': 'Speichere{127}{128}                      ',
     'text_cheat': 'Cheats fuer ',
     'text_ips_nopatch': '[Kein Patch]',
+    'text_ips_header': 'Patches',
     'cheat_tab_head': 'Name                                     Aktiv',
     'cheat_tab_hint_text': ' A:Ein/Aus   B:Speichern & Ende ',
     'mtext_browser_showcov': 'Cover anzeigen',

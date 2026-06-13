@@ -188,6 +188,7 @@ TRANSLATIONS = {
     'text_saving': 'Salvando{127}{128}                       ',
     'text_cheat': 'Cheats para ',
     'text_ips_nopatch': '[Sem patch]',
+    'text_ips_header': 'Patches',
     'cheat_tab_head': 'Nome                                     Ativado',
     'cheat_tab_hint_text': ' A:Habi./Desab.   B:Salvar & Sair ',
     'mtext_browser_showcov': 'Mostrar capas',

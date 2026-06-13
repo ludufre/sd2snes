@@ -190,6 +190,7 @@ TRANSLATIONS = {
     'text_saving': 'Guardando{127}{128}                      ',
     'text_cheat': 'Trucos para ',
     'text_ips_nopatch': '[Sin patch]',
+    'text_ips_header': 'Parches',
     'cheat_tab_head': 'Nombre                                    Activo',
     'cheat_tab_hint_text': ' A:Hab./Desh.   B:Guardar & Salir ',
     'mtext_browser_showcov': 'Mostrar carátulas',
