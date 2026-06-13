@@ -1038,6 +1038,8 @@ open_context_menu:
   beq ctx_is_dir
   cmp #TYPE_PARENT
   beq ctx_is_parent
+  cmp #TYPE_SKIN
+  beq ctx_is_skin
 open_context_menu_cont
   rts
 ctx_is_file
@@ -1083,6 +1085,28 @@ ctx_is_spc
   lda #$00
   sta @MCU_PARAM+3
   jsr filesel_contextmenu_spc
+  bra open_context_menu_cont
+ctx_is_skin
+; set up MCU_PARAM with the .thm file path (same layout as ctx_is_file) so
+; delete_selected_file/get_selected_name resolve the theme. Themes have no
+; save -> the context menu offers Delete only (no Delete save).
+  dey
+  rep #$20 : .al
+  lda [dirptr_addr], y
+  and #$00ff
+  sta @MCU_PARAM+6
+  dey
+  dey
+  lda [dirptr_addr], y
+  sta @MCU_PARAM+4
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+  jsr filesel_contextmenu_skin
   bra open_context_menu_cont
 
 delete_selected_file:

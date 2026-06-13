@@ -1086,6 +1086,27 @@ menu_enttab_filesel_context_spc:
  .byt  0,0,0
  .byt  0
 
+menu_enttab_filesel_context_skin:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_filesel_selected_file ; window title
+ .byt  ^text_filesel_selected_file ; for this menu
+; ENTRIES
+; Themes (.thm) have no save file -> Delete only (no "Delete save").
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_selected_file-1
+ .byt  ^delete_selected_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0
+
 menu_enttab_filesel_favorites_context:
 ; HEADER
  .byt  1              ; listsel_step=1
