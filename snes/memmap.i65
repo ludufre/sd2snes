@@ -136,6 +136,7 @@
 #define LAST_GAME_DIR               $FF1F00
 #define WRAM_BAK                    $FF2000
 #define FAVORITE_GAMES              $FF4000
+#define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (free gap between FAVORITE_GAMES tail $FF49FF and IPS_LIST $FF5000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
 
 #define CMD_LOADROM                 $01 /* shortcut - load ROM with default settings */
 #define CMD_SETRTC                  $02

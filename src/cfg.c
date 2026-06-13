@@ -552,7 +552,8 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
      with the favorite index-0 folder (e.g. a root favorite resets it to "/"),
      and the menu never returns to a sub-folder game. */
   if(write_lastdir) {
-    sram_writebyte(0, SRAM_LASTGAME_DIR_ADDR); /* default: empty dir path */
+    sram_writebyte(0, SRAM_LASTGAME_DIR_ADDR);  /* default: empty dir path */
+    sram_writebyte(0, SRAM_LASTGAME_FILE_ADDR); /* default: empty pre-select name */
   }
   file_open(listfilename, FA_READ);
   for(index = 0; index < 10 && !f_eof(&file_handle); index++) {
@@ -573,7 +574,14 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
     }
     sram_writestrn((uint8_t*)disp, address+256*index, 256);
     if(write_lastdir && index == 0) {
-      /* write directory of most recent game for reset_to_menu >= 2 (Folder/Rom) navigation */
+      /* write directory + base ROM basename of the most recent game for
+         reset_to_menu >= 2 (Folder/Rom) navigation. For a patch-aware
+         "<rom>\t<patch>" entry the navigation must target the BASE ROM (the
+         part before the tab), not the patch display name written above — so
+         temporarily terminate fntmp at the tab while scanning. */
+      char *base_end = tab ? tab : (fntmp + strlen((const char*)fntmp));
+      char base_saved = *base_end;
+      *base_end = '\0';
       char *slash = strrchr((const char*)fntmp, '/');
       if(slash != NULL) {
         size_t dir_len = slash - fntmp;
@@ -584,7 +592,14 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
           dirtmp[dir_len] = '\0';
           sram_writestrn((uint8_t*)dirtmp, SRAM_LASTGAME_DIR_ADDR, 256);
         }
+        /* base ROM basename → reset_to_menu==3 pre-select target */
+        sram_writestrn((uint8_t*)(slash + 1), SRAM_LASTGAME_FILE_ADDR, 256);
+      } else {
+        /* bare filename with no directory: folder nav bails (dir empty), but
+           still record the name for completeness */
+        sram_writestrn((uint8_t*)fntmp, SRAM_LASTGAME_FILE_ADDR, 256);
       }
+      *base_end = base_saved;
     }
   }
   file_close();

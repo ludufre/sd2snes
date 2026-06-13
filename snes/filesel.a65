@@ -2519,7 +2519,7 @@ filesel_nav_last:
   lda @CFG_ENABLE_RST_TO_MENU
   cmp #$03
   bne +
-  lda @LAST_GAME
+  lda @LAST_GAME_FILE
   beq fnl_out
 +
   ; Navigate path components one by one.
@@ -2716,7 +2716,8 @@ fnl_ac_done:
 ; =========================================================
 ; fnl_select_file:
 ;   Scan the current directory for a TYPE_ROM or TYPE_SPC
-;   entry whose name matches LAST_GAME[0] (just filename).
+;   entry whose name matches LAST_GAME_FILE (base ROM basename;
+;   for a patch-aware entry this is the ROM, not the patch name).
 ;   On match: sets filesel_sel and adjusts dirptr_addr so
 ;   the entry is visible.
 ; =========================================================
@@ -2850,7 +2851,7 @@ fnl_cs_yes:
 ; =========================================================
 ; fnl_cmp_file:
 ;   Case-insensitive compare of name at longptr[0..] against
-;   LAST_GAME[0] (null-terminated filename).
+;   LAST_GAME_FILE (null-terminated base ROM basename).
 ;   Handles hide_extensions: $01 in entry name treated as '.'.
 ;   Returns carry set = match, carry clear = no match.
 ; =========================================================
@@ -2859,7 +2860,7 @@ fnl_cmp_file:
   sep #$20 : .as
   rep #$10 : .xl
   ldy #$0000              ; Y indexes entry string via [longptr]
-  ldx #$0000              ; X indexes LAST_GAME via long,X
+  ldx #$0000              ; X indexes LAST_GAME_FILE via long,X
 fnl_cf_loop:
   ; Read entry char; $01 = hidden extension dot
   lda [longptr], y
@@ -2868,8 +2869,8 @@ fnl_cf_loop:
   lda #$2e                ; treat $01 as '.'
 fnl_cf_not_ext:
   sta mm_tmp              ; mm_tmp = RAW entry char (post $01 -> '.')
-  ; Read LAST_GAME[X] char — long,X ($BF), valid in 65816
-  lda @LAST_GAME, x       ; A = RAW target char
+  ; Read LAST_GAME_FILE[X] char — long,X ($BF), valid in 65816
+  lda @LAST_GAME_FILE, x  ; A = RAW target char
   ; End-of-string MUST be detected on the raw bytes, BEFORE case-folding:
   ; 0x20 (space) & 0xDF == 0x00, so folding first lets a space pose as the
   ; NUL terminator and truncates the compare at the first space. Almost
