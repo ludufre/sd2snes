@@ -55,6 +55,7 @@
 #define CFG_ENABLE_MENU_MUSIC            ("EnableMenuMusic")
 #define CFG_COVERS_IN_LISTS              ("ShowCoversInLists")
 #define CFG_ENABLE_MENU_SFX              ("EnableMenuSFX")
+#define CFG_ENABLE_WIFI                  ("EnableWifi")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -109,6 +110,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_menu_music;       /* play background menu music (/sd2snes/menu.spc) */
   uint8_t  covers_in_lists;         /* CFG @ $BA: also show covers in the Recent/Favorite lists (sub-option of show_covers) */
   uint8_t  enable_menu_sfx;         /* CFG @ $BB: menu navigation sound effects (MSU-1 DAC, /sd2snes/sfx_*.pcm) */
+  uint8_t  enable_wifi;             /* CFG @ $BC: WiFi companion master switch (0=off: no AP/STA/WebUI) */
 } cfg_t;
 
 int cfg_save(void);

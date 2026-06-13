@@ -265,6 +265,7 @@
 #define CFG_ENABLE_MENU_MUSIC           CFG_ADDR+$00B9
 #define CFG_COVERS_IN_LISTS             CFG_ADDR+$00BA
 #define CFG_ENABLE_MENU_SFX             CFG_ADDR+$00BB
+#define CFG_ENABLE_WIFI                 CFG_ADDR+$00BC
 
 #define MENU_ENTRY_SIZE             23
 

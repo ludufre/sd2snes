@@ -140,6 +140,7 @@ lerr_t proto_ping(uint8_t *ver, uint8_t *lang, char *name, size_t ns) {
 }
 
 lerr_t proto_ls_open(const char *path, uint8_t *status) {
+    if (strlen(path) + 1 > UP_MAX_PAYLOAD) return LERR_FAIL;
     uint8_t r[4]; uint16_t rl = 0;
     lerr_t e = txn(UP_OP_LS_OPEN, (const uint8_t *)path, strlen(path) + 1, NULL, r, sizeof(r), &rl);
     if (e) return e;
@@ -157,6 +158,7 @@ lerr_t proto_ls_next(uint8_t *buf, size_t bufsz, uint16_t *outlen, int *final) {
 }
 
 lerr_t proto_get_open(const char *path, uint8_t *status, uint32_t *total) {
+    if (strlen(path) + 1 > UP_MAX_PAYLOAD) return LERR_FAIL;
     uint8_t r[5]; uint16_t rl = 0;
     lerr_t e = txn(UP_OP_GET_OPEN, (const uint8_t *)path, strlen(path) + 1, NULL, r, sizeof(r), &rl);
     if (e) return e;
@@ -234,6 +236,7 @@ lerr_t proto_put_close(uint8_t *status) {
 }
 
 static lerr_t simple_path_op(uint8_t op, const char *path, uint8_t *status) {
+    if (strlen(path) + 1 > UP_MAX_PAYLOAD) return LERR_FAIL;
     uint8_t r[1]; uint16_t rl = 0;
     lerr_t e = txn(op, (const uint8_t *)path, strlen(path) + 1, NULL, r, sizeof(r), &rl);
     if (e) return e;
@@ -272,16 +275,17 @@ lerr_t proto_wifi_report(uint8_t connected, int8_t rssi, const char *ssid, const
     return txn_to(UP_OP_WIFI_REPORT, req, n, NULL, r, sizeof(r), &rl, WIFI_TO_MS);
 }
 
-lerr_t proto_wifi_poll(uint8_t *action, char *ssid, size_t ssz, char *pass, size_t psz) {
+lerr_t proto_wifi_poll(uint8_t *enabled, uint8_t *action, char *ssid, size_t ssz, char *pass, size_t psz) {
     uint8_t r[UP_MAX_PAYLOAD]; uint16_t rl = 0;
     if (ssid && ssz) ssid[0] = 0;
     if (pass && psz) pass[0] = 0;
     lerr_t e = txn_to(UP_OP_WIFI_POLL, NULL, 0, NULL, r, sizeof(r), &rl, WIFI_TO_MS);
     if (e) return e;
-    if (rl < 1) { if (action) *action = UP_WIFI_NONE; return LOK; }
-    if (action) *action = r[0];
-    if (r[0] == UP_WIFI_CONNECT) {
-        uint16_t i = 1, j = 0;
+    if (enabled) *enabled = (rl >= 1) ? r[0] : 0;   // off if the MCU sent nothing
+    if (rl < 2) { if (action) *action = UP_WIFI_NONE; return LOK; }
+    if (action) *action = r[1];
+    if (r[1] == UP_WIFI_CONNECT) {
+        uint16_t i = 2, j = 0;
         while (i < rl && r[i] && ssid && j + 1 < ssz) ssid[j++] = (char)r[i++];
         if (ssid && ssz) ssid[j] = 0;
         while (i < rl && r[i]) i++;

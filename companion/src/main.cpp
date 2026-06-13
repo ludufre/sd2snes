@@ -26,13 +26,19 @@ static void bridge_once(void) {
     net_status st; net_get_status(&st);
     if (proto_wifi_report(st.connected, st.rssi, st.ssid, st.ip) != LOK) return;  // MCU silent
     proto_esp_info(FW_VERSION_STR " (" CHIP_NAME ")");   // identity for System Information
-    uint8_t action = UP_WIFI_NONE;
-    char ssid[UP_WIFI_SSID_MAX + 1] = {0}, pass[UP_WIFI_PASS_MAX + 1] = {0};
-    if (proto_wifi_poll(&action, ssid, sizeof(ssid), pass, sizeof(pass)) != LOK) return;
-    if (action == UP_WIFI_SCAN_REQ) {
+    // push a freshly-finished async scan to the menu the moment it lands (-1 = none new)
+    {
         static ap_rec aps[UP_WIFI_MAX_APS];
-        int n = net_scan(aps, UP_WIFI_MAX_APS);
-        proto_wifi_scan_push(aps, n);
+        int n = net_scan_take(aps, UP_WIFI_MAX_APS);
+        if (n >= 0) proto_wifi_scan_push(aps, n);
+    }
+    uint8_t enabled = 0, action = UP_WIFI_NONE;
+    char ssid[UP_WIFI_SSID_MAX + 1] = {0}, pass[UP_WIFI_PASS_MAX + 1] = {0};
+    if (proto_wifi_poll(&enabled, &action, ssid, sizeof(ssid), pass, sizeof(pass)) != LOK) return;
+    net_set_enabled(enabled);    // menu's EnableWifi: radio up/down (secure-by-default off)
+    if (!enabled) return;        // WiFi off: ignore scan/connect/forget
+    if (action == UP_WIFI_SCAN_REQ) {
+        net_scan_start();        // async; the result is pushed above once the radio finishes
     } else if (action == UP_WIFI_CONNECT) {
         net_connect(ssid, pass);
     } else if (action == UP_WIFI_FORGET) {
@@ -43,7 +49,7 @@ static void bridge_once(void) {
 void setup() {
     link_init();              // MCU UART @921600
     ota_check_and_apply();    // self-update from /sd2snes/espXX.bin if a newer .ver is on the SD
-    net_start();              // SoftAP (+ STA auto-reconnect)
+    net_init();               // radio OFF until the menu's EnableWifi turns it on (secure default)
     display_init();           // ST7789 status panel (no-op wiring still boots fine)
     web_start();              // HTTP file manager + WiFi config + OTA
 }

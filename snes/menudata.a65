@@ -256,6 +256,20 @@ menu_enttab_cfg:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_cfg_wifi_en
+ .byt  ^mtext_cfg_wifi_en
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_WIFI
+ .byt  ^CFG_ENABLE_WIFI
+ .word !mdesc_cfg_wifi_en
+ .byt  ^mdesc_cfg_wifi_en
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  MTYPE_FUNC
  .word !mtext_cfg_wifi
  .byt  ^mtext_cfg_wifi

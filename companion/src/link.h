@@ -32,6 +32,6 @@ lerr_t proto_mkdir(const char *path, uint8_t *status);
 // WiFi-in-menu bridge (ESP is the client; the MCU buffers for the SNES menu).
 struct ap_rec { char ssid[33]; int8_t rssi; uint8_t enc; };
 lerr_t proto_wifi_report(uint8_t connected, int8_t rssi, const char *ssid, const char *ip);
-lerr_t proto_wifi_poll(uint8_t *action, char *ssid, size_t ssz, char *pass, size_t psz);
+lerr_t proto_wifi_poll(uint8_t *enabled, uint8_t *action, char *ssid, size_t ssz, char *pass, size_t psz);
 lerr_t proto_wifi_scan_push(const ap_rec *aps, int n);
 lerr_t proto_esp_info(const char *s);   // report the companion version "x.y.z (CHIP)"

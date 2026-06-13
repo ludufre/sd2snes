@@ -185,13 +185,15 @@ void web_start(void) {
     server.on("/api/ls", HTTP_GET, h_ls);
     server.on("/api/dl", HTTP_GET, h_dl);
     server.on("/api/up", HTTP_POST, h_up_done, h_up_data);
-    server.on("/api/rm", HTTP_GET, h_rm);
-    server.on("/api/mv", HTTP_GET, h_mv);
-    server.on("/api/mkdir", HTTP_GET, h_mkdir);
+    /* mutating endpoints are POST so a cross-origin <img>/prefetch can't fire
+       them (no auth exists, so GET side-effects would be trivially CSRF-able) */
+    server.on("/api/rm", HTTP_POST, h_rm);
+    server.on("/api/mv", HTTP_POST, h_mv);
+    server.on("/api/mkdir", HTTP_POST, h_mkdir);
     server.on("/api/wifi/scan", HTTP_GET, h_wifi_scan);
     server.on("/api/wifi/status", HTTP_GET, h_wifi_status);
-    server.on("/api/wifi/connect", HTTP_GET, h_wifi_connect);
-    server.on("/api/wifi/forget", HTTP_GET, h_wifi_forget);
+    server.on("/api/wifi/connect", HTTP_POST, h_wifi_connect);
+    server.on("/api/wifi/forget", HTTP_POST, h_wifi_forget);
     server.begin();
 }
 

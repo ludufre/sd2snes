@@ -18,6 +18,7 @@ _Static_assert(offsetof(cfg_t, language) == 0xB7, "cfg_t.language must stay at C
 _Static_assert(offsetof(cfg_t, patch_verify_integrity) == 0xB8, "cfg_t.patch_verify_integrity must stay at CFG_ADDR+$B8");
 _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists must stay at CFG_ADDR+$BA");
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
+_Static_assert(offsetof(cfg_t, enable_wifi) == 0xBC, "cfg_t.enable_wifi must stay at CFG_ADDR+$BC");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -64,7 +65,8 @@ cfg_t CFG_DEFAULT = {
   .patch_verify_integrity = 0,
   .enable_menu_music = 1,
   .covers_in_lists = 1,
-  .enable_menu_sfx = 1
+  .enable_menu_sfx = 1,
+  .enable_wifi = 0
 };
 
 cfg_t CFG;
@@ -178,6 +180,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_MUSIC, CFG.enable_menu_music ? "true" : "false");
   f_printf(&file_handle, "#  %s: Play menu navigation sound effects (cursor/confirm/back/error)\n", CFG_ENABLE_MENU_SFX);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_SFX, CFG.enable_menu_sfx ? "true" : "false");
+  f_printf(&file_handle, "\n#  %s: Enable the WiFi companion (false: no access point, no WebUI)\n", CFG_ENABLE_WIFI);
+  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_WIFI, CFG.enable_wifi ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   file_close();
@@ -335,6 +339,9 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_ENABLE_MENU_SFX, &tok)) {
       CFG.enable_menu_sfx = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_ENABLE_WIFI, &tok)) {
+      CFG.enable_wifi = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);

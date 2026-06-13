@@ -223,6 +223,8 @@ mtext_browser_showcov             .byt "Show covers", 0
 mtext_browser_covlists            .byt " ",129,"Favorites/Recents", 0
 mtext_cfg_patch                   .byt "Patch Options", 0
 mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
+mtext_cfg_wifi_en                 .byt "Enable WiFi", 0
+mdesc_cfg_wifi_en                 .byt "Turn the WiFi companion on/off (off: no access point, no WebUI)", 0
 mtext_cfg_wifi                    .byt "WiFi", 0
 mdesc_cfg_wifi                    .byt "Connect the sd2snes to a WiFi network", 0
 ; ---- WiFi config screen ----

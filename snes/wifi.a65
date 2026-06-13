@@ -839,6 +839,10 @@ wkp_pad:
   iny
   bra wkp_pad
 wkp_term:
+  cpy #64                      ; clamp: never store past wifi_linebuf[63] (64B buffer)
+  bcc wkpt_store
+  ldy #63
+wkpt_store:
   lda #$00
   sta wifi_linebuf, y
   lda #WIFI_CX : sta print_x

@@ -25,6 +25,7 @@ TRANSLATIONS = {
     'mtext_cfg_scic': 'SuperCIC Optionen',
     'mtext_cfg_patch': 'Patch-Optionen',
     'mtext_patch_verify': 'Integritaet pruefen (~23s)',
+    'mtext_cfg_wifi_en': 'WLAN aktivieren',
     'mtext_bsx_timesource': 'BS-X Uhr',
     'mtext_bsx_time': 'Eigene Zeit',
     'mtext_scic_enable': 'SuperCIC aktivieren',

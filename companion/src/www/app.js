@@ -175,13 +175,13 @@ async function go(path){
 const reload=()=>go(cwd);
 
 async function del(full,name){ if(!confirm(t("cfmDelete",name)))return;
-  const j=await(await fetch("/api/rm?path="+encodeURIComponent(full))).json();
+  const j=await(await fetch("/api/rm?path="+encodeURIComponent(full),{method:"POST"})).json();
   if(!j.ok) status(t("delFail",j.status)); reload(); }
 async function rename(full,name){ const nn=prompt(t("pNewName"),name); if(!nn||nn===name)return;
-  const j=await(await fetch("/api/mv?from="+encodeURIComponent(full)+"&to="+encodeURIComponent(join(cwd,nn)))).json();
+  const j=await(await fetch("/api/mv?from="+encodeURIComponent(full)+"&to="+encodeURIComponent(join(cwd,nn)),{method:"POST"})).json();
   if(!j.ok) status(t("renFail",j.status)); reload(); }
 async function mkdir(){ const nn=prompt(t("pNewFolder")); if(!nn)return;
-  const j=await(await fetch("/api/mkdir?path="+encodeURIComponent(join(cwd,nn)))).json();
+  const j=await(await fetch("/api/mkdir?path="+encodeURIComponent(join(cwd,nn)),{method:"POST"})).json();
   if(!j.ok) status(t("mkdirFail",j.status)); reload(); }
 
 /* ---- progress modal (download + upload, baud-limited) ---- */
@@ -424,7 +424,7 @@ function wifiPick(a,row){
 async function wifiDo(ssid,pass){
   document.querySelectorAll(".wform").forEach(f=>f.remove());
   $("#wstat").textContent=t("connecting",ssid);
-  try{ await fetch("/api/wifi/connect?ssid="+encodeURIComponent(ssid)+"&pass="+encodeURIComponent(pass)); }catch{}
+  try{ await fetch("/api/wifi/connect?ssid="+encodeURIComponent(ssid)+"&pass="+encodeURIComponent(pass),{method:"POST"}); }catch{}
   for(let i=0;i<12;i++){ await new Promise(r=>setTimeout(r,1000));
     try{ const s=await(await fetch("/api/wifi/status")).json();
       if(s.connected && s.ip){
@@ -437,7 +437,7 @@ async function wifiDo(ssid,pass){
   }
   $("#wstat").textContent=t("connFail",ssid);
 }
-async function wifiForget(){ if(!confirm(t("cfmForget")))return; try{ await fetch("/api/wifi/forget"); }catch{} wifiStatus(); }
+async function wifiForget(){ if(!confirm(t("cfmForget")))return; try{ await fetch("/api/wifi/forget",{method:"POST"}); }catch{} wifiStatus(); }
 
 /* block zoom (pinch/double-tap), including iOS which ignores user-scalable=no */
 ["gesturestart","gesturechange","gestureend"].forEach(ev=>document.addEventListener(ev,e=>e.preventDefault()));

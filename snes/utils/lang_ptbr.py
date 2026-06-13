@@ -23,6 +23,8 @@ TRANSLATIONS = {
     'mtext_cfg_scic': 'Opções SuperCIC',
     'mtext_cfg_patch': 'Opções de Patches',
     'mtext_patch_verify': 'Verificar Integridade (aprox. 23s)',
+    'mtext_cfg_wifi_en': 'Ativar WiFi',
+    'mdesc_cfg_wifi_en': 'Liga/desliga o companion WiFi (desligado: sem ponto de acesso, sem WebUI)',
     'mdesc_cfg_wifi': 'Conectar o sd2snes a uma rede WiFi',
     'wifi_s_scan': 'Procurando redes...',
     'wifi_s_nonet': 'Nenhuma rede encontrada.',

@@ -18,8 +18,11 @@
 #include "crc16.h"
 #include "timer.h"       /* getticks()/tick_t for the activity tracker */
 #include "lang.h"        /* lang_idx() - configured menu language for the WebUI */
+#include "cfg.h"         /* CFG.enable_wifi - WiFi master switch sent to the ESP */
 #include "esplink.h"
 #include "uart_proto.h"
+
+extern cfg_t CFG;
 
 #define UP_ACTIVE_TICKS 10   /* ~100ms @ HZ=100: "a transfer is flowing" window */
 
@@ -221,14 +224,14 @@ static void handle_frame(void) {
   }
 
   case UP_OP_GET_DATA: {
-    uint32_t off  = rd_u32(pl);
-    uint16_t want = (uint16_t)(pl[4] | (pl[5] << 8));
-    if (want > UP_CHUNK) want = UP_CHUNK;
-    if (up_fh_mode != 1) {
+    if (plen < 6 || up_fh_mode != 1) {       /* short frame or no read handle */
       resp[0] = FR_INVALID_OBJECT; resp[1] = 0; resp[2] = 0;
       build_frame(UP_TYPE_RESP | UP_TYPE_FINAL, op, seq, resp, 3);
       break;
     }
+    uint32_t off  = rd_u32(pl);
+    uint16_t want = (uint16_t)(pl[4] | (pl[5] << 8));
+    if (want > UP_CHUNK) want = UP_CHUNK;
     if (f_tell(&up_fh) != off) f_lseek(&up_fh, off);
     UINT got = 0;
     FRESULT r = f_read(&up_fh, resp + 3, want, &got);
@@ -253,6 +256,11 @@ static void handle_frame(void) {
     uint32_t off = rd_u32(pl);
     uint16_t len = (uint16_t)(pl[4] | (pl[5] << 8));
     uint8_t out3[3];
+    /* clamp the declared length to what was actually received (plen-6) so a
+       malformed/short frame can never make f_write read past pl[] (mirrors the
+       want>UP_CHUNK clamp in GET_DATA; plen<=256 keeps len<=250=UP_CHUNK) */
+    if (plen < 6) len = 0;
+    else if (len > (uint16_t)(plen - 6)) len = (uint16_t)(plen - 6);
     if (up_fh_mode != 2) {
       out3[0] = FR_INVALID_OBJECT;
     } else {
@@ -281,7 +289,9 @@ static void handle_frame(void) {
   case UP_OP_MV: {
     /* payload: from\0 to\0 */
     const char *from = (const char *)pl;
-    const char *to   = from + strlen(from) + 1;
+    size_t fl = strlen(from);
+    if (fl + 1 >= plen) { reply_status(op, seq, FR_INVALID_NAME); break; }  /* no 2nd path */
+    const char *to = from + fl + 1;
     reply_status(op, seq, (uint8_t)f_rename((TCHAR *)from, (TCHAR *)to));
     break;
   }
@@ -297,8 +307,12 @@ static void handle_frame(void) {
     break;
 
   case UP_OP_WIFI_POLL: {
-    /* hand the queued menu request to the ESP (delivered once, then cleared) */
+    /* resp: u8 enabled, u8 action, [ssid\0 pass\0 if action==connect].
+       enabled is the menu's EnableWifi - a *persistent* flag re-sent every poll so
+       the ESP keeps its radio on/off; action is the one-shot queued request
+       (delivered once, then cleared). */
     uint16_t n = 0;
+    resp[n++] = CFG.enable_wifi ? 1 : 0;
     resp[n++] = wifi_pending;
     if (wifi_pending == UP_WIFI_CONNECT) {
       n += copy_str((char *)resp + n, wifi_req_ssid, UP_WIFI_SSID_MAX); resp[n++] = 0;
@@ -311,11 +325,13 @@ static void handle_frame(void) {
 
   case UP_OP_WIFI_REPORT: {
     /* pl: u8 connected, i8 rssi, ssid\0, ip\0 */
+    if (plen < 2) { reply_status(op, seq, 0); break; }   /* too short: ignore */
     ws.connected = pl[0];
     ws.rssi = (int8_t)pl[1];
     const char *s = (const char *)(pl + 2);
     copy_str(ws.ssid, s, UP_WIFI_SSID_MAX);
-    const char *ip = s + strlen(s) + 1;
+    const char *ip = s + strlen(s);
+    if (ip < (const char *)pl + plen) ip++;   /* skip the NUL only if still in payload */
     copy_str(ws.ip, ip, (int)sizeof(ws.ip) - 1);
     reply_status(op, seq, 0);
     break;
