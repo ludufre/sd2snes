@@ -140,7 +140,7 @@ int write_sysinfo(int sd_measured) {
   if(sysclk == -1)
     len = snprintf(linebuf, sizeof(linebuf), sysinfo_msg[lang_idx()][SI_SNES_CLK_MEASURING]);
   else
-    len = snprintf(linebuf, sizeof(linebuf), sysinfo_msg[lang_idx()][SI_SNES_CLK], get_snes_sysclk());
+    len = snprintf(linebuf, sizeof(linebuf), sysinfo_msg[lang_idx()][SI_SNES_CLK], sysclk);
   memset(linebuf+len, 0x20, 40-len);
   sram_writeblock(linebuf, sram_addr, 40);
   sram_addr += 40;
