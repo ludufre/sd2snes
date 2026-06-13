@@ -66,7 +66,6 @@ fileselloop_redraw
   jsr filesel_redraw
   jsr filesel_cleanup ; update phase 2
   bra fileselloop
-  rts
 
 filesel_cleanup:
   sep #$20 : .as
@@ -1942,7 +1941,6 @@ select_last_file:
 select_last_redraw:               ; redraw after a remove: if now empty, just close
   lda @ST_NUM_RECENT_GAMES
   sta num_recent_games
-  stz recent_sel
   bne +
   jmp select_last_file_out
 + lda #^text_last
@@ -2027,7 +2025,7 @@ select_last_file_play:
   sep #$20 : .as
   lda #CMD_LOADLAST
   jsr game_handshake
-  bra select_favorite_file_done
+  bra select_last_file_done
 select_last_file_context_menu:
   jsr cover_menu_off         ; hide the floating box-art cover so it doesn't
                              ; float over the context / cheat windows (it
