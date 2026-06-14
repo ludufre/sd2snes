@@ -28,6 +28,9 @@ Necesitas:
 > [!NOTE]
 > Este proyecto no incluye juegos/ROMs. Usa tus propios archivos obtenidos legalmente.
 
+> [!IMPORTANT]
+> **Hardware Mk.II:** el sd2snes original (Mk.II) tiene poca memoria de programa en el MCU, y este firmware ya está cerca de ese límite. Algunas funciones futuras podrían quedar **solo en Mk.III / FXPAK PRO** (o desactivadas en Mk.II) por falta de espacio. El Mk.III / FXPAK PRO no se ve afectado, y todo en esta versión funciona en ambos.
+
 ## Qué añade este fork
 
 - **Idiomas:** elige Portugués de Brasil, Inglés, Español o Alemán directamente desde el menú.
