@@ -191,6 +191,7 @@ last_win_y      .byt 12
 last_win_w      .byt 60
 
 text_ellipse                      .byt 127, 128, 0
+text_empty                        .byt 0                 ; empty string -> draw_window draws no title
 text_mm_file                      .byt "File Browser", 0
 text_mm_last                      .byt "Recent Games", 0
 text_mm_favorites                 .byt "Favorite Games", 0
