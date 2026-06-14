@@ -28,9 +28,13 @@ You need:
 > [!NOTE]
 > This project does not include games/ROMs. Use your own legally obtained files.
 
+> [!IMPORTANT]
+> **Mk.II hardware:** the original sd2snes (Mk.II) has limited MCU program flash, and this firmware is already close to that limit. Some future features may end up **Mk.III / FXPAK PRO only** (or disabled on Mk.II) simply for lack of space. Mk.III / FXPAK PRO is unaffected, and everything in the current release works on both.
+
 ## What This Fork Adds
 
 - **Languages:** choose Brazilian Portuguese, English, Spanish or German directly in the menu.
+- **Option descriptions:** a short, translated help line for the selected menu option, shown in a floating box (auto-placed above or below the menu).
 - **Game covers:** show each game's box art while browsing your ROM list.
 - **Menu music:** play an `.spc` track in the background while browsing.
 - **Menu sounds:** optional navigation sound effects (cursor, confirm, back, error) that play on the cartridge's audio DAC, independent of the music.
@@ -150,6 +154,8 @@ Good places to find `.spc` files:
 - [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — has an MP3 preview for each track, so you can listen before downloading.
 
 Turn the music on or off in **Configuration → Browser Settings → Menu music**.
+
+You can also choose the music **without renaming anything**: highlight any **`.spc`** in the file browser, press **Y** for the context menu and choose **Set as menu music**. The menu reloads with that track as the new background music and remembers it across reboots; `/sd2snes/menu.spc` stays as the fallback. To go back to it, use **Configuration → Browser Settings → Restore music**.
 
 > [!TIP]
 > Some soundtracks are downloaded as `.rsn` files. An `.rsn` is usually an archive that contains several `.spc` files. Extract it and choose one `.spc` from inside.

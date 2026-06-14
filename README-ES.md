@@ -28,9 +28,13 @@ Necesitas:
 > [!NOTE]
 > Este proyecto no incluye juegos/ROMs. Usa tus propios archivos obtenidos legalmente.
 
+> [!IMPORTANT]
+> **Hardware Mk.II:** el sd2snes original (Mk.II) tiene poca memoria de programa en el MCU, y este firmware ya está cerca de ese límite. Algunas funciones futuras podrían quedar **solo en Mk.III / FXPAK PRO** (o desactivadas en Mk.II) por falta de espacio. El Mk.III / FXPAK PRO no se ve afectado, y todo en esta versión funciona en ambos.
+
 ## Qué añade este fork
 
 - **Idiomas:** elige Portugués de Brasil, Inglés, Español o Alemán directamente desde el menú.
+- **Descripciones de opciones:** una breve línea de ayuda traducida para la opción de menú seleccionada, en un cuadro flotante (colocado encima o debajo del menú automáticamente).
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
 - **Música en el menú:** reproduce una pista `.spc` de fondo mientras navegas.
 - **Sonidos del menú:** efectos de sonido de navegación opcionales (cursor, confirmar, volver, error) que suenan en el DAC de audio del cartucho, independientes de la música.
@@ -150,6 +154,8 @@ Buenos lugares para encontrar archivos `.spc`:
 - [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — tiene una vista previa en MP3 de cada pista, así que puedes escuchar antes de descargar.
 
 Puedes activar o desactivar la música en **Configuración → Opciones del Navegador → Música del menú**.
+
+También puedes elegir la música **sin renombrar nada**: selecciona cualquier **`.spc`** en el navegador de archivos, pulsa **Y** para el menú contextual y elige **Definir como música del menú**. El menú se recarga con esa pista como nueva música de fondo y la recuerda entre reinicios; `/sd2snes/menu.spc` queda como reserva. Para volver a él, usa **Configuración → Opciones del Navegador → Restaurar música**.
 
 > [!TIP]
 > Algunas bandas sonoras vienen como archivos `.rsn`. Un `.rsn` suele ser un archivo comprimido con varios `.spc` dentro. Extrae el `.rsn` y elige uno de los archivos `.spc`.

@@ -38,7 +38,7 @@ extern char current_filename[];
 #define SRAM_SAVE_ADDR               (0xE00000L)
 
 #define SRAM_MENU_ADDR               (0xC00000L)
-#define SRAM_DIR_ADDR                (0xC10000L)
+#define SRAM_DIR_ADDR                (0xC20000L)
 #define SRAM_DB_ADDR                 (0xC80000L)
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 
@@ -65,6 +65,12 @@ extern char current_filename[];
 #define SRAM_LASTGAME_ADDR           (0xFF1420L)
 #define SRAM_LASTGAME_DIR_ADDR       (0xFF1F00L)
 #define SRAM_FAVORITEGAMES_ADDR      (0xFF4000L)
+/* base ROM basename of the most recent game, for reset_to_menu==3 (Rom) pre-select.
+   Distinct from SRAM_LASTGAME_ADDR[0] (the recents *display* name, which for a
+   patch-aware "<rom>\t<patch>" entry is the patch name and would never match a
+   TYPE_ROM entry in the folder). Lives in the free gap after FAVORITEGAMES
+   (10*256 = 0xA00 -> ends 0xFF49FF) and before IPS_LIST (0xFF5000). */
+#define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
 #define SRAM_SCRATCHPAD              (0xFFFF00L)
 #define SRAM_DIRID                   (0xFFFFF0L)

@@ -67,12 +67,14 @@
 #define SNES_CMD_DELETE_SRM_RECENT   (0x29) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete only the .srm (ROM stays in recents). */
 #define SNES_CMD_LOAD_CHT_RECENT     (0x2a) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_load. */
 #define SNES_CMD_SAVE_CHT_RECENT     (0x2b) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_save. */
-#define SNES_CMD_WIFI_SCAN           (0x2c) /* queue an AP scan on the ESP */
-#define SNES_CMD_WIFI_GET            (0x2d) /* write current status + scan list to SRAM */
-#define SNES_CMD_WIFI_CONNECT        (0x2e) /* connect using ssid/pass the menu wrote to SRAM */
-#define SNES_CMD_WIFI_FORGET         (0x2f) /* forget the saved network */
-#define SNES_CMD_SET_THEME           (0x30) /* selected .thm (any visible folder): get_selected_name -> store full path in CFG.skin_name, then reload menu */
-#define SNES_CMD_CLR_THEME           (0x31) /* clear the menu theme back to the baked default, then reload menu */
+#define SNES_CMD_SET_THEME           (0x2c) /* selected .thm (any visible folder): get_selected_name -> store full path in CFG.skin_name, then reload menu */
+#define SNES_CMD_CLR_THEME           (0x2d) /* clear the menu theme back to the baked default, then reload menu */
+#define SNES_CMD_SET_MENU_SPC        (0x2e) /* selected .spc (any visible folder): get_selected_name -> store full path in CFG.bgm_name, enable music, then reload menu (in-place restart black-screened; see main.c) */
+#define SNES_CMD_CLR_MENU_SPC        (0x2f) /* clear CFG.bgm_name -> revert menu BGM to the /sd2snes/menu.spc fallback */
+#define SNES_CMD_WIFI_SCAN           (0x30) /* queue an AP scan on the ESP */
+#define SNES_CMD_WIFI_GET            (0x31) /* write current status + scan list to SRAM */
+#define SNES_CMD_WIFI_CONNECT        (0x32) /* connect using ssid/pass the menu wrote to SRAM */
+#define SNES_CMD_WIFI_FORGET         (0x33) /* forget the saved network */
 
 /* WiFi SRAM block layout (base = SRAM_SYSINFO_ADDR; menu side = WIFI_BLK $FF1200) */
 #define WIFI_OFF_CONNECTED  0    /* u8  */

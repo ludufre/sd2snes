@@ -131,7 +131,6 @@ cheatmenu_have_data16:
   stz cm_tmp
   sep #$20 : .as
 
-cheatmenu_have_data:
 ; Description scroll state must start zeroed since WRAM contents are
 ; undefined at first entry to the menu.  Without this the scroll
 ; ticker sees garbage in cm_fits / cm_xscroll_state and starts every

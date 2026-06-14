@@ -32,7 +32,7 @@ extern uint8_t ips_pending_index;
  *   the ROM stem (case-insensitive).  Up to IPS_MAX_PATCHES entries are
  *   sorted alphabetically and written to SRAM at sram_addr:
  *
- *     [sram_addr + 0]                          1 byte  num_patches (0..7)
+ *     [sram_addr + 0]                          1 byte  num_patches (0..IPS_MAX_PATCHES)
  *     [sram_addr + 1 + N*IPS_NAME_LEN]        64 bytes display name (null-terminated)
  *     [sram_addr + 512 + N*IPS_PATH_LEN]     256 bytes full SD path  (null-terminated)
  *

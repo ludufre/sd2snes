@@ -1,6 +1,6 @@
 /* sd2snes - per-ROM cover preview (MCU side)
  *
- * Loads a sibling "<rom>.cov" (8bpp BG cover, .cov v3) from the SD card into
+ * Loads a sibling "<rom>.cov" (4bpp OBJ-sprite cover, .cov v4) from the SD card into
  * the bank-C9 staging area shared with the SNES menu. The MCU only validates
  * the header and STREAMS bytes; it never decodes images.
  *

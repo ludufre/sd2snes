@@ -6,6 +6,14 @@
 
 #define MENU_NUM_DATA_TYPES $07
 
+; ---- description box (mdesc_* of the selected menu item) ----
+; The box hugs the text: width = longest wrapped line + 4, aligned under the menu
+; (desc_box_x = menu window_x), wrapped at desc_iw = DESC_RIGHT - x - 3.
+#define DESC_RIGHT        $3d       ; rightmost usable column (61, edge of greyed area)
+#define DESC_TOPROW       $09       ; first usable row (just below the header)
+#define DESC_BOTROW       $1a       ; last usable row (26, above the blank row + status bar/clock)
+#define MAX_DESC_LINES    $06       ; cap on description lines (and box height)
+
 mainmenu:
   sep #$20 : .as
   rep #$10 : .xl
@@ -93,6 +101,33 @@ filesel_contextmenu_spc:
     pha
     plb
     ldx #!menu_enttab_filesel_context_spc
+    jsr show_menu
+  plb
+  jsr pop_window
+  rts
+
+filesel_contextmenu_skin:
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$02
+  sta window_x
+  lda #$09
+  sta window_y
+  lda #60
+  sta window_w
+  lda #18
+  sta window_h
+  jsr push_window
+  jsr window_greyout
+  lda #$06
+  sta window_x
+  lda #$0b
+  sta window_y
+  phb
+    lda #^menu_enttab_filesel_context_skin
+    pha
+    plb
+    ldx #!menu_enttab_filesel_context_skin
     jsr show_menu
   plb
   jsr pop_window
@@ -241,6 +276,7 @@ menu_select_up
   sec
   sbc listsel_step
   sta bar_yl
+  jsr menu_desc_redraw       ; update the description (self-gated; no-op off-menu)
   bra menu_select_loop1
 menu_select_down
   lda listsel_sel
@@ -253,6 +289,7 @@ menu_select_down
   clc
   adc listsel_step
   sta bar_yl
+  jsr menu_desc_redraw       ; update the description (self-gated; no-op off-menu)
   bra menu_select_loop1
 menu_select_button_a ; always allow button a
   jsr snd_fx_confirm
@@ -275,6 +312,526 @@ menu_select_button_b ; cancel
   sta listsel_pickbutton
 menu_select_exit
   plp
+  rts
+
+
+;==================================================================
+; Description box: show the mdesc_* of the currently selected item
+; in a borderless-title window one row below the menu window. The
+; box auto-sizes to the word-wrapped text and is clamped to the
+; space left below the menu (truncated with an ellipsis if needed).
+;
+; Lifecycle is tied LIFO around the menu window (its own push/pop):
+;   show_menu: draw_window(menu) -> menu_desc_setup (push+draw)
+;   Up/Down  : menu_desc_redraw  (pop -> push+draw)   [gated]
+;   A->child : menu_desc_erase (pop) ... child ... menu_desc_setup
+;   B (exit) : menu_desc_erase (pop) -> pop_window(menu)
+; menu_desc_on is 0 for callers of menu_select that do NOT go through
+; show_menu (file browser, patch selector) -> they never draw a box.
+;==================================================================
+
+;------------------------------------------------------------------
+; menu_desc_setup: X = menu struct addr, A = menu struct bank (8-bit).
+; Remember the menu base, compute the box geometry from the current
+; menu window (window_y/window_h), set menu_desc_on and draw the box
+; for the current selection. Entry .as/.xl. (A/X/Y not preserved; the
+; menu loop reloads them. DP unchanged: menu_desc_draw saves/restores.)
+;------------------------------------------------------------------
+menu_desc_setup:
+  php
+  sta @desc_menu_ptr+2        ; bank (DBR low-RAM mirror -> WRAM)
+  phx
+  rep #$20 : .al
+  pla                        ; X (addr)
+  sta @desc_menu_ptr
+  sep #$20 : .as
+  jsr menu_desc_compute      ; -> desc_box_y, desc_lmax, menu_desc_on
+  lda @menu_desc_on
+  bne +
+  stz !menu_desc_shown       ; no room -> nothing on screen / pushed
+  plp
+  rts
++ jsr menu_desc_draw
+  plp
+  rts
+
+;------------------------------------------------------------------
+; menu_desc_compute: measure the menu window and the free rows above/below it.
+; Sets desc_box_x, desc_iw, desc_menu_top/bot, desc_avail_above/below, desc_lmax
+; and menu_desc_on (0 when neither side has >= 3 rows). The actual top row is chosen
+; later in menu_desc_draw (below if the box fits, else above). Entry/exit .as.
+;------------------------------------------------------------------
+menu_desc_compute:
+  php
+  sep #$20 : .as
+  lda @window_x              ; align the box under the menu
+  sta @desc_box_x
+  lda #DESC_RIGHT            ; interior wrap width for this x position
+  sec
+  sbc @window_x
+  sec
+  sbc #$03
+  sta @desc_iw
+  stz !desc_iw+1
+; menu top / bottom rows
+  lda @window_y
+  sta @desc_menu_top
+  clc
+  adc @window_h
+  dec                        ; menu_bottom = window_y + window_h - 1
+  sta @desc_menu_bot
+; rows free below (menu_bot+1 .. DESC_BOTROW) and above (DESC_TOPROW .. menu_top-1)
+  lda #DESC_BOTROW
+  sec
+  sbc @desc_menu_bot         ; DESC_BOTROW - menu_bot
+  bcs +
+  lda #$00                   ; menu past the bottom -> none below
++ sta @desc_avail_below
+  lda @desc_menu_top
+  sec
+  sbc #DESC_TOPROW           ; menu_top - DESC_TOPROW
+  bcs +
+  lda #$00
++ sta @desc_avail_above
+; lmax = max(below, above) - 2 ; menu_desc_on if that max >= 3
+  lda @desc_avail_below
+  cmp @desc_avail_above
+  bcs +
+  lda @desc_avail_above
++ cmp #$03
+  bcc mdc_off
+  sec
+  sbc #$02
+  cmp #MAX_DESC_LINES+1
+  bcc +
+  lda #MAX_DESC_LINES        ; clamp
++ sta @desc_lmax
+  lda #$01
+  sta @menu_desc_on
+  plp
+  rts
+mdc_off:
+  stz !menu_desc_on
+  plp
+  rts
+
+;------------------------------------------------------------------
+; menu_desc_erase: remove the description box (restore the greyed
+; backdrop). Preserves A (the selection result at the choke point)
+; and all other state.
+;------------------------------------------------------------------
+menu_desc_erase:
+  php
+  sep #$20 : .as
+  pha
+  lda @menu_desc_shown
+  beq mde_done
+  lda @listsel_sel           ; pop_window restores list state from the popped
+  pha                        ; element; preserve the live selection across the
+  lda @listsel_step          ; backdrop-only pop of the description box
+  pha
+  lda @listsel_max
+  pha
+  lda @desc_box_h            ; pop_window uses the global window_h as its BG1 row
+  sta @window_h              ; counter -> match the popped box height (not the menu's)
+  jsr pop_window
+  pla
+  sta @listsel_max
+  pla
+  sta @listsel_step
+  pla
+  sta @listsel_sel
+  stz !menu_desc_shown
+mde_done:
+  pla
+  plp
+  rts
+
+;------------------------------------------------------------------
+; menu_desc_redraw: erase + draw, for an in-loop selection change.
+; Self-gated on menu_desc_on (0 for non-menu lists -> no-op). Preserves
+; P; clobbers A/X/Y (the menu loop reloads them).
+;------------------------------------------------------------------
+menu_desc_redraw:
+  php
+  sep #$20 : .as
+  lda @menu_desc_on
+  beq mdr_skip
+  jsr menu_desc_erase
+  jsr menu_desc_draw
+mdr_skip:
+  plp
+  rts
+
+;------------------------------------------------------------------
+; menu_desc_draw: draw the box for the current selection (listsel_sel)
+; using the menu base in desc_menu_ptr. Reads the mdesc long pointer
+; at offset listsel_sel*MENU_ENTRY_SIZE + 15 (header 4 + desc +11).
+; A null pointer -> no box. Preserves P and DP; sets DP=0 internally.
+;------------------------------------------------------------------
+menu_desc_draw:
+  php
+  phd
+  sep #$20 : .as
+  lda @menu_desc_on
+  bne +
+  pld
+  plp
+  rts
++ rep #$30 : .al : .xl
+  pea $0000
+  pld                        ; DP=0 for [desc_ptr]/[desc_menu_ptr]
+; --- locate the mdesc long pointer for the selected entry ---
+  sep #$20 : .as
+  lda @listsel_sel
+  sta $211b
+  stz $211b
+  lda #MENU_ENTRY_SIZE
+  sta $211c
+  rep #$20 : .al
+  lda $2134                  ; listsel_sel * MENU_ENTRY_SIZE
+  clc
+  adc #$000f                 ; + 15 -> desc field of that entry
+  tay
+  lda [desc_menu_ptr],y      ; mdesc address
+  sta @print_src
+  bne mdd_have
+; null pointer -> no description for this item
+  sep #$20 : .as
+  stz !menu_desc_shown
+  jmp mdd_exit
+mdd_have:
+  iny
+  iny
+  sep #$20 : .as
+  lda [desc_menu_ptr],y      ; mdesc bank
+  sta @print_bank
+  jsr resolve_str            ; localize (no-op for current mdesc_*)
+  rep #$20 : .al
+  lda @print_src
+  sta @desc_ptr
+  sep #$20 : .as
+  lda @print_bank
+  sta @desc_ptr+2
+; --- word-wrap into the line table (single pass) ---
+  stz !nlines
+  stz !desc_trunc
+  rep #$20 : .al
+  stz !dl_idx
+  stz !desc_maxllen          ; track the longest line -> box hugs the text
+mdd_wrap:
+  sep #$20 : .as
+  lda @nlines
+  cmp @desc_lmax
+  bcs mdd_wrap_cap           ; reached the line cap
+  rep #$30 : .al : .xl
+  jsr desc_next_line         ; -> dl_start, dl_llen, dl_idx, dl_eos
+  sep #$20 : .as
+  lda @nlines
+  rep #$30 : .al : .xl
+  and #$00ff
+  asl
+  tax
+  lda @dl_start
+  sta @desc_ln_start,x
+  lda @dl_llen
+  sta @desc_ln_len,x
+  cmp @desc_maxllen          ; keep the longest line (A still = dl_llen)
+  bcc mdw_skipmax
+  sta @desc_maxllen
+mdw_skipmax:
+  sep #$20 : .as
+  inc !nlines
+  rep #$20 : .al
+  lda @dl_eos
+  beq mdd_wrap               ; more text -> next line
+  bra mdd_wrap_done          ; end of string
+mdd_wrap_cap:
+  rep #$20 : .al
+  lda @dl_eos                ; did the last stored line end the string?
+  bne mdd_wrap_done
+  sep #$20 : .as
+  lda #$01
+  sta @desc_trunc            ; more text remains -> truncate last line
+mdd_wrap_done:
+  sep #$20 : .as
+; box height = wrapped lines + 2 borders
+  lda @nlines
+  clc
+  adc #$02
+  sta @desc_box_h
+; --- choose vertical placement: below the menu if it fits, else above it ---
+  cmp @desc_avail_below      ; box_h <= rows free below ?
+  beq mdd_below
+  bcc mdd_below
+; place ABOVE (box_h <= avail_above guaranteed: lmax capped to max(above,below))
+  lda @desc_avail_above
+  cmp @desc_box_h
+  beq mdd_above_nogap        ; exact fit -> no gap row
+  lda @desc_menu_top         ; with a 1-row gap above the menu
+  sec
+  sbc @desc_box_h
+  dec
+  bra mdd_yset
+mdd_above_nogap:
+  lda @desc_menu_top
+  sec
+  sbc @desc_box_h
+  bra mdd_yset
+mdd_below:
+  lda @desc_avail_below
+  cmp @desc_box_h
+  beq mdd_below_nogap        ; exact fit -> no gap row
+  lda @desc_menu_bot         ; with a 1-row gap below the menu
+  clc
+  adc #$02
+  bra mdd_yset
+mdd_below_nogap:
+  lda @desc_menu_bot
+  inc
+mdd_yset:
+  sta @desc_box_y
+; --- save the menu geometry, set the description box geometry ---
+  lda @window_x
+  sta @desc_save_xy
+  lda @window_y
+  sta @desc_save_xy+1
+  lda @window_w
+  sta @desc_save_wh
+  lda @window_h
+  sta @desc_save_wh+1
+  lda @desc_box_x            ; align under the menu
+  sta @window_x
+  lda @desc_box_y
+  sta @window_y
+  lda @desc_maxllen          ; width hugs the longest line (+ 2 borders + 2 pad)
+  clc
+  adc #$04
+  sta @window_w
+  lda @desc_box_h            ; box height (lines + 2 borders)
+  sta @window_h
+  lda #^text_empty           ; empty title -> plain box
+  sta @window_tbank
+  rep #$20 : .al
+  lda #!text_empty
+  sta @window_taddr
+  sep #$20 : .as
+  jsr push_window            ; save the backdrop under the box footprint
+  jsr draw_window
+  jsr window_greyout         ; recolor the box to the dimmed palette (border + bg)
+; --- render the wrapped lines ---
+  stz !desc_li
+mdd_render:
+  lda @desc_li
+  cmp @nlines
+  bcs mdd_render_done
+  rep #$30 : .al : .xl
+  lda @desc_li
+  and #$00ff
+  asl
+  tax
+  lda @desc_ln_start,x
+  sta @dl_start
+  lda @desc_ln_len,x
+  sta @dl_llen
+  sep #$20 : .as
+  lda @desc_li
+  inc
+  cmp @nlines                ; last line?
+  bne mdd_render_plain
+  lda @desc_trunc
+  beq mdd_render_plain
+  jsr desc_render_trunc
+  bra mdd_render_next
+mdd_render_plain:
+  jsr desc_render_line
+mdd_render_next:
+  sep #$20 : .as
+  inc !desc_li
+  bra mdd_render
+mdd_render_done:
+; --- restore the menu geometry ---
+  sep #$20 : .as
+  lda @desc_save_xy
+  sta @window_x
+  lda @desc_save_xy+1
+  sta @window_y
+  lda @desc_save_wh
+  sta @window_w
+  lda @desc_save_wh+1
+  sta @window_h
+  lda #$01
+  sta @menu_desc_shown
+mdd_exit:
+  pld                        ; restore caller DP
+  plp
+  rts
+
+;------------------------------------------------------------------
+; desc_next_line: scan one wrapped line starting at dl_idx using the
+; string at [desc_ptr]. Width = DESC_IW. Greedy break on space; a word
+; longer than the width is hard-broken. Entry/exit .al/.xl, DP=0.
+; out: dl_start, dl_llen, dl_idx (next start), dl_eos (1 at end).
+;------------------------------------------------------------------
+desc_next_line:
+  .al : .xl                  ; caller enters in 16-bit A/X/Y (no rep emitted)
+  lda @dl_idx
+  sta @dl_start
+  tay                        ; Y = read index
+  ldx #$0000                 ; X = chars on this line
+  lda #$ffff
+  sta @dl_lastsp             ; no space seen yet
+dnl_loop:
+  sep #$20 : .as
+  lda [desc_ptr],y
+  rep #$20 : .al
+  and #$00ff
+  cmp #$0002
+  bcc dnl_eos                ; char < 2 -> end of string
+  cpx !desc_iw
+  bcs dnl_full               ; line already full -> must break here
+  cmp #$0020
+  bne +
+  sty !dl_lastsp             ; remember this space
++ inx
+  iny
+  bra dnl_loop
+dnl_full:
+  cmp #$0020
+  bne dnl_full_nospace
+; boundary char is a space -> clean break of exactly DESC_IW chars
+  tya
+  sec
+  sbc @dl_start
+  sta @dl_llen
+  iny                        ; skip the space
+  sty !dl_idx
+  stz !dl_eos
+  rts
+dnl_full_nospace:
+  lda @dl_lastsp
+  cmp #$ffff
+  beq dnl_hard
+  sec
+  sbc @dl_start
+  sta @dl_llen               ; break at the last space
+  lda @dl_lastsp
+  inc
+  sta @dl_idx
+  stz !dl_eos
+  rts
+dnl_hard:
+  lda @desc_iw
+  sta @dl_llen               ; hard break at the width
+  lda @dl_start
+  clc
+  adc @desc_iw
+  sta @dl_idx
+  stz !dl_eos
+  rts
+dnl_eos:
+  tya
+  sec
+  sbc @dl_start
+  sta @dl_llen
+  sty !dl_idx
+  lda #$0001
+  sta @dl_eos
+  rts
+
+;------------------------------------------------------------------
+; desc_render_line: hiprint the substring dl_start..+dl_llen of the
+; description on row desc_box_y+1+desc_li. Entry .as, DP=0.
+;------------------------------------------------------------------
+desc_render_line:
+  rep #$20 : .al
+  lda @desc_ptr
+  clc
+  adc @dl_start
+  sta @print_src
+  sep #$20 : .as
+  lda @desc_ptr+2
+  sta @print_bank
+  lda @desc_box_x            ; text starts at box left + 2 (border + pad)
+  clc
+  adc #$02
+  sta @print_x
+  stz !print_x+1
+  lda @desc_box_y
+  clc
+  adc #$01
+  adc @desc_li
+  sta @print_y
+  stz !print_y+1
+  rep #$20 : .al
+  lda @dl_llen
+  sta @print_count
+  stz !print_pal
+  sep #$20 : .as
+  jsr hiprint
+  rts
+
+;------------------------------------------------------------------
+; desc_render_trunc: build "<first chars>" + ellipse into stringbuf
+; and hiprint it on the last line. Entry .as, DP=0.
+;------------------------------------------------------------------
+desc_render_trunc:
+  rep #$30 : .al : .xl
+  lda @desc_maxllen          ; cap = box interior - 2 (room for the ellipsis)
+  sec
+  sbc #$0002
+  sta @dl_lastsp
+  lda @dl_llen
+  cmp @dl_lastsp
+  bcc mdrt_ncap              ; dl_llen < cap -> keep it
+  lda @dl_lastsp             ; else clamp to cap
+mdrt_ncap:
+  sta @dl_lastsp             ; n = capped length (reuse as counter)
+  ldy !dl_start
+  ldx #$0000
+mdrt_copy:
+  lda @dl_lastsp
+  beq mdrt_copydone
+  sep #$20 : .as
+  lda [desc_ptr],y
+  sta @stringbuf,x
+  rep #$30 : .al : .xl
+  iny
+  inx
+  dec !dl_lastsp
+  bra mdrt_copy
+mdrt_copydone:
+  sep #$20 : .as
+  lda #$7f
+  sta @stringbuf,x           ; ellipsis (two tiles: 127, 128)
+  inx
+  lda #$80
+  sta @stringbuf,x
+  inx
+  stz !stringbuf,x           ; NUL terminator
+  rep #$20 : .al
+  lda #!stringbuf
+  sta @print_src
+  sep #$20 : .as
+  lda #^stringbuf
+  sta @print_bank
+  lda @desc_box_x            ; text starts at box left + 2 (border + pad)
+  clc
+  adc #$02
+  sta @print_x
+  stz !print_x+1
+  lda @desc_box_y
+  clc
+  adc #$01
+  adc @desc_li
+  sta @print_y
+  stz !print_y+1
+  rep #$20 : .al
+  lda @desc_maxllen          ; box interior (hiprint still stops at the NUL)
+  sta @print_count
+  stz !print_pal
+  sep #$20 : .as
+  jsr hiprint
   rts
 
 
@@ -353,9 +910,15 @@ show_menu:
     sta menu_drawn_lang
     lda w_numentries
     sta listsel_max
+    sep #$20 : rep #$10 : .as : .xl   ; draw the description for the initial selection
+    ldx w_menu_addr
+    lda w_menu_bank
+    jsr menu_desc_setup
 show_menu_loop:
     stz listsel_pickbutton
     jsr menu_select_noinit
+    jsr menu_desc_erase           ; hide the box before acting (preserves A=selection)
+    stz menu_desc_on              ; off during nested screens; re-armed by cont_reprint
     cmp #$ff
     beq show_menu_out
     sta $211b
@@ -395,6 +958,10 @@ show_menu_cont:
     jmp show_menu_out
 show_menu_cont_reprint:
     jsr show_menu_entries
+    sep #$20 : rep #$10 : .as : .xl   ; re-arm + redraw the description for this level
+    ldx w_menu_addr
+    lda w_menu_bank
+    jsr menu_desc_setup
     jmp show_menu_loop
 show_menu_out:
     sep #$20 : .as

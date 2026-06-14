@@ -28,9 +28,13 @@ Du brauchst:
 > [!NOTE]
 > Dieses Projekt enthält keine Spiele/ROMs. Verwende deine eigenen legal erworbenen Dateien.
 
+> [!IMPORTANT]
+> **Mk.II-Hardware:** Das originale sd2snes (Mk.II) hat wenig Programmspeicher im MCU, und diese Firmware ist bereits nahe an diesem Limit. Manche zukünftigen Funktionen könnten **nur auf Mk.III / FXPAK PRO** verfügbar sein (oder auf Mk.II deaktiviert) – schlicht aus Platzmangel. Mk.III / FXPAK PRO ist nicht betroffen, und alles in der aktuellen Version funktioniert auf beiden.
+
 ## Was dieser Fork ergänzt
 
 - **Sprachen:** Wähle Brasilianisches Portugiesisch, Englisch, Spanisch oder Deutsch direkt im Menü.
+- **Optionsbeschreibungen:** eine kurze, übersetzte Hilfezeile für die ausgewählte Menüoption, in einem schwebenden Fenster (automatisch über oder unter dem Menü platziert).
 - **Spielecover:** Zeige das Cover jedes Spiels beim Durchsuchen deiner ROM-Liste.
 - **Menümusik:** Spiele einen `.spc`-Titel im Hintergrund ab, während du im Menü navigierst.
 - **Menü-Sounds:** optionale Navigations-Soundeffekte (Cursor, Bestätigen, Zurück, Fehler), die über den Audio-DAC des Moduls abgespielt werden, unabhängig von der Musik.
@@ -150,6 +154,8 @@ Gute Orte, um `.spc`-Dateien zu finden:
 - [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) - mit einer MP3-Vorschau für jeden Titel, sodass du vor dem Herunterladen reinhören kannst.
 
 Du kannst die Musik unter **Einstellungen → Browser-Optionen → Menue-Musik** ein- oder ausschalten.
+
+Du kannst die Musik auch **ohne Umbenennen** wählen: Markiere im Dateibrowser eine beliebige **`.spc`**, drücke **Y** für das Kontextmenü und wähle **Als Menuemusik setzen**. Das Menü lädt mit diesem Titel als neuer Hintergrundmusik neu und merkt sie sich über Neustarts hinweg; `/sd2snes/menu.spc` bleibt als Reserve. Um dorthin zurückzukehren, nutze **Einstellungen → Browser-Optionen → Musik zuruecksetzen**.
 
 > [!TIP]
 > Manche Soundtracks werden als `.rsn`-Dateien heruntergeladen. Eine `.rsn` ist normalerweise ein Archiv mit mehreren `.spc`-Dateien. Entpacke sie und wähle eine `.spc` daraus.

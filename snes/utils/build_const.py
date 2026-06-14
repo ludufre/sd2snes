@@ -172,14 +172,13 @@ def main():
     langs = [(lang_code(p), load_dict(p)) for p in lang_paths]
     out_path = Path(sys.argv[sys.argv.index("-o") + 1])
 
-    # Item descriptions (mdesc_*) are not rendered by the current menu (no menu
-    # entry offset-11 read exists), so we do NOT expand them into multilingual
-    # dispatch tables -- they stay as their single English base string. This
-    # keeps the menu inside one 64K ROM bank. (Their translated text
-    # still lives in lang_*.py; drop this skip if descriptions become rendered.)
-    SKIP_PREFIXES = ("mdesc_",)
+    # Item descriptions (mdesc_*) ARE rendered now (the menu draws the selected
+    # entry's description), so they get localized too. The localized string pool
+    # + dispatch tables are emitted into a SEPARATE bank ($C1, see below) so the
+    # menu spans banks $C0-$C1 (m3nu.bin grows to 128K) instead of overflowing.
+    SKIP_PREFIXES = ()
     localized = {k for _, d in langs for k in d
-                 if not k.startswith(SKIP_PREFIXES)}
+                 if not (SKIP_PREFIXES and k.startswith(SKIP_PREFIXES))}
     lines, en_args = parse_base(base)
 
     out, order = [], []
@@ -212,7 +211,13 @@ def main():
     #                   max_value + 7 must fit the 64-tile screen (menu.a65
     #                   menu_open) -> keep labels <= 40
     #   default         hiprint row budget (print_count = 56)
-    WIDTH_LIMITS = (("text_no_", 22), ("cheat_tab_head", 48), ("mtext_", 40))
+    #   mdesc_          word-wrapped across several lines by the description box;
+    #                   the runtime truncates with an ellipsis, so this is just a
+    #                   sanity cap to keep a translation from bloating the ROM.
+    #   text_err_*      show_error_msg box: window_w=28 -> interior ~26
+    #                   (game-load error popup, filesel.a65)
+    WIDTH_LIMITS = (("text_no_", 22), ("cheat_tab_head", 48), ("mtext_", 40),
+                    ("mdesc_", 160), ("text_err_", 26))
     WIDTH_DEFAULT = 56
 
     def encoded_len(text):
@@ -282,9 +287,14 @@ def main():
         for label, args in plaindefs:
             out.append(f"{label} .byt {args}")
 
-    out += ["", "; ==== interned language string pool (deduplicated) ===="]
+    # The interned pool + dispatch tables live in a SEPARATE bank ($C1) so the
+    # menu can grow past one 64K bank. resolve_str reads every pooled string with
+    # bank ^strtab_lo, and menudata reaches each dispatch table via ^label, so the
+    # bank split is transparent to the menu. Output -> <out>_str.a65, linked at $C1.
+    strout = [".link page $c1", "",
+              "; ==== interned language string pool (deduplicated) ===="]
     for args in pool_order:
-        out.append(f"{pool[args]} .byt {args}")
+        strout.append(f"{pool[args]} .byt {args}")
 
     # Number of language COLUMNS actually present. Trailing columns whose every
     # entry just repeats English (e.g. an unfilled scaffold) are dropped
@@ -300,21 +310,24 @@ def main():
         if any(differs(d.get(l), l) for l in order):
             nlang = idx + 1
 
-    out += ["", f"; ==== dispatch tables: resolve_str range [strtab_lo, strtab_hi) ===="]
+    strout += ["", f"; ==== dispatch tables: resolve_str range [strtab_lo, strtab_hi) ===="]
     lang_names = ", ".join(["EN"] + [code for code, _ in langs])
-    out += [f"; each table = {nlang} x 16-bit address ({lang_names})[:{nlang}]; NO bank byte:",
-            "; every pooled string lives in the same bank as strtab_lo, so resolve_str",
-            "; uses ^strtab_lo as the bank for all of them. cur_lang >= strtab_nlang -> EN."]
-    out.append(f"strtab_nlang .byt {nlang}")
-    out.append("strtab_lo")
+    strout += [f"; each table = {nlang} x 16-bit address ({lang_names})[:{nlang}]; NO bank byte:",
+               "; every pooled string lives in the same bank as strtab_lo, so resolve_str",
+               "; uses ^strtab_lo as the bank for all of them. cur_lang >= strtab_nlang -> EN."]
+    strout.append(f"strtab_nlang .byt {nlang}")
+    strout.append("strtab_lo")
     for label, labels in tabledefs:
         cols = labels[:nlang]
         # `label .word ...` (no colon) matches the proven `label .byt ...` style.
-        out.append(f"{label} " + " : ".join(f".word !{c}" for c in cols))
-    out.append("strtab_hi")
+        strout.append(f"{label} " + " : ".join(f".word !{c}" for c in cols))
+    strout.append("strtab_hi")
 
     out_path.write_text("\n".join(out) + "\n")
-    print(f"generated {out_path}: {len(order)} localized labels, {nlang} language column(s)")
+    str_path = out_path.with_name(out_path.stem + "_str" + out_path.suffix)
+    str_path.write_text("\n".join(strout) + "\n")
+    print(f"generated {out_path} + {str_path}: {len(order)} localized labels "
+          f"({len(pool_order)} pooled strings in bank $C1), {nlang} language column(s)")
 
 
 if __name__ == "__main__":

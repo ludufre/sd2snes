@@ -41,8 +41,6 @@
 #include "cdcuser.h"
 #include "usbinterface.h"
 
-int i;
-
 int sd_offload = 0, ff_sd_offload = 0, sd_offload_tgt = 0;
 int sd_offload_partial = 0;
 int sd_offload_start_mid = 0;
@@ -187,7 +185,7 @@ uart_putc('\n');
   /* Hand the authoritative entry count back to the menu through the snescmd
      param region (BRAM-backed, reliable to read from the SNES immediately).
      The menu sets dirend_addr = n*4 from this instead of scanning the SDRAM dir
-     table at $C1 itself, which can read a stale/partial buffer in the short
+     table at $C2 (SRAM_DIR_ADDR) itself, which can read a stale/partial buffer in the short
      window right after this write -> bogus short dirend -> broken pagination. */
   snescmd_writeshort(n, SNESCMD_MCU_PARAM);
 }
@@ -457,6 +455,13 @@ int main(void) {
             cfg_add_listed_game(LAST_FILE, file_lfn, true);
           }
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
+          if(filesize) break; /* ROM loaded and SNES reset, exit menu loop */
+          /* load aborted (missing chip BIOS etc.): NACK so game_handshake_error
+             shows the message and returns to the browser; stay in the menu loop
+             (else the MCU drops into in-game mode while the SNES is still in menu). */
+          file_res = FR_OK;
+          snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          cmd=0;
           break;
         case SNES_CMD_QUERY_IPS_PATCHES: {
           uint8_t qpath[256];
@@ -527,10 +532,12 @@ int main(void) {
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_LOAD_MENU_SPC:
-          /* stage background menu music from a fixed path (no browser selection).
-             load_spc is graceful: a missing/too-small file zeroes the SPC header,
-             which the menu detects and skips. */
-          filesize = load_spc((uint8_t*)"/sd2snes/menu.spc", SRAM_SPC_DATA_ADDR, SRAM_SPC_HEADER_ADDR);
+          /* stage background menu music. Use the user-chosen .spc (CFG.bgm_name, a
+             full SD path set via SNES_CMD_SET_MENU_SPC) when present, otherwise fall
+             back to the fixed /sd2snes/menu.spc. load_spc is graceful: a missing/
+             too-small file zeroes the SPC header, which the menu detects and skips. */
+          filesize = load_spc((uint8_t*)(CFG.bgm_name[0] == '/' ? CFG.bgm_name : (uint8_t*)"/sd2snes/menu.spc"),
+                              SRAM_SPC_DATA_ADDR, SRAM_SPC_HEADER_ADDR);
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_RESET:
@@ -547,6 +554,10 @@ int main(void) {
           cfg_add_listed_game(LAST_FILE, file_lfn, true);
           stage_patch_from_entry((char*)file_lfn);
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
+          if(filesize) break; /* booted, exit menu loop */
+          file_res = FR_OK;
+          snescmd_writebyte(0xaa, SNESCMD_SNES_CMD); /* NACK -> error popup, stay in menu */
+          cmd=0;
           break;
         case SNES_CMD_LOADFAVORITE:
           cfg_get_listed_game_raw(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
@@ -554,6 +565,10 @@ int main(void) {
           cfg_add_listed_game(LAST_FILE, file_lfn, true);   /* lands in recents too, tag intact */
           stage_patch_from_entry((char*)file_lfn);
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
+          if(filesize) break; /* booted, exit menu loop */
+          file_res = FR_OK;
+          snescmd_writebyte(0xaa, SNESCMD_SNES_CMD); /* NACK -> error popup, stay in menu */
+          cmd=0;
           break;
 /*        case SNES_CMD_SET_ALLOW_PAIR:
           cfg_set_pair_mode_allowed(snes_get_mcu_param() & 0xff);
@@ -746,6 +761,28 @@ int main(void) {
         case SNES_CMD_CLR_THEME:
           /* revert to the baked-in default look */
           theme_select(NULL);
+          menu_reload = 1;
+          break;
+        case SNES_CMD_SET_MENU_SPC:
+          /* a .spc was picked in the browser (any visible folder) to become the menu
+             background music. MCU_PARAM was set up like LOADROM (cwd + selected entry)
+             so get_selected_name yields the full SD path; store it, enable music, and
+             persist, then reload the menu (like SET_THEME). The cold reload re-syncs
+             SRAM via cfg_load_to_menu and starts the new BGM cleanly on boot -- the
+             only reliable way to (re)start the S-SMP (the in-place warm-reset path
+             black-screened: the warm boot leaves NMI off). */
+          get_selected_name(file_lfn);
+          strncpy((char*)CFG.bgm_name, (char*)file_lfn, sizeof(CFG.bgm_name) - 1);
+          CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
+          CFG.enable_menu_music = 1;
+          cfg_save();
+          menu_reload = 1; /* leave loop -> outer loop reloads, boots into the new BGM */
+          break;
+        case SNES_CMD_CLR_MENU_SPC:
+          /* "Restore music": drop the chosen .spc so the BGM falls back to
+             /sd2snes/menu.spc, then reload the menu (like CLR_THEME). */
+          CFG.bgm_name[0] = 0;
+          cfg_save();
           menu_reload = 1;
           break;
         case SNES_CMD_LOAD_CHT:

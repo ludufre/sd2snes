@@ -110,6 +110,13 @@ printf("start\n");
               fn[fnlen+1] = 0;
               fnlen++;
             }
+            /* The file-string table grows from base_addr+0x10000 ($C30000) up
+               toward SRAM_DB_ADDR ($C80000). That region shrank to banks $C3..$C7
+               when SRAM_DIR_ADDR moved $C1->$C2 (the 128K menu now owns bank $C1).
+               Stop before the next entry would spill into the cheat-DB staging at
+               $C8 and corrupt it. goto, not break: break would only exit the
+               switch, not this scan loop. */
+            if(file_tbl_off + fnlen + 7 >= SRAM_DB_ADDR) goto dir_full;
             /* write file size string */
             sram_writeblock(buf, file_tbl_off, 6);
             /* write file name string (leaf) */
@@ -127,6 +134,7 @@ printf("start\n");
       }
     }
   }
+dir_full:
   /* write directory termination */
   sram_writelong(0, ptr_tbl_off);
   if(CFG.sort_directories) {

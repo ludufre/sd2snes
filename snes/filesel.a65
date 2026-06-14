@@ -66,7 +66,6 @@ fileselloop_redraw
   jsr filesel_redraw
   jsr filesel_cleanup ; update phase 2
   bra fileselloop
-  rts
 
 filesel_cleanup:
   sep #$20 : .as
@@ -868,23 +867,28 @@ wait_spc:
   lda @MCU_CMD
   cmp #$00
   bne wait_spc
-  ; fork: with menu music off the S-SMP is at IPL -> play the chosen .spc
-  ; directly (stock path). With music on the bgm is running on the S-SMP, and
-  ; the only way back to IPL (which spc700_load needs) is a SNES reset. So
-  ; warm-reset here, then RESUME at spc_play_now: the warm boot restores the SP
-  ; and set_bank does plp;rts on the [P][return] frame we push below (the same
-  ; SAVED_SP/WARM_SIGNATURE mechanism the player uses to exit in spc_key_b).
+  ; fork: spc700_load needs the S-SMP at IPL. It is at IPL only in BGM states 0
+  ; (not attempted) and 2 (tried, no spc). In state 1 the bgm is playing and in
+  ; states 3/4 the DSP-unmute stub is running (music off but the cart DAC kept
+  ; audible for SFX) -- in ALL three the S-SMP is busy, and the only way back to
+  ; IPL is a SNES reset (else spc700_load hangs at "Loading SPC into SPC700"). So
+  ; for 1/3/4 warm-reset here, then RESUME at spc_play_now: the warm boot restores
+  ; the SP and set_bank does plp;rts on the [P][return] frame we push below (the
+  ; same SAVED_SP/WARM_SIGNATURE mechanism the player uses to exit in spc_key_b).
   ; apu_ram_init runs during the warm boot, so the S-SMP is back at IPL when we
   ; reach spc_play_now. The .spc staged in SDRAM survives the reset (it lives in
   ; MCU-managed SDRAM, untouched by the SNES reset).
-  lda @BGM_STATE         ; only pause+warm-reset if the bgm is actually playing
-  cmp #$01               ; (config on but no menu.spc -> APU already at IPL)
-  bne spc_play_now
+  lda @BGM_STATE         ; at IPL already (0/2) -> play directly, no reset
+  beq spc_play_now
+  cmp #$02
+  beq spc_play_now       ; 1 (playing) / 3,4 (DSP stub) -> S-SMP busy, must reset
   ; Build the frame set_bank's `plp; rts` will unwind on the warm boot: push the
-  ; resume address (spc_play_now-1, all menu code is bank $c0 so a near rts is
+  ; resume address (spc_play_now_redraw-1, all menu code is bank $c0 so a near rts is
   ; fine) then the P byte, then snapshot SP into SAVED_SP. pea pushes a 16-bit
-  ; value regardless of the M flag (same idiom as `pea !CFG_BSX_TIME`).
-  pea !(spc_play_now-1)
+  ; value regardless of the M flag (same idiom as `pea !CFG_BSX_TIME`). Resume at
+  ; spc_play_now_redraw (NOT spc_play_now): the warm boot cleared VRAM, so the list
+  ; must be repainted before the player so it overlays instead of a blank screen.
+  pea !(spc_play_now_redraw-1)
   php
   rep #$20 : .al
   tsc
@@ -901,6 +905,20 @@ wait_spc:
   sta @MCU_CMD
 -
   bra -
+spc_play_now_redraw:
+; fork: only the warm-reset path lands here. That reset cleared VRAM but the file
+; list's WRAM state survived the warm boot, so repaint it and let ONE NMI DMA it to
+; VRAM before spcplayer saves/greys the screen -- otherwise the player window opens
+; over a blank "new screen" instead of overlaying the listing. NMI is already on
+; (setup_hdma re-enabled it during the warm boot), so the isr_done wait can't hang.
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr filesel_statusbar
+  jsr filesel_redraw
+  jsr filesel_cleanup
+  stz isr_done
+- lda isr_done           ; wait one full NMI so the repaint is DMA'd to VRAM
+  beq -
 spc_play_now:
   jsr spcplayer
   jsr menu_bgm_load     ; back from the player (S-SMP at IPL): restore the bgm.
@@ -1038,6 +1056,8 @@ open_context_menu:
   beq ctx_is_dir
   cmp #TYPE_PARENT
   beq ctx_is_parent
+  cmp #TYPE_SKIN
+  beq ctx_is_skin
 open_context_menu_cont
   rts
 ctx_is_file
@@ -1083,6 +1103,28 @@ ctx_is_spc
   lda #$00
   sta @MCU_PARAM+3
   jsr filesel_contextmenu_spc
+  bra open_context_menu_cont
+ctx_is_skin
+; set up MCU_PARAM with the .thm file path (same layout as ctx_is_file) so
+; delete_selected_file/get_selected_name resolve the theme. Themes have no
+; save -> the context menu offers Delete only (no Delete save).
+  dey
+  rep #$20 : .al
+  lda [dirptr_addr], y
+  and #$00ff
+  sta @MCU_PARAM+6
+  dey
+  dey
+  lda [dirptr_addr], y
+  sta @MCU_PARAM+4
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+  jsr filesel_contextmenu_skin
   bra open_context_menu_cont
 
 delete_selected_file:
@@ -1882,8 +1924,174 @@ show_empty_msg_wait:
   plp
   rts
 
+; show_error_msg: two-line game-load error popup (called by game_handshake_error
+; when the MCU NACKs a load because a chip BIOS/firmware is missing). Line 1 is a
+; localized template chosen by @MCU_ERR_CODE; line 2 is the raw NUL-terminated
+; basename/chip the MCU wrote at @MCU_ERR_MSG ($FF1001, bank $FF). Modeled on
+; show_empty_msg; waits for A/B/Start/Select, then closes. Menu stays alive (the
+; ROM never booted) -> returns to the browser with no reset.
+show_error_msg:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr cover_hide          ; hide the floating OBJ box-art cover (priority over the BG
+                          ; popup). Use cover_hide, NOT cover_menu_off: the latter
+                          ; invalidates cover_last_sel -> the browser fires a cover
+                          ; reload on return, and when the user mashes A to retry a
+                          ; missing-BIOS launch that reload's handshake + the MCU's
+                          ; MCU_CMD_RDY ($55 == ACK) re-arm race the retry's
+                          ; game_handshake spin, which reads the stray $55 as an ACK
+                          ; and jumps to the WRAM boot trampoline -> hang on "Loading".
+                          ; cover_hide leaves cover_dirty/cover_last_sel untouched so
+                          ; nothing re-fires (cover stays hidden until the next nav).
+  lda bar_xl              ; park the select bar off-screen (see show_empty_msg)
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #$ff
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+  lda #18                 ; w=28 -> centered x=(64-28)/2=18; h=5 fits 2 body lines
+  sta window_x
+  lda #12
+  sta window_y
+  lda #28
+  sta window_w
+  lda #5
+  sta window_h
+  lda #^zero              ; empty title -> closed top border
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsr push_window
+  jsr draw_window
+; ----- line 1: localized template, chosen by the error code -----
+  sep #$20 : .as
+  lda @MCU_ERR_CODE
+  cmp #MENU_ERR_SUPPLFILE
+  beq show_error_tpl_supplfile
+  cmp #MENU_ERR_NOIMPL
+  beq show_error_tpl_noimpl
+  rep #$20 : .al
+  lda #!text_err_generic
+  sta print_src
+  sep #$20 : .as
+  lda #^text_err_generic
+  sta print_bank
+  bra show_error_tpl_done
+show_error_tpl_supplfile:
+  rep #$20 : .al
+  lda #!text_err_supplfile
+  sta print_src
+  sep #$20 : .as
+  lda #^text_err_supplfile
+  sta print_bank
+  bra show_error_tpl_done
+show_error_tpl_noimpl:
+  rep #$20 : .al
+  lda #!text_err_noimpl
+  sta print_src
+  sep #$20 : .as
+  lda #^text_err_noimpl
+  sta print_bank
+show_error_tpl_done:
+  lda print_bank          ; resolve language + measure to center (as show_empty_msg)
+  ldy print_src
+  jsr resolve_yx
+  phb
+  pha
+  plb
+  jsr strlen              ; Y = length
+  plb
+  sep #$20 : .as
+  tya
+  sta window_tmp
+  lda window_w
+  sec
+  sbc window_tmp
+  bcs +
+  lda #$02
++ lsr
+  clc
+  adc window_x
+  sta print_x
+  lda window_y
+  inc                     ; line 1 = window_y + 1
+  sta print_y
+  stz print_pal
+  lda #56
+  sta print_count
+  jsr hiprint
+; ----- line 2: raw basename/chip from $FF1001 (bank $FF), not localized -----
+  rep #$20 : .al
+  lda #!MCU_ERR_MSG
+  sta print_src
+  sep #$20 : .as
+  lda #^MCU_ERR_MSG
+  sta print_bank
+  phb                     ; measure with DB = $FF so strlen reads $FF1001
+  lda print_bank
+  pha
+  plb
+  ldy print_src
+  jsr strlen              ; Y = length
+  plb
+  sep #$20 : .as
+  tya
+  sta window_tmp
+  lda window_w
+  sec
+  sbc window_tmp
+  bcs +
+  lda #$02
++ lsr
+  clc
+  adc window_x
+  sta print_x
+  lda window_y
+  inc                     ; line 2 = window_y + 2
+  inc
+  sta print_y
+  stz print_pal
+  lda #56
+  sta print_count
+  jsr hiprint
+  lda tgt_bright          ; autoboot reaches game_handshake_error BEFORE screen_on,
+  bne +                   ; so the popup would render on a 0%-brightness (black)
+  jsr screen_on           ; screen -- fade it in. No-op/flicker-free in the menu
++                         ; case where tgt_bright is already the brightness limit.
+  jsr enable_screen_update
+show_error_msg_wait:
+  lda isr_done
+  beq show_error_msg_wait
+  stz isr_done
+  jsr printtime
+  jsr read_pad
+  lda pad_a
+  ora pad_b
+  ora pad_start
+  ora pad_select
+  beq show_error_msg_wait
+  jsr snd_fx_back
+  jsr pop_window
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  plp
+  rts
+
 select_last_file:
   php
+  phd                        ; show_menu's FUNC dispatch (rtl) leaves DP at its AllocStack
+  pea $0000                  ; frame; the cover code reads [cover_ptr],y (DP-indirect) and
+  pld                        ; assumes DP=0 (see data.a65). Force DP=0 like the browser jsl
+                             ; path or the list cover renders scrambled/mis-coloured.
   sep #$20 : .as
   rep #$10 : .xl
   lda #$00
@@ -1899,7 +2107,6 @@ select_last_file:
 select_last_redraw:               ; redraw after a remove: if now empty, just close
   lda @ST_NUM_RECENT_GAMES
   sta num_recent_games
-  stz recent_sel
   bne +
   jmp select_last_file_out
 + lda #^text_last
@@ -1984,7 +2191,7 @@ select_last_file_play:
   sep #$20 : .as
   lda #CMD_LOADLAST
   jsr game_handshake
-  bra select_favorite_file_done
+  bra select_last_file_done
 select_last_file_context_menu:
   jsr cover_menu_off         ; hide the floating box-art cover so it doesn't
                              ; float over the context / cheat windows (it
@@ -2005,12 +2212,16 @@ select_last_file_out:
   beq +
   jsr cover_hide
 + jsr enable_screen_update
+  pld                        ; restore caller's DP (matches the phd at entry)
   plp
   rtl
 
 select_favorite_file:
 ; shows a window with a list of favorite games
   php
+  phd                        ; force DP=0 (show_menu's FUNC dispatch leaves DP at its
+  pea $0000                  ; AllocStack frame; cover [cover_ptr],y assumes DP=0). See
+  pld                        ; select_last_file for the full explanation.
   sep #$20 : .as
   rep #$10 : .xl
   lda #$00
@@ -2132,6 +2343,7 @@ select_favorite_file_out
   beq +
   jsr cover_hide
 + jsr enable_screen_update
+  pld                        ; restore caller's DP (matches the phd at entry)
   plp
   rtl
 
@@ -2351,6 +2563,70 @@ set_favorite_as_autoboot_rom:
   plp
   rtl
 
+set_selected_spc_as_bgm:
+; Context-menu action on an .spc (MTYPE_FUNC_CLOSE): make it the menu background
+; music. MCU_PARAM already holds the file path (set by ctx_is_spc). Same light
+; $55/$aa handshake as select_theme, with cover_sync first -- .spc entries fire
+; cover requests, so a stale cover $55 could be misread as our ACK (cover_sync
+; preserves MCU_PARAM). The MCU stores the path, enables music, and RELOADS the menu
+; (CMD_SET_MENU_SPC -> menu_reload), which cold-boots into the new BGM cleanly -- the
+; only reliable way to (re)start the S-SMP (the in-place warm-reset path black-
+; screened because the warm boot leaves NMI off). The reload resets the SNES, so the
+; rtl below is moot; it's kept correct for the FUNC_CLOSE dispatcher convention.
+  php
+  phb
+  sep #$20 : .as
+  jsr cover_sync_before_cmd
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_SET_MENU_SPC
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plb
+  plp
+  rtl
+
+restore_music:
+; Browser Options action (below Restore Theme): revert the menu background music to
+; the /sd2snes/menu.spc fallback. Mirrors restore_theme exactly -- the MCU clears
+; CFG.bgm_name, persists, and RELOADS the menu (CMD_CLR_MENU_SPC -> menu_reload),
+; which cold-boots into the fallback BGM. Music on/off is left untouched. The reload
+; resets the SNES, so the rtl is moot; kept correct for the dispatcher convention.
+  php
+  phb
+  sep #$20 : .as
+  jsr cover_sync_before_cmd
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsr waitblank
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_CLR_MENU_SPC
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ lda #$55
+  sta @MCU_CMD
+  jsr pop_window
+  plb
+  plp
+  rtl
+
 scroll_direntry_clean:
   lda #$01
   sta direntry_xscroll_state
@@ -2481,8 +2757,8 @@ filesel_request_filelist_wait_mcu:
   jsr pop_window
 ; dirend_addr = (entry count reported by the firmware) * 4.  The firmware wrote
 ; the count into MCU_PARAM right after scan_dir; reading it back from the snescmd
-; region is reliable.  The old approach scanned the SDRAM directory table at $C1
-; from the SNES side here, but right after the firmware's write that read can come
+; region is reliable.  The old approach scanned the SDRAM directory table at $C2
+; (SRAM_DIR_ADDR) from the SNES side here, but right after the firmware's write that read can come
 ; back stale/partial (measured: dirend=$0018 for a 39-entry dir) -> a too-short
 ; dirend_addr that breaks R / page navigation.  DBR is $00 here so @MCU_PARAM and
 ; the dirend_addr store both resolve through the bank-0 WRAM mirror correctly.
@@ -2519,7 +2795,7 @@ filesel_nav_last:
   lda @CFG_ENABLE_RST_TO_MENU
   cmp #$03
   bne +
-  lda @LAST_GAME
+  lda @LAST_GAME_FILE
   beq fnl_out
 +
   ; Navigate path components one by one.
@@ -2575,11 +2851,11 @@ fnl_enter_subdir:
   lda #$0000
   sta testvar+4           ; current entry byte offset = 0
 fnl_es_loop:
-  ; Point longptr at current entry in $C1
+  ; Point longptr at current entry in the directory pointer table (^ROOT_DIR = $C2)
   lda testvar+4
   sta longptr
   sep #$20 : .as
-  lda #$C1
+  lda #^ROOT_DIR
   sta longptr+2
   ; bank offset of entry (= 0 → end of list)
   rep #$10 : .xl
@@ -2624,15 +2900,15 @@ fnl_es_loop:
   sta [dirlog_idx], y     ; dirstart_addr = 0
   iny
   iny
-  lda #$00C1
-  sta [dirlog_idx], y     ; dirstart_bank lo = $C1 (hi byte overwritten next)
+  lda #$00C2
+  sta [dirlog_idx], y     ; dirstart_bank lo = $C2 (=^ROOT_DIR; hi byte overwritten next)
   iny
   lda testvar+4           ; dirptr_addr = entry offset (screen starts here on B)
   sta [dirlog_idx], y
   iny
   iny
-  lda #$00C1
-  sta [dirlog_idx], y     ; dirptr_bank lo = $C1
+  lda #$00C2
+  sta [dirlog_idx], y     ; dirptr_bank lo = $C2 (=^ROOT_DIR)
   iny
   lda #$0000
   sta [dirlog_idx], y     ; filesel_sel = 0
@@ -2716,7 +2992,8 @@ fnl_ac_done:
 ; =========================================================
 ; fnl_select_file:
 ;   Scan the current directory for a TYPE_ROM or TYPE_SPC
-;   entry whose name matches LAST_GAME[0] (just filename).
+;   entry whose name matches LAST_GAME_FILE (base ROM basename;
+;   for a patch-aware entry this is the ROM, not the patch name).
 ;   On match: sets filesel_sel and adjusts dirptr_addr so
 ;   the entry is visible.
 ; =========================================================
@@ -2728,7 +3005,7 @@ fnl_sf_loop:
   lda testvar+4
   sta longptr
   sep #$20 : .as
-  lda #$C1
+  lda #^ROOT_DIR
   sta longptr+2
   rep #$10 : .xl
   ldy #$0002
@@ -2850,7 +3127,7 @@ fnl_cs_yes:
 ; =========================================================
 ; fnl_cmp_file:
 ;   Case-insensitive compare of name at longptr[0..] against
-;   LAST_GAME[0] (null-terminated filename).
+;   LAST_GAME_FILE (null-terminated base ROM basename).
 ;   Handles hide_extensions: $01 in entry name treated as '.'.
 ;   Returns carry set = match, carry clear = no match.
 ; =========================================================
@@ -2859,7 +3136,7 @@ fnl_cmp_file:
   sep #$20 : .as
   rep #$10 : .xl
   ldy #$0000              ; Y indexes entry string via [longptr]
-  ldx #$0000              ; X indexes LAST_GAME via long,X
+  ldx #$0000              ; X indexes LAST_GAME_FILE via long,X
 fnl_cf_loop:
   ; Read entry char; $01 = hidden extension dot
   lda [longptr], y
@@ -2868,8 +3145,8 @@ fnl_cf_loop:
   lda #$2e                ; treat $01 as '.'
 fnl_cf_not_ext:
   sta mm_tmp              ; mm_tmp = RAW entry char (post $01 -> '.')
-  ; Read LAST_GAME[X] char — long,X ($BF), valid in 65816
-  lda @LAST_GAME, x       ; A = RAW target char
+  ; Read LAST_GAME_FILE[X] char — long,X ($BF), valid in 65816
+  lda @LAST_GAME_FILE, x  ; A = RAW target char
   ; End-of-string MUST be detected on the raw bytes, BEFORE case-folding:
   ; 0x20 (space) & 0xDF == 0x00, so folding first lets a space pose as the
   ; NUL terminator and truncates the compare at the first space. Almost

@@ -115,7 +115,7 @@
 #define WRAM_WAIT_MCU               $7EF200
 #define WRAM_LOAD_ULTRA16_CFG       $7EF210
 
-#define ROOT_DIR                    $C10000
+#define ROOT_DIR                    $C20000
 
 #define NUM_CHEATS                  $FF0700
 #define CHEAT_ADDR                  $D00000
@@ -129,6 +129,11 @@
 
 #define FILESEL_CWD                 $FF0000
 #define CFG_ADDR                    $FF0100
+#define MCU_ERR_CODE                $FF1000 /* MCU snes_menu_errmsg: error code (1 byte). 0=OK,2=SUPPLFILE(missing chip BIOS),3=NOIMPL(unsupported chip). game_handshake_error reads this. */
+#define MCU_ERR_MSG                 $FF1001 /* MCU error string (basename/chip name, NUL-term), $FF1001..$FF1040. NB overlaps SRAM_PARAM_ADDR($FF1004) on the MCU side -- benign, PARAM already consumed in this flow. */
+/* error codes -- must match MENU_ERR_* in src/snes.h */
+#define MENU_ERR_SUPPLFILE          $02
+#define MENU_ERR_NOIMPL             $03
 #define ST_MCU_ADDR                 $FF1100
 #define ST_SNES_ADDR                $FF1110
 #define SYSINFO_BLK                 $FF1200
@@ -136,6 +141,7 @@
 #define LAST_GAME_DIR               $FF1F00
 #define WRAM_BAK                    $FF2000
 #define FAVORITE_GAMES              $FF4000
+#define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (free gap between FAVORITE_GAMES tail $FF49FF and IPS_LIST $FF5000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
 
 #define CMD_LOADROM                 $01 /* shortcut - load ROM with default settings */
 #define CMD_SETRTC                  $02
@@ -180,12 +186,16 @@
 #define CMD_DELETE_SRM_RECENT       $29 /* MCU_PARAM low byte: recent index. Delete only the .srm (ROM stays in recents). */
 #define CMD_LOAD_CHT_RECENT         $2a /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_load. */
 #define CMD_SAVE_CHT_RECENT         $2b /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_save. */
-#define CMD_WIFI_SCAN               $2c /* queue an AP scan on the ESP */
-#define CMD_WIFI_GET                $2d /* write current status + scan list to WIFI_BLK */
-#define CMD_WIFI_CONNECT            $2e /* connect using ssid/pass written to WIFI_BLK */
-#define CMD_WIFI_FORGET             $2f /* forget the saved network */
-#define CMD_SET_THEME               $30 /* selected .thm in a visible folder (MCU_PARAM set like LOADROM): store full path, reload menu */
-#define CMD_CLR_THEME               $31 /* clear menu theme to baked default, reload menu */
+#define CMD_SET_THEME               $2c /* selected .thm in a visible folder (MCU_PARAM set like LOADROM): store full path, reload menu */
+#define CMD_CLR_THEME               $2d /* clear menu theme to baked default, reload menu */
+#define CMD_SET_MENU_SPC            $2e /* selected .spc (MCU_PARAM set like LOADROM): store full path in CFG.bgm_name, enable music */
+#define CMD_CLR_MENU_SPC            $2f /* clear CFG.bgm_name -> menu BGM falls back to /sd2snes/menu.spc */
+#define CMD_WIFI_SCAN               $30 /* queue an AP scan on the ESP */
+#define CMD_WIFI_GET                $31 /* write current status + scan list to WIFI_BLK */
+#define CMD_WIFI_CONNECT            $32 /* connect using ssid/pass written to WIFI_BLK */
+#define CMD_WIFI_FORGET             $33 /* forget the saved network */
+
+#define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
 /* WiFi status/scan block + connect params. Aliases SYSINFO_BLK (both modal, so
    they never coexist). Layout MUST match src/snes.h WIFI_OFF_*. */
@@ -265,7 +275,8 @@
 #define CFG_ENABLE_MENU_MUSIC           CFG_ADDR+$00B9
 #define CFG_COVERS_IN_LISTS             CFG_ADDR+$00BA
 #define CFG_ENABLE_MENU_SFX             CFG_ADDR+$00BB
-#define CFG_ENABLE_WIFI                 CFG_ADDR+$00BC
+#define CFG_MENU_MUSIC_FILE             CFG_ADDR+$00BC
+#define CFG_ENABLE_WIFI                 CFG_ADDR+$00BD
 
 #define MENU_ENTRY_SIZE             23
 

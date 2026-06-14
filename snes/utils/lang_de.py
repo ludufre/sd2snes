@@ -3,8 +3,8 @@
 Maps const.a65 string labels -> de text. The current menu font lacks some
 German glyphs, so those characters are written as ae/oe/ue/ss for predictable rendering.
 Placeholders: {129}=submenu icon, {127}{128}=ellipsis control bytes.
-mdesc_* item descriptions are NOT rendered by the current menu (build_const
-skips them), so they stay English at build time and cost no ROM space.
+mdesc_* item descriptions ARE rendered now (the selected option's help box) and
+localized like the rest; the pool lives in bank $C1 (see build_const.py).
 """
 
 TRANSLATIONS = {
@@ -121,6 +121,8 @@ TRANSLATIONS = {
     'mdesc_recent_context_remove_from_recent': 'Datei aus letzter Liste entfernen',
     'text_filesel_set_as_autoboot': 'Als Autoboot setzen',
     'mdesc_filesel_set_as_autoboot': 'Diese ROM beim naechsten Einschalten starten',
+    'text_filesel_set_as_bgm': 'Als Menuemusik setzen',
+    'mdesc_filesel_set_as_bgm': 'Dieses SPC als Menue-Hintergrundmusik verwenden',
     'text_filesel_context_delete_file': 'Loeschen',
     'mdesc_filesel_context_delete_file': 'Gewaehlte Datei loeschen',
     'text_filesel_context_delete_srm': 'Save loeschen',
@@ -146,6 +148,9 @@ TRANSLATIONS = {
     'text_favorite': 'Favoriten',
     'text_no_last': 'Keine letzten',
     'text_no_favorite': 'Keine Favoriten',
+    'text_err_supplfile': 'Datei nicht gefunden:',
+    'text_err_noimpl': 'Nicht unterstuetzt:',
+    'text_err_generic': 'Ladefehler:',
     'text_on_p1': 'Ein: P1',
     'text_on_p2': 'Ein: P2',
     'text_on': 'Ein',
@@ -189,6 +194,7 @@ TRANSLATIONS = {
     'text_saving': 'Speichere{127}{128}                      ',
     'text_cheat': 'Cheats fuer ',
     'text_ips_nopatch': '[Kein Patch]',
+    'text_ips_header': 'Patches',
     'cheat_tab_head': 'Name                                     Aktiv',
     'cheat_tab_hint_text': ' A:Ein/Aus   B:Speichern & Ende ',
     'mtext_browser_showcov': 'Cover anzeigen',
@@ -200,6 +206,9 @@ TRANSLATIONS = {
     'mdesc_browser_menumusic': 'Hintergrundmusik (menu.spc) im Menue spielen',
     'mtext_browser_restoretheme': 'Theme zuruecksetzen',
     'mdesc_browser_restoretheme': 'Menue-Theme auf Standard zuruecksetzen',
+    'mtext_browser_restoremusic': 'Musik zuruecksetzen',
+    'mdesc_browser_restoremusic': 'Menue-Musik auf Standard zuruecksetzen (menu.spc)',
     'text_mm_language': 'Sprache',
     'mdesc_mm_language': 'Sprache fuer Menue/Firmware setzen',
+    'mdesc_browser_menusfx': 'Soundeffekte beim Navigieren durch das Menü abspielen',
 }

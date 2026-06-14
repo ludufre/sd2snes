@@ -28,9 +28,13 @@ Você precisa de:
 > [!NOTE]
 > Este projeto não inclui jogos/ROMs. Use seus próprios arquivos obtidos legalmente.
 
+> [!IMPORTANT]
+> **Hardware Mk.II:** o sd2snes original (Mk.II) tem pouca memória de programa no MCU, e este firmware já está perto desse limite. Alguns recursos futuros podem ficar **só no Mk.III / FXPAK PRO** (ou desligados no Mk.II) por falta de espaço. O Mk.III / FXPAK PRO não é afetado, e tudo nesta versão funciona nos dois.
+
 ## O que este fork adiciona
 
 - **Idiomas:** escolha Português do Brasil, Inglês, Espanhol ou Alemão diretamente no menu.
+- **Descrições das opções:** uma linha de ajuda curta e traduzida para a opção de menu selecionada, numa caixa flutuante (posicionada acima ou abaixo do menu automaticamente).
 - **Capas dos jogos:** veja a capa de cada jogo enquanto navega pela lista de ROMs.
 - **Música no menu:** toque uma faixa `.spc` de fundo enquanto navega.
 - **Sons do menu:** efeitos sonoros de navegação opcionais (cursor, confirmar, voltar, erro) que tocam no DAC de áudio do cartucho, independentes da música.
@@ -150,6 +154,8 @@ Bons lugares para encontrar arquivos `.spc`:
 - [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — tem prévia em MP3 de cada faixa, então dá pra ouvir antes de baixar.
 
 Você pode ligar ou desligar a música em **Configurações → Opções do Navegador → Música do menu**.
+
+Você também pode escolher a música **sem renomear nada**: selecione qualquer **`.spc`** no navegador de arquivos, aperte **Y** para o menu de contexto e escolha **Definir como música do menu**. O menu recarrega com essa faixa como nova música de fundo e lembra dela entre reinícios; o `/sd2snes/menu.spc` continua como reserva. Para voltar a ele, use **Configurações → Opções do Navegador → Restaurar música**.
 
 > [!TIP]
 > Algumas trilhas vêm como arquivos `.rsn`. Um `.rsn` geralmente é um arquivo compactado com vários `.spc` dentro. Extraia o `.rsn` e escolha um dos arquivos `.spc`.

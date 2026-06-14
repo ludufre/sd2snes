@@ -18,7 +18,8 @@ _Static_assert(offsetof(cfg_t, language) == 0xB7, "cfg_t.language must stay at C
 _Static_assert(offsetof(cfg_t, patch_verify_integrity) == 0xB8, "cfg_t.patch_verify_integrity must stay at CFG_ADDR+$B8");
 _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists must stay at CFG_ADDR+$BA");
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
-_Static_assert(offsetof(cfg_t, enable_wifi) == 0xBC, "cfg_t.enable_wifi must stay at CFG_ADDR+$BC");
+_Static_assert(offsetof(cfg_t, bgm_name) == 0xBC, "cfg_t.bgm_name must stay at CFG_ADDR+$BC");
+_Static_assert(offsetof(cfg_t, enable_wifi) == 0xBD, "cfg_t.enable_wifi must stay at CFG_ADDR+$BD");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -66,6 +67,7 @@ cfg_t CFG_DEFAULT = {
   .enable_menu_music = 1,
   .covers_in_lists = 1,
   .enable_menu_sfx = 1,
+  .bgm_name = "",
   .enable_wifi = 0
 };
 
@@ -184,6 +186,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_WIFI, CFG.enable_wifi ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
+  f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
+  f_printf(&file_handle, "%s: %s\n", CFG_MENU_MUSIC_FILE, (char*)CFG.bgm_name);
   file_close();
   return err;
 }
@@ -347,6 +351,10 @@ int cfg_load() {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);
       CFG.skin_name[sizeof(CFG.skin_name) - 1] = 0;
     }
+    if(yaml_get_itemvalue(CFG_MENU_MUSIC_FILE, &tok)) {
+      strncpy((char*)CFG.bgm_name, tok.stringvalue, sizeof(CFG.bgm_name) - 1);
+      CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
+    }
   }
   yaml_file_close();
   return err;
@@ -401,7 +409,7 @@ int cfg_validity_check_listed_games(const uint8_t *listfilename) {
 
 int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn,
                                 const char *patch_basename, bool evict_oldest) {
-  int err = 0, index, index2, found = 0, foundindex = 0, written = 0;
+  int err = 0, index, index2, found = 0, foundindex = 0;
   TCHAR fqfn[256];
   TCHAR fntmp[10][256];
   file_open(listfilename, FA_READ);
@@ -445,7 +453,6 @@ int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn,
   /* always put new entry on top of list */
   err = f_puts((const TCHAR*)fqfn, &file_handle);
   err = f_putc(0, &file_handle);
-  written++;
   if(index > 9 + found) index = 9 + found; /* truncate oldest entry */
   /* allow number of destination entries to be the same as source in case
    * we're only moving a previous entry to top */
@@ -455,7 +462,6 @@ int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn,
     }
     err = f_puts(fntmp[index2], &file_handle);
     err = f_putc(0, &file_handle);
-    written++;
   }
   file_close();
   return err;
@@ -466,7 +472,7 @@ int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_old
 }
 
 int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove) {
-  int err = 0, index, index2, written = 0;
+  int err = 0, index, index2;
   TCHAR fntmp[10][256];
 
   // Load current file list into memory
@@ -487,7 +493,6 @@ int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove)
     }
     err = f_puts(fntmp[index2], &file_handle);
     err = f_putc(0, &file_handle);
-    written++;
   }
   file_close();
   return err;
@@ -559,7 +564,8 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
      with the favorite index-0 folder (e.g. a root favorite resets it to "/"),
      and the menu never returns to a sub-folder game. */
   if(write_lastdir) {
-    sram_writebyte(0, SRAM_LASTGAME_DIR_ADDR); /* default: empty dir path */
+    sram_writebyte(0, SRAM_LASTGAME_DIR_ADDR);  /* default: empty dir path */
+    sram_writebyte(0, SRAM_LASTGAME_FILE_ADDR); /* default: empty pre-select name */
   }
   file_open(listfilename, FA_READ);
   for(index = 0; index < 10 && !f_eof(&file_handle); index++) {
@@ -580,7 +586,14 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
     }
     sram_writestrn((uint8_t*)disp, address+256*index, 256);
     if(write_lastdir && index == 0) {
-      /* write directory of most recent game for reset_to_menu >= 2 (Folder/Rom) navigation */
+      /* write directory + base ROM basename of the most recent game for
+         reset_to_menu >= 2 (Folder/Rom) navigation. For a patch-aware
+         "<rom>\t<patch>" entry the navigation must target the BASE ROM (the
+         part before the tab), not the patch display name written above — so
+         temporarily terminate fntmp at the tab while scanning. */
+      char *base_end = tab ? tab : (fntmp + strlen((const char*)fntmp));
+      char base_saved = *base_end;
+      *base_end = '\0';
       char *slash = strrchr((const char*)fntmp, '/');
       if(slash != NULL) {
         size_t dir_len = slash - fntmp;
@@ -591,7 +604,14 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
           dirtmp[dir_len] = '\0';
           sram_writestrn((uint8_t*)dirtmp, SRAM_LASTGAME_DIR_ADDR, 256);
         }
+        /* base ROM basename → reset_to_menu==3 pre-select target */
+        sram_writestrn((uint8_t*)(slash + 1), SRAM_LASTGAME_FILE_ADDR, 256);
+      } else {
+        /* bare filename with no directory: folder nav bails (dir empty), but
+           still record the name for completeness */
+        sram_writestrn((uint8_t*)fntmp, SRAM_LASTGAME_FILE_ADDR, 256);
       }
+      *base_end = base_saved;
     }
   }
   file_close();
@@ -749,7 +769,11 @@ int cfg_get_stringvalue(const char *key, char *target, size_t count) {
   int found = 0;
   yaml_file_open(CFG_FILE, FA_READ);
   found = yaml_get_itemvalue(key, &tok);
-  strncpy(target, tok.stringvalue, count);
+  if(found) {
+    strncpy(target, tok.stringvalue, count);
+  } else if(count) {
+    target[0] = 0;
+  }
   yaml_file_close();
   return found;
 }

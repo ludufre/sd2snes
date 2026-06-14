@@ -66,6 +66,35 @@ window_h        .byt 0
 window_tmp      .word 0
 window_tbank    .byt 0
 window_taddr    .word 0
+;----------description box (mdesc_* of the selected menu item)----------
+; NOTE: desc_menu_ptr and desc_ptr MUST stay < $100 in this segment so the
+; [dp],y indirect-long reads (with DP=0) resolve via the low-RAM mirror.
+menu_desc_on    .byt 0      ; 1 while a show_menu level has an active description box
+menu_desc_shown .byt 0      ; 1 if a description box is currently drawn (and pushed)
+desc_menu_ptr   .byt 0,0,0  ; long ptr to the current menu structure (mdesc lookup) [<$100]
+desc_ptr        .byt 0,0,0  ; long ptr to the (resolved) mdesc string                [<$100]
+desc_box_y      .byt 0      ; top row of the description box
+desc_box_x      .byt 0      ; left column of the description box (aligned under the menu)
+desc_box_h      .byt 0      ; pushed box height (pop_window uses window_h as its BG1 row count)
+desc_menu_top   .byt 0      ; menu window top row
+desc_menu_bot   .byt 0      ; menu window bottom row
+desc_avail_below .byt 0     ; rows free below the menu (down to DESC_BOTROW)
+desc_avail_above .byt 0     ; rows free above the menu (up to DESC_TOPROW)
+desc_iw         .word 0     ; interior wrap width for the current box position
+desc_maxllen    .word 0     ; longest wrapped line (-> box hugs the text width)
+desc_lmax       .byt 0      ; max text lines that fit below the menu (>=1 when on)
+desc_trunc      .byt 0      ; 1 if the last drawn line ends with an ellipsis
+nlines          .byt 0      ; number of wrapped lines to draw
+desc_li         .byt 0      ; render loop line counter
+dl_eos          .word 0     ; desc_next_line: 1 if the line reached end of string
+dl_idx          .word 0     ; desc_next_line: current read index
+dl_start        .word 0     ; desc_next_line: current line start index
+dl_llen         .word 0     ; desc_next_line: current line length / copy counter
+dl_lastsp       .word 0     ; desc_next_line: last space index ($ffff=none) / scratch
+desc_save_xy    .word 0     ; saved window_x/window_y around the desc draw
+desc_save_wh    .word 0     ; saved window_w/window_h around the desc draw
+desc_ln_start   .word 0,0,0,0,0,0   ; per-line start index (<= MAX_DESC_LINES)
+desc_ln_len     .word 0,0,0,0,0,0   ; per-line length
 stringbuf
   .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
   .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0

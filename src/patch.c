@@ -52,7 +52,7 @@ static int istrcmp(const char *a, const char *b) {
     return *a ? 1 : -1;
 }
 
-/* Scratch storage for up to 7 entries.  Placed in AHB RAM to avoid
+/* Scratch storage for up to IPS_MAX_PATCHES entries.  Placed in AHB RAM to avoid
    overflowing the small 16 KB main RAM.  AHB RAM is not zero-initialised;
    entries are fully written before being read. */
 struct _ips_entry {
