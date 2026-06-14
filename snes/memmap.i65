@@ -140,8 +140,8 @@
 #define LAST_GAME                   $FF1420
 #define LAST_GAME_DIR               $FF1F00
 #define WRAM_BAK                    $FF2000
-#define FAVORITE_GAMES              $FF4000
-#define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (free gap between FAVORITE_GAMES tail $FF49FF and IPS_LIST $FF5000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
+#define FAVORITE_GAMES              $FF6000 /* 20*256 = $1400 -> $FF6000..$FF73FF. Moved off $FF4000 (only fit 10) into the free gap past IPS_LIST so favorites could grow to 20. Lockstep with SRAM_FAVORITEGAMES_ADDR (src/memory.h). Old $FF4000..$FF49FF now unused. */
+#define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (now-fully-free gap before IPS_LIST $FF5000; favorites moved off $FF4000 to $FF6000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
 
 #define CMD_LOADROM                 $01 /* shortcut - load ROM with default settings */
 #define CMD_SETRTC                  $02
@@ -256,8 +256,10 @@
 #define CFG_COVERS_IN_LISTS             CFG_ADDR+$00BA
 #define CFG_ENABLE_MENU_SFX             CFG_ADDR+$00BB
 #define CFG_MENU_MUSIC_FILE             CFG_ADDR+$00BC
+#define CFG_SORT_FAVORITES              CFG_ADDR+$013C
 
 #define MENU_ENTRY_SIZE             23
+#define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */
 
 #define ST_RTC_VALID                ST_MCU_ADDR+$0000
 #define ST_NUM_RECENT_GAMES         ST_MCU_ADDR+$0001
@@ -265,6 +267,7 @@
 #define ST_NUM_FAVORITE_GAMES       ST_MCU_ADDR+$0003
 #define ST_AUTOBOOT_ENABLED         ST_MCU_ADDR+$0004
 #define ST_RESET_TO_MENU_ACTIVE     ST_MCU_ADDR+$0005
+#define ST_FAVORITES_FULL           ST_MCU_ADDR+$0006 /* 1 if the last add-favorite was refused (list full) */
 
 #define ST_IS_U16                   ST_SNES_ADDR+$0000
 #define ST_U16_CFG                  ST_SNES_ADDR+$0001

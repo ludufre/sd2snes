@@ -451,6 +451,20 @@ menu_enttab_browser:
 ; .byt  0,0,0
 ; .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_sortfav
+ .byt  ^mtext_browser_sortfav
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_SORT_FAVORITES
+ .byt  ^CFG_SORT_FAVORITES
+ .word !mdesc_browser_sortfav
+ .byt  ^mdesc_browser_sortfav
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  MTYPE_FUNC
  .word !mtext_browser_restoretheme
  .byt  ^mtext_browser_restoretheme

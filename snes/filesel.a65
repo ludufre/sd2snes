@@ -2243,22 +2243,27 @@ select_favorite_redraw:           ; redraw after a remove: if now empty, just cl
   sta window_tbank
   ldx #!text_favorite
   stx window_taddr
+; Favorites can hold up to MAX_FAVORITE_GAMES (20) entries -- too many to draw in
+; one window without overflowing the screen.  Show a fixed viewport of at most
+; FAV_VISMAX rows (window stays at last_win_y) and SCROLL through the rest:
+; fav_visible = rows on screen, fav_top = first visible entry, listsel_sel = the
+; absolute selection.  favsel_navigate handles the scrolling; favsel_draw_rows
+; paints the visible slice.  For <= FAV_VISMAX favorites this behaves exactly like
+; the old all-in-one window.
   lda @last_win_x
   sta window_x
-  inc
-  inc
-  pha
-  lda @last_win_y
-  sta window_y
-  inc
-  pha
   lda @last_win_w
   sta window_w
-  lda num_favorite_games
-  inc
-  inc
-  sta window_h
-  jsr push_window
+  lda @last_win_y
+  sta window_y
+  lda num_favorite_games     ; fav_visible = min(count, FAV_VISMAX)
+  cmp #(FAV_VISMAX+1)
+  bcc +
+  lda #FAV_VISMAX
++ sta fav_visible
+  clc
+  adc #$02
+  sta window_h               ; window_h = fav_visible + 2 (title + bottom border)
   lda num_favorite_games
   sta listsel_max
   dec ; listsel_max is an element count but listsel_sel is 0..max-1
@@ -2267,24 +2272,22 @@ select_favorite_redraw:           ; redraw after a remove: if now empty, just cl
   sta listsel_backup
 + lda listsel_backup
   sta listsel_sel
+  ; fav_top: keep the (restored) selection visible -- 0 if it fits in the first
+  ; page, else scroll so the selection sits on the bottom visible row.
+  cmp fav_visible
+  bcc fav_top_zero
+  sec
+  sbc fav_visible
+  inc
+  sta fav_top
+  bra fav_top_set
+fav_top_zero:
+  lda #$00
+  sta fav_top
+fav_top_set:
+  jsr push_window
   jsr draw_window
-  stz print_pal
-  lda #^FAVORITE_GAMES
-  ldx #!FAVORITE_GAMES
-  sta print_bank
-  stx print_src
-  stz print_pal
-  pla
-  sta print_y
-  pla
-  sta print_x
-- lda #56
-  sta print_count
-  jsr hiprint
-  inc print_src+1
-  inc print_y
-  dec num_favorite_games
-  bne -
+  jsr favsel_draw_rows
   stz listsel_dirty
   jsr enable_screen_update
 select_favorite_choose:
@@ -2303,7 +2306,7 @@ select_favorite_choose:
   stz cover_request_pending
   stz cover_dirty
   stz cover_debounce
-  jsr menu_select_noinit
+  jsr favsel_navigate        ; scrolling viewport (defined below); returns like menu_select_noinit
   stz listcover_active       ; stop the per-frame hook before any context menu/command
   pha                        ; save the selection index (cover_sync clobbers A)
   jsr cover_sync_before_cmd  ; drain any in-flight cover load so the channel is idle
@@ -2347,6 +2350,163 @@ select_favorite_file_out
   plp
   rtl
 
+; ============================================================================
+; favsel_navigate: navigation loop for the Favorites list with a SCROLLING
+; viewport.  Mirrors menu_select_noinit (cursor bar via bar_xl/yl/wl, read_pad,
+; cover-on-highlight, A/B/Y) but only fav_visible rows are on screen at once:
+; listsel_sel is the ABSOLUTE selection (0..listsel_max-1), fav_top is the first
+; visible entry.  When the selection leaves the viewport, fav_top moves and the
+; visible rows are repainted (favsel_draw_rows).  Returns the selected index in A
+; (or $ff), with listsel_pickbutton = 00 (A) / 01 (Y) / ff (B), like menu_select.
+; A dedicated loop (not a flag bolted onto menu_select_noinit) keeps the config
+; menus -- which rely on the all-drawn no-scroll behaviour -- completely untouched.
+; Inherits the caller's DBR/DP=0 (same as the menu_select_noinit it replaces).
+; listsel_step is always 1 here, so bar_yl = window_y + (sel - fav_top) directly.
+; ============================================================================
+favsel_navigate:
+  php
+  sep #$20 : rep #$10 : .as : .xl
+  lda window_x               ; cursor-bar x/width from the window (as menu_select_noinit)
+  inc
+  inc
+  sta bar_xl
+  lda window_w
+  sec
+  sbc #$04
+  sta bar_wl
+  jsr favsel_bar_y
+favsel_loop:
+  lda isr_done
+  beq favsel_loop
+  stz isr_done
+  jsr printtime
+  jsr read_pad
+  lda listcover_active       ; Recent/Favorite cover-on-highlight
+  beq +
+  jsr listcover_update
++ lda pad_up
+  bne favsel_up
+  lda pad_down
+  bne favsel_down
+  lda pad_a
+  bne favsel_btn_a
+  lda pad_y
+  bne favsel_btn_y
+  lda pad_b
+  bne favsel_btn_b
+  bra favsel_loop
+favsel_up:
+  lda listsel_sel
+  beq favsel_loop            ; already at the first entry
+  jsr snd_fx_cursor
+  dec listsel_sel
+  lda listsel_sel
+  cmp fav_top
+  bcs +                      ; still visible -> just move the bar
+  dec fav_top                ; scrolled above the viewport -> scroll + repaint
+  jsr favsel_scroll_redraw
++ jsr favsel_bar_y
+  bra favsel_loop
+favsel_down:
+  lda listsel_sel
+  inc
+  cmp listsel_max
+  beq favsel_loop            ; already at the last entry
+  jsr snd_fx_cursor
+  inc listsel_sel
+  lda listsel_sel
+  sec
+  sbc fav_top
+  cmp fav_visible
+  bcc +                      ; still visible -> just move the bar
+  inc fav_top                ; past the bottom row -> scroll + repaint
+  jsr favsel_scroll_redraw
++ jsr favsel_bar_y
+  bra favsel_loop
+favsel_btn_a:
+  jsr snd_fx_confirm
+  lda #$00
+  sta listsel_pickbutton
+  lda listsel_sel
+  bra favsel_exit
+favsel_btn_y:
+  lda listsel_pickbutton
+  cmp #$01
+  bne favsel_loop            ; Y not allowed here
+  jsr snd_fx_confirm
+  lda #$01
+  sta listsel_pickbutton
+  lda listsel_sel
+  bra favsel_exit
+favsel_btn_b:
+  jsr snd_fx_back
+  lda #$ff
+  sta listsel_pickbutton
+favsel_exit:
+  plp
+  rts
+
+; bar_yl = window_y + (listsel_sel - fav_top)   [listsel_step is 1 for favorites]
+favsel_bar_y:
+  php
+  sep #$20 : .as
+  lda listsel_sel
+  sec
+  sbc fav_top
+  clc
+  adc window_y
+  sta bar_yl
+  plp
+  rts
+
+; favsel_scroll_redraw: full repaint after a scroll.  draw_window blanks the window
+; interior first (entries have no trailing padding -- sram_writestrn writes name+NUL
+; -- so without the clear a shorter entry scrolling in would leave the tail of the
+; previous longer entry on screen).  Screen DMA is held off across the redraw so the
+; NMI never uploads a half-built tilemap while the d-pad auto-repeats.
+favsel_scroll_redraw:
+  jsr disable_screen_update
+  jsr draw_window
+  jsr favsel_draw_rows
+  jsr enable_screen_update
+  rts
+
+; favsel_draw_rows: paint the fav_visible visible rows of the favorites window,
+; starting at entry fav_top.  Each FAVORITE_GAMES entry is 256 bytes (the high byte
+; of the pointer = entry index), so advancing one row is inc print_src+1.  Called on
+; the initial draw and after every scroll; fav_top is always clamped so the page is
+; full (no partial last page -> no row clearing needed).
+favsel_draw_rows:
+  php
+  sep #$20 : rep #$10 : .as : .xl
+  stz print_pal
+  lda #^FAVORITE_GAMES
+  sta print_bank
+  ldx #!FAVORITE_GAMES
+  stx print_src
+  lda print_src+1
+  clc
+  adc fav_top                ; + fav_top entries (each = 256 bytes = +1 high byte)
+  sta print_src+1
+  lda window_x
+  inc
+  inc
+  sta print_x
+  lda window_y
+  inc
+  sta print_y
+  lda fav_visible
+  sta fav_row_cnt
+- lda #56
+  sta print_count
+  jsr hiprint
+  inc print_src+1
+  inc print_y
+  dec fav_row_cnt
+  bne -
+  plp
+  rts
+
 ; TODO the following seven functions differ only in the command byte
 ;      sent to the MCU and whether the listsel_dirty flag is set.
 ;      consider merging!
@@ -2376,6 +2536,7 @@ add_selected_file_to_favorites:
 + lda #$55
   sta @MCU_CMD
   jsr pop_window
+  jsr favorites_full_msg     ; show "list full" popup if the MCU refused the add
   plb
   plp
   rtl
@@ -2407,9 +2568,33 @@ add_recent_file_to_favorites:
   sta @MCU_CMD
 ;  sta listsel_dirty
   jsr pop_window
+  jsr favorites_full_msg     ; show "list full" popup if the MCU refused the add
   plb
   plp
   rtl
+
+; favorites_full_msg: if the MCU set ST_FAVORITES_FULL (the add was refused because
+; the favorites list is at MAX_FAVORITE_GAMES), pop up a "list full" message and wait
+; for a keypress. DP is forced to 0 because show_empty_msg uses DP=0 window vars and
+; the add routines run via the FUNC_CLOSE dispatch (which can leave DP non-zero --
+; same reason select_favorite_file forces DP=0). Enter in .as; DBR already $7e.
+favorites_full_msg:
+  php
+  sep #$20 : .as
+  lda @ST_FAVORITES_FULL
+  beq +
+  phd
+  pea $0000
+  pld
+  rep #$10 : .xl
+  lda #^text_favorites_full
+  sta window_tbank
+  ldx #!text_favorites_full
+  stx window_taddr
+  jsr show_empty_msg
+  pld
++ plp
+  rts
 
 remove_selected_recent_file:
 ; have MCU remove the file from the recent list

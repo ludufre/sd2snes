@@ -136,6 +136,9 @@ listsel_max         .byt 0
 listsel_pickbutton  .byt 0
 listsel_dirty       .byt 0
 listsel_backup      .byt 0
+fav_top             .byt 0      ; favorites scroll: index of the first visible entry
+fav_visible         .byt 0      ; favorites scroll: rows on screen (min(count, FAV_VISMAX))
+fav_row_cnt         .byt 0      ; favorites scroll: favsel_draw_rows loop counter (temp)
 ips_idx_tmp         .byt 0      ; IPS menu: loop counter / result temp
 
 screen_dma_disable  .word 0

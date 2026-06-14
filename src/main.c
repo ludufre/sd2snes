@@ -114,7 +114,8 @@ static void stage_patch_from_entry(char *entry) {
    ROM otherwise.  Raw entry lands in file_lfn; patchpath is caller scratch. */
 static char *listed_game_sidecar_source(const uint8_t *listfile,
                                         char *patchpath, int size) {
-  cfg_get_listed_game_raw(listfile, file_lfn, snes_get_mcu_param() & 0xff);
+  cfg_get_listed_game_raw(listfile, file_lfn,
+                          listed_game_resolve_index(listfile, snes_get_mcu_param() & 0xff));
   return cfg_parse_patch_entry((char*)file_lfn, patchpath, size)
          ? patchpath : (char*)file_lfn;
 }
@@ -124,7 +125,7 @@ static char *listed_game_sidecar_source(const uint8_t *listfile,
    must stay.  For a plain entry, delete the ROM; revalidate_game_lists() then
    drops it from BOTH lists by file existence. */
 static void delete_listed_game_file(const uint8_t *listfile, const char *what) {
-  uint8_t idx = snes_get_mcu_param() & 0xff;
+  uint8_t idx = listed_game_resolve_index(listfile, snes_get_mcu_param() & 0xff);
   char patchpath[256];
   cfg_get_listed_game_raw(listfile, file_lfn, idx);
   if(cfg_parse_patch_entry((char*)file_lfn, patchpath, sizeof(patchpath))) {
@@ -512,7 +513,8 @@ int main(void) {
           cmd=0;
           break;
         case SNES_CMD_LOADFAVORITE:
-          cfg_get_listed_game_raw(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          cfg_get_listed_game_raw(FAVORITES_FILE, file_lfn,
+                                  listed_game_resolve_index(FAVORITES_FILE, snes_get_mcu_param() & 0xff));
           printf("Selected name: %s\n", file_lfn);
           cfg_add_listed_game(LAST_FILE, file_lfn, true);   /* lands in recents too, tag intact */
           stage_patch_from_entry((char*)file_lfn);
@@ -553,6 +555,10 @@ int main(void) {
           cic_videomode(CFG.vidmode_menu);
           fpga_set_dac_boost(CFG.msu_volume_boost);
           cfg_save();
+          /* re-dump favorites so a just-toggled SortFavorites takes effect the next
+             time the list opens (the dump honors CFG.sort_favorites). */
+          STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
+          status_load_to_menu();
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_LED_BRIGHTNESS:
@@ -563,7 +569,10 @@ int main(void) {
         case SNES_CMD_ADD_FAVORITE_ROM:
           get_selected_name(file_lfn);
           printf("Selected name: %s\n", file_lfn);
-          cfg_add_listed_game(FAVORITES_FILE, file_lfn, false);
+          /* returns 1 ONLY when the list is full and the game is not already in it
+             (0 = added, <0 = write error).  Report just the full case to the menu so
+             it can show a "list full" popup; the dump+status sync below carry it. */
+          STM.favorites_full = (cfg_add_listed_game(FAVORITES_FILE, file_lfn, false) == 1);
           STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
           status_load_to_menu();
           cmd=0; /* stay in menu loop */
@@ -572,7 +581,7 @@ int main(void) {
           /* RAW so a patched recent carries its "<rom>\t<patch>" tag into Favorites. */
           cfg_get_listed_game_raw(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
           printf("Selected name from recent: %s\n", file_lfn);
-          cfg_add_listed_game(FAVORITES_FILE, file_lfn, true);
+          STM.favorites_full = (cfg_add_listed_game(FAVORITES_FILE, file_lfn, false) == 1);
           STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
           status_load_to_menu();
           cmd=0;
@@ -584,7 +593,8 @@ int main(void) {
           cmd=0;
           break;
         case SNES_CMD_REMOVE_FAVORITE_ROM:
-          cfg_remove_listed_game(FAVORITES_FILE, snes_get_mcu_param() & 0xff);
+          cfg_remove_listed_game(FAVORITES_FILE,
+                                 listed_game_resolve_index(FAVORITES_FILE, snes_get_mcu_param() & 0xff));
           STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
           status_load_to_menu();
           cmd=0; /* stay in menu loop */
@@ -600,7 +610,8 @@ int main(void) {
         case SNES_CMD_SET_AUTOBOOT_FAV:
           /* RAW so the patch tag is stored in autoboot.cfg (round-trips on NUL);
              SNES_CMD_LOAD_AUTOBOOT re-applies the patch at boot. */
-          cfg_get_listed_game_raw(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          cfg_get_listed_game_raw(FAVORITES_FILE, file_lfn,
+                                  listed_game_resolve_index(FAVORITES_FILE, snes_get_mcu_param() & 0xff));
           printf("Set autoboot from favorite: %s\n", file_lfn);
           cfg_set_autoboot_rom(file_lfn);
           STM.autoboot_enabled = 1;
@@ -697,7 +708,8 @@ int main(void) {
           break;
         case SNES_CMD_LOAD_COVER_FAVORITE:
           /* small (downscaled) cover for the highlighted FAVORITE game */
-          cfg_get_listed_game(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          cfg_get_listed_game(FAVORITES_FILE, file_lfn,
+                              listed_game_resolve_index(FAVORITES_FILE, snes_get_mcu_param() & 0xff));
           load_cover(file_lfn, SRAM_COVER_ADDR);
           cmd=0; /* stay in menu loop */
           break;
