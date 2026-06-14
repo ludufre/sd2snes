@@ -115,7 +115,7 @@
 #define WRAM_WAIT_MCU               $7EF200
 #define WRAM_LOAD_ULTRA16_CFG       $7EF210
 
-#define ROOT_DIR                    $C10000
+#define ROOT_DIR                    $C20000
 
 #define NUM_CHEATS                  $FF0700
 #define CHEAT_ADDR                  $D00000

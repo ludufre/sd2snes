@@ -7,6 +7,7 @@ OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
 
 OUT = menu.bin m3nu.bin
+MENU_SIZE = 131072
 
 LOG = $(OBJS:=.log)
 MAP = $(IPS:.ips=.map) $(O65:.o65=.map)
@@ -36,6 +37,7 @@ $(OUT): $(OBJS)
 	sneslink -fsmc -o $@ $^ 2>&1 | tee link.log
 	@if grep -qE "ERROR:|still undefined|still not defined" link.log; then \
 	  echo "*** menu link FAILED — bank overflow or undefined symbol (see snes/link.log)"; exit 1; fi
+	@python3 -c "from pathlib import Path; p=Path('$@'); d=p.read_bytes(); target=$(MENU_SIZE); assert len(d) <= target, f'{p} too large: {len(d)} > {target}'; p.write_bytes(d + b'\xff' * (target - len(d)))"
 
 # in case link.log has been deleted
 link.log: $(OBJS)

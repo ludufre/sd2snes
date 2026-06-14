@@ -2586,8 +2586,8 @@ filesel_request_filelist_wait_mcu:
   jsr pop_window
 ; dirend_addr = (entry count reported by the firmware) * 4.  The firmware wrote
 ; the count into MCU_PARAM right after scan_dir; reading it back from the snescmd
-; region is reliable.  The old approach scanned the SDRAM directory table at $C1
-; from the SNES side here, but right after the firmware's write that read can come
+; region is reliable.  The old approach scanned the SDRAM directory table at $C2
+; (SRAM_DIR_ADDR) from the SNES side here, but right after the firmware's write that read can come
 ; back stale/partial (measured: dirend=$0018 for a 39-entry dir) -> a too-short
 ; dirend_addr that breaks R / page navigation.  DBR is $00 here so @MCU_PARAM and
 ; the dirend_addr store both resolve through the bank-0 WRAM mirror correctly.
@@ -2680,11 +2680,11 @@ fnl_enter_subdir:
   lda #$0000
   sta testvar+4           ; current entry byte offset = 0
 fnl_es_loop:
-  ; Point longptr at current entry in $C1
+  ; Point longptr at current entry in the directory pointer table (^ROOT_DIR = $C2)
   lda testvar+4
   sta longptr
   sep #$20 : .as
-  lda #$C1
+  lda #^ROOT_DIR
   sta longptr+2
   ; bank offset of entry (= 0 → end of list)
   rep #$10 : .xl
@@ -2729,15 +2729,15 @@ fnl_es_loop:
   sta [dirlog_idx], y     ; dirstart_addr = 0
   iny
   iny
-  lda #$00C1
-  sta [dirlog_idx], y     ; dirstart_bank lo = $C1 (hi byte overwritten next)
+  lda #$00C2
+  sta [dirlog_idx], y     ; dirstart_bank lo = $C2 (=^ROOT_DIR; hi byte overwritten next)
   iny
   lda testvar+4           ; dirptr_addr = entry offset (screen starts here on B)
   sta [dirlog_idx], y
   iny
   iny
-  lda #$00C1
-  sta [dirlog_idx], y     ; dirptr_bank lo = $C1
+  lda #$00C2
+  sta [dirlog_idx], y     ; dirptr_bank lo = $C2 (=^ROOT_DIR)
   iny
   lda #$0000
   sta [dirlog_idx], y     ; filesel_sel = 0
@@ -2834,7 +2834,7 @@ fnl_sf_loop:
   lda testvar+4
   sta longptr
   sep #$20 : .as
-  lda #$C1
+  lda #^ROOT_DIR
   sta longptr+2
   rep #$10 : .xl
   ldy #$0002

@@ -183,7 +183,7 @@ uart_putc('\n');
   /* Hand the authoritative entry count back to the menu through the snescmd
      param region (BRAM-backed, reliable to read from the SNES immediately).
      The menu sets dirend_addr = n*4 from this instead of scanning the SDRAM dir
-     table at $C1 itself, which can read a stale/partial buffer in the short
+     table at $C2 (SRAM_DIR_ADDR) itself, which can read a stale/partial buffer in the short
      window right after this write -> bogus short dirend -> broken pagination. */
   snescmd_writeshort(n, SNESCMD_MCU_PARAM);
 }
