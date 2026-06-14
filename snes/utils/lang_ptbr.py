@@ -204,4 +204,5 @@ TRANSLATIONS = {
     'mdesc_browser_restoremusic': 'Voltar a música do menu para o padrão (menu.spc)',
     'text_mm_language': 'Idioma',
     'mdesc_mm_language': 'Define o idioma do menu/firmware',
+    'mdesc_browser_menusfx': 'Tocar efeitos sonoros ao navegar pelo menu',
 }

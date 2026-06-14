@@ -34,6 +34,7 @@ Du brauchst:
 ## Was dieser Fork ergänzt
 
 - **Sprachen:** Wähle Brasilianisches Portugiesisch, Englisch, Spanisch oder Deutsch direkt im Menü.
+- **Optionsbeschreibungen:** eine kurze, übersetzte Hilfezeile für die ausgewählte Menüoption, in einem schwebenden Fenster (automatisch über oder unter dem Menü platziert).
 - **Spielecover:** Zeige das Cover jedes Spiels beim Durchsuchen deiner ROM-Liste.
 - **Menümusik:** Spiele einen `.spc`-Titel im Hintergrund ab, während du im Menü navigierst.
 - **Menü-Sounds:** optionale Navigations-Soundeffekte (Cursor, Bestätigen, Zurück, Fehler), die über den Audio-DAC des Moduls abgespielt werden, unabhängig von der Musik.

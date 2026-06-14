@@ -1,7 +1,7 @@
 IPS = header.ips
 # const_lang.o65 is generated from the English base const.a65 + the per-language
 # dicts (utils/lang_*.py) by utils/build_const.py -> multilingual const_lang.a65.
-O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 logo.o65 dma.o65 filesel.o65 cover.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 near.o65 patch.o65 cheatmenu.o65 # gfx.o65 # vars.o65
+O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 logo.o65 dma.o65 filesel.o65 cover.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 near.o65 patch.o65 cheatmenu.o65 # gfx.o65 # vars.o65
 
 OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
@@ -17,8 +17,10 @@ GENDEPFLAGS = -MM -MP -MF $(DEPDIR)/$(@F).d -MT $(@F)
 
 all: $(OUT) $(MAP)
 
-# Generate the const source from the English base + language dicts.
-const_lang.a65: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py
+# Generate the const source from the English base + language dicts. One run
+# emits both files: const_lang.a65 (bank $C0: neutral data) and const_lang_str.a65
+# (bank $C1: the localized string pool + dispatch tables) -> m3nu.bin spans 2 banks.
+const_lang.a65 const_lang_str.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py
 	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py -o const_lang.a65
 
 smc: menu.bin
@@ -54,7 +56,7 @@ link.log: $(OBJS)
 	snescom -I -J -Wall -o $(@:.log=) $< 2>&1 | tee $(@:.log=).log
 
 clean:
-	rm -f -- *~ *.ips *.o65 const_lang.a65 $(OUT) *.o65.log *.ips.log
+	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 $(OUT) *.o65.log *.ips.log
 
 -include $(info $(DEPDIR)) $(shell mkdir $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*)
 

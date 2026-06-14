@@ -34,6 +34,7 @@ You need:
 ## What This Fork Adds
 
 - **Languages:** choose Brazilian Portuguese, English, Spanish or German directly in the menu.
+- **Option descriptions:** a short, translated help line for the selected menu option, shown in a floating box (auto-placed above or below the menu).
 - **Game covers:** show each game's box art while browsing your ROM list.
 - **Menu music:** play an `.spc` track in the background while browsing.
 - **Menu sounds:** optional navigation sound effects (cursor, confirm, back, error) that play on the cartridge's audio DAC, independent of the music.

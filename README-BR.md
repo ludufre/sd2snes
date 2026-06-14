@@ -34,6 +34,7 @@ Você precisa de:
 ## O que este fork adiciona
 
 - **Idiomas:** escolha Português do Brasil, Inglês, Espanhol ou Alemão diretamente no menu.
+- **Descrições das opções:** uma linha de ajuda curta e traduzida para a opção de menu selecionada, numa caixa flutuante (posicionada acima ou abaixo do menu automaticamente).
 - **Capas dos jogos:** veja a capa de cada jogo enquanto navega pela lista de ROMs.
 - **Música no menu:** toque uma faixa `.spc` de fundo enquanto navega.
 - **Sons do menu:** efeitos sonoros de navegação opcionais (cursor, confirmar, voltar, erro) que tocam no DAC de áudio do cartucho, independentes da música.

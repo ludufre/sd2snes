@@ -77,6 +77,16 @@ coldboot:       ; Regular, cold-start init
   ; fork: menu sound effects - start with an empty SFX mailbox ($2A region is
   ; not touched by clear_wram; a stale value would play one ghost blip at boot).
   sta @SFX_MAILBOX
+  ; fork: the description-box gates live in the $7E WRAM data segment, which
+  ; clear_wram fills with $55 (NOT 0). Left non-zero, the Recent/Favorite lists
+  ; (menu_select_noinit) fire menu_desc_redraw on the first Up/Down with a garbage
+  ; desc_menu_ptr ($555555) and a garbage desc_box_h -> pop_window restores $55
+  ; tilemap rows -> the list/screen garbles. menu_desc_on is otherwise only ever
+  ; cleared inside show_menu, so a list opened straight from the file browser
+  ; (before any menu) inherits $55. Zero it here, like BGM_STATE/listcover_active.
+  ; (A is still #$00.)
+  sta @menu_desc_on
+  sta @menu_desc_shown
   jsr waitblank
   jsr snes_init
   jsr setup_gfx

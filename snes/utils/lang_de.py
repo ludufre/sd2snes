@@ -3,8 +3,8 @@
 Maps const.a65 string labels -> de text. The current menu font lacks some
 German glyphs, so those characters are written as ae/oe/ue/ss for predictable rendering.
 Placeholders: {129}=submenu icon, {127}{128}=ellipsis control bytes.
-mdesc_* item descriptions are NOT rendered by the current menu (build_const
-skips them), so they stay English at build time and cost no ROM space.
+mdesc_* item descriptions ARE rendered now (the selected option's help box) and
+localized like the rest; the pool lives in bank $C1 (see build_const.py).
 """
 
 TRANSLATIONS = {
@@ -206,4 +206,5 @@ TRANSLATIONS = {
     'mdesc_browser_restoremusic': 'Menue-Musik auf Standard zuruecksetzen (menu.spc)',
     'text_mm_language': 'Sprache',
     'mdesc_mm_language': 'Sprache fuer Menue/Firmware setzen',
+    'mdesc_browser_menusfx': 'Soundeffekte beim Navigieren durch das Menü abspielen',
 }
