@@ -1926,6 +1926,10 @@ show_empty_msg_wait:
 
 select_last_file:
   php
+  phd                        ; show_menu's FUNC dispatch (rtl) leaves DP at its AllocStack
+  pea $0000                  ; frame; the cover code reads [cover_ptr],y (DP-indirect) and
+  pld                        ; assumes DP=0 (see data.a65). Force DP=0 like the browser jsl
+                             ; path or the list cover renders scrambled/mis-coloured.
   sep #$20 : .as
   rep #$10 : .xl
   lda #$00
@@ -2046,12 +2050,16 @@ select_last_file_out:
   beq +
   jsr cover_hide
 + jsr enable_screen_update
+  pld                        ; restore caller's DP (matches the phd at entry)
   plp
   rtl
 
 select_favorite_file:
 ; shows a window with a list of favorite games
   php
+  phd                        ; force DP=0 (show_menu's FUNC dispatch leaves DP at its
+  pea $0000                  ; AllocStack frame; cover [cover_ptr],y assumes DP=0). See
+  pld                        ; select_last_file for the full explanation.
   sep #$20 : .as
   rep #$10 : .xl
   lda #$00
@@ -2173,6 +2181,7 @@ select_favorite_file_out
   beq +
   jsr cover_hide
 + jsr enable_screen_update
+  pld                        ; restore caller's DP (matches the phd at entry)
   plp
   rtl
 
