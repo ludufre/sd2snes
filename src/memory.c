@@ -244,6 +244,37 @@ uint16_t sram_writeblock(void* buf, uint32_t addr, uint16_t size) {
 }
 
 char current_filename[258];
+
+/* Does a file exist on the SD card? (lfname=NULL like main.c:stage_patch_from_entry) */
+static int file_exists(const char *path) {
+  FILINFO fno;
+  fno.lfname = NULL;
+  return f_stat((TCHAR*)path, &fno) == FR_OK;
+}
+
+/* basename: last path component (drops "/sd2snes/"). Used so the on-screen error
+   shows "dsp1b.bin", not the full path (which would overflow the popup). */
+static const char *basename_of(const char *path) {
+  const char *b = strrchr(path, '/');
+  return b ? b + 1 : path;
+}
+
+/* Abort a game load because a required chip BIOS/firmware is missing: push the
+   message to the menu's error region ($FF1000 code, $FF1001 string) and NACK the
+   handshake so the menu falls into game_handshake_error and shows it WITHOUT a
+   reset (it never left the menu). For a menu load (flags has no LOADROM_WAIT_SNES)
+   this only clears the FS error. `name` must be a short basename/chip string.
+   Always returns 0 -- call as `return load_abort_missing(...)`. */
+static uint32_t load_abort_missing(uint8_t flags, int err, const char *name) {
+  printf("load aborted: err=%d missing=%s\n", err, name ? name : "");
+  if(flags & LOADROM_WAIT_SNES) {
+    snes_menu_errmsg(err, (void*)(name ? name : ""));
+    snes_set_snes_cmd(0xaa);
+  }
+  file_res = FR_OK;
+  return 0;
+}
+
 uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   UINT bytes_read;
   DWORD filesize;
@@ -252,9 +283,9 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   tick_t ticksstart, ticks_total=0;
   ticksstart=getticks();
 
-  /* Leaving the menu to load a game/SPC: full SFX teardown so the DAC, SD and
-     feature set are free.  No-op (and harmless for a menu reload) otherwise. */
-  if(!is_menu) menu_sfx_shutdown();
+  /* NB: menu SFX teardown (menu_sfx_shutdown) is deferred to the commit point
+     below -- AFTER the prerequisite check -- so that an aborted game load (missing
+     chip BIOS -> NACK -> back to menu) leaves the menu sound intact. */
 
   // copy the full name and path
   strncpy(current_filename, (char *)filename, sizeof(current_filename)-1);
@@ -264,7 +295,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   if(file_res) {
     uart_putc('?');
     uart_putc(0x30+file_res);
-    return 0;
+    /* ROM vanished/SD glitch between selection and load: populate the error
+       region so the menu's popup names this file instead of showing stale bytes
+       from a previous abort (the main.c epilogue NACKs on a 0 return either way). */
+    return load_abort_missing(flags, MENU_ERR_FS, basename_of((const char*)filename));
   }
   filesize = file_handle.fsize; // won't be correct for combo roms
   
@@ -281,7 +315,11 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   uint8_t *sgb_filename = filename;
   DWORD sgb_filesize = file_handle.fsize;
   sgb_id(&sgb_romprops, sgb_filename);
-  if (!sgb_update_file(&filename)) return 0;
+  /* SGB SNES BIOS (sgbN_snes.bin) missing -> message + NACK (else the menu would
+     hang in game_handshake waiting for an ACK/NACK that never came). */
+  if (!sgb_update_file(&filename)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of(SGBSR));
+  }
 
   filesize = file_handle.fsize;
   smc_id(&romprops, file_offset);
@@ -313,8 +351,13 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     printf(" OK.\n");
   }
 
-  /* SGB assign the SGB FPGA file and relocate the snes image to the 512KB RAM */
-  if (!sgb_update_romprops(&romprops, sgb_filename)) return 0;
+  /* SGB assign the SGB FPGA file and relocate the snes image to the 512KB RAM.
+     A 0 here means the SGB SNES BIOS is PRESENT but fails the mapper/size/sram
+     requirements (sgb_update_file already verified existence), so report a generic
+     load error, not "file not found". */
+  if (!sgb_update_romprops(&romprops, sgb_filename)) {
+    return load_abort_missing(flags, MENU_ERR_FS, basename_of(SGBSR));
+  }
 
   uint16_t fpga_features_preload = romprops.fpga_features | FEAT_CMD_UNLOCK | FEAT_2100_LIMIT_NONE;
   if(is_menu) {
@@ -322,7 +365,54 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     fpga_set_features(fpga_features_preload);
     printf("OK.\n");
   }
-  /* TODO check prerequisites and set error code here */
+  /* Prerequisite check BEFORE the ACK: if a required chip BIOS/firmware file is
+     missing (or the chip is unimplemented), NACK the handshake so the menu shows
+     the error and stays alive (no reset), instead of booting a broken game. Gated
+     on LOADROM_WAIT_SNES (the SNES is parked in game_handshake able to take the
+     NACK): a menu load (flags 0) never needs these files, and the IPS/BPS recore
+     reload clears WAIT_SNES AFTER the SNES already ACKed/booted, so aborting there
+     would only desync MCU and SNES -- let it fall through as before. */
+  if(!is_menu && (flags & LOADROM_WAIT_SNES)) {
+    /* unimplemented chip (ST0011/ST0018/SPC7110): smc_id already flagged it */
+    if(romprops.error == MENU_ERR_NOIMPL) {
+      return load_abort_missing(flags, MENU_ERR_NOIMPL, (char*)romprops.error_param);
+    }
+    /* FPGA core (.bit) for the enhancement chip: SA-1/GSU/CX4/OBC1/S-DD1/DSP/SGB.
+       fpga_conf is NULL for plain LoROM/HiROM (those fall back to fpga_base, not
+       gated here); when set it is always a real /sd2snes/fpga_*.bit path. Without
+       it, fpga_pgm() fails silently and the game boots with no/wrong core. */
+    if(romprops.fpga_conf && !file_exists((const char*)romprops.fpga_conf)) {
+      return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
+                                basename_of((const char*)romprops.fpga_conf));
+    }
+    /* DSPx / ST0010 firmware. DSP1 may fall back to dsp1b.bin (see below). */
+    if(romprops.has_dspx && romprops.dsp_fw) {
+      if(!file_exists((const char*)romprops.dsp_fw)
+         && !(romprops.dsp_fw == DSPFW_1 && file_exists((const char*)DSPFW_1B))) {
+        return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
+                                  basename_of((const char*)romprops.dsp_fw));
+      }
+    }
+    /* BS-X BIOS + data page (mapper_id 3 = BS-X Flash cart); both are loaded by
+       the BS-X path below with their result ignored. */
+    if(romprops.mapper_id == 3) {
+      if(!file_exists("/sd2snes/bsxbios.bin")) {
+        return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxbios.bin");
+      }
+      if(!file_exists("/sd2snes/bsxpage.bin")) {
+        return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxpage.bin");
+      }
+    }
+    /* SGB boot ROM (sgbN_boot.bin); the SNES BIOS sgbN_snes.bin was already
+       checked by sgb_update_file above. */
+    if(sgb_romprops.has_sgb && !file_exists(SGBFW)) {
+      return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of(SGBFW));
+    }
+    /* Prerequisites OK -> committed to the load: NOW tear down menu SFX so the
+       DAC/SD/feature set are free for the game (deferred from the top of load_rom
+       so an aborted load above keeps the menu sound alive). */
+    menu_sfx_shutdown();
+  }
   if(flags & LOADROM_WAIT_SNES) {
     printf("Setting cmd=0x55...");
     snes_set_snes_cmd(0x55);

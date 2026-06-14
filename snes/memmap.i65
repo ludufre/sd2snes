@@ -129,6 +129,11 @@
 
 #define FILESEL_CWD                 $FF0000
 #define CFG_ADDR                    $FF0100
+#define MCU_ERR_CODE                $FF1000 /* MCU snes_menu_errmsg: error code (1 byte). 0=OK,2=SUPPLFILE(missing chip BIOS),3=NOIMPL(unsupported chip). game_handshake_error reads this. */
+#define MCU_ERR_MSG                 $FF1001 /* MCU error string (basename/chip name, NUL-term), $FF1001..$FF1040. NB overlaps SRAM_PARAM_ADDR($FF1004) on the MCU side -- benign, PARAM already consumed in this flow. */
+/* error codes -- must match MENU_ERR_* in src/snes.h */
+#define MENU_ERR_SUPPLFILE          $02
+#define MENU_ERR_NOIMPL             $03
 #define ST_MCU_ADDR                 $FF1100
 #define ST_SNES_ADDR                $FF1110
 #define SYSINFO_BLK                 $FF1200

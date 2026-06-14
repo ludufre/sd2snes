@@ -214,8 +214,10 @@ def main():
     #   mdesc_          word-wrapped across several lines by the description box;
     #                   the runtime truncates with an ellipsis, so this is just a
     #                   sanity cap to keep a translation from bloating the ROM.
+    #   text_err_*      show_error_msg box: window_w=28 -> interior ~26
+    #                   (game-load error popup, filesel.a65)
     WIDTH_LIMITS = (("text_no_", 22), ("cheat_tab_head", 48), ("mtext_", 40),
-                    ("mdesc_", 160))
+                    ("mdesc_", 160), ("text_err_", 26))
     WIDTH_DEFAULT = 56
 
     def encoded_len(text):

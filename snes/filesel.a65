@@ -1924,6 +1924,168 @@ show_empty_msg_wait:
   plp
   rts
 
+; show_error_msg: two-line game-load error popup (called by game_handshake_error
+; when the MCU NACKs a load because a chip BIOS/firmware is missing). Line 1 is a
+; localized template chosen by @MCU_ERR_CODE; line 2 is the raw NUL-terminated
+; basename/chip the MCU wrote at @MCU_ERR_MSG ($FF1001, bank $FF). Modeled on
+; show_empty_msg; waits for A/B/Start/Select, then closes. Menu stays alive (the
+; ROM never booted) -> returns to the browser with no reset.
+show_error_msg:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr cover_hide          ; hide the floating OBJ box-art cover (priority over the BG
+                          ; popup). Use cover_hide, NOT cover_menu_off: the latter
+                          ; invalidates cover_last_sel -> the browser fires a cover
+                          ; reload on return, and when the user mashes A to retry a
+                          ; missing-BIOS launch that reload's handshake + the MCU's
+                          ; MCU_CMD_RDY ($55 == ACK) re-arm race the retry's
+                          ; game_handshake spin, which reads the stray $55 as an ACK
+                          ; and jumps to the WRAM boot trampoline -> hang on "Loading".
+                          ; cover_hide leaves cover_dirty/cover_last_sel untouched so
+                          ; nothing re-fires (cover stays hidden until the next nav).
+  lda bar_xl              ; park the select bar off-screen (see show_empty_msg)
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #$ff
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+  lda #18                 ; w=28 -> centered x=(64-28)/2=18; h=5 fits 2 body lines
+  sta window_x
+  lda #12
+  sta window_y
+  lda #28
+  sta window_w
+  lda #5
+  sta window_h
+  lda #^zero              ; empty title -> closed top border
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsr push_window
+  jsr draw_window
+; ----- line 1: localized template, chosen by the error code -----
+  sep #$20 : .as
+  lda @MCU_ERR_CODE
+  cmp #MENU_ERR_SUPPLFILE
+  beq show_error_tpl_supplfile
+  cmp #MENU_ERR_NOIMPL
+  beq show_error_tpl_noimpl
+  rep #$20 : .al
+  lda #!text_err_generic
+  sta print_src
+  sep #$20 : .as
+  lda #^text_err_generic
+  sta print_bank
+  bra show_error_tpl_done
+show_error_tpl_supplfile:
+  rep #$20 : .al
+  lda #!text_err_supplfile
+  sta print_src
+  sep #$20 : .as
+  lda #^text_err_supplfile
+  sta print_bank
+  bra show_error_tpl_done
+show_error_tpl_noimpl:
+  rep #$20 : .al
+  lda #!text_err_noimpl
+  sta print_src
+  sep #$20 : .as
+  lda #^text_err_noimpl
+  sta print_bank
+show_error_tpl_done:
+  lda print_bank          ; resolve language + measure to center (as show_empty_msg)
+  ldy print_src
+  jsr resolve_yx
+  phb
+  pha
+  plb
+  jsr strlen              ; Y = length
+  plb
+  sep #$20 : .as
+  tya
+  sta window_tmp
+  lda window_w
+  sec
+  sbc window_tmp
+  bcs +
+  lda #$02
++ lsr
+  clc
+  adc window_x
+  sta print_x
+  lda window_y
+  inc                     ; line 1 = window_y + 1
+  sta print_y
+  stz print_pal
+  lda #56
+  sta print_count
+  jsr hiprint
+; ----- line 2: raw basename/chip from $FF1001 (bank $FF), not localized -----
+  rep #$20 : .al
+  lda #!MCU_ERR_MSG
+  sta print_src
+  sep #$20 : .as
+  lda #^MCU_ERR_MSG
+  sta print_bank
+  phb                     ; measure with DB = $FF so strlen reads $FF1001
+  lda print_bank
+  pha
+  plb
+  ldy print_src
+  jsr strlen              ; Y = length
+  plb
+  sep #$20 : .as
+  tya
+  sta window_tmp
+  lda window_w
+  sec
+  sbc window_tmp
+  bcs +
+  lda #$02
++ lsr
+  clc
+  adc window_x
+  sta print_x
+  lda window_y
+  inc                     ; line 2 = window_y + 2
+  inc
+  sta print_y
+  stz print_pal
+  lda #56
+  sta print_count
+  jsr hiprint
+  lda tgt_bright          ; autoboot reaches game_handshake_error BEFORE screen_on,
+  bne +                   ; so the popup would render on a 0%-brightness (black)
+  jsr screen_on           ; screen -- fade it in. No-op/flicker-free in the menu
++                         ; case where tgt_bright is already the brightness limit.
+  jsr enable_screen_update
+show_error_msg_wait:
+  lda isr_done
+  beq show_error_msg_wait
+  stz isr_done
+  jsr printtime
+  jsr read_pad
+  lda pad_a
+  ora pad_b
+  ora pad_start
+  ora pad_select
+  beq show_error_msg_wait
+  jsr snd_fx_back
+  jsr pop_window
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  plp
+  rts
+
 select_last_file:
   php
   phd                        ; show_menu's FUNC dispatch (rtl) leaves DP at its AllocStack

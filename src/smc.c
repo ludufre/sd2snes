@@ -106,6 +106,11 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->fpga_features = 0;
   props->fpga_dspfeat = 0;
   props->fpga_conf = NULL;
+  /* romprops is a persistent global: clear the error latch each id so a stale
+     MENU_ERR_NOIMPL from a previous unsupported-chip ROM can't reject the next
+     valid game (the prereq check in load_rom reads romprops.error). */
+  props->error = MENU_ERR_OK;
+  props->error_param = NULL;
   for(uint8_t num = 0; num < 6; num++) {
     score = smc_headerscore(hdr_addr[num], header, file_offset);
     //printf("%d: offset = %lX; score = %d\n", num, hdr_addr[num], score);

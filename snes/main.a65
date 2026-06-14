@@ -734,8 +734,12 @@ game_handshake:
   rts
 
 game_handshake_error:
-; TODO display meaningful error message
+; MCU NACKed the load (missing chip BIOS/firmware, or unsupported chip). The ROM
+; never booted -> the menu is still live. Close the loading window, show the error
+; (names the missing file/chip via @MCU_ERR_CODE/@MCU_ERR_MSG), return to the
+; browser. No reset.
   jsr pop_window
+  jsr show_error_msg
   plp
   rts
 

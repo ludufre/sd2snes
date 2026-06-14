@@ -359,6 +359,13 @@ text_last           .byt "Recent games", 0
 text_favorite       .byt "Favorite games", 0
 text_no_last        .byt "No recent games", 0
 text_no_favorite    .byt "No favorite games", 0
+
+; game-load error popup (game_handshake_error -> show_error_msg). line 1 = this
+; template (chosen by MCU_ERR_CODE), line 2 = the raw basename/chip from the MCU
+; ($FF1001). Keep <= 26 cols (text_err_ budget in build_const.py WIDTH_LIMITS).
+text_err_supplfile  .byt "Required file not found:", 0
+text_err_noimpl     .byt "Chip not supported:", 0
+text_err_generic    .byt "Load error:", 0
 text_system         .byt "CPU/PPU1/PPU2: a/b/c        VMode: x0Hz",0
 
 text_on_p1      .byt "On: P1", 0

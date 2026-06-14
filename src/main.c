@@ -447,6 +447,13 @@ int main(void) {
             cfg_add_listed_game(LAST_FILE, file_lfn, true);
           }
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
+          if(filesize) break; /* ROM loaded and SNES reset, exit menu loop */
+          /* load aborted (missing chip BIOS etc.): NACK so game_handshake_error
+             shows the message and returns to the browser; stay in the menu loop
+             (else the MCU drops into in-game mode while the SNES is still in menu). */
+          file_res = FR_OK;
+          snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          cmd=0;
           break;
         case SNES_CMD_QUERY_IPS_PATCHES: {
           uint8_t qpath[256];
@@ -499,6 +506,10 @@ int main(void) {
           cfg_add_listed_game(LAST_FILE, file_lfn, true);
           stage_patch_from_entry((char*)file_lfn);
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
+          if(filesize) break; /* booted, exit menu loop */
+          file_res = FR_OK;
+          snescmd_writebyte(0xaa, SNESCMD_SNES_CMD); /* NACK -> error popup, stay in menu */
+          cmd=0;
           break;
         case SNES_CMD_LOADFAVORITE:
           cfg_get_listed_game_raw(FAVORITES_FILE, file_lfn, snes_get_mcu_param() & 0xff);
@@ -506,6 +517,10 @@ int main(void) {
           cfg_add_listed_game(LAST_FILE, file_lfn, true);   /* lands in recents too, tag intact */
           stage_patch_from_entry((char*)file_lfn);
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
+          if(filesize) break; /* booted, exit menu loop */
+          file_res = FR_OK;
+          snescmd_writebyte(0xaa, SNESCMD_SNES_CMD); /* NACK -> error popup, stay in menu */
+          cmd=0;
           break;
 /*        case SNES_CMD_SET_ALLOW_PAIR:
           cfg_set_pair_mode_allowed(snes_get_mcu_param() & 0xff);
