@@ -29,7 +29,7 @@ Necesitas:
 > Este proyecto no incluye juegos/ROMs. Usa tus propios archivos obtenidos legalmente.
 
 > [!IMPORTANT]
-> **Hardware Mk.II:** el sd2snes original (Mk.II) tiene poca memoria de programa en el MCU, y este firmware ya está cerca de ese límite. Algunas funciones futuras podrían quedar **solo en Mk.III / FXPAK PRO** (o desactivadas en Mk.II) por falta de espacio. El Mk.III / FXPAK PRO no se ve afectado, y todo en esta versión funciona en ambos.
+> **Hardware Mk.II:** el sd2snes original (Mk.II) tiene poca memoria de programa en el MCU. Desde la **v2.12**, el bootstrap de la FPGA se carga desde la tarjeta SD en lugar del firmware, lo que liberó cerca de **21 KB** y le da al Mk.II bastante más margen. Sigue siendo la placa más justa de las dos, así que algunas funciones futuras podrían quedar **solo en Mk.III / FXPAK PRO** (o desactivadas en Mk.II) por falta de espacio. El Mk.III / FXPAK PRO no se ve afectado, y todo en esta versión funciona en ambos.
 
 ## Qué añade este fork
 
@@ -272,6 +272,20 @@ Comprueba que la opción **Sonidos del menú** esté activada, y que `sfx_cursor
 **Un parche no aparece.**
 
 Comprueba que el parche esté en la misma carpeta que la ROM, que empiece con el nombre de la ROM y que termine en `.ips` o `.bps`.
+
+**Mk.II (Spartan‑3): la pantalla queda en negro y un LED parpadea como una sirena.**
+
+A partir de la **v2.12**, en el **Mk.II** (FPGA Spartan‑3) el bootstrap de la FPGA (`fpga_mini`) se carga desde la tarjeta SD en lugar de ir incrustado en el firmware, lo que libera espacio de flash para las funciones del fork. (El Mk.III / FXPAK PRO no se ve afectado: sigue mostrando los mensajes en pantalla.) Por eso, cuando el Mk.II no puede mostrar la pantalla de arranque, indica el motivo mediante los **LED** en lugar de texto. Esto **no** es un fallo:
+
+- **Sin tarjeta SD** → sirena verde ↔ rojo. Inserta una tarjeta y apaga/enciende.
+
+  <img src="misc/led_no_sd.gif" width="100" alt="No SD card — green/red">
+
+- **`/sd2snes/fpga_mini.bit` ausente o ilegible** → sirena verde ↔ amarillo. Restáuralo desde el paquete de release y apaga/enciende.
+
+  <img src="misc/led_fpga_mini.gif" width="100" alt="No FPGA — green/yellow">
+
+`fpga_mini.bit` viene en el release v2.12+; basta con mantener los archivos del release en `/sd2snes/`.
 
 ## Notas avanzadas
 

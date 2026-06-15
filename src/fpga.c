@@ -39,11 +39,18 @@
 #include "led.h"
 #include "timer.h"
 #include "rle.h"
+#ifndef CONFIG_MK2
+/* mk2 loads the boot bitstream from SD (see fpga_rompgm), so it does NOT bake the
+   ~21 KB cfgware blob into the firmware. mk3/mk3-stm32 keep it embedded. */
 #include "cfgware.h"
+#endif
 
 uint8_t SPI_OFFLOAD;
 
 const uint8_t *fpga_config;
+/* Boot-display failure signal for the LEDs (read by led_error on SysTick):
+   0 = ok, 1 = no SD card, 2 = fpga_mini missing/unreadable. */
+uint8_t fpga_boot_led = 0;
 void fpga_set_prog_b(uint8_t val) {
   OUT_BIT(FPGA_PROGBREG, FPGA_PROGBBIT, val);
 }
@@ -152,10 +159,31 @@ void fpga_pgm(uint8_t* filename) {
   
   printf("FPGA configured\n");
   fpga_config = filename;
+  fpga_boot_led = 0; /* any successful config clears the boot-failure LED signal */
   fpga_postinit();
 }
 
 void fpga_rompgm() {
+#ifdef CONFIG_MK2
+  /* mk2: the boot-display config "fpga_mini" lives on the SD card (/sd2snes/
+     fpga_mini.bit) instead of being baked into the 128 KB firmware, reclaiming
+     ~21 KB.  fpga_mini is ONLY used to render boot-diagnostic screens (No SD /
+     menu-load error / fw-update progress) via the lazy bootstrap in snes.c; a
+     normal boot loads fpga_base from SD directly (main.c) and never calls this.
+     fpga_pgm() already does the full PROG_B/INIT_B/DONE handshake + retries and
+     returns cleanly if the file is absent (no hang, no led_panic on open-fail).
+     Trade-off: with a missing/unreadable SD there is no config to draw the
+     "insert card" message (blank screen) -- but USB is up and the bootldr can
+     still reflash from SD, so this is a recoverable no-boot, not a brick. */
+  /* Probe why the boot bitstream might be unavailable, for the LED signal:
+     no card (FR_NOT_READY) vs fpga_mini file missing/unreadable (other error). */
+  file_open((uint8_t*)FPGA_MINI, FA_READ);
+  if(file_res == FR_NOT_READY)   fpga_boot_led = 1;       /* no SD card */
+  else if(file_res != FR_OK)     fpga_boot_led = 2;       /* fpga_mini missing/unreadable */
+  else { fpga_boot_led = 0; file_close(); }               /* present (fpga_pgm reopens it) */
+  fpga_pgm((uint8_t*)FPGA_MINI);
+  fpga_config = FPGA_ROM; /* keep the boot-display marker (main.c FPGA_ROM check) */
+#else
   int MAXRETRIES = 10;
   int retries = MAXRETRIES;
   uint8_t data;
@@ -205,5 +233,6 @@ void fpga_rompgm() {
   printf("FPGA configured\n");
   fpga_config = FPGA_ROM;
   fpga_postinit();
+#endif
 }
 
