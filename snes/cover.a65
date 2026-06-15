@@ -315,7 +315,13 @@ cu_enabled:
   beq cu_same
   sta cover_last_sel
   sep #$20 : .as
-  lda #COVER_DEBOUNCE
+  ; selection moved: hide the previous cover NOW so it doesn't linger on screen
+  ; while scrolling (the debounce delays the new cover; without this the last
+  ; loaded box-art stays visible the whole time the d-pad is held).
+  lda cover_loaded
+  beq +
+  jsr cover_hide
++ lda #COVER_DEBOUNCE
   sta cover_debounce
   lda #$01
   sta cover_dirty
