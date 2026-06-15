@@ -36,6 +36,7 @@ Du brauchst:
 - **Sprachen:** Wähle Brasilianisches Portugiesisch, Englisch, Spanisch oder Deutsch direkt im Menü.
 - **Optionsbeschreibungen:** eine kurze, übersetzte Hilfezeile für die ausgewählte Menüoption, in einem schwebenden Fenster (automatisch über oder unter dem Menü platziert).
 - **Spielecover:** Zeige das Cover jedes Spiels beim Durchsuchen deiner ROM-Liste.
+- **Spielinfo-Bildschirm:** Bevor eine ROM startet, siehst du eine Detailseite mit Cover, Screenshot und Metadaten (Entwickler, Jahr, Spieler, Genre, Spezialchip) plus einer kurzen Beschreibung, gelesen aus `/sd2snes/info/<rom>.yml`. ROMs ohne Info-Eintrag starten direkt. Umschaltbar in den *Browser-Einstellungen* (standardmäßig an).
 - **Menümusik:** Spiele einen `.spc`-Titel im Hintergrund ab, während du im Menü navigierst.
 - **Menü-Sounds:** optionale Navigations-Soundeffekte (Cursor, Bestätigen, Zurück, Fehler), die über den Audio-DAC des Moduls abgespielt werden, unabhängig von der Musik.
 - **IPS/BPS-Patches:** Wähle Übersetzungen, Hacks oder Fix-Patches vor dem Start eines Spiels aus, ohne die ROM-Datei auf der SD-Karte zu verändern.

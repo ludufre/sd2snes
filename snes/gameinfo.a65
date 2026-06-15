@@ -1,0 +1,659 @@
+.link page $c0
+
+#include "memmap.i65"
+#include "dma.i65"
+
+; ===========================================================================
+; Pre-boot game info screen.
+;
+; Split layout, matching the menu's own mode-3-header / mode-5-body structure:
+;   rows 0..15  (mode 3) : a DirectColor (CG-Direct-Select) BG1 image - the cover
+;                          + screenshot composited (utils/gen_dcimage.py, .gd).
+;   rows 16..27 (mode 5) : the metadata + wrapped description, drawn with the SAME
+;                          hiprint hires text the rest of the menu uses.
+; A boots, B returns. Auto-skips when the ROM has no /sd2snes/info/<rom>.yml.
+;
+; The HDMA mode-switch channel is repointed at our own table so mode 3 covers the
+; top 128 lines and mode 5 the rest; $2130.0 turns on Direct Select for the 8bpp
+; band; the other HDMA channels (CGRAM gradient, colour math, scroll) are off.
+;
+; VRAM: the menu's text fonts stay put (BG1 char base word $0000, BG2 $4000) so
+; hiprint keeps working. BG1's char base is fixed, so an 8bpp tile #N reads from word
+; N*$20: the 8bpp image goes into TWO free windows -- $2000-$3FFF (= 8bpp tile #256..511)
+; and $6000-$7FFF (= #768..1023) -- so the band tilemap numbers 0..255 remap +256 and
+; 256.. remap +512 on upload (the body's mode-5 4bpp font tiles stay #0..511 at words
+; $0000-$1FFF, no collision). We drive all VRAM writes ourselves in forced blank
+; (screen_dma_disable on); the menu is restored on exit (setup_gfx/video_init/setup_hdma).
+; ===========================================================================
+
+#define GI_IMG_VRAM0     $2000     ; 8bpp image tiles, window 0 ($2000-$3FFF = tile #256..511)
+#define GI_IMG_VRAM1     $6000     ; 8bpp image tiles, window 1 ($6000-$7FFF = tile #768..1023)
+#define GI_BG1_TMAP      $5800
+#define GI_BG2_TMAP      $5000
+#define GI_TMAP_BUF      $7E2000   ; WINDOW_STACK_BASE scratch (remapped band tilemap)
+#define GI_BAND_ROWS     16        ; image band height in tile rows (rows 0..15)
+#define GI_BAND_TMAP_B   $0400     ; 32*16*2 bytes
+#define GI_BODY_ROW0     16        ; first body (text) row
+
+; body text layout (hiprint half-columns; mode 5 hires = 64 cols). Row 16 (the first
+; mode-5 row) is left BLANK as a seam margin: the BGMODE switch glitches its top scanline,
+; which shows up in blank/space cells (it garbled the title when the title sat on row 16).
+#define GI_DESC_IW       58
+#define GIB_TITLE_ROW    17
+#define GIB_LBL_X        2
+#define GIB_VAL_X        18
+#define GIB_META_ROW     18
+#define GIB_DESC_X       2
+#define GIB_DESC_R0      23
+#define GIB_DESC_RL      26
+#define GIB_FOOT_ROW     27
+
+; -- gameinfo_select_file: drop-in for the `jsr ips_select_file` in filesel.a65.
+gameinfo_select_file:
+  lda @CFG_SHOW_GAME_INFO
+  beq gisf_to_ips
+  jsr gameinfo_maybe_show
+  bcc gisf_to_ips
+  rts
+gisf_to_ips:
+  rep #$20 : .al
+  lda filesel_sel
+  and #$00ff
+  asl
+  asl
+  tay
+  sep #$20 : .as
+  iny
+  iny
+  iny
+  jmp ips_select_file
+
+gameinfo_maybe_show:
+  jsr gameinfo_query
+  lda @GI_STATUS
+  cmp #GI_STATUS_OK
+  bne gms_noinfo
+  jsr gi_dc_show
+  jsr gi_input
+  jsr gi_dc_restore
+  lda gi_result
+  bne gms_cancel
+  clc
+  rts
+gms_cancel:
+  sec
+  rts
+gms_noinfo:
+  clc
+  rts
+
+gameinfo_query:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  phb
+  lda #$00
+  pha
+  plb
+  jsr cover_sync_before_cmd
+  jsr cover_fill_param_for_current_sel
+  jsr draw_loading_window
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_GAME_INFO
+  sta @MCU_CMD
+  jsl @WRAM_WAIT_MCU
+  jsr pop_window
+  plb
+  plp
+  rts
+
+; gi_input: poll A (play) / B (back). NMI stays ON during the screen (screen_dma_disable=1
+; makes the menu NMI skip its tilemap DMA, so our static screen survives) so the hardware
+; auto-joypad keeps latching $4218 -- read_pad's edge detection then works like the browser.
+; FIRST drain the A/B that OPENED the screen (still held): without that, that same press is
+; re-read as a fresh Play edge and the game boots instantly. .as/.xl.
+gi_input:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+gin_drain:
+  jsr gin_syncread
+  rep #$20 : .al
+  lda pad1mem
+  and #$8080                 ; A ($0080) or B ($8000) still HELD? (level, not edge)
+  sep #$20 : .as
+  bne gin_drain
+gin_loop:
+  jsr gin_syncread
+  lda pad_a
+  bne gin_play
+  lda pad_b
+  bne gin_back
+  bra gin_loop
+gin_play:
+  jsr snd_fx_confirm
+  stz gi_result
+  plp
+  rts
+gin_back:
+  jsr snd_fx_back
+  lda #$01
+  sta gi_result
+  plp
+  rts
+
+; gin_syncread: one debounced joypad sample. Sync on the NMI's isr_done (like the browser),
+; then spin until HVBJOY.0 ($4212 bit0 = auto-read busy) clears -- the auto-joypad latches
+; $4218 serially with A (low byte) LAST, so reading at vblank start catches B but misses A.
+; Then read_pad. .as/.xl in, returns whatever read_pad left.
+gin_syncread:
+gsr_nmi:
+  lda isr_done
+  lsr
+  bcc gsr_nmi
+  stz isr_done
+gsr_joy:
+  lda $4212
+  lsr
+  bcs gsr_joy
+  jmp read_pad               ; tail call: read_pad's rts returns to gin_syncread's caller
+
+; ===========================================================================
+; Build the screen
+; ===========================================================================
+gi_dc_show:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  phb
+  lda #$00
+  pha
+  plb
+  ; --- Take over the screen DMA BEFORE the next NMI so it skips its tilemap DMA. NMI stays
+  ;     ON (and so does auto-joypad) so read_pad works in gi_input like the browser; the NMI
+  ;     only does bar/window/brightness, which don't touch our image/text VRAM. ---
+  lda #$01 : sta screen_dma_disable
+  jsr waitblank
+  lda #$8f : sta $2100       ; forced blank
+  stz $420c                  ; ALL HDMA off during our GP-DMA uploads (as setup_gfx does)
+  ; --- base mode 3; ch3 HDMA will flip BGMODE to mode 5 at the band/body seam (line
+  ;     128). SET UP ch3 here but DO NOT enable $420c yet: HDMA fires every scanline even
+  ;     in forced blank, and the menu's proven ordering (setup_gfx `stz $420c` during the
+  ;     heavy GP-DMAs, setup_hdma enables $420c only afterwards at vblank) must be matched
+  ;     -- enabling HDMA while our channel-7 GP-DMA uploads run blacks the screen. We point
+  ;     ch3 at OUR 7-byte table (the menu's hdma_mode WRAM buffer is only 5 bytes, too
+  ;     small for a 128-line band). gi_dc_restore -> setup_hdma repoints ch3 + re-enables. ---
+  lda #$03 : sta $2105
+  ; copy the 7-byte BGMODE table into WRAM (HDMA must fetch its table from WRAM, not ROM
+  ; -- the menu copies hdma_mode_src->hdma_mode for exactly this reason). 128 lines mode 3
+  ; (band rows 0..15) then mode 5; hold-count maxes at 127 so 127+1 lines.
+  lda #127 : sta @gi_hdma_mode
+  lda #$03 : sta @gi_hdma_mode+1
+  lda #$01 : sta @gi_hdma_mode+2
+  lda #$03 : sta @gi_hdma_mode+3
+  lda #$01 : sta @gi_hdma_mode+4
+  lda #$05 : sta @gi_hdma_mode+5
+  lda #$00 : sta @gi_hdma_mode+6
+  lda #$00 : sta $4330       ; ch3: A->B, direct, 1 reg, 1 byte/line
+  lda #$05 : sta $4331       ; dest = $2105 (BGMODE)
+  ldx #!gi_hdma_mode
+  stx $4332
+  lda #^gi_hdma_mode
+  sta $4334
+  ; --- the menu's BACKGROUND gradient: ch1 holds CG address = 0 (backdrop) per line, ch2
+  ;     writes the per-scanline teal colour to $2122 -> CGRAM[0] gets the menu's gradient.
+  ;     Reuse the menu's runtime tables (hdma_cg_addr / hdma_pal) so the info screen's
+  ;     background matches the browser. (These are re-set here to be self-contained.) ---
+  lda #$00 : sta $4310       ; ch1: 1 reg, direct, 1 byte/line
+  lda #$21 : sta $4311       ; dest = $2121 (CGADD)
+  ldx #!hdma_cg_addr
+  stx $4312
+  lda #^hdma_cg_addr
+  sta $4314
+  lda #$02 : sta $4320       ; ch2: 1 reg, write-twice (15-bit colour)
+  lda #$22 : sta $4321       ; dest = $2122 (CGDATA)
+  ldx #!hdma_pal
+  stx $4322
+  lda #^hdma_pal
+  sta $4324
+  ; --- PPU: Direct Select on the band ($2130.0); the mode-5 body needs the H-512 sub-
+  ;     screen ($212d == $212c, $2130 D4/D5 per manual ch.19); $2133.3 pseudo-512 stays
+  ;     OFF (it only affects modes 0-4 and was what vertical-lined the direct-colour band). ---
+  ; EXPERIMENT: match the menu's proven mode-5 body register state exactly (the menu
+  ; renders clean hi-res text with these). Band artifacts (pseudo-512 lines, H shift) are
+  ; expected for now -- once the body text is confirmed clean these band-specific regs
+  ; ($2133, BG1 H) get HDMA'd off for the band lines.
+  lda #$11 : sta $2130       ; D0 Direct Select + D4 (menu uses $10; +$01 for the band)
+  stz $2131                  ; no colour math
+  lda #$08 : sta $2133       ; pseudo-512 ON (menu's mode-5 text setup; setup_224 does this)
+  lda #$1f : sta $212e       ; window mask main = sub (menu uses $1f/$1f)
+  lda #$1f : sta $212f
+  lda #$03 : sta $212c       ; main screen: BG1 + BG2 (no OBJ)
+  lda #$03 : sta $212d       ; sub screen: BG1 + BG2 (= main, required for mode-5 H-512)
+  lda #$fc : sta $210d : stz $210d   ; BG1 H scroll = $00fc (menu's body hi-res alignment)
+  stz $210e : stz $210e      ; BG1 V scroll = 0
+  stz $210f : stz $210f      ; BG2 H scroll = 0
+  stz $2110 : stz $2110       ; BG2 V scroll = 0
+  lda #$80 : sta $2115       ; VRAM inc +1 word
+  ; --- reload the base palette for the hiprint text colours (CGRAM[1..255]). CGRAM[0]
+  ;     (backdrop) is left to the ch1/ch2 gradient HDMA above -> menu-style teal background
+  ;     behind the band's transparent pixels and the mode-5 body. ---
+  stz $2121
+  DMA7(#$00, #$0200, #^palette, #!palette, #$22)
+  ; --- build the screen ---
+  jsr gi_upload_band         ; image tiles + remapped band tilemap; clear BG2 band
+  jsr gi_draw_body           ; hiprint metadata + wrapped description (mode-5 body)
+  ; --- now (all GP-DMAs done) enable ONLY ch3 at vblank, then unblank. ch3 holds the
+  ;     mode-3/mode-5 split; the screen is otherwise static. Pin cur/tgt brightness so the
+  ;     NMI's fade leaves $2100 alone (else it drifts our brightness each frame). ---
+  jsr waitblank
+  lda #$0e : sta $420c       ; enable ch1+ch2 (CGRAM gradient) + ch3 (mode switch); scroll
+                             ; / colour-math HDMA stay off
+  lda @CFG_BRIGHTNESS_LIMIT
+  sta cur_bright
+  sta tgt_bright
+  sta menu_brightness
+  sta $2100
+  plb
+  plp
+  rts
+
+; -- gi_upload_band: stage the DirectColor image into TWO VRAM windows. With BG1 char
+;    base fixed at word $0000, an 8bpp tile #N reads from word N*$20: window 0 ($2000) is
+;    tile #256, window 1 ($6000) is tile #768. Tiles 0..255 go to window 0, 256..511 to
+;    window 1; the band tilemap numbers are remapped (+256 / +512) and written to BG1 rows
+;    0..15; the BG2 band rows are cleared (transparent). .as/.xl.
+gi_upload_band:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @GI_FLAGS
+  and #GI_FLAG_IMAGE
+  bne giub_go
+  plp
+  rts                          ; no image -> black band
+giub_go:
+  ; tiles 0..255 -> window 0 ($2000-$3FFF). DMA the whole window; >256 unique tiles spill
+  ; to window 1 below, <256 leaves unreferenced tiles (harmless).
+  ldx #GI_IMG_VRAM0
+  stx $2116
+  DMA7(#$01, #$4000, #^GI_TILES, #!GI_TILES, #$18)
+  ; tiles 256.. -> window 1 ($6000-$7FFF), only if num_tiles > 256
+  rep #$20 : .al
+  lda @GI_IMG_NTILES
+  cmp #257
+  bcc giub_tmap
+  sec
+  sbc #256
+  asl : asl : asl : asl : asl : asl   ; *64 = byte count for window 1
+  sta gi_pos
+  sep #$20 : .as
+  ldx #GI_IMG_VRAM1
+  stx $2116
+  lda #$01 : sta $4370
+  lda #$18 : sta $4371
+  rep #$20 : .al
+  lda #!GI_TILES+$4000 : sta $4372    ; source = GI_TILES + 256*64
+  lda gi_pos : sta $4375
+  sep #$20 : .as
+  lda #^GI_TILES : sta $4374
+  lda #$80 : sta $420b
+giub_tmap:
+  ; remap the band tilemap into the WRAM buffer, then DMA -> BG1 rows 0..15
+  jsr gi_remap_tilemap
+  ldx #GI_BG1_TMAP
+  stx $2116
+  DMA7(#$01, #GI_BAND_TMAP_B, #^GI_TMAP_BUF, #!GI_TMAP_BUF, #$18)
+  ; clear the BG2 band (rows 0..15) so the image shows through
+  ldx #GI_BG2_TMAP
+  stx $2116
+  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
+  plp
+  rts
+
+; -- gi_remap_tilemap: GI_TMAP (32x16 entries, tile #0..511) -> GI_TMAP_BUF, remapping each
+;    entry to its VRAM window (#<256 -> +256 = window 0 $2000; #>=256 -> +512 = window 1 $6000).
+gi_remap_tilemap:
+  php
+  rep #$30 : .al : .xl
+  ldx #$0000
+grt_loop:
+  lda @GI_TMAP, x
+  and #$03ff                  ; tile number (ignore any flip/pal bits)
+  cmp #$0100
+  bcc grt_lo
+  clc
+  adc #$0200                  ; #>=256 -> +512 (window 1, tile #768..)
+  bra grt_store
+grt_lo:
+  clc
+  adc #$0100                  ; #<256 -> +256 (window 0, tile #256..)
+grt_store:
+  sta @GI_TMAP_BUF, x
+  inx
+  inx
+  cpx #GI_BAND_TMAP_B
+  bcc grt_loop
+  plp
+  rts
+
+; ===========================================================================
+; Body text (rows 16..27), drawn with hiprint then DMA'd to VRAM
+; ===========================================================================
+gi_draw_body:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; clear the body rows of the BG tile buffers (rows 16..27)
+  jsr gi_clear_body_buf
+  ; title
+  lda #GIB_TITLE_ROW : sta print_y
+  lda #GIB_LBL_X : sta print_x
+  stz print_pal
+  lda #60 : sta print_count
+  ldx #!GI_TITLE : lda #^GI_TITLE
+  jsr gi_puts
+  ; metadata
+  lda #GIB_META_ROW : sta print_y
+  jsr gi_meta_lbl
+  ldx #!text_gi_developer : lda #^text_gi_developer
+  jsr gi_puts
+  jsr gi_meta_val
+  ldx #!GI_DEVELOPER : lda #^GI_DEVELOPER
+  jsr gi_puts
+  lda #GIB_META_ROW+1 : sta print_y
+  jsr gi_meta_lbl
+  ldx #!text_gi_year : lda #^text_gi_year
+  jsr gi_puts
+  jsr gi_meta_val
+  ldx #!GI_YEAR : lda #^GI_YEAR
+  jsr gi_puts
+  lda #GIB_META_ROW+2 : sta print_y
+  jsr gi_meta_lbl
+  ldx #!text_gi_players : lda #^text_gi_players
+  jsr gi_puts
+  jsr gi_meta_val
+  ldx #!GI_PLAYERS : lda #^GI_PLAYERS
+  jsr gi_puts
+  lda #GIB_META_ROW+3 : sta print_y
+  jsr gi_meta_lbl
+  ldx #!text_gi_genre : lda #^text_gi_genre
+  jsr gi_puts
+  jsr gi_meta_val
+  ldx #!GI_GENRE : lda #^GI_GENRE
+  jsr gi_puts
+  lda #GIB_META_ROW+4 : sta print_y
+  jsr gi_meta_lbl
+  ldx #!text_gi_chip : lda #^text_gi_chip
+  jsr gi_puts
+  jsr gi_meta_val
+  ldx #!GI_CHIP : lda #^GI_CHIP
+  jsr gi_puts
+  ; description (wrapped)
+  jsr gi_draw_desc
+  ; footer
+  lda #GIB_FOOT_ROW : sta print_y
+  lda #GIB_DESC_X : sta print_x
+  stz print_pal
+  lda #40 : sta print_count
+  ldx #!text_gi_footer : lda #^text_gi_footer
+  jsr gi_puts
+  ; --- DMA the body rows (16..27) of both buffers to VRAM ---
+  ldx #GI_BG1_TMAP+GI_BODY_ROW0*32
+  stx $2116
+  DMA7(#$01, #12*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF+GI_BODY_ROW0*64, #$18)
+  ldx #GI_BG2_TMAP+GI_BODY_ROW0*32
+  stx $2116
+  DMA7(#$01, #12*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF+GI_BODY_ROW0*64, #$18)
+  plp
+  rts
+
+; -- gi_clear_body_buf: zero rows 16..27 of BG1_TILE_BUF and BG2_TILE_BUF. .as/.xl.
+gi_clear_body_buf:
+  php
+  rep #$30 : .al : .xl
+  ldx #GI_BODY_ROW0*64
+  lda #$0000
+gcb_loop:
+  sta @BG1_TILE_BUF, x
+  sta @BG2_TILE_BUF, x
+  inx
+  inx
+  cpx #28*64
+  bcc gcb_loop
+  plp
+  .as                          ; CRITICAL: plp restores 8-bit A at runtime, but the
+                               ; rep #$30/.al above leaves the ASSEMBLER in .al, which
+                               ; would leak into gi_meta_lbl/gi_meta_val below and size
+                               ; their `lda #imm` as 16-bit (3 bytes) while they run in
+                               ; 8-bit -> the stray 3rd byte executes as BRK -> crash.
+  rts
+
+; -- gi_puts: hiprint a string. A = bank, X = addr; print_x/y/pal/count preset. ----
+gi_puts:
+  sta print_bank
+  stx print_src
+  jmp hiprint
+
+; gi_meta_lbl/gi_meta_val run in .as/.xl (caller's state); declare it so the immediates
+; assemble as 8-bit regardless of any preceding .al directive.
+gi_meta_lbl:
+  .as : .xl
+  lda #GIB_LBL_X : sta print_x
+  stz print_pal
+  lda #14 : sta print_count
+  rts
+gi_meta_val:
+  .as : .xl
+  lda #GIB_VAL_X : sta print_x
+  lda #$02 : sta print_pal
+  lda #44 : sta print_count
+  rts
+
+; -- gi_draw_desc: wrap GI_DESCRIPTION into rows GIB_DESC_R0..GIB_DESC_RL via hiprint.
+gi_draw_desc:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr gi_desc_ptr
+  ldy #$0000
+  lda [longptr], y
+  bne gdd_go
+  plp
+  rts
+gdd_go:
+  lda #GIB_DESC_R0 : sta gi_dy
+  stz gi_done
+  rep #$20 : .al
+  stz gi_ls
+  sep #$20 : .as
+gdd_loop:
+  jsr gi_wrap_one
+  lda #GIB_DESC_X : sta print_x
+  lda gi_dy : sta print_y
+  stz print_pal
+  lda #GI_DESC_IW+2 : sta print_count
+  rep #$20 : .al
+  lda #!stringbuf : sta print_src
+  sep #$20 : .as
+  lda #^stringbuf : sta print_bank
+  jsr hiprint
+  jsr gi_desc_ptr
+  lda gi_done
+  bne gdd_done
+  inc gi_dy
+  lda gi_dy
+  cmp #GIB_DESC_RL+1
+  bcc gdd_loop
+gdd_done:
+  plp
+  rts
+
+gi_desc_ptr:
+  rep #$20 : .al
+  lda #!GI_DESCRIPTION : sta longptr
+  sep #$20 : .as
+  lda #^GI_DESCRIPTION : sta longptr+2
+  rts
+
+; -- gi_wrap_one: one wrapped line of GI_DESCRIPTION -> stringbuf (NUL-term). -------
+gi_wrap_one:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda gi_ls : sta gi_pos
+  lda #$ffff : sta gi_lastsp
+  sep #$20 : .as
+  ldx #$0000
+gw_scan:
+  cpx #GI_DESC_IW
+  bcs gw_atwidth
+  rep #$20 : .al
+  lda gi_pos
+  tay
+  sep #$20 : .as
+  lda [longptr], y
+  beq gw_eos
+  cmp #$20
+  bne gw_nosp
+  rep #$20 : .al
+  lda gi_pos : sta gi_lastsp
+  sep #$20 : .as
+gw_nosp:
+  rep #$20 : .al
+  inc gi_pos
+  sep #$20 : .as
+  inx
+  bra gw_scan
+gw_atwidth:
+  rep #$20 : .al
+  lda gi_pos
+  tay
+  sep #$20 : .as
+  lda [longptr], y
+  beq gw_eos
+  cmp #$20
+  beq gw_break_skip
+  rep #$20 : .al
+  lda gi_lastsp
+  cmp #$ffff
+  bne gw_break_space
+  sep #$20 : .as
+  bra gw_hardbreak
+gw_break_space:
+  sta gi_pos
+  sep #$20 : .as
+gw_break_skip:
+  jsr gw_copy_line
+  rep #$20 : .al
+  lda gi_pos
+  inc
+  sta gi_ls
+  sep #$20 : .as
+  bra gw_trunc
+gw_hardbreak:
+  jsr gw_copy_line
+  rep #$20 : .al
+  lda gi_pos : sta gi_ls
+  sep #$20 : .as
+  bra gw_trunc
+gw_eos:
+  jsr gw_copy_line
+  lda #$01 : sta gi_done
+  plp
+  rts
+gw_trunc:
+  lda gi_dy
+  cmp #GIB_DESC_RL
+  bcc gw_out
+  jsr gw_append_ellipsis
+  lda #$01 : sta gi_done
+gw_out:
+  plp
+  rts
+
+gw_copy_line:
+  php
+  rep #$30 : .al : .xl
+  ldy gi_ls
+  ldx #$0000
+gcl_loop:
+  cpy gi_pos
+  bcs gcl_done
+  sep #$20 : .as
+  lda [longptr], y
+  sta !stringbuf, x
+  rep #$20 : .al
+  iny
+  inx
+  bra gcl_loop
+gcl_done:
+  sep #$20 : .as
+  lda #$00
+  sta !stringbuf, x
+  plp
+  rts
+
+gw_append_ellipsis:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+gae_findnul:
+  lda !stringbuf, x
+  beq gae_found
+  inx
+  bra gae_findnul
+gae_found:
+  cpx #$0002
+  bcs +
+  ldx #$0002
++ dex
+  dex
+  lda #127
+  sta !stringbuf, x
+  inx
+  lda #128
+  sta !stringbuf, x
+  inx
+  lda #$00
+  sta !stringbuf, x
+  plp
+  rts
+
+; ===========================================================================
+; Restore the menu
+; ===========================================================================
+gi_dc_restore:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  phb
+  lda #$00
+  pha
+  plb
+  lda #$01 : sta $4200
+  jsr waitblank
+  lda #$8f : sta $2100
+  jsr setup_gfx
+  jsr store_wram_routines    ; setup_gfx zeroed WRAM $7E8000-$7EFFFF incl. WRAM_WAIT_MCU
+                             ; ($7EF200); re-copy the WRAM routines or the next jsl
+                             ; @WRAM_WAIT_MCU (IPS query / READDIR) jumps into zeros -> hang
+  jsr video_init
+  jsr setup_hdma
+  lda @CFG_BRIGHTNESS_LIMIT
+  sta cur_bright
+  sta tgt_bright
+  sta menu_brightness
+  sta $2100
+  stz screen_dma_disable
+  stz screen_dma_disable+1
+  rep #$20 : .al
+  lda #$ffff : sta cover_last_sel
+  sep #$20 : .as
+  lda #$01 : sta filesel_dirty
+  plb
+  plp
+  rts

@@ -41,6 +41,8 @@ extern char current_filename[];
 #define SRAM_DIR_ADDR                (0xC20000L)
 #define SRAM_DB_ADDR                 (0xC80000L)
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
+#define SRAM_GAMEINFO_TILES_ADDR     (0xCA0000L) /* bank CA: game-info DirectColor 8bpp tiles (up to ~48KB) */
+#define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
@@ -77,6 +79,9 @@ extern char current_filename[];
    IPS_LIST (0xFF5000); the favorites list was moved off 0xFF4000 to 0xFF6000. */
 #define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
+/* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Lives in
+   the large free gap between IPS_LIST (ends ~0xFF5A00) and SCRATCHPAD (0xFFFF00). */
+#define SRAM_GAMEINFO_ADDR           (0xFF6000L)
 #define SRAM_SCRATCHPAD              (0xFFFF00L)
 #define SRAM_DIRID                   (0xFFFFF0L)
 #define SRAM_RELIABILITY_SCORE       (0x100)

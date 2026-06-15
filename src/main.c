@@ -16,6 +16,7 @@
 #include "memory.h"
 #include "snes.h"
 #include "cover.h"
+#include "gameinfo.h"
 #include "led.h"
 #include "sort.h"
 #include "cic.h"
@@ -711,6 +712,15 @@ int main(void) {
           cfg_get_listed_game(FAVORITES_FILE, file_lfn,
                               listed_game_resolve_index(FAVORITES_FILE, snes_get_mcu_param() & 0xff));
           load_cover(file_lfn, SRAM_COVER_ADDR);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_GAME_INFO:
+          /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot for the pre-boot
+             info screen. MCU_PARAM was filled like LOADROM (cover_fill_param_for_current_sel)
+             so get_selected_name yields the ROM path. Bounded + fail-safe; does NOT
+             boot, so no NACK -- the menu polls GAMEINFO status in $FF6000. */
+          get_selected_name(file_lfn);
+          gameinfo_load(file_lfn);
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_SET_THEME:

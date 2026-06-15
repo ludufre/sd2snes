@@ -20,6 +20,7 @@ _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists 
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
 _Static_assert(offsetof(cfg_t, bgm_name) == 0xBC, "cfg_t.bgm_name must stay at CFG_ADDR+$BC");
 _Static_assert(offsetof(cfg_t, sort_favorites) == 0x13C, "cfg_t.sort_favorites must stay at CFG_ADDR+$13C");
+_Static_assert(offsetof(cfg_t, show_game_info) == 0x13D, "cfg_t.show_game_info must stay at CFG_ADDR+$13D");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -68,7 +69,8 @@ cfg_t CFG_DEFAULT = {
   .covers_in_lists = 1,
   .enable_menu_sfx = 1,
   .bgm_name = "",
-  .sort_favorites = 0
+  .sort_favorites = 0,
+  .show_game_info = 1
 };
 
 cfg_t CFG;
@@ -188,6 +190,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
   f_printf(&file_handle, "%s: %s\n", CFG_MENU_MUSIC_FILE, (char*)CFG.bgm_name);
+  f_printf(&file_handle, "\n#  %s: Show the game info screen (cover/screenshot/metadata) before booting a ROM that has a /sd2snes/info entry\n", CFG_SHOW_GAME_INFO);
+  f_printf(&file_handle, "%s: %s\n", CFG_SHOW_GAME_INFO, CFG.show_game_info ? "true" : "false");
   file_close();
   return err;
 }
@@ -354,6 +358,9 @@ int cfg_load() {
     if(yaml_get_itemvalue(CFG_MENU_MUSIC_FILE, &tok)) {
       strncpy((char*)CFG.bgm_name, tok.stringvalue, sizeof(CFG.bgm_name) - 1);
       CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
+    }
+    if(yaml_get_itemvalue(CFG_SHOW_GAME_INFO, &tok)) {
+      CFG.show_game_info = tok.boolvalue ? 1 : 0;
     }
   }
   yaml_file_close();

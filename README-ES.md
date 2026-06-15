@@ -36,6 +36,7 @@ Necesitas:
 - **Idiomas:** elige Portugués de Brasil, Inglés, Español o Alemán directamente desde el menú.
 - **Descripciones de opciones:** una breve línea de ayuda traducida para la opción de menú seleccionada, en un cuadro flotante (colocado encima o debajo del menú automáticamente).
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
+- **Pantalla de info del juego:** antes de que una ROM arranque, ve una pantalla de detalles con su carátula, una captura y los metadatos (desarrollador, año, jugadores, género, chip especial) más una breve descripción, leídos de `/sd2snes/info/<rom>.yml`. Las ROMs sin entrada de info arrancan directo. Se activa en *Opciones del Navegador* (activado por defecto).
 - **Música en el menú:** reproduce una pista `.spc` de fondo mientras navegas.
 - **Sonidos del menú:** efectos de sonido de navegación opcionales (cursor, confirmar, volver, error) que suenan en el DAC de audio del cartucho, independientes de la música.
 - **Parches IPS/BPS:** elige parches de traducción, hacks o correcciones antes de iniciar un juego, sin modificar la ROM en la tarjeta SD.

@@ -349,4 +349,19 @@ listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (d
 ;----------language switch redraw bookkeeping
 menu_drawn_lang        .byt 0    ; language the current show_menu window was drawn in
 mainmenu_relang        .byt 0    ; set when the language changed -> main menu re-shows
+
+;----------pre-boot game info screen (snes/gameinfo.a65). DirectColor mode-3 takeover.
+; Text is written into a BG2 tilemap buffer (WINDOW_STACK_BASE) as char codes; the
+; [dp],y string reads reuse longptr (< $100).
+gi_result       .byt 0     ; input loop result: 0 = play, 1 = cancel
+gi_col          .byt 0     ; text: current column
+gi_row          .byt 0     ; text: current row
+gi_max          .word 0    ; text: max chars for the current field
+gi_dy           .byt 0     ; desc wrap: current output row
+gi_done         .byt 0     ; desc wrap: 1 once the end of the string is reached
+gi_ls           .word 0    ; desc wrap: current line start index
+gi_pos          .word 0    ; desc wrap: scan position
+gi_lastsp       .word 0    ; desc wrap: last space index ($ffff = none)
+gi_hdma_mode    .byt 0,0,0,0,0,0,0  ; WRAM HDMA ch3 BGMODE table (like the menu's hdma_mode;
+                                    ; HDMA must read its table from WRAM, not ROM)
 _END            .byt 0

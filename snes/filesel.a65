@@ -587,7 +587,7 @@ select_item_cont
   rts
 sel_is_file
   jsr snd_fx_confirm
-  jsr ips_select_file
+  jsr gameinfo_select_file    ; show the info screen first (if enabled); A -> ips_select_file/boot, B -> back
   bra select_item_cont
 sel_is_parent
   jsr select_parent     ; (back/error blip inside: root plays error)

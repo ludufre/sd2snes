@@ -227,6 +227,7 @@ mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
 mtext_browser_menumusic           .byt "Menu music", 0
 mtext_browser_menusfx             .byt "Menu sounds", 0
 mtext_browser_sortfav             .byt "Sort favorites", 0
+mtext_browser_gameinfo            .byt "Game info before boot", 0
 mtext_browser_restoretheme        .byt "Restore theme", 0
 mtext_browser_restoremusic        .byt "Restore music", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
@@ -284,6 +285,7 @@ mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (mu
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0
 mdesc_browser_menusfx             .byt "Play sound effects when navigating the menu", 0
 mdesc_browser_sortfav             .byt "Sort the favorites list alphabetically", 0
+mdesc_browser_gameinfo            .byt "Show cover, screenshot and info before booting a ROM that has a /sd2snes/info entry", 0
 mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
 mdesc_browser_restoremusic        .byt "Revert the menu background music to the default (menu.spc)", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
@@ -469,6 +471,14 @@ loading_win_h   .byt 1
 text_cheat      .byt "Cheats for ", 0
 text_ips_header .byt "Patches", 0
 text_ips_nopatch .byt "[No patch]", 0
+
+; pre-boot game info screen (snes/gameinfo.a65)
+text_gi_developer .byt "Developer", 0
+text_gi_year      .byt "Year", 0
+text_gi_players   .byt "Players", 0
+text_gi_genre     .byt "Genre", 0
+text_gi_chip      .byt "Chip", 0
+text_gi_footer    .byt "A: Play   B: Back", 0
 cheat_win_x     .byt 6
 cheat_win_y     .byt 11
 cheat_win_w     .byt 52

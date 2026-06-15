@@ -66,6 +66,7 @@
 #define CFG_ENABLE_MENU_SFX              ("EnableMenuSFX")
 #define CFG_MENU_MUSIC_FILE              ("MenuMusicFile")
 #define CFG_SORT_FAVORITES               ("SortFavorites")
+#define CFG_SHOW_GAME_INFO               ("ShowGameInfo")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -122,6 +123,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_menu_sfx;         /* CFG @ $BB: menu navigation sound effects (MSU-1 DAC, /sd2snes/sfx_*.pcm) */
   uint8_t  bgm_name[128];           /* CFG @ $BC: full SD path of the chosen background-music .spc ("" = use /sd2snes/menu.spc fallback) */
   uint8_t  sort_favorites;          /* CFG @ $13C: show the Favorites list alphabetically (display-only; the .cfg keeps recency order) */
+  uint8_t  show_game_info;          /* CFG @ $13D: show the pre-boot game info screen (auto-skips when the ROM has no /sd2snes/info entry) */
 } cfg_t;
 
 int cfg_save(void);

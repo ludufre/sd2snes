@@ -36,6 +36,7 @@ You need:
 - **Languages:** choose Brazilian Portuguese, English, Spanish or German directly in the menu.
 - **Option descriptions:** a short, translated help line for the selected menu option, shown in a floating box (auto-placed above or below the menu).
 - **Game covers:** show each game's box art while browsing your ROM list.
+- **Game info screen:** before a ROM boots, see a details page with its cover, a screenshot, and metadata (developer, year, players, genre, special chip) plus a short description, read from `/sd2snes/info/<rom>.yml`. ROMs without an info entry boot straight through. Toggle in *Browser Settings* (on by default).
 - **Menu music:** play an `.spc` track in the background while browsing.
 - **Menu sounds:** optional navigation sound effects (cursor, confirm, back, error) that play on the cartridge's audio DAC, independent of the music.
 - **IPS/BPS patches:** choose translation, hack or fix patches before a game starts, without changing the ROM file on the SD card.

@@ -437,6 +437,20 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_gameinfo
+ .byt  ^mtext_browser_gameinfo
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_SHOW_GAME_INFO
+ .byt  ^CFG_SHOW_GAME_INFO
+ .word !mdesc_browser_gameinfo
+ .byt  ^mdesc_browser_gameinfo
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
 ; .byt  MTYPE_VALUE
 ; .word !mtext_browser_screensaver_timeout
 ; .byt  ^mtext_browser_screensaver_timeout

@@ -213,4 +213,12 @@ TRANSLATIONS = {
     'text_mm_language': 'Sprache',
     'mdesc_mm_language': 'Sprache fuer Menue/Firmware setzen',
     'mdesc_browser_menusfx': 'Soundeffekte beim Navigieren durch das Menü abspielen',
+    'mtext_browser_gameinfo': 'Spielinfo vor Start',
+    'mdesc_browser_gameinfo': 'Cover, Screenshot und Infos vor dem Start einer ROM mit /sd2snes/info-Eintrag anzeigen',
+    'text_gi_developer': 'Entwickler',
+    'text_gi_year': 'Jahr',
+    'text_gi_players': 'Spieler',
+    'text_gi_genre': 'Genre',
+    'text_gi_chip': 'Chip',
+    'text_gi_footer': 'A: Start  B: Zurück',
 }
