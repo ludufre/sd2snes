@@ -478,6 +478,20 @@ menu_enttab_browser:
 ; .byt  0,0,0
 ; .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_sortfav
+ .byt  ^mtext_browser_sortfav
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_SORT_FAVORITES
+ .byt  ^CFG_SORT_FAVORITES
+ .word !mdesc_browser_sortfav
+ .byt  ^mdesc_browser_sortfav
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  MTYPE_FUNC
  .word !mtext_browser_restoretheme
  .byt  ^mtext_browser_restoretheme
@@ -751,6 +765,21 @@ menu_enttab_ingame:
  .byt  ^CFG_ENABLE_INGAME_BUTTONS
  .word !mdesc_ingame_buttons
  .byt  ^mdesc_ingame_buttons
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_hooks-1)
+ .byt  ^(mfunc_isenabled_hooks-1)
+
+ .byt  MTYPE_VALUE
+ .word !mtext_ingame_cheat_overlay
+ .byt  ^mtext_ingame_cheat_overlay
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_CHEAT_OVERLAY
+ .byt  ^CFG_ENABLE_CHEAT_OVERLAY
+ .word !mdesc_ingame_cheat_overlay
+ .byt  ^mdesc_ingame_cheat_overlay
  .byt  0,0,0
  .byt  0,0,0
  .word !(mfunc_isenabled_hooks-1)
@@ -1108,19 +1137,6 @@ menu_enttab_filesel_context_spc:
  .byt  0,0,0
  .word !mdesc_filesel_set_as_bgm
  .byt  ^mdesc_filesel_set_as_bgm
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_add_to_favorites
- .byt  ^text_filesel_context_add_to_favorites
- .word !add_selected_file_to_favorites-1
- .byt  ^add_selected_file_to_favorites-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_add_to_favorites
- .byt  ^mdesc_filesel_context_add_to_favorites
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0

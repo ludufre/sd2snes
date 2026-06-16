@@ -90,6 +90,7 @@
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)
+#define SNES_CMD_CHEAT_REPROGRAM     (0x42) /* in-game cheat overlay: reconcile BSRAM flag mirror ($FF0500) into the canonical PSRAM records and re-deploy all cheats live (no reboot) */
 
 #define SNES_CMD_RESET               (0x80)
 #define SNES_CMD_RESET_TO_MENU       (0x81)
@@ -189,6 +190,7 @@ typedef struct __attribute__ ((__packed__)) _mcu_status {
   uint8_t num_favorite_games;
   uint8_t autoboot_enabled;        /* 1 if an autoboot ROM is configured */
   uint8_t reset_to_menu_active;    /* 1 if this boot is a reset-to-menu (not cold power-on) */
+  uint8_t favorites_full;          /* 1 if the last "add favorite" was refused (list at MAX_FAVORITE_GAMES) */
 } mcu_status_t;
 
 typedef struct __attribute__ ((__packed__)) _snes_status {

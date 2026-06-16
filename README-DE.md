@@ -29,7 +29,7 @@ Du brauchst:
 > Dieses Projekt enthält keine Spiele/ROMs. Verwende deine eigenen legal erworbenen Dateien.
 
 > [!IMPORTANT]
-> **Mk.II-Hardware:** Das originale sd2snes (Mk.II) hat wenig Programmspeicher im MCU, und diese Firmware ist bereits nahe an diesem Limit. Manche zukünftigen Funktionen könnten **nur auf Mk.III / FXPAK PRO** verfügbar sein (oder auf Mk.II deaktiviert) – schlicht aus Platzmangel. Mk.III / FXPAK PRO ist nicht betroffen, und alles in der aktuellen Version funktioniert auf beiden.
+> **Mk.II-Hardware:** Das originale sd2snes (Mk.II) hat wenig Programmspeicher im MCU. Seit **v2.12** wird der FPGA-Bootstrap von der SD-Karte geladen statt aus der Firmware, was rund **21 KB** freigemacht hat und dem Mk.II deutlich mehr Luft gibt. Es bleibt die knappere der beiden Platinen, daher könnten manche zukünftigen Funktionen **nur auf Mk.III / FXPAK PRO** verfügbar sein (oder auf Mk.II deaktiviert) – aus Platzmangel. Mk.III / FXPAK PRO ist nicht betroffen, und alles in der aktuellen Version funktioniert auf beiden.
 
 ## Was dieser Fork ergänzt
 
@@ -205,6 +205,28 @@ So bekommst du fertige Cheat-Dateien:
 > [!NOTE]
 > Wenn eine ROM keine `.yml` in `/sd2snes/cheats/` hat oder die Datei keine Codes enthält, zeigt das Menü eine Meldung, dass keine Cheats für diese ROM vorhanden sind.
 
+## Cheat-Menü im Spiel
+
+Neben dem Cheat-Manager im Menü kann dieser Fork ein **Cheat-Menü über dem laufenden Spiel** einblenden, damit du Codes ein- und ausschalten kannst, ohne zu resetten.
+
+Halte während des Spiels **L + R + Y + Links**, um zu pausieren und die Überlagerung zu öffnen:
+
+- **Hoch/Runter** bewegt den Cursor.
+- **A** schaltet den markierten Code ein oder aus.
+- **B** schließt die Überlagerung und wendet deine Änderungen im laufenden Spiel an.
+
+Ist **standardmäßig aktiviert**. Schalte es unter **Configuration → In-game Settings → In-game hook → Cheat menu** ab.
+
+> [!TIP]
+> Die App **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** lädt auch die Cheats jedes Spiels automatisch herunter.
+
+> [!NOTE]
+> Aktuelle Einschränkungen:
+> - Es werden nur die ersten **64** Cheats aufgelistet.
+> - In der Überlagerung gemachte Änderungen werden **nicht gespeichert** in der `.yml`-Datei — sie gelten nur für die aktuelle Spielsitzung.
+> - Wie Savestates funktioniert es **nicht bei Spielen mit Spezialchips** (SA-1, SuperFX, usw.).
+> - Das Layout ist noch grob (in Arbeit).
+
 ## Datei und Spielstand löschen
 
 Du kannst Dateien und Spielstände direkt aus dem Menü löschen, ohne die SD-Karte zu entfernen oder einen Computer zu benutzen.
@@ -272,6 +294,20 @@ Prüfe, ob die Option **Menue-Sounds** eingeschaltet ist und ob `sfx_cursor.pcm`
 **Ein Patch erscheint nicht.**
 
 Prüfe, ob der Patch im selben Ordner wie die ROM liegt, mit dem Namen der ROM beginnt und auf `.ips` oder `.bps` endet.
+
+**Mk.II (Spartan‑3): schwarzer Bildschirm und eine LED blinkt wie eine Sirene.**
+
+Ab **v2.12** wird beim **Mk.II** (Spartan‑3‑FPGA) der FPGA‑Bootstrap (`fpga_mini`) von der SD‑Karte geladen, statt fest in der Firmware zu stecken – das schafft Flash‑Platz für die Funktionen des Forks. (Der Mk.III / FXPAK PRO ist nicht betroffen und zeigt die Meldungen weiterhin auf dem Bildschirm.) Wenn der Mk.II die Boot‑Anzeige nicht aufbauen kann, meldet er den Grund daher über die **LEDs** statt per Text. Das ist **kein** Defekt:
+
+- **Keine SD‑Karte** → Sirene grün ↔ rot. Karte einlegen und aus‑/einschalten.
+
+  <img src="misc/led_no_sd.gif" width="100" alt="No SD card — green/red">
+
+- **`/sd2snes/fpga_mini.bit` fehlt oder ist unlesbar** → Sirene grün ↔ gelb. Aus dem Release‑Paket wiederherstellen und aus‑/einschalten.
+
+  <img src="misc/led_fpga_mini.gif" width="100" alt="No FPGA — green/yellow">
+
+`fpga_mini.bit` ist im Release v2.12+ enthalten – einfach die Release‑Dateien in `/sd2snes/` behalten.
 
 ## Fortgeschrittene Hinweise
 

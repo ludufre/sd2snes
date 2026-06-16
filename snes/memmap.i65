@@ -118,10 +118,14 @@
 #define ROOT_DIR                    $C20000
 
 #define NUM_CHEATS                  $FF0700
+#define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
 #define CHEAT_FLAGS                 $FF0500 /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle, MCU also keeps it in sync. */
+#define CHEAT_NAMES                 $FF0800 /* in-game cheat overlay: first CHEAT_OVL_MAX names, CHEAT_NAME_LEN bytes each, staged by firmware at game load ($D00000 records are game ROM in-game). 64*32=2KB fills $FF0800..$FF0FFF. */
+#define CHEAT_OVL_MAX               64      /* in-game overlay covers the first 64 cheats */
+#define CHEAT_NAME_LEN              32      /* bytes per staged in-game name */
 
 #define SPC_DATA                    $FD0000
 #define SPC_HEADER                  $FE0000
@@ -140,8 +144,8 @@
 #define LAST_GAME                   $FF1420
 #define LAST_GAME_DIR               $FF1F00
 #define WRAM_BAK                    $FF2000
-#define FAVORITE_GAMES              $FF4000
-#define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (free gap between FAVORITE_GAMES tail $FF49FF and IPS_LIST $FF5000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
+#define FAVORITE_GAMES              $FF6000 /* 20*256 = $1400 -> $FF6000..$FF73FF. Moved off $FF4000 (only fit 10) into the free gap past IPS_LIST so favorites could grow to 20. Lockstep with SRAM_FAVORITEGAMES_ADDR (src/memory.h). Old $FF4000..$FF49FF now unused. */
+#define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (now-fully-free gap before IPS_LIST $FF5000; favorites moved off $FF4000 to $FF6000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
 
 #define CMD_LOADROM                 $01 /* shortcut - load ROM with default settings */
 #define CMD_SETRTC                  $02
@@ -217,6 +221,7 @@
 #define IPS_MAX_PATCHES             8        /* maximum patches per ROM */
 #define CMD_SAVESTATE               $40
 #define CMD_LOADSTATE               $41
+#define CMD_CHEAT_REPROGRAM         $42 /* in-game cheat overlay: reconcile BSRAM flag mirror ($FF0500) into canonical records + re-deploy cheats live */
 #define CMD_MCU_RDY                 $55
 #define CMD_RESET                   $80
 #define CMD_RESET_TO_MENU           $81
@@ -277,8 +282,11 @@
 #define CFG_ENABLE_MENU_SFX             CFG_ADDR+$00BB
 #define CFG_MENU_MUSIC_FILE             CFG_ADDR+$00BC
 #define CFG_ENABLE_WIFI                 CFG_ADDR+$00BD
+#define CFG_SORT_FAVORITES              CFG_ADDR+$013C
+#define CFG_ENABLE_CHEAT_OVERLAY        CFG_ADDR+$013D
 
 #define MENU_ENTRY_SIZE             23
+#define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */
 
 #define ST_RTC_VALID                ST_MCU_ADDR+$0000
 #define ST_NUM_RECENT_GAMES         ST_MCU_ADDR+$0001
@@ -286,6 +294,7 @@
 #define ST_NUM_FAVORITE_GAMES       ST_MCU_ADDR+$0003
 #define ST_AUTOBOOT_ENABLED         ST_MCU_ADDR+$0004
 #define ST_RESET_TO_MENU_ACTIVE     ST_MCU_ADDR+$0005
+#define ST_FAVORITES_FULL           ST_MCU_ADDR+$0006 /* 1 if the last add-favorite was refused (list full) */
 
 #define ST_IS_U16                   ST_SNES_ADDR+$0000
 #define ST_U16_CFG                  ST_SNES_ADDR+$0001

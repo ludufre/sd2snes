@@ -42,6 +42,7 @@ void fpga_rompgm(void);
 extern uint8_t SPI_OFFLOAD;
 
 extern const uint8_t *fpga_config;
+extern uint8_t fpga_boot_led;
 
 #define FPGA_CX4 ((const uint8_t*)"/sd2snes/fpga_cx4." FPGA_CONF_EXT)
 #define FPGA_OBC1 ((const uint8_t*)"/sd2snes/fpga_obc1." FPGA_CONF_EXT)
@@ -52,6 +53,10 @@ extern const uint8_t *fpga_config;
 #define FPGA_SPC7110 ((const uint8_t*)"/sd2snes/fpga_spc7110." FPGA_CONF_EXT)
 #define FPGA_BASE ((const uint8_t*)"/sd2snes/fpga_base." FPGA_CONF_EXT)
 #define FPGA_DSP ((const uint8_t*)"/sd2snes/fpga_dsp." FPGA_CONF_EXT)
+/* mk2: boot-display bootstrap config ("fpga_mini"), loaded from SD instead of
+   baked into the firmware to reclaim ~21 KB of the tight 128 KB flash. See
+   fpga_rompgm(). mk3/mk3-stm32 keep it embedded (cfgware). */
+#define FPGA_MINI ((const uint8_t*)"/sd2snes/fpga_mini." FPGA_CONF_EXT)
 #define FPGA_ROM ((const uint8_t*)"rom")
 
 #define FPGA_TEST_TOKEN	(0xa5)

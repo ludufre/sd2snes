@@ -16,6 +16,7 @@
 #include "led.h"
 #include "usbinterface.h"
 #include "savestate.h"
+#include "cheat.h"
 #include "cfg.h"
 
 FIL msudata;
@@ -313,6 +314,9 @@ int msu1_loop() {
           if(msu_audio_usage == MSU_BUSY) dac_pause();
           load_backup_state();
           if(msu_audio_usage == MSU_BUSY) dac_play();
+          break;
+        case SNES_CMD_CHEAT_REPROGRAM:
+          cheat_reprogram_from_mirror();
           break;
         default:
           printf("unknown cmd: %02x\n", cmd);

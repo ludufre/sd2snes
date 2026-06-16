@@ -81,7 +81,6 @@ utils/derle
 *.cof
 *.bak
 *.bmp
-*.png
 *.ods
 *.xls
 *.chi

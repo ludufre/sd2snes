@@ -29,7 +29,7 @@ You need:
 > This project does not include games/ROMs. Use your own legally obtained files.
 
 > [!IMPORTANT]
-> **Mk.II hardware:** the original sd2snes (Mk.II) has limited MCU program flash, and this firmware is already close to that limit. Some future features may end up **Mk.III / FXPAK PRO only** (or disabled on Mk.II) simply for lack of space. Mk.III / FXPAK PRO is unaffected, and everything in the current release works on both.
+> **Mk.II hardware:** the original sd2snes (Mk.II) has limited MCU program flash. As of **v2.12** the FPGA bootstrap is loaded from the SD card instead of the firmware, which freed about **21 KB** and gives the Mk.II noticeably more headroom. It is still the tighter of the two boards, so some future features may end up **Mk.III / FXPAK PRO only** (or disabled on Mk.II) for lack of space. Mk.III / FXPAK PRO is unaffected, and everything in the current release works on both.
 
 ## What This Fork Adds
 
@@ -205,6 +205,28 @@ To get ready-made cheat files:
 > [!NOTE]
 > If a ROM has no `.yml` in `/sd2snes/cheats/` (or the file has no codes), the menu shows a "no cheats for this ROM" message.
 
+## In-game Cheat Menu
+
+Beyond the menu cheat manager, this fork can pop a **cheat menu over the running game**, so you can toggle codes on and off without resetting.
+
+While playing, hold **L + R + Y + Left** to pause and open the overlay:
+
+- **Up/Down** moves the cursor.
+- **A** turns the highlighted code on or off.
+- **B** closes the overlay and applies your changes to the running game.
+
+It is **enabled by default**. Turn it off in **Configuration → In-game Settings → In-game hook → Cheat menu**.
+
+> [!TIP]
+> The **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** app also downloads each game's cheats automatically.
+
+> [!NOTE]
+> Current limitations:
+> - Only the first **64** cheats are listed.
+> - Changes made in the overlay are **not saved** to the `.yml` file — they apply to the current play session only.
+> - Like savestates, it **does not work on Special Chip games** (SA-1, SuperFX, etc.).
+> - The layout is still rough (work in progress).
+
 ## Delete File and Savegame
 
 You can delete files and saves straight from the menu, without removing the SD card or using a computer.
@@ -272,6 +294,20 @@ Check that **Menu sounds** is turned on, and that `sfx_cursor.pcm`, `sfx_confirm
 **A patch does not appear.**
 
 Check that the patch is in the same folder as the ROM, starts with the ROM filename, and ends in `.ips` or `.bps`.
+
+**Mk.II (Spartan‑3): the screen stays black and an LED blinks like a siren.**
+
+Starting with **v2.12**, on the **Mk.II** (Spartan‑3 FPGA) the FPGA bootstrap (`fpga_mini`) is loaded from the SD card instead of being baked into the firmware, which frees flash space for the fork's features. (The Mk.III / FXPAK PRO is unaffected — it still shows the on‑screen messages.) Because of this, when the Mk.II cannot bring up the boot display it reports the reason with the LEDs instead of text. This is **not** a malfunction:
+
+- **No SD card** → green ↔ red siren. Insert a card and power‑cycle.
+
+  <img src="misc/led_no_sd.gif" width="100" alt="No SD card — green/red">
+
+- **`/sd2snes/fpga_mini.bit` missing or unreadable** → green ↔ yellow siren. Restore it from the release package and power‑cycle.
+
+  <img src="misc/led_fpga_mini.gif" width="100" alt="No FPGA — green/yellow">
+
+`fpga_mini.bit` ships with the v2.12+ release — just keep the release files in `/sd2snes/`.
 
 ## Advanced Notes
 
