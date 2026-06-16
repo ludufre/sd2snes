@@ -43,11 +43,13 @@ extern char current_filename[];
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
+#define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay && !special_chip. The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
 #define SRAM_CHEAT_CODE_STRINGS_ADDR (0xD40000L) /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans D4..D7, leaving D0..D3 free for up to 512 cheat records. */
 
 #define SRAM_CHEAT_TITLE_ADDR        (0xD80000L) /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
 #define SRAM_CHEAT_FLAGS_ADDR        (0xFF0500L) /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle. */
+#define SRAM_CHEAT_NAMES_ADDR        (0xFF0800L) /* in-game cheat overlay: first CHEAT_NAME_INGAME_MAX names, CHEAT_NAME_INGAME_LEN bytes each (31 visible + NUL), staged at game load. 64*32 = 2 KB -> fills FF0800..FF0FFF (up to FF1000=SRAM_CMD_ADDR). */
 
 #define SRAM_SKIN_ADDR               (0xF00000L)
 

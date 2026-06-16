@@ -74,6 +74,7 @@
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)
+#define SNES_CMD_CHEAT_REPROGRAM     (0x42) /* in-game cheat overlay: reconcile BSRAM flag mirror ($FF0500) into the canonical PSRAM records and re-deploy all cheats live (no reboot) */
 
 #define SNES_CMD_RESET               (0x80)
 #define SNES_CMD_RESET_TO_MENU       (0x81)

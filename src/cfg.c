@@ -20,6 +20,7 @@ _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists 
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
 _Static_assert(offsetof(cfg_t, bgm_name) == 0xBC, "cfg_t.bgm_name must stay at CFG_ADDR+$BC");
 _Static_assert(offsetof(cfg_t, sort_favorites) == 0x13C, "cfg_t.sort_favorites must stay at CFG_ADDR+$13C");
+_Static_assert(offsetof(cfg_t, enable_cheat_overlay) == 0x13D, "cfg_t.enable_cheat_overlay must stay at CFG_ADDR+$13D");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -68,7 +69,8 @@ cfg_t CFG_DEFAULT = {
   .covers_in_lists = 1,
   .enable_menu_sfx = 1,
   .bgm_name = "",
-  .sort_favorites = 0
+  .sort_favorites = 0,
+  .enable_cheat_overlay = 1
 };
 
 cfg_t CFG;
@@ -184,6 +186,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_SFX, CFG.enable_menu_sfx ? "true" : "false");
   f_printf(&file_handle, "#  %s: Show the Favorites list in alphabetical order (display only)\n", CFG_SORT_FAVORITES);
   f_printf(&file_handle, "%s: %s\n", CFG_SORT_FAVORITES, CFG.sort_favorites ? "true" : "false");
+  f_printf(&file_handle, "#  %s: In-game cheat overlay (pause via L+R+Y+Left to toggle cheats). Off on special-chip games.\n", CFG_ENABLE_CHEAT_OVERLAY);
+  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEAT_OVERLAY, CFG.enable_cheat_overlay ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
@@ -346,6 +350,9 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_SORT_FAVORITES, &tok)) {
       CFG.sort_favorites = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_ENABLE_CHEAT_OVERLAY, &tok)) {
+      CFG.enable_cheat_overlay = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);

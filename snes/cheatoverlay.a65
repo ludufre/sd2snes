@@ -1,0 +1,791 @@
+; In-game cheat overlay - split out of savestate.a65 for clarity.
+;
+; Pauses the running game (combo L+R+Y+Left), takes over the PPU to draw a navigable
+; cheat list with live ON/OFF toggles, then restores the COMPLETE PPU/VRAM/CGRAM
+; state and resumes. The combo *probe* still lives in savestate.a65's in-game input
+; flow (it runs every NMI as part of the savestate handler) and reaches here with a
+; plain `jmp ss_overlay`.
+
+.link page $c0
+#include "memmap.i65"
+#include "savestate.i65"
+
+; --- In-game cheat overlay (Phase 3) layout + scratch ----------------------
+;     The overlay takes over the whole 32x28-tile screen (mode 0, BG1, font at
+;     VRAM tile N = glyph N, tilemap at word $1000). Row/col are tile units.
+#define OVL_LIST_ROW0   4        ; first cheat row
+#define OVL_ROWS        20       ; visible cheat rows (4..23)
+#define OVL_CURSOR_COL  1
+#define OVL_NAME_COL    3
+#define OVL_NAME_MAX    22       ; name chars shown (cols 3..24)
+#define OVL_FLAG_COL    26       ; "ON "/"OFF" at cols 26..28
+; Scratch state in PSRAM bank $F4 (SNES-visible in-game, clear of the savestate
+; buffers at $F2/$F40000/$F41000/$F45000/$F46000). All .word unless noted.
+#define ovl_count    $F48100     ; min(NUM_CHEATS, CHEAT_OVL_MAX)
+#define ovl_top      $F48102     ; index of first visible cheat (scroll)
+#define ovl_selrow   $F48104     ; cursor screen row 0..visible-1
+#define ovl_visible  $F48106     ; min(count, OVL_ROWS)
+#define ovl_dirty    $F48108     ; byte: 1 if any toggle happened
+#define ovl_pprev    $F4810A     ; previous pad word (edge detection)
+#define ovl_cur      $F4810C     ; current pad word (scratch)
+#define ovl_edge     $F4810E     ; newly-pressed bits (scratch)
+#define ovl_rowbase  $F48110     ; VRAM tilemap word for a row (scratch)
+#define ovl_idx      $F48112     ; absolute cheat index for a row (scratch)
+#define ovl_rep_cnt  $F48114     ; auto-repeat countdown for held Up/Down
+#define OVL_REP_INIT 16          ; frames before held ↑/↓ starts repeating
+#define OVL_REP_RATE 3           ; frames between auto-repeat steps
+; Incremental scroll redraw: a full list redraw (20 rows) does NOT fit in one
+; vblank, so on scroll we mark the list dirty and redraw OVL_RDRAW_BATCH rows per
+; frame over a few frames (each batch fits vblank) -> all rows update, NO flash.
+#define ovl_rdraw_n  $F48116     ; rows still to redraw this cycle (0 = idle)
+#define ovl_rdraw_y  $F48118     ; next screen row to redraw
+#define OVL_RDRAW_BATCH 7        ; rows redrawn per frame (fits a vblank)
+
+; --- Cheat overlay (Phase 2): pause the running game, take over the PPU to draw
+;     a full-screen text UI, then restore the COMPLETE PPU state and resume.
+;     Entered from the combo probe (L+R+Y+Left) in savestate.a65's in-game input flow.
+;
+;     WHY A SAVESTATE-GRADE SNAPSHOT (and not a hand-picked subset): an earlier
+;     version snapshotted ~13 chosen registers and only a VRAM *slice*. Games that
+;     program $2105/$2107/$210B/$210D-E once at level-load and only push scroll/OAM
+;     each NMI never repaired what we left wrong, so the game kept running (audio)
+;     while the picture stayed broken ("beige resume"). The firmware already does
+;     this correctly for savestates, so we reuse the same machinery here.
+;
+;     The game is frozen inside this NMI, so the FPGA live mirrors are static.
+;     Snapshot (into the savestate's own scratch buffers, free outside a save):
+;       VRAM  live $F70000 -> $F20000        (FPGA copier $2020-$2029, 64KB)
+;       CGRAM live $F90000 -> $F40000         (512 bytes)
+;       PPU shadow $F90500 -> SRAM_PPU_BANK   (128 bytes, raw stride-2, like save_state)
+;       $420X      $F90700 -> SRAM_OTH_BANK   (16 bytes)
+;       DMA ch0/1  $4300    -> SRAM_DMA_BANK   (23 bytes; only ch0/ch1 are reprogrammed)
+;     WRAM, OAM and APU are never touched, so they need no save/restore.
+;
+;     Draw: force blank, DMA the menu font (bank ^font) to VRAM $0000, mode 0 /
+;     BG1 only / tilemap @ word $1000 / char base $0000, clear the map to spaces,
+;     write "CHEATS", set CGRAM 0=bg 1-3=white, unblank.
+;
+;     Restore (mirror of load_write_table + register_restore_return): force blank,
+;     DMA $F20000->VRAM (full 64KB) + $F40000->CGRAM (512B), then restore the full
+;     $21XX file (skip data ports) + $420X + $420C/$2100/$4200, resume via ss_exit.
+;     Phase 3 extends the draw/input into the real cheat list. ---
+ss_overlay:
+	sep #$20 : .as : rep #$10 : .xl
+
+; ---- snapshot interrupt + PPU state (game values, before we change anything) ----
+	; Save the ORIGINAL $4200 first, then DISABLE NMI/IRQ immediately - before the
+	; long snapshot - so the game's own IRQ can't fire mid-snapshot and crash the
+	; SNES. IRQ-driven title screens (Bomberman: HDMA split) froze right here.
+	; This mirrors save_state's ordering ($4200 saved, then disabled, then the
+	; rest). The $420X loop starts at x=1 because byte 0 ($4200) is already saved
+	; and would now read back the disabled $01.
+	lda @$F90700 : sta @SRAM_OTH_BANK      ; original $4200 -> SRAM_OTH_BANK[0]
+	lda #$01 : sta @$004200                ; NMI/IRQ off (auto-joypad stays on)
+	; --- rest of $420X shadow $F90700[1..F] -> SRAM_OTH_BANK[1..F] ---
+	ldx #$0001
+ss_ovl_othsave:
+	lda @$F90700, x : sta @SRAM_OTH_BANK, x
+	inx : cpx #$0010 : bne ss_ovl_othsave
+	; --- PPU register shadow $F90500 -> SRAM_PPU_BANK (128 bytes, raw stride-2
+	;     copy, exactly like save_state; restored via the proven loop on exit) ---
+	ldy #$0000
+	tyx
+ss_ovl_ppusave:
+	lda @$F90500, x : sta @SRAM_PPU_BANK, x : inx
+	lda @$F90500, x : sta @SRAM_PPU_BANK, x : inx
+	iny
+	cpy #$0040
+	bne ss_ovl_ppusave
+	; --- CGRAM live mirror $F90000 -> $F40000 (512 bytes) ---
+	ldx #$0000
+ss_ovl_cgsave:
+	lda @$F90000, x : sta @$F40000, x
+	inx : cpx #$0200 : bne ss_ovl_cgsave
+	; --- DMA ch0/ch1 regs $4300 -> SRAM_DMA_BANK (23 bytes; we only use ch0/ch1) ---
+	ldx #$0000
+ss_ovl_dmasave:
+	lda @$004300, x : sta @SRAM_DMA_BANK, x
+	inx : cpx #$0017 : bne ss_ovl_dmasave
+	; (interrupts were already disabled at the very start of the snapshot)
+	; Force-blank and disable the game's HDMA + GP-DMA BEFORE the copier. HDMA runs
+	; in hardware every scanline even with the CPU frozen, writing the same PPU/VRAM
+	; mirror the FPGA copier reads -> they contend and the copier hangs the SNES
+	; (Bomberman's HDMA-driven title froze exactly at the copier trigger).
+	lda #$80 : sta @$002100                ; force blank
+	lda #$00 : sta @$00420b                ; GP-DMA off
+	sta @$00420c                           ; HDMA off
+
+; ---- snapshot VRAM: live mirror $F70000 -> backup $F20000 via FPGA copier ----
+	; Full 64KB ($010000): srcBank $F7 (live VRAM mirror) -> dstBank $F2 (the
+	; savestate's own VRAM backup, free outside a save). The whole bank is
+	; snapshotted and the whole bank is restored on exit, so the game's VRAM is
+	; byte-for-byte preserved regardless of what we overwrite while drawing.
+	rep #$20 : .al
+	lda #$F7F2 : sta @$002020
+	lda #$0000 : sta @$002022
+	lda #$0000 : sta @$002024
+	lda #$0000 : sta @$002026
+	sep #$20 : .as
+	lda #$01 : sta @$002028
+	lda #$05 : sta @$002029
+	- lda @$004212 : bpl -
+	- lda @$004212 : bmi -
+	- lda @$004212 : bpl -
+	- lda @$004212 : bmi -
+
+; ---- take over the display (force-blank + GP-DMA/HDMA already off above) ----
+	lda #$00
+	sta @$002106                          ; mosaic off
+	sta @$00212e                          ; window off (main)
+	sta @$00212f                          ; window off (sub)
+	sta @$002130                          ; color math off
+	sta @$002131                          ; color math off
+	; DMA menu font -> VRAM $0000 (contiguous: glyph N -> tile N)
+	lda #$80 : sta @$002115               ; VRAM incr after high byte
+	rep #$20 : .al
+	lda #$0000 : sta @$002116             ; VRAM addr = 0
+	sep #$20 : .as
+	lda #$01 : sta @$004300                ; ch0: A->B, 2-addr (word port)
+	lda #$18 : sta @$004301                ; B = $2118
+	rep #$20 : .al
+	lda #!font : sta @$004302              ; A-bus addr
+	sep #$20 : .as
+	lda #^font : sta @$004304              ; A-bus bank
+	rep #$20 : .al
+	lda #$1000 : sta @$004305              ; size 4096 (256 glyphs)
+	sep #$20 : .as
+	lda #$01 : sta @$00420b                ; trigger ch0
+
+	; clear tilemap (VRAM word $1000, 32x32 = 1024 words) to space tile $0020
+	rep #$20 : .al
+	lda #$1000 : sta @$002116
+	ldx #$0400
+	sep #$20 : .as
+ss_ovl_clr:
+	lda #$20 : sta @$002118
+	lda #$00 : sta @$002119
+	dex : bne ss_ovl_clr
+
+	; --- title "CHEATS" at row 1, col 13 ---
+	rep #$20 : .al
+	lda #($1000+1*32+13) : sta @$002116
+	sep #$20 : .as
+	lda #$43 : sta @$002118 : lda #$00 : sta @$002119   ; C
+	lda #$48 : sta @$002118 : lda #$00 : sta @$002119   ; H
+	lda #$45 : sta @$002118 : lda #$00 : sta @$002119   ; E
+	lda #$41 : sta @$002118 : lda #$00 : sta @$002119   ; A
+	lda #$54 : sta @$002118 : lda #$00 : sta @$002119   ; T
+	lda #$53 : sta @$002118 : lda #$00 : sta @$002119   ; S
+
+	; --- init overlay state ---
+	rep #$30 : .al : .xl
+	lda @NUM_CHEATS                       ; count = min(NUM_CHEATS, CHEAT_OVL_MAX)
+	cmp #CHEAT_OVL_MAX
+	bcc ss_ovl_cnt_ok
+	lda #CHEAT_OVL_MAX
+ss_ovl_cnt_ok:
+	sta @ovl_count
+	cmp #OVL_ROWS                          ; visible = min(count, OVL_ROWS)
+	bcc ss_ovl_vis_ok
+	lda #OVL_ROWS
+ss_ovl_vis_ok:
+	sta @ovl_visible
+	lda #$0000
+	sta @ovl_top
+	sta @ovl_selrow
+	lda @$004218                           ; seed pprev with the current pad so the
+	sta @ovl_pprev                         ; opening combo isn't read as fresh edges
+	sep #$20 : .as
+	lda #$00 : sta @ovl_dirty
+
+	; --- draw list (or "no cheats" message) ---
+	rep #$20 : .al
+	lda @ovl_count
+	sep #$20 : .as
+	beq ss_ovl_init_empty
+	jsr ss_ovl_draw_rows
+	bra ss_ovl_init_drawn
+ss_ovl_init_empty:
+	jsr ss_ovl_draw_empty
+ss_ovl_init_drawn:
+	jsr ss_ovl_draw_footer
+	rep #$20 : .al
+	lda #$0000 : sta @ovl_rep_cnt          ; no auto-repeat pending yet
+	sta @ovl_rdraw_n                       ; no incremental redraw pending yet
+	sep #$20 : .as
+
+	; CGRAM sub-palette 0 = the menu font's own text colors (so glyph anti-aliasing
+	; renders cleanly, not flattened), but color 0 swapped for our blue backdrop:
+	;   0 = blue $5000 (bg)   1 = white $7FFF   2 = dark gray $18C6   3 = light gray $6318
+	lda #$00 : sta @$002121
+	lda #$00 : sta @$002122 : lda #$50 : sta @$002122   ; color 0 (blue bg)
+	lda #$ff : sta @$002122 : lda #$7f : sta @$002122   ; color 1 (white)
+	lda #$c6 : sta @$002122 : lda #$18 : sta @$002122   ; color 2 (dark gray)
+	lda #$18 : sta @$002122 : lda #$63 : sta @$002122   ; color 3 (light gray)
+
+	; BG setup: mode 0, BG1 tilemap word $1000, char base $0000, BG1 only
+	lda #$00 : sta @$002105
+	lda #$10 : sta @$002107
+	lda #$00 : sta @$00210b
+	lda #$00 : sta @$00210d : sta @$00210d   ; BG1 H scroll = 0 (write-twice)
+	sta @$00210e : sta @$00210e              ; BG1 V scroll = 0 (game re-sets scroll on resume)
+	lda #$01 : sta @$00212c
+	lda #$00 : sta @$00212d
+	lda #$0f : sta @$002100               ; unblank to full brightness
+
+; ---- input loop: edge-detected pad. ovl_pprev was seeded with the opening
+;      combo, so the still-held L+R+Y+Left produces no fresh edge (no instant
+;      exit/toggle, no drain needed).
+;        Up/Down = move cursor   A = toggle ON/OFF   B = close + apply ----
+ss_overlay_loop:
+	- lda @$004212 : bpl -                 ; wait until vblank (catches the rising edge)
+	; Robust auto-joypad sync: wait for the read to START (bit0=1) THEN FINISH
+	; (bit0=0). Just waiting for "finish" can catch the brief pre-read window
+	; (bit0 not yet set) and read a STALE pad -> the press edge double-fires on two
+	; non-adjacent frames (the "2x" auto-repeat). Both waits are safe here because
+	; we entered exactly at the vblank rising edge, so bit0 always rises.
+	- lda @$004212 : and #$01 : beq -      ; wait auto-joypad read START (bit0 set)
+	- lda @$004212 : and #$01 : bne -      ; wait auto-joypad read DONE (bit0 clear)
+	rep #$20 : .al
+	lda @$004218                           ; current pad word ($4218 lo / $4219 hi) - now fresh
+	sta @ovl_cur
+	eor @ovl_pprev
+	and @ovl_cur                           ; (cur ^ prev) & cur = newly pressed bits
+	sta @ovl_edge
+	lda @ovl_cur
+	sta @ovl_pprev
+	sep #$20 : .as
+	; B ($8000) -> close + apply
+	rep #$20 : .al
+	lda @ovl_edge
+	bit #$8000
+	sep #$20 : .as
+	beq ss_ovl_disp_a
+	jmp ss_ovl_do_exit
+ss_ovl_disp_a:
+	rep #$20 : .al
+	lda @ovl_edge
+	bit #$0080                             ; A (edge) -> toggle
+	sep #$20 : .as
+	beq ss_ovl_disp_nav
+	jsr ss_ovl_toggle
+ss_ovl_disp_nav:
+	jsr ss_ovl_nav_vert                    ; Up/Down with auto-repeat
+	jsr ss_ovl_rdraw_step                  ; pump the incremental scroll redraw (no flash)
+ss_ovl_loop_tail:
+	- lda @$004212 : bmi -                 ; wait out of vblank (one sample/frame)
+	jmp ss_overlay_loop
+
+; ---- restore: full VRAM + full CGRAM + full PPU/$420X register file ----
+;      Savestate-grade: mirrors load_write_table (data) + register_restore_return
+;      (regs). Restores EVERYTHING we could have touched, so games that program
+;      their PPU once at level-load come back intact (no partial-restore beige).
+ss_overlay_restore:
+	lda #$80 : sta @$002100               ; force blank during restore
+	lda #$00 : sta @$00420b               ; GP-DMA off
+	sta @$00420c                          ; HDMA off (re-enabled at the end)
+	; --- full VRAM: $F20000 -> VRAM $0000 (64KB) via GP-DMA ch1 ---
+	lda #$80 : sta @$002115
+	rep #$20 : .al
+	lda #$0000 : sta @$002116
+	sep #$20 : .as
+	lda #$01 : sta @$004310                ; mode 1 (2 regs $2118/$2119), A->B
+	lda #$18 : sta @$004311                ; B = $2118
+	rep #$20 : .al
+	lda #$0000 : sta @$004312              ; A addr
+	sep #$20 : .as
+	lda #$f2 : sta @$004314                ; A bank $F2
+	rep #$20 : .al
+	lda #$0000 : sta @$004315              ; size $0000 = full 64KB
+	sep #$20 : .as
+	lda #$02 : sta @$00420b                ; trigger ch1
+	; --- full CGRAM: $F40000 -> CGRAM (512 bytes) via GP-DMA ch1 ---
+	lda #$00 : sta @$002121                ; CGRAM addr 0
+	lda #$00 : sta @$004310                ; mode 0 (1 reg), A->B
+	lda #$22 : sta @$004311                ; B = $2122
+	rep #$20 : .al
+	lda #$0000 : sta @$004312
+	sep #$20 : .as
+	lda #$f4 : sta @$004314                ; A bank $F4
+	rep #$20 : .al
+	lda #$0200 : sta @$004315              ; size 512
+	sep #$20 : .as
+	lda #$02 : sta @$00420b                ; trigger ch1
+	; --- restore DMA ch0/ch1 regs from snapshot (so re-enabled HDMA, if the game
+	;     ran it on ch0/ch1, uses the game's table pointers, not ours) ---
+	ldx #$0000
+ss_ovl_dmarst:
+	lda @SRAM_DMA_BANK, x : sta @$004300, x
+	inx : cpx #$0017 : bne ss_ovl_dmarst
+	; --- restore the full $21XX register file (mirror of register_restore_return);
+	;     DBR=0 so the absolute `sta $2100,y`/`sta $4200,x` land on the regs ---
+	phb
+	pea $0000 : plb : plb
+	sep #$20 : .as : rep #$10 : .xl        ; A 8-bit, X/Y 16-bit (match register_restore_return)
+	ldx #$0002
+	ldy #$0001
+ss_ovl_rr:
+	cpy #$0002 : beq ss_ovl_rr_s           ; skip $2102/3/4 (OAM addr/data)
+	cpy #$0003 : beq ss_ovl_rr_s
+	cpy #$0004 : beq ss_ovl_rr_s
+	cpy #$0018 : beq ss_ovl_rr_s           ; skip $2118/9 (VRAM data port)
+	cpy #$0019 : beq ss_ovl_rr_s
+	cpy #$0022 : beq ss_ovl_rr_s           ; skip $2122 (CGRAM data port)
+	lda @SRAM_PPU_BANK, x : sta $2100, y : inx
+	lda @SRAM_PPU_BANK, x : sta $2100, y : dex
+ss_ovl_rr_s:
+	inx : inx
+	iny
+	cpy #$0034
+	bne ss_ovl_rr
+	; --- restore $420X (skip $4201, $420B GP-DMA trig, $420C HDMA en) ---
+	ldx #$0001
+ss_ovl_oth:
+	cpx #$0001 : beq ss_ovl_oth_s
+	cpx #$000B : beq ss_ovl_oth_s
+	cpx #$000C : beq ss_ovl_oth_s
+	lda @SRAM_OTH_BANK, x : sta $4200, x
+ss_ovl_oth_s:
+	inx
+	cpx #$000E
+	bne ss_ovl_oth
+	plb
+	; --- HDMA enable, brightness, interrupt enable; then resume ---
+	lda @SRAM_OTH_BANK|$000C : sta @$00420c   ; game's $420C
+	lda @SRAM_PPU_BANK : sta @$002100         ; game's brightness (unblank)
+	lda @SRAM_OTH_BANK : sta @$004200         ; game's $4200
+	rep #$30 : .al : .xl
+	jmp ss_exit
+
+; ======================================================================
+;  In-game cheat overlay helpers (Phase 3). Long addressing throughout,
+;  so DBR is irrelevant; PBR = $C0 (handler bank) so jsr/rts reach here.
+;  VRAM increment stays $80 (word, after-high) from the draw setup, so
+;  each routine just sets $2116 then streams $2118/$2119 char pairs.
+;  Called only while the overlay owns the screen.
+; ======================================================================
+
+; ---- close: apply the cheat changes (if any) and resume the game ----
+ss_ovl_do_exit:
+	sep #$20 : .as
+	lda @ovl_dirty
+	beq ss_ovl_exit_noapply
+	; Ask the MCU (snes_main_loop) to reconcile the BSRAM flag mirror into
+	; the canonical records and re-deploy cheats live. Fire-and-forget: the
+	; MCU clears MCU_CMD when done; the game resumes meanwhile.
+	lda #CMD_CHEAT_REPROGRAM
+	sta @MCU_CMD
+ss_ovl_exit_noapply:
+	jmp ss_overlay_restore
+
+; ---- draw all visible rows (caller is in forced blank) ----
+ss_ovl_draw_rows:
+	php
+	rep #$30 : .al : .xl
+	ldy #$0000
+ss_ovl_dr_loop:
+	tya : cmp @ovl_visible
+	bcs ss_ovl_dr_done
+	phy
+	jsr ss_ovl_draw_full_row
+	ply
+	iny
+	bra ss_ovl_dr_loop
+ss_ovl_dr_done:
+	plp
+	rts
+
+; ---- draw one full row. Y (16-bit) = screen row 0..visible-1 ----
+ss_ovl_draw_full_row:
+	php
+	rep #$30 : .al : .xl
+	; rowbase = $1000 + (OVL_LIST_ROW0 + Y) * 32
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl
+	clc : adc #$1000
+	sta @ovl_rowbase
+	; idx = ovl_top + Y
+	tya
+	clc : adc @ovl_top
+	sta @ovl_idx
+	; clear the row to 32 spaces
+	lda @ovl_rowbase
+	sta @$002116
+	sep #$20 : .as
+	ldx #$0020
+ss_ovl_dfr_clr:
+	lda #$20 : sta @$002118 : lda #$00 : sta @$002119
+	dex
+	bne ss_ovl_dfr_clr
+	; cursor cell: '>' if this is the selected row, else space
+	rep #$30 : .al : .xl
+	lda @ovl_rowbase
+	clc : adc #OVL_CURSOR_COL
+	sta @$002116
+	tya
+	cmp @ovl_selrow
+	sep #$20 : .as
+	bne ss_ovl_dfr_nocur
+	lda #$3e : bra ss_ovl_dfr_curwr        ; '>'
+ss_ovl_dfr_nocur:
+	lda #$20                                ; ' '
+ss_ovl_dfr_curwr:
+	sta @$002118 : lda #$00 : sta @$002119
+	; name: up to OVL_NAME_MAX chars from CHEAT_NAMES + idx*32
+	rep #$30 : .al : .xl
+	lda @ovl_rowbase
+	clc : adc #OVL_NAME_COL
+	sta @$002116
+	lda @ovl_idx
+	asl : asl : asl : asl : asl             ; idx * 32
+	tax                                      ; X = name byte offset
+	ldy #$0000                               ; Y = char counter
+	sep #$20 : .as
+ss_ovl_dfr_name:
+	lda @CHEAT_NAMES, x
+	beq ss_ovl_dfr_name_done
+	sta @$002118 : lda #$00 : sta @$002119
+	inx
+	iny
+	cpy #OVL_NAME_MAX
+	bne ss_ovl_dfr_name
+ss_ovl_dfr_name_done:
+	; flag: "ON " / "OFF" at OVL_FLAG_COL from the BSRAM mirror
+	rep #$30 : .al : .xl
+	lda @ovl_rowbase
+	clc : adc #OVL_FLAG_COL
+	sta @$002116
+	lda @ovl_idx
+	tax
+	sep #$20 : .as
+	lda @CHEAT_FLAGS, x
+	bmi ss_ovl_dfr_on
+	lda #$4f : sta @$002118 : lda #$00 : sta @$002119   ; O
+	lda #$46 : sta @$002118 : lda #$00 : sta @$002119   ; F
+	lda #$46 : sta @$002118 : lda #$00 : sta @$002119   ; F
+	plp
+	rts
+ss_ovl_dfr_on:
+	lda #$4f : sta @$002118 : lda #$00 : sta @$002119   ; O
+	lda #$4e : sta @$002118 : lda #$00 : sta @$002119   ; N
+	lda #$20 : sta @$002118 : lda #$00 : sta @$002119   ; (space)
+	plp
+	rts
+
+; ---- "NO CHEATS" centered at row 13 ----
+ss_ovl_draw_empty:
+	php
+	rep #$20 : .al
+	lda #($1000+13*32+11)
+	sta @$002116
+	sep #$20 : .as
+	lda #$4e : sta @$002118 : lda #$00 : sta @$002119   ; N
+	lda #$4f : sta @$002118 : lda #$00 : sta @$002119   ; O
+	lda #$20 : sta @$002118 : lda #$00 : sta @$002119   ; (space)
+	lda #$43 : sta @$002118 : lda #$00 : sta @$002119   ; C
+	lda #$48 : sta @$002118 : lda #$00 : sta @$002119   ; H
+	lda #$45 : sta @$002118 : lda #$00 : sta @$002119   ; E
+	lda #$41 : sta @$002118 : lda #$00 : sta @$002119   ; A
+	lda #$54 : sta @$002118 : lda #$00 : sta @$002119   ; T
+	lda #$53 : sta @$002118 : lda #$00 : sta @$002119   ; S
+	plp
+	rts
+
+; ---- full redraw under forced blank (used on scroll) ----
+; Redraw the list after a scroll. Only the name+flag of every row change (the
+; cursor stays on the same screen row), and ALL visible rows are valid during a
+; scroll, so we rewrite just name+flag with LOW-BYTE-ONLY tile writes (the high
+; attribute byte stays $00 from the initial clear). That halves the writes and
+; skips the full-row clear, so the redraw fits inside vblank -> NO force-blank,
+; NO black flash while scrolling.
+; Called once per frame from the input loop. If a scroll marked the list dirty
+; (ovl_rdraw_n > 0), redraw up to OVL_RDRAW_BATCH rows (low-byte-only) starting at
+; ovl_rdraw_y, advancing. Spreads a 20-row redraw over ~3 frames so each batch
+; fits inside vblank -> all rows update with NO black flash. Idle (instant) when
+; nothing is pending. The cursor stays put across a scroll, so it isn't redrawn.
+ss_ovl_rdraw_step:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_rdraw_n
+	beq ss_ovl_rds_done                    ; nothing pending
+	sep #$20 : .as
+	lda #$00 : sta @$002115                ; VRAM increment after LOW byte ($2118)
+	rep #$30 : .al : .xl
+	ldx #OVL_RDRAW_BATCH
+ss_ovl_rds_loop:
+	lda @ovl_rdraw_n
+	beq ss_ovl_rds_restore
+	lda @ovl_rdraw_y : tay
+	phx
+	jsr ss_ovl_fast_row
+	plx
+	lda @ovl_rdraw_y : inc : sta @ovl_rdraw_y
+	lda @ovl_rdraw_n : dec : sta @ovl_rdraw_n
+	dex
+	bne ss_ovl_rds_loop
+ss_ovl_rds_restore:
+	sep #$20 : .as
+	lda #$80 : sta @$002115                ; restore increment after HIGH byte
+ss_ovl_rds_done:
+	plp
+	rts
+
+; draw name(padded to OVL_NAME_MAX)+flag of screen row Y, low-byte-only. Assumes
+; $2115=$00 (increment-after-low) and high attribute bytes already $00. idx is
+; always valid here (every visible row maps to a real cheat during a scroll).
+ss_ovl_fast_row:
+	php
+	rep #$30 : .al : .xl
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl
+	clc : adc #$1000
+	sta @ovl_rowbase
+	tya
+	clc : adc @ovl_top
+	sta @ovl_idx
+	; name @ rowbase + OVL_NAME_COL
+	lda @ovl_rowbase
+	clc : adc #OVL_NAME_COL
+	sta @$002116
+	lda @ovl_idx
+	asl : asl : asl : asl : asl             ; idx*32
+	tax
+	ldy #$0000
+	sep #$20 : .as
+ss_ovl_fr_name:
+	lda @CHEAT_NAMES, x
+	bne ss_ovl_fr_nch
+	lda #$20                                ; past end -> space (pads to NAME_MAX)
+ss_ovl_fr_nch:
+	sta @$002118                            ; low byte (char) only
+	inx
+	iny
+	cpy #OVL_NAME_MAX
+	bne ss_ovl_fr_name
+	; flag @ rowbase + OVL_FLAG_COL
+	rep #$30 : .al : .xl
+	lda @ovl_rowbase
+	clc : adc #OVL_FLAG_COL
+	sta @$002116
+	lda @ovl_idx : tax
+	sep #$20 : .as
+	lda @CHEAT_FLAGS, x
+	bmi ss_ovl_fr_on
+	lda #$4f : sta @$002118 : lda #$46 : sta @$002118 : lda #$46 : sta @$002118   ; OFF
+	plp
+	rts
+ss_ovl_fr_on:
+	lda #$4f : sta @$002118 : lda #$4e : sta @$002118 : lda #$20 : sta @$002118   ; ON
+	plp
+	rts
+
+; ---- draw '>' cursor at screen row Y ----
+ss_ovl_draw_cursor:
+	php
+	rep #$30 : .al : .xl
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl
+	clc : adc #($1000+OVL_CURSOR_COL)
+	sta @$002116
+	sep #$20 : .as
+	lda #$3e : sta @$002118 : lda #$00 : sta @$002119
+	plp
+	rts
+
+; ---- erase cursor (space) at screen row Y ----
+ss_ovl_erase_cursor:
+	php
+	rep #$30 : .al : .xl
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl
+	clc : adc #($1000+OVL_CURSOR_COL)
+	sta @$002116
+	sep #$20 : .as
+	lda #$20 : sta @$002118 : lda #$00 : sta @$002119
+	plp
+	rts
+
+; ---- redraw just the ON/OFF flag of screen row Y ----
+ss_ovl_draw_flag:
+	php
+	rep #$30 : .al : .xl
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl
+	clc : adc #($1000+OVL_FLAG_COL)
+	sta @$002116
+	tya
+	clc : adc @ovl_top
+	tax
+	sep #$20 : .as
+	lda @CHEAT_FLAGS, x
+	bmi ss_ovl_dflag_on
+	lda #$4f : sta @$002118 : lda #$00 : sta @$002119   ; O
+	lda #$46 : sta @$002118 : lda #$00 : sta @$002119   ; F
+	lda #$46 : sta @$002118 : lda #$00 : sta @$002119   ; F
+	plp
+	rts
+ss_ovl_dflag_on:
+	lda #$4f : sta @$002118 : lda #$00 : sta @$002119   ; O
+	lda #$4e : sta @$002118 : lda #$00 : sta @$002119   ; N
+	lda #$20 : sta @$002118 : lda #$00 : sta @$002119   ; (space)
+	plp
+	rts
+
+; ---- Up: move cursor up a row, or scroll the list up ----
+ss_ovl_move_up:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_selrow
+	beq ss_ovl_mu_scroll
+	lda @ovl_selrow : tay
+	jsr ss_ovl_erase_cursor
+	lda @ovl_selrow : dec : sta @ovl_selrow
+	lda @ovl_selrow : tay
+	jsr ss_ovl_draw_cursor
+	plp
+	rts
+ss_ovl_mu_scroll:
+	lda @ovl_top
+	beq ss_ovl_mu_done                      ; already at the very top
+	lda @ovl_top : dec : sta @ovl_top
+	lda @ovl_visible : sta @ovl_rdraw_n     ; mark list dirty -> incremental redraw
+	lda #$0000 : sta @ovl_rdraw_y
+ss_ovl_mu_done:
+	plp
+	rts
+
+; ---- Down: move cursor down a row, or scroll the list down ----
+ss_ovl_move_down:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_selrow
+	inc
+	cmp @ovl_visible
+	bcs ss_ovl_md_scroll                    ; cursor already on bottom visible row
+	lda @ovl_top
+	clc : adc @ovl_selrow
+	inc
+	cmp @ovl_count
+	bcs ss_ovl_md_done                      ; already on the last cheat
+	lda @ovl_selrow : tay
+	jsr ss_ovl_erase_cursor
+	lda @ovl_selrow : inc : sta @ovl_selrow
+	lda @ovl_selrow : tay
+	jsr ss_ovl_draw_cursor
+	plp
+	rts
+ss_ovl_md_scroll:
+	lda @ovl_top
+	clc : adc @ovl_visible
+	cmp @ovl_count
+	bcs ss_ovl_md_done                      ; bottom of list already shown
+	lda @ovl_top : inc : sta @ovl_top
+	lda @ovl_visible : sta @ovl_rdraw_n     ; mark list dirty -> incremental redraw
+	lda #$0000 : sta @ovl_rdraw_y
+ss_ovl_md_done:
+	plp
+	rts
+
+; ---- A: toggle the selected cheat (instant BSRAM flip + redraw its flag) ----
+ss_ovl_toggle:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq ss_ovl_tog_done                     ; no cheats
+	lda @ovl_top
+	clc : adc @ovl_selrow
+	cmp @ovl_count
+	bcs ss_ovl_tog_done                     ; index out of range
+	tax
+	sep #$20 : .as
+	lda @CHEAT_FLAGS, x
+	eor #$80
+	sta @CHEAT_FLAGS, x
+	lda #$01
+	sta @ovl_dirty
+	rep #$30 : .al : .xl
+	lda @ovl_selrow : tay
+	jsr ss_ovl_draw_flag
+ss_ovl_tog_done:
+	plp
+	rts
+
+; ---- Up/Down with auto-repeat. ovl_cur = held pad, ovl_edge = newly pressed.
+;      A held direction moves once on the edge, waits OVL_REP_INIT frames, then
+;      steps every OVL_REP_RATE frames. ovl_rep_cnt is the countdown. ----
+ss_ovl_nav_vert:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_cur
+	bit #$0800                              ; Up held?
+	beq ss_ovl_nv_chkdn
+	lda @ovl_edge
+	bit #$0800                              ; Up edge?
+	beq ss_ovl_nv_up_held
+	jsr ss_ovl_move_up
+	lda #OVL_REP_INIT : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_up_held:
+	lda @ovl_rep_cnt
+	beq ss_ovl_nv_up_fire
+	dec : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_up_fire:
+	jsr ss_ovl_move_up
+	lda #OVL_REP_RATE : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_chkdn:
+	lda @ovl_cur
+	bit #$0400                              ; Down held?
+	beq ss_ovl_nv_none
+	lda @ovl_edge
+	bit #$0400                              ; Down edge?
+	beq ss_ovl_nv_dn_held
+	jsr ss_ovl_move_down
+	lda #OVL_REP_INIT : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_dn_held:
+	lda @ovl_rep_cnt
+	beq ss_ovl_nv_dn_fire
+	dec : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_dn_fire:
+	jsr ss_ovl_move_down
+	lda #OVL_REP_RATE : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_none:
+	lda #$0000 : sta @ovl_rep_cnt           ; nothing held -> clear repeat
+ss_ovl_nv_done:
+	plp
+	rts
+
+; ---- footer hint "A:ON/OFF  B:BACK" at row 25, col 8 ----
+ss_ovl_draw_footer:
+	php
+	rep #$20 : .al
+	lda #($1000+25*32+8)
+	sta @$002116
+	sep #$20 : .as
+	lda #$41 : sta @$002118 : lda #$00 : sta @$002119   ; A
+	lda #$3a : sta @$002118 : lda #$00 : sta @$002119   ; :
+	lda #$4f : sta @$002118 : lda #$00 : sta @$002119   ; O
+	lda #$4e : sta @$002118 : lda #$00 : sta @$002119   ; N
+	lda #$2f : sta @$002118 : lda #$00 : sta @$002119   ; /
+	lda #$4f : sta @$002118 : lda #$00 : sta @$002119   ; O
+	lda #$46 : sta @$002118 : lda #$00 : sta @$002119   ; F
+	lda #$46 : sta @$002118 : lda #$00 : sta @$002119   ; F
+	lda #$20 : sta @$002118 : lda #$00 : sta @$002119   ; (space)
+	lda #$20 : sta @$002118 : lda #$00 : sta @$002119   ; (space)
+	lda #$42 : sta @$002118 : lda #$00 : sta @$002119   ; B
+	lda #$3a : sta @$002118 : lda #$00 : sta @$002119   ; :
+	lda #$42 : sta @$002118 : lda #$00 : sta @$002119   ; B
+	lda #$41 : sta @$002118 : lda #$00 : sta @$002119   ; A
+	lda #$43 : sta @$002118 : lda #$00 : sta @$002119   ; C
+	lda #$4b : sta @$002118 : lda #$00 : sta @$002119   ; K
+	plp
+	rts

@@ -205,6 +205,28 @@ So bekommst du fertige Cheat-Dateien:
 > [!NOTE]
 > Wenn eine ROM keine `.yml` in `/sd2snes/cheats/` hat oder die Datei keine Codes enthält, zeigt das Menü eine Meldung, dass keine Cheats für diese ROM vorhanden sind.
 
+## Cheat-Menü im Spiel
+
+Neben dem Cheat-Manager im Menü kann dieser Fork ein **Cheat-Menü über dem laufenden Spiel** einblenden, damit du Codes ein- und ausschalten kannst, ohne zu resetten.
+
+Halte während des Spiels **L + R + Y + Links**, um zu pausieren und die Überlagerung zu öffnen:
+
+- **Hoch/Runter** bewegt den Cursor.
+- **A** schaltet den markierten Code ein oder aus.
+- **B** schließt die Überlagerung und wendet deine Änderungen im laufenden Spiel an.
+
+Ist **standardmäßig aktiviert**. Schalte es unter **Configuration → In-game Settings → In-game hook → Cheat menu** ab.
+
+> [!TIP]
+> Die App **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** lädt auch die Cheats jedes Spiels automatisch herunter.
+
+> [!NOTE]
+> Aktuelle Einschränkungen:
+> - Es werden nur die ersten **64** Cheats aufgelistet.
+> - In der Überlagerung gemachte Änderungen werden **nicht gespeichert** in der `.yml`-Datei — sie gelten nur für die aktuelle Spielsitzung.
+> - Wie Savestates funktioniert es **nicht bei Spielen mit Spezialchips** (SA-1, SuperFX, usw.).
+> - Das Layout ist noch grob (in Arbeit).
+
 ## Datei und Spielstand löschen
 
 Du kannst Dateien und Spielstände direkt aus dem Menü löschen, ohne die SD-Karte zu entfernen oder einen Computer zu benutzen.
