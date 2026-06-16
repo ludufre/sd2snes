@@ -758,6 +758,21 @@ menu_enttab_ingame:
  .byt  ^(mfunc_isenabled_hooks-1)
 
  .byt  MTYPE_VALUE
+ .word !mtext_ingame_cheat_overlay
+ .byt  ^mtext_ingame_cheat_overlay
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_CHEAT_OVERLAY
+ .byt  ^CFG_ENABLE_CHEAT_OVERLAY
+ .word !mdesc_ingame_cheat_overlay
+ .byt  ^mdesc_ingame_cheat_overlay
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_hooks-1)
+ .byt  ^(mfunc_isenabled_hooks-1)
+
+ .byt  MTYPE_VALUE
  .word !mtext_ingame_holdoff
  .byt  ^mtext_ingame_holdoff
  .word !kv_onoff

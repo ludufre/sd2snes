@@ -206,6 +206,28 @@ Para conseguir archivos de trucos listos:
 > [!NOTE]
 > Si una ROM no tiene un `.yml` en `/sd2snes/cheats/` (o el archivo no tiene códigos), el menú muestra el mensaje "no hay trucos para esta ROM".
 
+## Menú de trucos en el juego
+
+Además del gestor de trucos del menú, este fork puede abrir un **menú de trucos sobre el juego en marcha**, para activar y desactivar códigos sin reiniciar.
+
+Mientras juegas, manten **L + R + Y + Izquierda** para pausar y abrir la superposición:
+
+- **Arriba/Abajo** mueve el cursor.
+- **A** activa o desactiva el código resaltado.
+- **B** cierra la superposición y aplica tus cambios en el juego en marcha.
+
+Viene **activado por defecto**. Desactívalo en **Configuration → In-game Settings → In-game hook → Cheat menu**.
+
+> [!TIP]
+> La app **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** también descarga automáticamente los trucos de cada juego.
+
+> [!NOTE]
+> Limitaciones actuales:
+> - Solo se listan los primeros **64** trucos.
+> - Los cambios hechos en la superposición **no se guardan** en el archivo `.yml` — solo valen para la sesión de juego actual.
+> - Como los savestates, **no funciona en juegos con Chips Especiales** (SA-1, SuperFX, etc.).
+> - El diseño todavía es tosco (en progreso).
+
 ## Borrar archivo y partida guardada
 
 Puedes borrar archivos y partidas directamente desde el menú, sin sacar la tarjeta SD ni usar una computadora.

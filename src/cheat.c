@@ -131,6 +131,19 @@ void cheat_program() {
   cheat_buttons_enable(CFG.enable_ingame_buttons);
   cheat_wram_present(wram_index);
 
+  /* Arm the in-game cheat overlay (snes/savestate.a65 probe reads this byte).
+     The overlay reuses the savestate snapshot/restore machinery, which is NOT
+     supported on enhancement-chip games (SA-1, SuperFX/GSU, S-DD1, SPC7110, and
+     the DSP/CX4/OBC1 helpers) — freezing the SNES CPU mid-frame and snapshotting
+     the PPU desyncs the asynchronous coprocessor. So force it off there regardless
+     of the user toggle; on plain LoROM/HiROM it follows CFG.enable_cheat_overlay. */
+  {
+    uint8_t special_chip = romprops.has_dspx || romprops.has_cx4 || romprops.has_obc1
+                        || romprops.has_gsu  || romprops.has_sa1 || romprops.has_sdd1
+                        || romprops.has_spc7110;
+    sram_writebyte((CFG.enable_cheat_overlay && !special_chip) ? 1 : 0, SRAM_CHEAT_OVL_GATE_ADDR);
+  }
+
   sgb_cheat_program();
 }
 
@@ -335,6 +348,17 @@ void cheat_yaml_load(uint8_t* romfilename) {
        trip. The PSRAM record at $D00000+512*idx remains the canonical
        state that save reads. */
     sram_writebyte(cheat.flags, SRAM_CHEAT_FLAGS_ADDR + cheat_idx);
+    /* Stage the first CHEAT_NAME_INGAME_MAX descriptions into the
+       SNES-visible BSRAM window ($FF0800) so the in-game cheat overlay
+       can display names: the canonical PSRAM record at $D00000 is the
+       game's own ROM during gameplay, unreachable from the overlay. */
+    if(cheat_idx < CHEAT_NAME_INGAME_MAX) {
+      char nbuf[CHEAT_NAME_INGAME_LEN];
+      memset(nbuf, 0, sizeof(nbuf));
+      strncpy(nbuf, cheat.description, CHEAT_NAME_INGAME_LEN - 1);
+      nbuf[CHEAT_NAME_INGAME_LEN - 1] = 0;
+      sram_writeblock(nbuf, SRAM_CHEAT_NAMES_ADDR + (uint32_t)cheat_idx * CHEAT_NAME_INGAME_LEN, CHEAT_NAME_INGAME_LEN);
+    }
     cheat_idx++;
   }
   sram_writeshort((uint16_t)cheat_idx, SRAM_NUM_CHEATS);
@@ -350,6 +374,27 @@ void cheat_toggle_flag(int index) {
   uint32_t addr = SRAM_CHEAT_ADDR + 512 * index;
   uint8_t flag = sram_readbyte(addr);
   sram_writebyte(flag ^ CHEAT_FLAG_ENABLE, addr);
+}
+
+/* In-game live re-program (CMD_CHEAT_REPROGRAM). The in-game cheat overlay
+   edits the BSRAM flag mirror ($FF0500, one byte per cheat) directly for
+   instant visual feedback without an MCU round trip. This reconciles that
+   mirror's enable bit back into the canonical PSRAM records ($D00000 +
+   512*i, byte 0) and re-runs cheat_program() so the FPGA ROM-cheat enable
+   mask and the injected WRAM-cheat block reflect the new state without a
+   reboot. Bounded by the cheat count, so it can never hang. */
+void cheat_reprogram_from_mirror(void) {
+  int count = sram_readshort(SRAM_NUM_CHEATS);
+  if(count < 0) count = 0;
+  if(count > 512) count = 512;
+  for(int i = 0; i < count; i++) {
+    uint8_t mirror = sram_readbyte(SRAM_CHEAT_FLAGS_ADDR + i);
+    uint32_t rec = SRAM_CHEAT_ADDR + 512u * (uint32_t)i;
+    uint8_t flag = sram_readbyte(rec);
+    flag = (flag & ~CHEAT_FLAG_ENABLE) | (mirror & CHEAT_FLAG_ENABLE);
+    sram_writebyte(flag, rec);
+  }
+  cheat_program();
 }
 
 /* Inverse of cheat_decode_html_entities. Writes the supplied string to

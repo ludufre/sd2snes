@@ -1,7 +1,7 @@
 IPS = header.ips
 # const_lang.o65 is generated from the English base const.a65 + the per-language
 # dicts (utils/lang_*.py) by utils/build_const.py -> multilingual const_lang.a65.
-O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 near.o65 patch.o65 cheatmenu.o65 # gfx.o65 # vars.o65
+O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 cheatoverlay.o65 near.o65 patch.o65 cheatmenu.o65 # gfx.o65 # vars.o65
 
 OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
@@ -46,14 +46,23 @@ link.log: $(OBJS)
 	sneslink -fsmc -o /dev/null $^ 2>&1 | tee link.log
 
 # Generic rule to create .o65[.log] out from .a65
+# The `| tee` masks snescom's exit code, so an assembler error (e.g. an invalid
+# addressing mode) would otherwise produce a broken .o65 with a 0 exit and slip
+# past the link step (the link guard only greps the LINKER log). Grep the
+# assembler log for "Error:" and fail loudly, deleting the bad object so a
+# re-make actually retries. (A broken cheat-overlay object shipped once this way.)
 %.o65 %.o65.log: %.a65
 	cpp $(GENDEPFLAGS) $<
 	snescom -J -Wall -o $(@:.log=) $< 2>&1 | tee $(@:.log=).log
+	@if grep -q "Error:" $(@:.log=).log; then \
+	  echo "*** snescom FAILED on $< (see $(@:.log=).log)"; rm -f $(@:.log=); exit 1; fi
 
 # Generic rule to create .ips out from .a65
 %.ips %.ips.log: %.a65
 	cpp $(GENDEPFLAGS) $<
 	snescom -I -J -Wall -o $(@:.log=) $< 2>&1 | tee $(@:.log=).log
+	@if grep -q "Error:" $(@:.log=).log; then \
+	  echo "*** snescom FAILED on $< (see $(@:.log=).log)"; rm -f $(@:.log=); exit 1; fi
 
 clean:
 	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 $(OUT) *.o65.log *.ips.log

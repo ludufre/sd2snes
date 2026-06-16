@@ -206,6 +206,28 @@ Para conseguir arquivos de cheats prontos:
 > [!NOTE]
 > Se a ROM não tiver um `.yml` em `/sd2snes/cheats/` (ou o arquivo não tiver códigos), o menu mostra a mensagem "Nenhum cheat definido para esta ROM".
 
+## Menu de cheats no jogo
+
+Além do gerenciador de cheats no menu, este fork pode abrir um **menu de cheats por cima do jogo em execução**, pra você ligar e desligar códigos sem resetar.
+
+Durante o jogo, segure **L + R + Y + Esquerda** pra pausar e abrir a sobreposição:
+
+- **Cima/Baixo** move o cursor.
+- **A** liga ou desliga o código destacado.
+- **B** fecha a sobreposição e aplica suas mudanças no jogo em execução.
+
+Vem **habilitado por padrão**. Desligue em **Configuration → In-game Settings → In-game hook → Cheat menu**.
+
+> [!TIP]
+> O app **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** também baixa os cheats dos jogos automaticamente.
+
+> [!NOTE]
+> Limitações atuais:
+> - Só os primeiros **64** cheats são listados.
+> - As alterações feitas na sobreposição **não são salvas** no arquivo `.yml` — valem só na sessão de jogo atual.
+> - Igual aos savestates, **não funciona em jogos com Chips Especiais** (SA-1, SuperFX, etc.).
+> - O layout ainda está feio (em progresso).
+
 ## Deletar arquivo e save
 
 Você pode deletar arquivos e saves direto pelo menu, sem tirar o cartão SD nem usar o computador.

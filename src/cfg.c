@@ -20,7 +20,8 @@ _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists 
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
 _Static_assert(offsetof(cfg_t, bgm_name) == 0xBC, "cfg_t.bgm_name must stay at CFG_ADDR+$BC");
 _Static_assert(offsetof(cfg_t, sort_favorites) == 0x13C, "cfg_t.sort_favorites must stay at CFG_ADDR+$13C");
-_Static_assert(offsetof(cfg_t, show_game_info) == 0x13D, "cfg_t.show_game_info must stay at CFG_ADDR+$13D");
+_Static_assert(offsetof(cfg_t, enable_cheat_overlay) == 0x13D, "cfg_t.enable_cheat_overlay must stay at CFG_ADDR+$13D");
+_Static_assert(offsetof(cfg_t, show_game_info) == 0x13E, "cfg_t.show_game_info must stay at CFG_ADDR+$13E");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -70,7 +71,8 @@ cfg_t CFG_DEFAULT = {
   .enable_menu_sfx = 1,
   .bgm_name = "",
   .sort_favorites = 0,
-  .show_game_info = 1
+  .enable_cheat_overlay = 1,
+  .show_game_info = 1,
 };
 
 cfg_t CFG;
@@ -186,6 +188,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_SFX, CFG.enable_menu_sfx ? "true" : "false");
   f_printf(&file_handle, "#  %s: Show the Favorites list in alphabetical order (display only)\n", CFG_SORT_FAVORITES);
   f_printf(&file_handle, "%s: %s\n", CFG_SORT_FAVORITES, CFG.sort_favorites ? "true" : "false");
+  f_printf(&file_handle, "#  %s: In-game cheat overlay (pause via L+R+Y+Left to toggle cheats). Off on special-chip games.\n", CFG_ENABLE_CHEAT_OVERLAY);
+  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEAT_OVERLAY, CFG.enable_cheat_overlay ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
@@ -351,6 +355,9 @@ int cfg_load() {
     if(yaml_get_itemvalue(CFG_SORT_FAVORITES, &tok)) {
       CFG.sort_favorites = tok.boolvalue ? 1 : 0;
     }
+    if(yaml_get_itemvalue(CFG_ENABLE_CHEAT_OVERLAY, &tok)) {
+      CFG.enable_cheat_overlay = tok.boolvalue ? 1 : 0;
+    }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);
       CFG.skin_name[sizeof(CFG.skin_name) - 1] = 0;
@@ -416,61 +423,101 @@ static void listed_game_display_key(const TCHAR *entry, TCHAR *out) {
   out[255] = 0;
 }
 
+/* The recent/favorite list functions below are STREAMING: they process one
+   entry at a time through a single 256-byte buffer and rewrite the list into a
+   temp file (a 2nd FIL) that atomically replaces it.  They must NEVER buffer the
+   whole list into a TCHAR[cap][256] array: at cap=20 that is a 5 KB stack frame,
+   and the mk2/mk3-LPC1756 MCUs only have ~4 KB of stack (16 KB SRAM minus
+   globals) -- the frame overran into .bss and corrupted the lists (phantom
+   "0x0B" entries).  Keep these allocation-light.  As a side benefit, entries that
+   are not '/'-rooted (empty/garbage) are dropped on any rewrite, self-healing a
+   list that an older firmware corrupted. */
+
+/* Build "<listfilename>.tmp" into out (out must be >= strlen(list)+5). */
+static void listed_game_tmp_path(const uint8_t *listfilename, TCHAR *out, size_t outsz) {
+  strncpy(out, (const char*)listfilename, outsz - 5);
+  out[outsz - 5] = 0;
+  strncat(out, ".tmp", 5);
+}
+
+/* Finish a stream-rewrite: close the temp `dst`, then on success swap it in for
+   `listfilename` (drop original, rename temp -> original).  On a write/close
+   error the original is left untouched and the temp discarded.  Returns 0 / <0. */
+static int listed_game_commit(const uint8_t *listfilename, const TCHAR *tmppath, FIL *dst) {
+  if(f_close(dst) != FR_OK) {
+    f_unlink(tmppath);
+    return -1;
+  }
+  f_unlink((const TCHAR*)listfilename);
+  return f_rename(tmppath, (const TCHAR*)listfilename) == FR_OK ? 0 : -1;
+}
+
 int cfg_validity_check_listed_games(const uint8_t *listfilename) {
   int cap = listed_game_cap(listfilename);
-  int err = 0, index, index_max, write_indices[MAX_LISTED_GAMES], rewrite_listfile = 0;
-  TCHAR fntmp[MAX_LISTED_GAMES][256];
+  int seen = 0, written = 0, bad = 0;
+  TCHAR entry[256];
+  TCHAR base[256];
+  TCHAR tmppath[80];
+  FIL dst;
+  char *tab;
+
+  /* Pass 1 (read-only): is a rewrite needed?  Triggered by any garbage entry
+     (not '/'-rooted) or any entry whose base ROM no longer exists.  Patch-aware
+     entries are "<rom>\t<patch>": validate the base ROM ONLY (a temporarily-
+     missing patch must not evict the entry), stripping a COPY at the tab. */
   file_open(listfilename, FA_READ);
   if(file_status == FILE_ERR) {
     return 0;
   }
-  for(index = 0; index < cap && !f_eof(&file_handle); index++) {
-    f_gets(fntmp[index], 255, &file_handle);
-  }
-  if(!f_eof(&file_handle))
-    index_max = cap;
-  else
-    index_max = index;
-  file_close();
-  for(index = 0; index < index_max; index++) {
-    /* Patch-aware entries are "<rom>\t<patch>"; validate by the base ROM's
-       existence ONLY (a temporarily-missing patch must not evict the entry).
-       Strip a COPY at the tab — the rewrite below keeps the original tag. */
-    TCHAR base[256];
-    strncpy(base, fntmp[index], 255);
+  while(seen < cap) {
+    f_gets(entry, 255, &file_handle);
+    if(*entry == 0) break;
+    seen++;
+    if(*entry != '/') { bad = 1; break; }
+    strncpy(base, entry, 255);
     base[255] = 0;
-    char *tab = strchr(base, '\t');
+    tab = strchr(base, '\t');
     if(tab) *tab = 0;
-    file_open((uint8_t*)base, FA_READ);
-    write_indices[index] = file_status;
-    if(file_status != FILE_OK)
-      rewrite_listfile = 1;
-    file_close();
+    if(f_stat((const TCHAR*)base, NULL) != FR_OK) { bad = 1; break; }
   }
-  if(rewrite_listfile) {
-    uint8_t listfile_bak[80];
-    strncpy((char*)listfile_bak, (char*)listfilename, sizeof(listfile_bak) - 5);
-    strncat((char*)listfile_bak, ".bak", 5);
-    f_rename ((TCHAR*)listfilename, (TCHAR*)listfile_bak);
-    file_open(listfilename, FA_CREATE_ALWAYS | FA_WRITE);
-    for(index = 0; index < index_max; index++) {
-      if(write_indices[index] == FILE_OK) {
-        err = f_puts(fntmp[index], &file_handle);
-        err = f_putc(0, &file_handle);
-      }
+  file_close();
+  if(!bad) {
+    return 0;
+  }
+
+  /* Pass 2: stream the surviving entries into a temp file, then swap it in. */
+  listed_game_tmp_path(listfilename, tmppath, sizeof(tmppath));
+  if(f_open(&dst, tmppath, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
+    return 0;
+  }
+  file_open(listfilename, FA_READ);
+  if(file_status != FILE_ERR) {
+    while(written < cap) {
+      f_gets(entry, 255, &file_handle);
+      if(*entry == 0) break;
+      if(*entry != '/') continue;
+      strncpy(base, entry, 255);
+      base[255] = 0;
+      tab = strchr(base, '\t');
+      if(tab) *tab = 0;
+      if(f_stat((const TCHAR*)base, NULL) != FR_OK) continue;
+      f_puts(entry, &dst);
+      f_putc(0, &dst);
+      written++;
     }
-    file_close();
   }
-  return err;
+  file_close();
+  return listed_game_commit(listfilename, tmppath, &dst);
 }
 
 int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn,
                                 const char *patch_basename, bool evict_oldest) {
   int cap = listed_game_cap(listfilename);
-  int err = 0, index, index2, found = 0, foundindex = 0;
+  int count = 0, found = 0, written = 0;
   TCHAR fqfn[256];
-  TCHAR fntmp[MAX_LISTED_GAMES][256];
-  file_open(listfilename, FA_READ);
+  TCHAR entry[256];
+  TCHAR tmppath[80];
+  FIL dst;
   fqfn[0] = 0;
   if(fn[0] !=  '/') {
     strncpy(fqfn, (const char*)file_path, 256);
@@ -488,51 +535,50 @@ int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn,
       strncat(fqfn, patch_basename, 256 - strlen(fqfn) - 1);
     }
   }
-  /* If the list file does not exist yet (empty Favorites/Recents), file_open left
-     file_status == FILE_ERR and the global file_handle is stale -- reading it would
-     return another file's data and falsely fill the list (=> bogus "list full").
-     Treat a missing file as an empty list: index stays 0. */
-  index = 0;
+  /* Pass 1: count valid entries + detect an existing copy (dedup), streaming one
+     entry at a time -- see the note above on why we never buffer the whole list.
+     A missing list file (FILE_ERR) is an empty list: count stays 0.  Garbage
+     entries (not '/'-rooted) are ignored so a corrupted list self-heals. */
+  file_open(listfilename, FA_READ);
   if(file_status != FILE_ERR) {
-    for(index = 0; index < cap; index++) {
-      f_gets(fntmp[index], 255, &file_handle);
-      if((*fntmp[index] == 0) || (*fntmp[index] == '\n')) {
-        break; /* last entry found */
-      }
-      if(!strncasecmp((TCHAR*)fqfn, fntmp[index], 255)) {
-        found = 1; /* file already in list */
-        foundindex = index;
-      }
+    while(count < cap) {
+      f_gets(entry, 255, &file_handle);
+      if(*entry == 0) break;
+      if(*entry != '/') continue;
+      if(!strncasecmp((TCHAR*)fqfn, entry, 255)) found = 1;
+      count++;
     }
   }
   file_close();
 
-  if(!evict_oldest) {
-    if(index > (cap - 1) + found) {
-      //List is full and game is not already in list, refuse to add it
-      return 1;
-    }
+  if(!evict_oldest && count > (cap - 1) + found) {
+    /* List is full and game is not already in list, refuse to add it. */
+    return 1;
   }
 
-  file_open(listfilename, FA_CREATE_ALWAYS | FA_WRITE);
-  /* always put new entry on top of list */
-  err = f_puts((const TCHAR*)fqfn, &file_handle);
-  err = f_putc(0, &file_handle);
-  if(index > (cap - 1) + found) index = (cap - 1) + found; /* truncate oldest entry */
-  /* allow number of destination entries to be the same as source in case
-   * we're only moving a previous entry to top */
-  for(index2 = 0; index2 < index; index2++) {
-    if(found && (index2 == foundindex)){
-      continue; /* omit found entry here to prevent dupe */
+  /* Pass 2: stream-rewrite -- new entry on top, then the old entries copied
+     through one buffer (dropping the moved/duplicate copy and any garbage,
+     capped at `cap`) into a temp file that atomically replaces the list. */
+  listed_game_tmp_path(listfilename, tmppath, sizeof(tmppath));
+  if(f_open(&dst, tmppath, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) return -1;
+  f_puts((const TCHAR*)fqfn, &dst);
+  f_putc(0, &dst);
+  written = 1;
+  file_open(listfilename, FA_READ);
+  if(file_status != FILE_ERR) {
+    while(written < cap) {
+      f_gets(entry, 255, &file_handle);
+      if(*entry == 0) break;
+      if(*entry != '/') continue;                          /* skip garbage */
+      if(!strncasecmp((TCHAR*)fqfn, entry, 255)) continue; /* dedup / move-to-top */
+      f_puts(entry, &dst);
+      f_putc(0, &dst);
+      written++;
     }
-    err = f_puts(fntmp[index2], &file_handle);
-    err = f_putc(0, &file_handle);
   }
   file_close();
-  /* Contract: 1 == list full (refused, the explicit return above); 0 == added OK;
-     <0 == write error.  Do NOT return err raw on success -- f_putc returns the byte
-     count (1), which the caller would misread as "full". */
-  return err < 0 ? err : 0;
+  /* Contract: 1 == list full (refused above); 0 == added OK; <0 == write error. */
+  return listed_game_commit(listfilename, tmppath, &dst);
 }
 
 int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_oldest) {
@@ -541,30 +587,31 @@ int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_old
 
 int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove) {
   int cap = listed_game_cap(listfilename);
-  int err = 0, index, index2;
-  TCHAR fntmp[MAX_LISTED_GAMES][256];
+  int index = 0, written = 0;
+  TCHAR entry[256];
+  TCHAR tmppath[80];
+  FIL dst;
 
-  // Load current file list into memory
+  /* Stream all valid entries except the one at file index `index_to_remove`
+     (the caller already mapped any displayed/sorted position to the file index
+     via listed_game_resolve_index) into a temp file, then swap it in.  Garbage
+     entries are dropped (self-heal). */
+  listed_game_tmp_path(listfilename, tmppath, sizeof(tmppath));
+  if(f_open(&dst, tmppath, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) return -1;
   file_open(listfilename, FA_READ);
-  for(index = 0; index < cap; index++) {
-    f_gets(fntmp[index], 255, &file_handle);
-    if((*fntmp[index] == 0) || (*fntmp[index] == '\n')) {
-      break; /* last entry found */
+  if(file_status != FILE_ERR) {
+    while(written < cap) {
+      f_gets(entry, 255, &file_handle);
+      if(*entry == 0) break;
+      if(*entry != '/') continue;                 /* skip garbage */
+      if(index++ == index_to_remove) continue;    /* drop the entry being removed */
+      f_puts(entry, &dst);
+      f_putc(0, &dst);
+      written++;
     }
   }
   file_close();
-
-  //Write back all items except the one at index_to_remove
-  file_open(listfilename, FA_CREATE_ALWAYS | FA_WRITE);
-  for(index2 = 0; index2 < index; index2++) {
-    if(index2 == index_to_remove){
-      continue;
-    }
-    err = f_puts(fntmp[index2], &file_handle);
-    err = f_putc(0, &file_handle);
-  }
-  file_close();
-  return err;
+  return listed_game_commit(listfilename, tmppath, &dst);
 }
 
 int cfg_get_listed_game_raw(const uint8_t *listfilename, uint8_t *fn, uint8_t index) {
@@ -623,6 +670,11 @@ int cfg_parse_patch_entry(char *entry, char *patchpath, int size) {
  *                to be made accessible.
  * @return uint8_t Number of list entries.
  */
+/* Max display-key length buffered when sorting favorites (kept small: up to 20
+   keys live on the stack at once -- buffering the full [cap][256] paths was a
+   5 KB frame that overran the 16 KB MCUs' stack). Names longer than this only
+   truncate in the sorted view; the menu shows far fewer columns anyway. */
+#define LISTED_DISP_KEYLEN 64
 uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t address, uint8_t write_lastdir) {
   TCHAR fntmp[256];
   TCHAR dirtmp[256];
@@ -644,16 +696,23 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
      listed_game_resolve_index.  Recents are never sorted. */
   if(!strcmp((const char*)listfilename, (const char*)FAVORITES_FILE)) {
     if(CFG.sort_favorites) {
-      TCHAR list[MAX_LISTED_GAMES][256];
+      /* Sort favorites for DISPLAY by their display key.  Buffer only the short
+         keys (never the full [cap][256] paths -- that 5 KB frame overran the
+         stack), reusing fntmp/dirtmp as the read / display-key scratch.  Garbage
+         entries are skipped.  favorite_sort_map maps displayed pos -> file index. */
+      TCHAR keys[MAX_LISTED_GAMES][LISTED_DISP_KEYLEN];
       uint8_t order[MAX_LISTED_GAMES];
       int count = 0, i, j;
       file_open(listfilename, FA_READ);
       if(file_status != FILE_ERR) {
-        for(count = 0; count < cap && !f_eof(&file_handle); count++) {
-          f_gets(list[count], 255, &file_handle);
-          if((*list[count] == 0) || (*list[count] == '\n')) {
-            break; /* last entry */
-          }
+        while(count < cap) {
+          f_gets(fntmp, 255, &file_handle);
+          if(*fntmp == 0) break;
+          if(*fntmp != '/') continue;
+          listed_game_display_key(fntmp, dirtmp);
+          strncpy(keys[count], dirtmp, LISTED_DISP_KEYLEN - 1);
+          keys[count][LISTED_DISP_KEYLEN - 1] = 0;
+          count++;
         }
       }
       file_close();
@@ -661,11 +720,8 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
       /* insertion sort the permutation by display key (case-insensitive) */
       for(i = 1; i < count; i++) {
         uint8_t curi = order[i];
-        TCHAR ki[256], kj[256];
-        listed_game_display_key(list[curi], ki);
         for(j = i - 1; j >= 0; j--) {
-          listed_game_display_key(list[order[j]], kj);
-          if(strncasecmp(kj, ki, 256) <= 0) {
+          if(strncasecmp(keys[order[j]], keys[curi], LISTED_DISP_KEYLEN) <= 0) {
             break;
           }
           order[j + 1] = order[j];
@@ -673,9 +729,7 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
         order[j + 1] = curi;
       }
       for(i = 0; i < count; i++) {
-        TCHAR disp[256];
-        listed_game_display_key(list[order[i]], disp);
-        sram_writestrn((uint8_t*)disp, address + 256 * i, 256);
+        sram_writestrn((uint8_t*)keys[order[i]], address + 256 * i, 256);
         favorite_sort_map[i] = order[i];
       }
       favorite_sort_count = (uint8_t) count;
@@ -684,8 +738,11 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
     favorite_sort_count = 0; /* toggle off -> identity (display == file order) */
   }
   file_open(listfilename, FA_READ);
-  for(index = 0; index < cap && !f_eof(&file_handle); index++) {
+  index = 0;
+  while(file_status != FILE_ERR && index < cap) {
     f_gets(fntmp, 255, &file_handle);
+    if(*fntmp == 0) break;        /* end of list */
+    if(*fntmp != '/') continue;   /* skip empty/garbage entries (self-heal) */
     /* Patch-aware entries are "<rom>\t<patch_basename>": display the patch name
        (without the .ips/.bps extension); plain entries display the ROM basename.
        listed_game_display_key works on a COPY, so fntmp stays intact for the
@@ -722,6 +779,7 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
       }
       *base_end = base_saved;
     }
+    index++;
   }
   file_close();
   return (uint8_t) index;
