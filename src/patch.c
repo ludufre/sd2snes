@@ -32,6 +32,7 @@ uint8_t ips_pending_index = 0;
 static int istartswith(const char *str, const char *prefix, size_t prefix_len) {
     for (size_t i = 0; i < prefix_len; i++) {
         char a = str[i], b = prefix[i];
+        if (a == 0) return 0;   /* str shorter than prefix: no match, and don't read past its NUL */
         if (a >= 'a' && a <= 'z') a -= 32;
         if (b >= 'a' && b <= 'z') b -= 32;
         if (a != b) return 0;
@@ -794,8 +795,11 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     }
 
     if (metadata_size > 0) {
-        /* Skip metadata: seek the real file cursor forward, then flush buffer */
+        /* Skip metadata: seek the real file cursor forward, then flush buffer.
+           Reject a metadata_size that exceeds the file: the VLI is unbounded and
+           logical+metadata_size could wrap uint32, silently defeating the skip. */
         uint32_t logical = BPS_LOGICAL_POS();
+        if (metadata_size > file_handle.fsize) { file_close(); return 0; }
         f_lseek(&file_handle, logical + metadata_size);
         bps_sb_pos = 0;
         bps_sb_len = 0;
@@ -994,6 +998,7 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
 
     if (metadata_size > 0) {
         uint32_t logical = BPS_LOGICAL_POS();
+        if (metadata_size > file_handle.fsize) { file_close(); return 0; }
         f_lseek(&file_handle, logical + metadata_size);
         bps_sb_pos = 0;
         bps_sb_len = 0;
