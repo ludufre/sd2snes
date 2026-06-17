@@ -101,7 +101,8 @@ printf("start\n");
               if(fn[0]=='.') continue; /* omit dot files */
               make_filesize_string(buf, fno.fsize);
               if(CFG.hide_extensions) {
-                *(strrchr(fn, '.')) = 1;
+                char *dot = strrchr(fn, '.');
+                if(dot) *dot = 1;
               }
             }
             fnlen = strlen(fn);
