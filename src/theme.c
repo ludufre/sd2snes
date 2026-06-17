@@ -121,6 +121,15 @@ void theme_apply(void) {
   file_res = f_read(&file_handle, toc, (UINT)n * 4, &got);
   if(file_res || got != (UINT)n * 4) { file_close(); return; }
 
+  /* atomicity guard: require the full payload up front so a .thm truncated
+     after the header can't leave the live menu half-themed (e.g. new palette
+     but stale logo tiles). Bail before touching menu PSRAM if the file is short. */
+  uint32_t need = 16 + (uint32_t)n * 4;
+  for(int r = 0; r < n; r++) {
+    need += (uint16_t)toc[r * 4 + 2] | ((uint16_t)toc[r * 4 + 3] << 8);
+  }
+  if(need > file_handle.fsize) { file_close(); return; }
+
   uint16_t gfxptr[THEME_NSLOTS];
   if(!theme_read_gfxptr(gfxptr)) {
     printf("theme: _GFXPTR_ not found in menu image\n");
