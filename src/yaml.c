@@ -38,6 +38,7 @@ yaml_token_type yaml_detect_value(char **token, yaml_token_t *tok) {
   yaml_token_type type = YAML_UNKNOWN;
   /* as a default, copy the token literal value to stringvalue */
   strncpy(tok->stringvalue, *token, YAML_BUFLEN);
+  tok->stringvalue[YAML_BUFLEN] = 0;
   if (**token == '"') {
     /* String value: discard quotes */
     (*token)++;
@@ -49,6 +50,7 @@ yaml_token_type yaml_detect_value(char **token, yaml_token_t *tok) {
     }
     type = YAML_STRING;
     strncpy(tok->stringvalue, *token, YAML_BUFLEN);
+    tok->stringvalue[YAML_BUFLEN] = 0;
   } else if (   !strcasecmp(*token, "true")
              || !strcasecmp(*token, "yes")
              || !strcasecmp(*token, "on")
@@ -171,7 +173,8 @@ int yaml_get_next(yaml_token_t *tok) {
           token++;
         }
         /* HACK restore delimiter so strtok can work with the whole line again */
-        token[strlen(token)]=':';
+        size_t tl = strlen(token);
+        if(tl && (token + tl) < (ystate.line + YAML_BUFLEN)) token[tl] = ':';
         ystate.flags |= YAML_FLAG_REWIND_LINE;
         type = YAML_ITEM_START;
         ystate.state = YAML_PSTATE_KEY;
@@ -186,6 +189,7 @@ int yaml_get_next(yaml_token_t *tok) {
         ystate.state = YAML_PSTATE_VALUE;
         ystate.depth = indent;
         strncpy(tok->stringvalue, token, YAML_BUFLEN);
+        tok->stringvalue[YAML_BUFLEN] = 0;
       }
       break;
     case YAML_PSTATE_VALUE:
@@ -323,6 +327,7 @@ int yaml_get_value(const char *key, yaml_token_t *tok, yaml_scope scope) {
   yaml_token_t cmp;
   cmp.type = YAML_KEY;
   strncpy(cmp.stringvalue, key, YAML_BUFLEN);
+  cmp.stringvalue[YAML_BUFLEN] = 0;
   /* look for key */
   found = yaml_search_next(&cmp, scope);
   /* now move to value */
