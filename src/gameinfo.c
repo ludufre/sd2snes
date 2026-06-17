@@ -107,7 +107,8 @@ static int gi_load_image(const char *path, gameinfo_meta_t *meta) {
   }
   uint8_t  w = hdr[4], h = hdr[5];
   uint16_t ntiles = (uint16_t)(hdr[6] | (hdr[7] << 8));
-  if(w == 0 || w > 32 || h == 0 || h > 32 || ntiles == 0 || ntiles > 1023) {
+  /* VRAM holds at most 512 unique 8bpp tiles (two 256-tile windows, see snes/gameinfo.a65) */
+  if(w == 0 || w > 32 || h == 0 || h > 32 || ntiles == 0 || ntiles > 512) {
     file_close(); return 0;
   }
   /* file order: header, tilemap (w*h*2), tiles (ntiles*64) */
