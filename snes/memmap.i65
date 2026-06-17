@@ -119,6 +119,9 @@
 
 #define NUM_CHEATS                  $FF0700
 #define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
+#define SS_DSP_GATE                 $FF0711 /* DSP1-4 savestate present flag (firmware-armed = fpga_conf==FPGA_DSP && !ST0010). Handler reads it to decide whether to capture/restore the DSP. Same $FF0701..$FF07FF gap. */
+#define SS_DSP_WINDOW               $E80000 /* DSP1-4 data-RAM + scan register-file window (banks $E8-$EF, off $0000-$07FF). $07FF = halt control (write bit0=halt, read bit0=halted). Live only while the handler holds map/snescmd unlock. */
+#define SS_DSP_SCRATCH              $F30000 /* PSRAM scratch for the DSP snapshot; bank F3 is inside the F0..F4 region persisted to the .state file. */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */

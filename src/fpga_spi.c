@@ -437,6 +437,16 @@ void fpga_dspx_reset(uint8_t reset) {
   FPGA_DESELECT();
 }
 
+/* savestate halt for the uPD7725 (DSP1-4) core: freezes every DSP flop so its
+   internal state can be snapshotted/restored. MCU-driven path for bring-up;
+   the savestate handler drives the same halt SNES-side via $D0_07FF. */
+void fpga_dspx_ss_halt(uint8_t halt) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_DSPSSHALT);
+  FPGA_TX_BYTE(halt);
+  FPGA_DESELECT();
+}
+
 void fpga_set_dac_boost(uint8_t boost) {
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_DACBOOST);

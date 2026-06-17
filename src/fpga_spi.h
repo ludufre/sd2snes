@@ -114,6 +114,7 @@
 #define FPGA_CMD_MSUGETVOLUME    (0xf4)
 #define FPGA_CMD_MSUREAD         (0xf5)
 #define FPGA_CMD_MSUGETSCADDR    (0xf6)
+#define FPGA_CMD_DSPSSHALT       (0xf7) /* DSP1-4 savestate halt (MCU debug) */
 #define FPGA_CMD_CONFIG_READ     (0xf9)
 #define FPGA_CMD_CONFIG_WRITE    (0xfa)
 #define FPGA_CMD_GETSYSCLK       (0xfe)
@@ -150,6 +151,7 @@ void fpga_reset_dspx_addr(void);
 void fpga_write_dspx_pgm(uint32_t data);
 void fpga_write_dspx_dat(uint16_t data);
 void fpga_dspx_reset(uint8_t reset);
+void fpga_dspx_ss_halt(uint8_t halt);
 void fpga_set_dac_boost(uint8_t boost);
 void fpga_set_features(uint16_t feat);
 void fpga_set_213f(uint8_t data);

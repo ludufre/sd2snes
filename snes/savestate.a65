@@ -251,7 +251,7 @@ ss_start_skip
 ; input handling
 +	rep #$30 : .al : .xl
 	;%cgram()
-	
+
 	lda @CS_INPUT_CUR
 	sta @CS_INPUT_PREV
 controller_reg
@@ -369,6 +369,18 @@ save_state
 	inc
 	sta @CS_STATE
 
+	; --- DSP1-4: freeze the DSP EARLY (aligned with the CPU cut at T) ---
+	; The DSP free-runs on CLK2; if we only halt it later in save_return it
+	; drifts to T+delta while the (frozen) SNES is still at T, desyncing the
+	; CPU<->DSP handshake on resume -> one bad HUD-tile DMA after load. Halting
+	; here captures the DSP consistent with everything else. A is 8-bit here.
+	; (save_return still reads the now-frozen window and unhalts.)
+	lda @SS_DSP_GATE
+	beq ss_dsp_early_done
+	lda #$01
+	sta @SS_DSP_WINDOW|$07FF
+ss_dsp_early_done:
+
 	; disable interrupts
 	lda @$F90700|$0000
 	sta @SRAM_OTH_BANK
@@ -468,7 +480,39 @@ save_return
 	; opcode[4:0], loop, dir, enable
 	lda #$05
 	sta @$002029
-	
+
+	; --- DSP1-4 savestate capture -------------------------------------
+	; Halt was requested early in save_state; the DSP now freezes at an IDLE
+	; instruction boundary (or after the FPGA's 256-cycle timeout). Wait until
+	; it reports frozen (ss_halted = $7FF bit0) before reading, so the cut is
+	; at a clean CPU<->DSP transaction boundary. Then copy the data-RAM +
+	; register-file window into PSRAM bank F3. A is 8-bit, X 16-bit here.
+	; Bounded spin -> hang-proof.
+	lda @SS_DSP_GATE
+	beq ss_dsp_cap_done
+	lda #$01
+	sta @SS_DSP_WINDOW|$07FF        ; ensure halt requested
+	ldx #$0000
+ss_dsp_cap_wait:
+	lda @SS_DSP_WINDOW|$07FF        ; bit0 = frozen
+	and #$01
+	bne ss_dsp_cap_go
+	inx
+	cpx #$2000
+	bne ss_dsp_cap_wait
+ss_dsp_cap_go:
+	ldx #$0000
+ss_dsp_cap_loop:
+	lda @SS_DSP_WINDOW, x           ; $000-$1FF data RAM, $600-$6FF registers
+	sta @SS_DSP_SCRATCH, x
+	inx
+	cpx #$0700
+	bne ss_dsp_cap_loop
+	lda #$00
+	sta @SS_DSP_WINDOW|$07FF        ; release halt -> DSP resumes
+ss_dsp_cap_done:
+	; -------------------------------------------------------------------
+
 	rep #$20 : .al
 	tsc
 	sta @SRAM_SAVED_SP
@@ -593,8 +637,38 @@ load_dma_regs_start
 	ldy #$0000
 	bra -
 	
+	; --- DSP1-4 savestate restore: halt -> wait frozen-at-boundary -> copy F3
+	;     snapshot back into the $E8 scan window -> unhalt LAST. Writes data RAM
+	;     ($000-$1FF, port B) + register file ($600-$6FF, write-demux). port-A
+	;     RAM write is gated off while frozen so it can't race. A is 8-bit, X
+	;     16-bit here. Unhalt only AFTER the last write or the core runs over the
+	;     restored regs. Bounded spin -> hang-proof.
++	lda @SS_DSP_GATE
+	beq ss_dsp_rst_done
+	lda #$01
+	sta @SS_DSP_WINDOW|$07FF        ; request halt
+	ldx #$0000
+ss_dsp_rst_wait:
+	lda @SS_DSP_WINDOW|$07FF        ; bit0 = frozen
+	and #$01
+	bne ss_dsp_rst_go
+	inx
+	cpx #$2000
+	bne ss_dsp_rst_wait
+ss_dsp_rst_go:
+	ldx #$0000
+ss_dsp_rst_loop:
+	lda @SS_DSP_SCRATCH, x          ; F3 snapshot -> $E8 scan window
+	sta @SS_DSP_WINDOW, x
+	inx
+	cpx #$0700
+	bne ss_dsp_rst_loop
+	lda #$00
+	sta @SS_DSP_WINDOW|$07FF        ; release halt -> DSP resumes restored state
+ss_dsp_rst_done:
+
 	; Restore registers and return.
-+	jmp register_restore_return
+	jmp register_restore_return
 	
 vm
 	; Data format: xx xx yy yy

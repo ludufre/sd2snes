@@ -17,9 +17,13 @@ extern cfg_t CFG;
 extern snes_romprops_t romprops;
 
 void savestate_program() {
+  /* DSP1-4 (uPD7725) savestates are supported via the FPGA scan port; ST0010
+     (uPD96050, 2KB data RAM) is not yet (its RAM collides with the scan
+     register-file gap), so it stays disabled. */
+  uint8_t dsp_ok = (romprops.fpga_conf == FPGA_DSP) && !romprops.has_st0010;
   if(romprops.fpga_conf != NULL
      && romprops.fpga_conf != FPGA_BASE
-     /* && romprops.fpga_conf != FPGA_DSP */) {
+     && !dsp_ok) {
     savestate_enable_handler(0);
     return;
   }
@@ -35,6 +39,7 @@ void savestate_program() {
     sram_writebyte(CFG.loadstate_delay, SS_DELAY_ADDR);
     sram_writebyte(CFG.enable_savestate_slots, SS_SLOTS_ADDR);
     sram_writebyte(CFG.enable_ingame_savestate, SS_CTRL_ADDR);
+    sram_writebyte(dsp_ok ? 1 : 0, SS_DSP_GATE_ADDR);
     savestate_set_inputs();
     savestate_set_fixes();
     load_backup_state();

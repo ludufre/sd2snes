@@ -44,6 +44,7 @@ extern char current_filename[];
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay && !special_chip. The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
+#define SS_DSP_GATE_ADDR             (0xFF0711L) /* 1 byte armed at game load = (fpga_conf==FPGA_DSP && !has_st0010). The savestate handler reads it to decide whether to capture/restore the DSP1-4 internal state. Same free $FF0701..$FF07FF gap. */
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
 #define SRAM_CHEAT_CODE_STRINGS_ADDR (0xD40000L) /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans D4..D7, leaving D0..D3 free for up to 512 cheat records. */
 
