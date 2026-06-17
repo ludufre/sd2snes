@@ -408,6 +408,12 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     if(sgb_romprops.has_sgb && !file_exists(SGBFW)) {
       return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of(SGBFW));
     }
+    /* A non-combo file too small to be a real ROM would still ACK the SNES out of
+       game_handshake and then stream nothing, desyncing the handshake. Abort here
+       (clean NACK while the SNES is still parked) instead of half-booting. */
+    if(!(flags & LOADROM_WITH_COMBO) && filesize < 1024) {
+      return load_abort_missing(flags, MENU_ERR_FS, basename_of((const char*)filename));
+    }
     /* Prerequisites OK -> committed to the load: NOW tear down menu SFX so the
        DAC/SD/feature set are free for the game (deferred from the top of load_rom
        so an aborted load above keeps the menu sound alive). */
@@ -496,7 +502,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   uint32_t rammask;
   uint32_t rommask;
 
-  while(!romprops.has_combo && filesize > (romprops.romsize_bytes + romprops.offset)) {
+  while(!romprops.has_combo && romprops.romsize_bytes && filesize > (romprops.romsize_bytes + romprops.offset)) {
     romprops.romsize_bytes <<= 1;
   }
 
@@ -956,7 +962,9 @@ uint32_t migrate_and_load_srm(uint8_t* filename, uint32_t base_addr) {
       return 0;
     }
     /* try to move SRM file from old place to new one and to load again */
-    strcpy(strrchr((char*)filename, (int)'.'), ".srm");
+    char *dot = strrchr((char*)filename, (int)'.');
+    if(!dot) return 0;   /* ROM name has no extension: nothing to migrate (a missing save is fine) */
+    strcpy(dot, ".srm");
     printf("%s not found, trying to load and migrate %s...\n", srmfile, filename);
     /* check if new sram folder exists, create it if it doesn't */
     check_or_create_folder(SAVE_BASEDIR);
@@ -1163,6 +1171,7 @@ void load_dspx(const uint8_t *filename, uint8_t coretype) {
   for(word_cnt = 0; word_cnt < pgmsize;) {
     if(!sector_remaining) {
       bytes_read = file_read();
+      if(!bytes_read) break;   /* truncated firmware: stop before sector_remaining underflows to 0xffff */
       sector_remaining = bytes_read;
       sector_cnt = 0;
     }
@@ -1186,6 +1195,7 @@ void load_dspx(const uint8_t *filename, uint8_t coretype) {
   for(word_cnt = 0; word_cnt < datsize;) {
     if(!sector_remaining) {
       bytes_read = file_read();
+      if(!bytes_read) break;   /* truncated firmware: stop before sector_remaining underflows to 0xffff */
       sector_remaining = bytes_read;
       sector_cnt = 0;
     }
