@@ -616,9 +616,11 @@ int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove)
 
 int cfg_get_listed_game_raw(const uint8_t *listfilename, uint8_t *fn, uint8_t index) {
   int err = 0;
+  fn[0] = 0;
   file_open(listfilename, FA_READ);
   do {
     f_gets((TCHAR*)fn, 255, &file_handle);
+    if(fn[0] == 0) break;   /* stop at EOF: an out-of-range index must not loop up to 256 reads */
   } while (index--);
   file_close();
   return err;
@@ -921,7 +923,8 @@ void cfg_buttons_bits2string(uint16_t bits, char *out) {
 uint16_t cfg_buttons_string2bits(char *str) {
   uint16_t input = 0;
   for(uint8_t x=0; x < SNES_NUM_BUTTONS && str[x]; x++){
-    input |= 1 << (0xF - (strchr(button_names, str[x]) - button_names));
+    char *p = strchr(button_names, str[x]);
+    if(p) input |= 1 << (0xF - (p - button_names));   /* ignore chars not in button_names */
   }
 //  printf("converted button string %s to bits: %04X\n", str, input);
   return input;
@@ -938,6 +941,7 @@ int cfg_get_stringvalue(const char *key, char *target, size_t count) {
   found = yaml_get_itemvalue(key, &tok);
   if(found) {
     strncpy(target, tok.stringvalue, count);
+    if(count) target[count-1] = 0;   /* strncpy may not NUL-terminate */
   } else if(count) {
     target[0] = 0;
   }
