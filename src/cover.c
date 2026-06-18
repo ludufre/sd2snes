@@ -45,29 +45,19 @@ static int cover_stream(uint32_t addr, uint32_t size) {
   return 1;
 }
 
-int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
+/* stream an explicit .cov path (v4, 16x16 OBJ sprites) into sram_addr in the
+ * COVER_OFF_* layout. Bounded + fail-safe; writes a status byte on every path.
+ * Used by the game-info screen to stage the cover (-> OBJ name table 0) and the
+ * screenshot (-> OBJ name table 1) into separate banks. */
+int load_cover_path(const char *cov_path, uint32_t sram_addr) {
   UINT got = 0;
   uint8_t hdr[COVER_HEADER_SIZE];
 
   /* fail-safe default: mark "no cover" up front; only OK after a clean load */
   cover_set_status(sram_addr, COVER_STATUS_NONE, 0, 0, 0, 0, 0);
 
-  /* build "<rom>.cov": copy the full path (bounded) and rewrite the extension */
-  size_t len = 0;
-  while(rom_path[len] && len < sizeof(cover_path) - 5) {
-    cover_path[len] = rom_path[len];
-    len++;
-  }
-  cover_path[len] = 0;
-  char *dot = strrchr((char*)cover_path, '.');
-  if(!dot) {
-    printf("cover: no extension in %s\n", cover_path);
-    return 0;
-  }
-  strcpy(dot, ".cov");
-  printf("cover: try %s\n", cover_path);
-
-  file_open((uint8_t*)cover_path, FA_READ);
+  printf("cover: try %s\n", cov_path);
+  file_open((uint8_t*)cov_path, FA_READ);
   if(file_res) {
     printf("cover: open failed res=%d (no cover)\n", file_res);
     return 0;
@@ -90,11 +80,9 @@ int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
   uint8_t h_spr      = hdr[5];
   uint8_t n_palettes = hdr[6];
 
-  /* v4 OBJ sprite cover: a w_spr x h_spr grid of 16x16 sprites, <=8 OBJ palettes.
-   * The 4bpp tiles live in a 256-tile OBJ name table at VRAM $2000, in 16-wide
-   * name-grid order: (2*h_spr)*16 tiles, so 32*h_spr <= 256 -> h_spr <= 8, and the
-   * grid is 16 wide -> w_spr <= 8. OBJ palettes are fixed at CGRAM 128..255, so
-   * there is no cg_base to validate (it can never recolour the UI/logo). */
+  /* v4 OBJ sprite image: a w_spr x h_spr grid of 16x16 sprites, <=8 OBJ palettes,
+   * 4bpp tiles in a 16-wide name grid ((2*h)*16 tiles). OBJ palettes are at CGRAM
+   * 128..255, so there is no cg_base to validate. */
   if(w_spr == 0 || h_spr == 0
      || w_spr > COVER_OBJ_MAX_W || h_spr > COVER_OBJ_MAX_H
      || n_palettes == 0 || n_palettes > COVER_MAX_PALETTES) {
@@ -127,4 +115,25 @@ trunc:
   file_close();
   cover_set_status(sram_addr, COVER_STATUS_ERROR, 0, 0, 0, 0, 0);
   return 0;
+}
+
+int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
+  /* fail-safe default: mark "no cover" up front; only OK after a clean load */
+  cover_set_status(sram_addr, COVER_STATUS_NONE, 0, 0, 0, 0, 0);
+
+  /* build "<rom>.cov": copy the full path (bounded) and rewrite the extension */
+  size_t len = 0;
+  while(rom_path[len] && len < sizeof(cover_path) - 5) {
+    cover_path[len] = rom_path[len];
+    len++;
+  }
+  cover_path[len] = 0;
+  char *dot = strrchr((char*)cover_path, '.');
+  if(!dot) {
+    printf("cover: no extension in %s\n", cover_path);
+    return 0;
+  }
+  strcpy(dot, ".cov");
+
+  return load_cover_path((char*)cover_path, sram_addr);
 }

@@ -75,4 +75,10 @@
  * 0 otherwise. Never hangs. */
 int load_cover(const uint8_t *rom_path, uint32_t sram_addr);
 
+/* load_cover_path: stream an explicit .cov path (v4 16-wide OR v5 dense) into
+ * sram_addr (any free bank) in the COVER_OFF_* layout. Used by the game-info
+ * screen to stage the cover + screenshot. Returns 1 on success, 0 otherwise.
+ * Bounded + fail-safe; never hangs. */
+int load_cover_path(const char *cov_path, uint32_t sram_addr);
+
 #endif

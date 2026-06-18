@@ -107,6 +107,7 @@ void cheat_program() {
   int cheat_index;
 
   cheat_count = sram_readshort(SRAM_NUM_CHEATS);
+  if(cheat_count > CHEAT_RECORD_MAX) cheat_count = CHEAT_RECORD_MAX;
 
   printf("cheat_program: %d cheats present\n", cheat_count);
   /* get list of activated cheats from menu */
@@ -114,7 +115,9 @@ void cheat_program() {
   for(cheat_index = 0; cheat_index < cheat_count; cheat_index++) {
     sram_readblock(&cheat, cheat_record_addr, sizeof(cheat_record_t));
     if(cheat.flags & CHEAT_FLAG_ENABLE) {
-      for(int patch_index = 0; patch_index < cheat.numpatches; patch_index++) {
+      int np = cheat.numpatches;
+      if(np > CHEAT_NUM_CODES_PER_CHEAT) np = CHEAT_NUM_CODES_PER_CHEAT;   /* patches[] is fixed-size */
+      for(int patch_index = 0; patch_index < np; patch_index++) {
         cheat_program_single(cheat.patches+patch_index);
       }
     }
@@ -153,7 +156,7 @@ void cheat_program_single(cheat_patch_record_t *cheat) {
   is_wram_cheat = cheat_is_wram_cheat(cheat->code);
   /* apply cheat to FPGA / NMI hook */
   if(is_wram_cheat) {
-    cheat_program_ram_cheat(wram_index++, cheat);
+    if(wram_index < CHEAT_WRAM_MAX) cheat_program_ram_cheat(wram_index++, cheat);
   } else if(rom_index < 6) {
     enable_mask |= (1 << rom_index);
     cheat_program_rom_cheat(rom_index++, cheat);
@@ -294,6 +297,7 @@ void cheat_yaml_load(uint8_t* romfilename) {
   /* read cheat entries */
   int cheat_idx = 0;
   while(yaml_next_item()) {
+    if(cheat_idx >= CHEAT_RECORD_MAX) break;   /* records region holds 512; matches menu cap */
     int i=0;
     /* Defensive: zero the local cheat record at the start of each
        iteration so a parse failure on any field cannot leak data from
@@ -509,7 +513,7 @@ void cheat_yaml_save(uint8_t *romfilename) {
 uint32_t cheat_str2bin(char *string) {
   char code[9];
   uint32_t patch;
-  if(string[4] == '-') {
+  if(strlen(string) >= 9 && string[4] == '-') {
     /* GG code */
     printf("GG code: %s\n", string);
     memcpy(code, string, 4);

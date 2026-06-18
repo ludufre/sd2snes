@@ -60,6 +60,37 @@
 #define COVER_C9_META_H             $C93A02    /* h_spr */
 #define COVER_C9_META_NPAL          $C93A03    /* n_palettes */
 #define COVER_STATUS_OK             $01
+
+/* ---- pre-boot game info screen (snes/gameinfo.a65) ----
+   One composited DirectColor (CG-Direct-Select) BG1 image (cover + screenshot,
+   utils/gen_dcimage.py) is staged by the MCU (CMD_GAME_INFO): 8bpp tiles -> bank
+   $CA, 16-bit tilemap -> bank $CB. The parsed metadata struct lands at GAMEINFO
+   ($FF6000); the menu reads it by fixed offset (mirror src/gameinfo.h). */
+#define GI_TILES                    $CA0000    /* 8bpp DirectColor tiles */
+#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap */
+
+/* gameinfo_meta_t. MUST sit AFTER the favorites mirror ($FF6000..$FF73FF) -- overlapping it
+   clobbers the favorites list when a favorite's info panel opens. Lockstep with src/memory.h. */
+#define GAMEINFO                    $FF7400    /* gameinfo_meta_t (src/gameinfo.h) */
+#define GI_STATUS                   $FF7402    /* 0 NONE, 1 OK, 2 ERROR */
+#define GI_FLAGS                    $FF7403    /* bit0 = image.gd staged */
+#define GI_IMG_W                    $FF7404    /* image width in 8x8 tiles */
+#define GI_IMG_H                    $FF7405    /* image height in tiles */
+#define GI_IMG_NTILES               $FF7406    /* unique tiles (uint16) */
+#define GI_TITLE                    $FF7408    /* char[40] font-encoded */
+#define GI_DEVELOPER                $FF7430    /* char[40] */
+#define GI_YEAR                     $FF7458    /* char[6]  e.g. "1994" */
+#define GI_PLAYERS                  $FF745E    /* char[4]  e.g. "2" */
+#define GI_GENRE                    $FF7462    /* char[32] */
+#define GI_CHIP                     $FF7482    /* char[24] */
+#define GI_DESCRIPTION              $FF749A    /* char[256] one line; menu word-wraps */
+#define GI_FMV_FPS                  $FF759A    /* FMV playback fps (when GI_FLAG_FMV) */
+#define GI_FMV_FRAMES               $FF759B    /* FMV total frames (uint16; info/debug) */
+#define GI_STATUS_OK                $01
+#define GI_FLAG_IMAGE               $01
+#define GI_FLAG_FMV                 $02        /* animated <rom>.fmv: cover = sibling .cov (OBJ),
+                                                  screenshot box streams from GI_TILES ($CA0000),
+                                                  pumped by CMD_FMV_NEXT (see snes/gameinfo.a65) */
 /* ---- small (half-size) cover: WRAM scratch + downscale LUT ----
    When ShowCovers == 2 the menu resamples the staged 16x16-block tiles down to
    one 8x8 tile per block (nearest-neighbour, even pixels) into COVER_SMALL_TILEBUF,
@@ -198,6 +229,11 @@
 #define CMD_WIFI_GET                $31 /* write current status + scan list to WIFI_BLK */
 #define CMD_WIFI_CONNECT            $32 /* connect using ssid/pass written to WIFI_BLK */
 #define CMD_WIFI_FORGET             $33 /* forget the saved network */
+/* game-info commands relocated to $34-$37 in the esp32companion merge: WiFi owns $30-$33 (lockstep with src/snes.h) */
+#define CMD_GAME_INFO               $34 /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot (non-booting, like LOAD_COVER) */
+#define CMD_GAME_INFO_RECENT        $35 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
+#define CMD_GAME_INFO_FAVORITE      $36 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
+#define CMD_FMV_NEXT                $37 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
 
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
@@ -281,9 +317,10 @@
 #define CFG_COVERS_IN_LISTS             CFG_ADDR+$00BA
 #define CFG_ENABLE_MENU_SFX             CFG_ADDR+$00BB
 #define CFG_MENU_MUSIC_FILE             CFG_ADDR+$00BC
-#define CFG_ENABLE_WIFI                 CFG_ADDR+$00BD
 #define CFG_SORT_FAVORITES              CFG_ADDR+$013C
 #define CFG_ENABLE_CHEAT_OVERLAY        CFG_ADDR+$013D
+#define CFG_SHOW_GAME_INFO              CFG_ADDR+$013E
+#define CFG_ENABLE_WIFI                 CFG_ADDR+$013F /* relocated from $BD: overlapped CFG_MENU_MUSIC_FILE ($BC, 128B) in the esp32companion merge (lockstep with src/cfg.h) */
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

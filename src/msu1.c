@@ -476,6 +476,9 @@ static int menusfx_active = 0;
 static int menusfx_open = 0;               /* menusfx_fil currently holds an open effect */
 static const char *menusfx_open_name = 0;  /* which effect is open (same static strings) */
 static tick_t menusfx_deadline = 0;        /* watchdog: latest tick an effect may run to */
+static int menusfx_loop_forever = 0;       /* 1 = FMV music: loop the clip, no one-shot deadline */
+static uint32_t menusfx_samples = 0;       /* FMV music: stereo samples fed to the DAC since the
+                                              loop start -> the FMV video frame clock (sync) */
 
 /* Cap on how long one effect may stay "active". Real blips are well under a
    second; this only matters if the DAC never toggles (e.g. an abnormal FPGA
@@ -507,6 +510,7 @@ void menu_sfx_play(const char *filename) {
   UINT br = 0;
   uint8_t magic[4];
 
+  menusfx_loop_forever = 0;            /* a navigation blip is always one-shot */
   if(menusfx_active) menu_sfx_stop();
 
   /* Re-triggering the SAME effect (e.g. a held d-pad blip) reuses the handle
@@ -573,7 +577,7 @@ void menu_sfx_pump(void) {
      stop is driven by DAC half-buffer toggles below; this guards the case
      where the DAC never toggles, so menusfx_active can't latch forever and
      the menu loop can't busy-spin on a stuck effect. */
-  if(time_after(getticks(), menusfx_deadline)) { menu_sfx_stop(); return; }
+  if(!menusfx_loop_forever && time_after(getticks(), menusfx_deadline)) { menu_sfx_stop(); return; }
   now = fpga_status();
   /* refill the half the FPGA just finished reading (DAC_READ_MSB toggles) */
   if((now & MSU_FPGA_STATUS_DAC_READ_MSB) != (menusfx_fpga_prev & MSU_FPGA_STATUS_DAC_READ_MSB)) {
@@ -586,16 +590,88 @@ void menu_sfx_pump(void) {
          loop region of an effect is pure silence; after two wraps the
          one-shot is over - stop cleanly mid-silence. */
       UINT br2 = 0;
-      if(++menusfx_wraps >= 2) { DBG_MSU1 printf("sfx: done\n"); menu_sfx_stop(); return; }
+      /* one-shot ends after two wraps into the (silent) loop region; FMV music instead
+         loops the clip forever (until menu_music_stop). */
+      if(!menusfx_loop_forever && ++menusfx_wraps >= 2) { DBG_MSU1 printf("sfx: done\n"); menu_sfx_stop(); return; }
       ff_sd_offload = 0; sd_offload = 0;
       ff_sd_offload = 1; sd_offload_tgt = 1;
       f_lseek(&menusfx_fil, MSU_PCM_OFFSET_WAVEDATA + (uint32_t)menusfx_loop_point * 4);
       ff_sd_offload = 1; sd_offload_tgt = 1;
       f_read(&menusfx_fil, file_buf, (MSU_DAC_BUFSIZE / 2) - menusfx_bytes_read, &br2);
       if(!br2) { menu_sfx_stop(); return; }   /* unreadable -> go silent, no hang */
+      menusfx_samples = br2 / 4;              /* looped: position = the loop-start samples fed */
+    } else {
+      menusfx_samples += (MSU_DAC_BUFSIZE / 2) / 4;  /* +256 stereo samples this refill */
     }
   }
   menusfx_fpga_prev = now;
+}
+
+/* Looping background music (FMV info-screen audio) via the same DAC. Like menu_sfx_play but
+   always reopens (no per-blip name cache), loops the whole clip from the header loop point,
+   and sets the no-deadline loop_forever mode (menu_sfx_pump then loops it). Silent + harmless
+   if the .pcm is absent/bad. Pumped by the same menu_sfx_pump() in the menu loop. */
+int menu_music_play(const char *filename) {
+  UINT br = 0;
+  uint8_t magic[4];
+
+  menu_sfx_stop();                     /* free the DAC from any blip */
+  menusfx_close();                     /* always reopen fresh (music isn't retriggered per blip) */
+  if(f_open(&menusfx_fil, (const TCHAR*)filename, FA_READ) != FR_OK) return 0x01;
+  if(f_read(&menusfx_fil, magic, 4, &br) != FR_OK || br != 4 || memcmp(magic, "MSU1", 4)) {
+    f_close(&menusfx_fil); return 0x02;   /* not a valid MSU-1 PCM -> silent */
+  }
+  /* No fast-seek linkmap: a multi-MB clip overflows CLTBL_SIZE anyway, and BUILDING it scans
+     the whole cluster chain -- a slow open. Stream sequentially without it; the only seek is
+     the cheap once-per-loop rewind to the loop point (near the file start). */
+  menusfx_fil.cltbl = 0;
+  /* loop point (samples) from the header, clamped; default = loop the whole clip */
+  f_lseek(&menusfx_fil, MSU_PCM_OFFSET_LOOPPOINT);
+  f_read(&menusfx_fil, &menusfx_loop_point, sizeof(menusfx_loop_point), &br);
+  {
+    DWORD fsz = f_size(&menusfx_fil);
+    uint32_t max_lp = (fsz > MSU_PCM_OFFSET_WAVEDATA)
+                        ? (uint32_t)((fsz - MSU_PCM_OFFSET_WAVEDATA) / 4) : 0;
+    if(br != sizeof(menusfx_loop_point) || menusfx_loop_point > max_lp)
+      menusfx_loop_point = 0;
+  }
+  menusfx_open = 1;
+  menusfx_open_name = 0;               /* no name cache for music */
+  menusfx_loop_forever = 1;
+
+  if(!(current_features & FEAT_MSU1))
+    fpga_set_features(current_features | FEAT_MSU1);
+  dac_pause();
+  dac_reset(0);
+  set_msu_status(MSU_SNES_STATUS_CLEAR_AUDIO_ERROR | MSU_SNES_STATUS_SET_AUDIO_REPEAT);
+  set_dac_addr(0);
+  ff_sd_offload = 1; sd_offload_tgt = 1;
+  f_lseek(&menusfx_fil, MSU_PCM_OFFSET_WAVEDATA);
+  ff_sd_offload = 1; sd_offload_tgt = 1;
+  f_read(&menusfx_fil, file_buf, MSU_DAC_BUFSIZE, &menusfx_bytes_read);
+  menusfx_samples = MSU_DAC_BUFSIZE / 4;   /* 512 stereo samples primed into the DAC buffer */
+
+  menusfx_fpga_prev = fpga_status();
+  menusfx_wraps = 0;
+  dac_play();
+  menusfx_active = 1;
+  DBG_MSU1 printf("music: %s\n", filename);
+  return 0xA0;
+}
+
+int menu_music_active(void) {
+  return menusfx_active && menusfx_loop_forever;
+}
+
+/* Stereo samples fed to the DAC since the loop start = the FMV video frame clock. The menu
+   drives the displayed frame off this so the video stays locked to the audio (no drift). */
+uint32_t menu_music_samples(void) {
+  return menusfx_samples;
+}
+
+void menu_music_stop(void) {
+  if(menusfx_active && menusfx_loop_forever) menu_sfx_stop();
+  menusfx_loop_forever = 0;
 }
 
 uint8_t msu_readbyte(uint16_t addr) {

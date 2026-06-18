@@ -27,6 +27,12 @@
 
 #define CHEAT_FLAG_ENABLE (0x80)
 #define CHEAT_NUM_CODES_PER_CHEAT (40)
+/* WRAM cheats are emitted as a 6-byte LDA/STA/RTS chain starting at
+   SNESCMD_WRAM_CHEATS; the chain must stay below the next snescmd vector
+   (SNESCMD_NMI_RESET). 20 matches the documented capability with margin. */
+#define CHEAT_WRAM_MAX (20)
+/* Records live in the $D00000 PSRAM bank group D0..D3 (512 * 512 bytes). */
+#define CHEAT_RECORD_MAX (512)
 
 /* In-game cheat overlay: the first CHEAT_NAME_INGAME_MAX cheat descriptions are
  * staged into the SNES-visible BSRAM window (SRAM_CHEAT_NAMES_ADDR, $FF0800) at

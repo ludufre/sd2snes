@@ -41,6 +41,8 @@ extern char current_filename[];
 #define SRAM_DIR_ADDR                (0xC20000L)
 #define SRAM_DB_ADDR                 (0xC80000L)
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
+#define SRAM_GAMEINFO_TILES_ADDR     (0xCA0000L) /* bank CA: game-info DirectColor 8bpp tiles (up to ~48KB) */
+#define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay && !special_chip. The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
@@ -79,6 +81,10 @@ extern char current_filename[];
    IPS_LIST (0xFF5000); the favorites list was moved off 0xFF4000 to 0xFF6000. */
 #define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
+/* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Sits AFTER the
+   favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
+   info panel clobbers the favorites list (lockstep with GAMEINFO in snes/memmap.i65). */
+#define SRAM_GAMEINFO_ADDR           (0xFF7400L)
 #define SRAM_SCRATCHPAD              (0xFFFF00L)
 #define SRAM_DIRID                   (0xFFFFF0L)
 #define SRAM_RELIABILITY_SCORE       (0x100)

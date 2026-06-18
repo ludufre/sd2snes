@@ -19,9 +19,10 @@ _Static_assert(offsetof(cfg_t, patch_verify_integrity) == 0xB8, "cfg_t.patch_ver
 _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists must stay at CFG_ADDR+$BA");
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
 _Static_assert(offsetof(cfg_t, bgm_name) == 0xBC, "cfg_t.bgm_name must stay at CFG_ADDR+$BC");
-_Static_assert(offsetof(cfg_t, enable_wifi) == 0xBD, "cfg_t.enable_wifi must stay at CFG_ADDR+$BD");
 _Static_assert(offsetof(cfg_t, sort_favorites) == 0x13C, "cfg_t.sort_favorites must stay at CFG_ADDR+$13C");
 _Static_assert(offsetof(cfg_t, enable_cheat_overlay) == 0x13D, "cfg_t.enable_cheat_overlay must stay at CFG_ADDR+$13D");
+_Static_assert(offsetof(cfg_t, show_game_info) == 0x13E, "cfg_t.show_game_info must stay at CFG_ADDR+$13E");
+_Static_assert(offsetof(cfg_t, enable_wifi) == 0x13F, "cfg_t.enable_wifi must stay at CFG_ADDR+$13F (relocated from $BD: overlapped bgm_name @ $BC in the esp32companion merge)");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -70,9 +71,10 @@ cfg_t CFG_DEFAULT = {
   .covers_in_lists = 1,
   .enable_menu_sfx = 1,
   .bgm_name = "",
-  .enable_wifi = 0
+  .enable_wifi = 0,
   .sort_favorites = 0,
-  .enable_cheat_overlay = 1
+  .enable_cheat_overlay = 1,
+  .show_game_info = 1,
 };
 
 cfg_t CFG;
@@ -196,6 +198,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
   f_printf(&file_handle, "%s: %s\n", CFG_MENU_MUSIC_FILE, (char*)CFG.bgm_name);
+  f_printf(&file_handle, "\n#  %s: Show the game info screen (cover/screenshot/metadata) before booting a ROM that has a /sd2snes/info entry\n", CFG_SHOW_GAME_INFO);
+  f_printf(&file_handle, "%s: %s\n", CFG_SHOW_GAME_INFO, CFG.show_game_info ? "true" : "false");
   file_close();
   return err;
 }
@@ -354,6 +358,7 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_ENABLE_WIFI, &tok)) {
       CFG.enable_wifi = tok.boolvalue ? 1 : 0;
+    }
     if(yaml_get_itemvalue(CFG_SORT_FAVORITES, &tok)) {
       CFG.sort_favorites = tok.boolvalue ? 1 : 0;
     }
@@ -367,6 +372,9 @@ int cfg_load() {
     if(yaml_get_itemvalue(CFG_MENU_MUSIC_FILE, &tok)) {
       strncpy((char*)CFG.bgm_name, tok.stringvalue, sizeof(CFG.bgm_name) - 1);
       CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
+    }
+    if(yaml_get_itemvalue(CFG_SHOW_GAME_INFO, &tok)) {
+      CFG.show_game_info = tok.boolvalue ? 1 : 0;
     }
   }
   yaml_file_close();
@@ -615,9 +623,11 @@ int cfg_remove_listed_game(const uint8_t *listfilename, uint8_t index_to_remove)
 
 int cfg_get_listed_game_raw(const uint8_t *listfilename, uint8_t *fn, uint8_t index) {
   int err = 0;
+  fn[0] = 0;
   file_open(listfilename, FA_READ);
   do {
     f_gets((TCHAR*)fn, 255, &file_handle);
+    if(fn[0] == 0) break;   /* stop at EOF: an out-of-range index must not loop up to 256 reads */
   } while (index--);
   file_close();
   return err;
@@ -920,7 +930,8 @@ void cfg_buttons_bits2string(uint16_t bits, char *out) {
 uint16_t cfg_buttons_string2bits(char *str) {
   uint16_t input = 0;
   for(uint8_t x=0; x < SNES_NUM_BUTTONS && str[x]; x++){
-    input |= 1 << (0xF - (strchr(button_names, str[x]) - button_names));
+    char *p = strchr(button_names, str[x]);
+    if(p) input |= 1 << (0xF - (p - button_names));   /* ignore chars not in button_names */
   }
 //  printf("converted button string %s to bits: %04X\n", str, input);
   return input;
@@ -937,6 +948,7 @@ int cfg_get_stringvalue(const char *key, char *target, size_t count) {
   found = yaml_get_itemvalue(key, &tok);
   if(found) {
     strncpy(target, tok.stringvalue, count);
+    if(count) target[count-1] = 0;   /* strncpy may not NUL-terminate */
   } else if(count) {
     target[0] = 0;
   }

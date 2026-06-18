@@ -333,6 +333,10 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
       }
     }
   }
+  /* clamp shift counts from the (possibly corrupt) header: a raw byte >= 32
+     would be undefined behavior and could yield a bogus ramsize/sram_memset len */
+  if(header->ramsize > 13) header->ramsize = 0;
+  if(header->expramsize > 13) header->expramsize = 0;
   props->ramsize_bytes = (uint32_t)1024 << header->ramsize;
   props->romsize_bytes = (uint32_t)1024 << header->romsize;
   props->expramsize_bytes = (uint32_t)1024 << header->expramsize;
