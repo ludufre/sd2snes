@@ -12,8 +12,6 @@
 #include "timer.h"    /* getticks()/MS_TO_TICKS/time_after for the FMV idle watchdog */
 #include "gameinfo.h"
 
-#ifndef CONFIG_MK2
-
 /* UTF-8 codepoint -> sd2snes font byte. MUST match the ACCENTS map in
  * snes/utils/build_const.py (and snes/font.a65). Only the Latin accents the font
  * has glyphs for (codes 130..159); everything else renders as '?'. */
@@ -366,22 +364,3 @@ void gameinfo_load(uint8_t *rom_path) {
 
   sram_writeblock(&meta, SRAM_GAMEINFO_ADDR, sizeof(meta));
 }
-
-#else /* CONFIG_MK2: flash is too tight for the parser. Stub that always reports
-       * "no info" so the (fail-safe) SNES side skips the screen and boots. */
-
-void gameinfo_load(uint8_t *rom_path) {
-  (void)rom_path;
-  gameinfo_meta_t meta;
-  memset(&meta, 0, sizeof(meta));
-  meta.magic[0] = GAMEINFO_MAGIC0;
-  meta.magic[1] = GAMEINFO_MAGIC1;
-  meta.status   = GAMEINFO_STATUS_NONE;
-  sram_writeblock(&meta, SRAM_GAMEINFO_ADDR, sizeof(meta));
-}
-
-void gameinfo_fmv_next(void)       { /* no FMV on mk2 (flash too tight; parser stubbed) */ }
-void gameinfo_fmv_stop(void)       { }
-void gameinfo_fmv_idle_check(void) { }
-
-#endif /* CONFIG_MK2 */
