@@ -69,21 +69,28 @@
 #define GI_TILES                    $CA0000    /* 8bpp DirectColor tiles */
 #define GI_TMAP                     $CB0000    /* 16-bit BG tilemap */
 
-#define GAMEINFO                    $FF6000    /* gameinfo_meta_t (src/gameinfo.h) */
-#define GI_STATUS                   $FF6002    /* 0 NONE, 1 OK, 2 ERROR */
-#define GI_FLAGS                    $FF6003    /* bit0 = image.gd staged */
-#define GI_IMG_W                    $FF6004    /* image width in 8x8 tiles */
-#define GI_IMG_H                    $FF6005    /* image height in tiles */
-#define GI_IMG_NTILES               $FF6006    /* unique tiles (uint16) */
-#define GI_TITLE                    $FF6008    /* char[40] font-encoded */
-#define GI_DEVELOPER                $FF6030    /* char[40] */
-#define GI_YEAR                     $FF6058    /* char[6]  e.g. "1994" */
-#define GI_PLAYERS                  $FF605E    /* char[4]  e.g. "2" */
-#define GI_GENRE                    $FF6062    /* char[32] */
-#define GI_CHIP                     $FF6082    /* char[24] */
-#define GI_DESCRIPTION              $FF609A    /* char[512] one line; menu word-wraps */
+/* gameinfo_meta_t. MUST sit AFTER the favorites mirror ($FF6000..$FF73FF) -- overlapping it
+   clobbers the favorites list when a favorite's info panel opens. Lockstep with src/memory.h. */
+#define GAMEINFO                    $FF7400    /* gameinfo_meta_t (src/gameinfo.h) */
+#define GI_STATUS                   $FF7402    /* 0 NONE, 1 OK, 2 ERROR */
+#define GI_FLAGS                    $FF7403    /* bit0 = image.gd staged */
+#define GI_IMG_W                    $FF7404    /* image width in 8x8 tiles */
+#define GI_IMG_H                    $FF7405    /* image height in tiles */
+#define GI_IMG_NTILES               $FF7406    /* unique tiles (uint16) */
+#define GI_TITLE                    $FF7408    /* char[40] font-encoded */
+#define GI_DEVELOPER                $FF7430    /* char[40] */
+#define GI_YEAR                     $FF7458    /* char[6]  e.g. "1994" */
+#define GI_PLAYERS                  $FF745E    /* char[4]  e.g. "2" */
+#define GI_GENRE                    $FF7462    /* char[32] */
+#define GI_CHIP                     $FF7482    /* char[24] */
+#define GI_DESCRIPTION              $FF749A    /* char[256] one line; menu word-wraps */
+#define GI_FMV_FPS                  $FF759A    /* FMV playback fps (when GI_FLAG_FMV) */
+#define GI_FMV_FRAMES               $FF759B    /* FMV total frames (uint16; info/debug) */
 #define GI_STATUS_OK                $01
 #define GI_FLAG_IMAGE               $01
+#define GI_FLAG_FMV                 $02        /* animated <rom>.fmv: cover = sibling .cov (OBJ),
+                                                  screenshot box streams from GI_TILES ($CA0000),
+                                                  pumped by CMD_FMV_NEXT (see snes/gameinfo.a65) */
 /* ---- small (half-size) cover: WRAM scratch + downscale LUT ----
    When ShowCovers == 2 the menu resamples the staged 16x16-block tiles down to
    one 8x8 tile per block (nearest-neighbour, even pixels) into COVER_SMALL_TILEBUF,
@@ -219,6 +226,9 @@
 #define CMD_SET_MENU_SPC            $2e /* selected .spc (MCU_PARAM set like LOADROM): store full path in CFG.bgm_name, enable music */
 #define CMD_CLR_MENU_SPC            $2f /* clear CFG.bgm_name -> menu BGM falls back to /sd2snes/menu.spc */
 #define CMD_GAME_INFO               $30 /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot (non-booting, like LOAD_COVER) */
+#define CMD_GAME_INFO_RECENT        $31 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
+#define CMD_GAME_INFO_FAVORITE      $32 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
+#define CMD_FMV_NEXT                $33 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */

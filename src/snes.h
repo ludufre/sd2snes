@@ -72,6 +72,9 @@
 #define SNES_CMD_SET_MENU_SPC        (0x2e) /* selected .spc (any visible folder): get_selected_name -> store full path in CFG.bgm_name, enable music, then reload menu (in-place restart black-screened; see main.c) */
 #define SNES_CMD_CLR_MENU_SPC        (0x2f) /* clear CFG.bgm_name -> revert menu BGM to the /sd2snes/menu.spc fallback */
 #define SNES_CMD_GAME_INFO           (0x30) /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot for the pre-boot info screen (non-booting; like LOAD_COVER) */
+#define SNES_CMD_GAME_INFO_RECENT    (0x31) /* like GAME_INFO but for the recent game at the index in MCU_PARAM (resolved via LAST_FILE) */
+#define SNES_CMD_GAME_INFO_FAVORITE  (0x32) /* like GAME_INFO but for the favorite game at the index in MCU_PARAM (resolved via FAVORITES_FILE) */
+#define SNES_CMD_FMV_NEXT            (0x33) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)

@@ -81,9 +81,10 @@ extern char current_filename[];
    IPS_LIST (0xFF5000); the favorites list was moved off 0xFF4000 to 0xFF6000. */
 #define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
-/* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Lives in
-   the large free gap between IPS_LIST (ends ~0xFF5A00) and SCRATCHPAD (0xFFFF00). */
-#define SRAM_GAMEINFO_ADDR           (0xFF6000L)
+/* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Sits AFTER the
+   favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
+   info panel clobbers the favorites list (lockstep with GAMEINFO in snes/memmap.i65). */
+#define SRAM_GAMEINFO_ADDR           (0xFF7400L)
 #define SRAM_SCRATCHPAD              (0xFFFF00L)
 #define SRAM_DIRID                   (0xFFFFF0L)
 #define SRAM_RELIABILITY_SCORE       (0x100)

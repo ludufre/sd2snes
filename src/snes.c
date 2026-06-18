@@ -46,6 +46,7 @@
 #include "version.h"
 #include "hwinfo.h"
 #include "msu1.h"   /* menu_sfx_* : menu sound effects via the MSU-1 DAC */
+#include "gameinfo.h" /* gameinfo_fmv_idle_check : stop a lingering FMV when its screen closes */
 
 uint32_t saveram_crc, saveram_crc_old;
 uint8_t sram_crc_valid;
@@ -377,8 +378,10 @@ uint8_t menu_main_loop() {
         if(fx) {
           snescmd_writebyte(0, SNESCMD_SFX_MAILBOX);
           /* "Menu sounds" toggle (CFG_ENABLE_MENU_SFX): gate HERE so flipping
-             the option takes effect instantly, no reload needed. */
-          if(fx <= 4 && CFG.enable_menu_sfx) menu_sfx_play(menu_sfx_files[fx - 1]);
+             the option takes effect instantly, no reload needed. While FMV audio loops
+             on the DAC the nav blips are suppressed (single DAC) - the mailbox is still
+             drained so none queue up for when the clip stops. */
+          if(fx <= 4 && CFG.enable_menu_sfx && !menu_music_active()) menu_sfx_play(menu_sfx_files[fx - 1]);
         }
       }
     }
@@ -389,13 +392,20 @@ uint8_t menu_main_loop() {
       menu_sfx_shutdown();
       cmd = 0;
     }
+    gameinfo_fmv_idle_check();   /* stop a lingering FMV if its info screen closed quietly */
     /* While an effect is playing the FPGA drains a DAC half-buffer every ~6 ms
        (44.1 kHz) - far faster than this 20 ms poll - so busy-service the DAC to
        the same ~20 ms budget instead of sleeping (verbatim pattern from the
        proven msu1-menu branch). No-op when idle: plain 20 ms sleep as before. */
     if(menu_sfx_active()) {
       tick_t until = getticks() + MS_TO_TICKS(20);
-      do { menu_sfx_pump(); } while(getticks() < until);
+      /* Pump the DAC, but re-check for a command each pass and bail the instant one arrives:
+         otherwise a pending CMD_FMV_NEXT waits out the whole 20 ms burst, stretching the FMV
+         frame interval and drifting the video ~25% behind the audio. */
+      do {
+        menu_sfx_pump();
+        if(!cmd && !get_snes_reset()) cmd = snes_get_mcu_cmd();
+      } while(!cmd && getticks() < until);
     } else {
       sleep_ms(20);
     }

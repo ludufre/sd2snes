@@ -222,5 +222,7 @@ TRANSLATIONS = {
     'text_gi_players': 'Spieler',
     'text_gi_genre': 'Genre',
     'text_gi_chip': 'Chip',
-    'text_gi_footer': 'A: Start  B: Zurück',
+    'text_gi_footer': 'A: Start  B: Zurück  Y: Beschreibung',
+    'text_gi_footer_nav': 'A:Start B:Zurück Y:Besch Ho/Ru:Spiel',
+    'text_gi_footer_full': 'B: Zurück  Hoch/Runter: Scrollen',
 }

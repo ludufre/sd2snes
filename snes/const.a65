@@ -480,7 +480,9 @@ text_gi_year      .byt "Year", 0
 text_gi_players   .byt "Players", 0
 text_gi_genre     .byt "Genre", 0
 text_gi_chip      .byt "Chip", 0
-text_gi_footer    .byt "A: Play   B: Back", 0
+text_gi_footer    .byt "A: Play   B: Back   Y: Description", 0
+text_gi_footer_nav .byt "A:Play B:Back Y:Desc Up/Down:Game", 0
+text_gi_footer_full .byt "B: Back   Up/Down: Scroll", 0
 cheat_win_x     .byt 6
 cheat_win_y     .byt 11
 cheat_win_w     .byt 52

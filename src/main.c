@@ -418,6 +418,13 @@ int main(void) {
       printf("cmd: %d\n", cmd);
       status_save_from_menu();
       uart_putc('-');
+      /* FMV plays only while the info screen is up. Any command other than the FMV pump or a
+         new info query means the SNES left the screen -> stop it (close the file + the DAC clip)
+         so the DAC frees up for the browser's nav SFX. No-op if no FMV is active. (Returning to
+         the Favorites/Recents list issues NO command -> the idle watchdog in snes.c covers it.) */
+      if(cmd != SNES_CMD_FMV_NEXT && cmd != SNES_CMD_GAME_INFO
+         && cmd != SNES_CMD_GAME_INFO_RECENT && cmd != SNES_CMD_GAME_INFO_FAVORITE)
+        gameinfo_fmv_stop();
       switch(cmd) {
         case SNES_CMD_LOADROM:
           /* Read the IPS patch index BEFORE get_selected_name so that the
@@ -721,6 +728,27 @@ int main(void) {
              boot, so no NACK -- the menu polls GAMEINFO status in $FF6000. */
           get_selected_name(file_lfn);
           gameinfo_load(file_lfn);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_GAME_INFO_RECENT:
+          /* pre-boot info screen for the recent game at the MCU_PARAM index (resolved
+             via LAST_FILE, like LOAD_COVER_RECENT). Non-booting; menu polls $FF6000. */
+          cfg_get_listed_game(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
+          gameinfo_load(file_lfn);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_GAME_INFO_FAVORITE:
+          /* pre-boot info screen for the favorite game at the MCU_PARAM index (resolved
+             via FAVORITES_FILE, like LOAD_COVER_FAVORITE). Non-booting. */
+          cfg_get_listed_game(FAVORITES_FILE, file_lfn,
+                              listed_game_resolve_index(FAVORITES_FILE, snes_get_mcu_param() & 0xff));
+          gameinfo_load(file_lfn);
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_FMV_NEXT:
+          /* info-screen FMV pump: stream the next <rom>.fmv frame into the band tile
+             bank ($CA0000). Bounded + fail-safe (no-op if no .fmv open); does NOT boot. */
+          gameinfo_fmv_next();
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_SET_THEME:
