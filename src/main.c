@@ -115,12 +115,24 @@ static void stage_patch_from_entry(char *entry) {
    the name its sidecar files (.srm/.yml) are keyed off: the PATCH for a
    patched entry (consistent with in-game current_ips_srm_source), the base
    ROM otherwise.  Raw entry lands in file_lfn; patchpath is caller scratch. */
-static char *listed_game_sidecar_source(const uint8_t *listfile,
-                                        char *patchpath, int size) {
+static char *listed_game_sidecar_source(const uint8_t *listfile) {
+  /* The result is returned in the global file_lfn (not a caller stack buffer) and
+     the scratch patchpath is OUR local, popped on return.  This matters: the cheat
+     menu reaches cheat_yaml_load()/cheat_yaml_save() through this on the recents/
+     favorites path, and those carry a large frame (cheat_record_t + yaml_token_t).
+     Keeping a 256-byte buffer alive in the *caller* across that call added enough
+     depth to overflow the LPC1756's ~4 KB stack into .bss (recents cheats showed
+     "no cheats"/hung; the shallower browser path was fine).  Resolving here and
+     returning a global keeps the cheat-load stack as shallow as the browser. */
+  char patchpath[256];
   cfg_get_listed_game_raw(listfile, file_lfn,
                           listed_game_resolve_index(listfile, snes_get_mcu_param() & 0xff));
-  return cfg_parse_patch_entry((char*)file_lfn, patchpath, size)
-         ? patchpath : (char*)file_lfn;
+  if(cfg_parse_patch_entry((char*)file_lfn, patchpath, sizeof(patchpath))) {
+    /* patched entry: the sidecar key is the patch path -- move it into file_lfn */
+    strncpy((char*)file_lfn, patchpath, sizeof(file_lfn) - 1);
+    file_lfn[sizeof(file_lfn) - 1] = 0;
+  }
+  return (char*)file_lfn;
 }
 
 /* DELETE_FILE_{FAV,RECENT}: for a PATCHED entry, delete only the patch
@@ -150,9 +162,7 @@ static void delete_listed_game_file(const uint8_t *listfile, const char *what) {
    ROM/patch (and the list entry itself) stay in place. */
 static void delete_listed_game_srm(const uint8_t *listfile, const char *what) {
   uint8_t srmfile[256] = SAVE_BASEDIR;
-  char patchpath[256];
-  char *srmsrc = listed_game_sidecar_source(listfile, patchpath,
-                                            sizeof(patchpath));
+  char *srmsrc = listed_game_sidecar_source(listfile);
   printf("Delete SRM for %s: %s\n", what, srmsrc);
   append_file_basename((char*)srmfile, srmsrc, ".srm", sizeof(srmfile));
   printf("SRM path: %s\n", srmfile);
@@ -166,9 +176,10 @@ static void delete_listed_game_srm(const uint8_t *listfile, const char *what) {
    these, because the cheat toggle handler clobbers it. */
 static void listed_game_cheats(const uint8_t *listfile, const char *what,
                                int save) {
-  char patchpath[256];
-  char *src = listed_game_sidecar_source(listfile, patchpath,
-                                         sizeof(patchpath));
+  /* No 256-byte buffer in this frame: listed_game_sidecar_source resolves into
+     the global file_lfn so the cheat_yaml_load/save call below stays as shallow
+     as the browser path (LPC1756 ~4 KB stack -- see the note there). */
+  char *src = listed_game_sidecar_source(listfile);
   printf("%s cheats for %s: %s\n", save ? "Save" : "Load", what, src);
   if(save) cheat_yaml_save((uint8_t*)src);
   else     cheat_yaml_load((uint8_t*)src);
