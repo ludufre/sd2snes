@@ -225,11 +225,33 @@
 #define CMD_CLR_THEME               $2d /* clear menu theme to baked default, reload menu */
 #define CMD_SET_MENU_SPC            $2e /* selected .spc (MCU_PARAM set like LOADROM): store full path in CFG.bgm_name, enable music */
 #define CMD_CLR_MENU_SPC            $2f /* clear CFG.bgm_name -> menu BGM falls back to /sd2snes/menu.spc */
-#define CMD_GAME_INFO               $30 /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot (non-booting, like LOAD_COVER) */
-#define CMD_GAME_INFO_RECENT        $31 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
-#define CMD_GAME_INFO_FAVORITE      $32 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
-#define CMD_FMV_NEXT                $33 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
+/* WiFi-in-menu commands RESERVED for the Companion port (lockstep with src/snes.h):
+   WiFi owns $30-$33, so game-info lives at $34-$37. No menu/MCU handler in this
+   branch -- reserved so adding WiFi later needs zero command renumbering. */
+#define CMD_WIFI_SCAN               $30 /* RESERVED (Companion): queue an AP scan on the ESP */
+#define CMD_WIFI_GET                $31 /* RESERVED (Companion): write current status + scan list to WIFI_BLK */
+#define CMD_WIFI_CONNECT            $32 /* RESERVED (Companion): connect using ssid/pass written to WIFI_BLK */
+#define CMD_WIFI_FORGET             $33 /* RESERVED (Companion): forget the saved network */
+#define CMD_GAME_INFO               $34 /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot (non-booting, like LOAD_COVER) */
+#define CMD_GAME_INFO_RECENT        $35 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
+#define CMD_GAME_INFO_FAVORITE      $36 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
+#define CMD_FMV_NEXT                $37 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
+
+/* WiFi status/scan block + connect params, RESERVED for the Companion port.
+   Aliases SYSINFO_BLK ($FF1200, both modal so they never coexist) -- consumes no
+   new memory. Layout MUST match src/snes.h WIFI_OFF_*. */
+#define WIFI_BLK                    $FF1200
+#define WIFI_OFF_CONNECTED          0    /* u8 */
+#define WIFI_OFF_RSSI               1    /* i8 */
+#define WIFI_OFF_SSID               2    /* char[33] */
+#define WIFI_OFF_IP                 35   /* char[16] */
+#define WIFI_OFF_SCAN_CNT           51   /* u8 */
+#define WIFI_OFF_SCAN_SEQ           52   /* u8 */
+#define WIFI_OFF_APS                53   /* scan_cnt * {i8 rssi, u8 enc, char ssid[33]} */
+#define WIFI_AP_STRIDE              35
+#define WIFI_OFF_REQ_SSID           340  /* char[33] - menu writes (CONNECT) */
+#define WIFI_OFF_REQ_PASS           373  /* char[64] - menu writes (CONNECT) */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */
@@ -299,6 +321,7 @@
 #define CFG_SORT_FAVORITES              CFG_ADDR+$013C
 #define CFG_ENABLE_CHEAT_OVERLAY        CFG_ADDR+$013D
 #define CFG_SHOW_GAME_INFO              CFG_ADDR+$013E
+#define CFG_ENABLE_WIFI                 CFG_ADDR+$013F /* RESERVED (Companion master switch). Placed at $13F (NOT $BD: that overlapped CFG_MENU_MUSIC_FILE $BC, 128B) so the WiFi port slots in with no cfg-offset drift. Lockstep with src/cfg.h. */
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

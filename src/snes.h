@@ -71,10 +71,34 @@
 #define SNES_CMD_CLR_THEME           (0x2d) /* clear the menu theme back to the baked default, then reload menu */
 #define SNES_CMD_SET_MENU_SPC        (0x2e) /* selected .spc (any visible folder): get_selected_name -> store full path in CFG.bgm_name, enable music, then reload menu (in-place restart black-screened; see main.c) */
 #define SNES_CMD_CLR_MENU_SPC        (0x2f) /* clear CFG.bgm_name -> revert menu BGM to the /sd2snes/menu.spc fallback */
-#define SNES_CMD_GAME_INFO           (0x30) /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot for the pre-boot info screen (non-booting; like LOAD_COVER) */
-#define SNES_CMD_GAME_INFO_RECENT    (0x31) /* like GAME_INFO but for the recent game at the index in MCU_PARAM (resolved via LAST_FILE) */
-#define SNES_CMD_GAME_INFO_FAVORITE  (0x32) /* like GAME_INFO but for the favorite game at the index in MCU_PARAM (resolved via FAVORITES_FILE) */
-#define SNES_CMD_FMV_NEXT            (0x33) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
+/* WiFi-in-menu commands (bridged to the ESP via uart_proto WIFI_* opcodes).
+   RESERVED here so the command map stays lockstep with feat-esp32companion: the
+   Companion port owns 0x30-0x33, which is why game-info lives at 0x34-0x37 below.
+   No MCU handler in this branch (no ESP link yet) -- adding WiFi later is purely
+   additive (fill in the cases), with zero command renumbering. */
+#define SNES_CMD_WIFI_SCAN           (0x30) /* RESERVED (Companion): queue an AP scan on the ESP */
+#define SNES_CMD_WIFI_GET            (0x31) /* RESERVED (Companion): write current status + scan list to SRAM (WIFI_BLK) */
+#define SNES_CMD_WIFI_CONNECT        (0x32) /* RESERVED (Companion): connect using ssid/pass the menu wrote to SRAM */
+#define SNES_CMD_WIFI_FORGET         (0x33) /* RESERVED (Companion): forget the saved network */
+/* game-info commands live at 0x34-0x37 (WiFi owns 0x30-0x33) -- see reservation note above */
+#define SNES_CMD_GAME_INFO           (0x34) /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot for the pre-boot info screen (non-booting; like LOAD_COVER) */
+#define SNES_CMD_GAME_INFO_RECENT    (0x35) /* like GAME_INFO but for the recent game at the index in MCU_PARAM (resolved via LAST_FILE) */
+#define SNES_CMD_GAME_INFO_FAVORITE  (0x36) /* like GAME_INFO but for the favorite game at the index in MCU_PARAM (resolved via FAVORITES_FILE) */
+#define SNES_CMD_FMV_NEXT            (0x37) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
+
+/* WiFi SRAM block layout (base = SRAM_SYSINFO_ADDR; menu side = WIFI_BLK $FF1200).
+   RESERVED for the Companion port -- aliases the sysinfo block (both modal, so they
+   never coexist). Kept here so the future WiFi code uses the same offsets. */
+#define WIFI_OFF_CONNECTED  0    /* u8  */
+#define WIFI_OFF_RSSI       1    /* i8  */
+#define WIFI_OFF_SSID       2    /* char[33] */
+#define WIFI_OFF_IP         35   /* char[16] */
+#define WIFI_OFF_SCAN_CNT   51   /* u8  */
+#define WIFI_OFF_SCAN_SEQ   52   /* u8  */
+#define WIFI_OFF_APS        53   /* scan_cnt * { i8 rssi, u8 enc, char ssid[33] } = 35B each */
+#define WIFI_AP_STRIDE      35
+#define WIFI_OFF_REQ_SSID   340  /* char[33] - menu writes (CONNECT) */
+#define WIFI_OFF_REQ_PASS   373  /* char[64] - menu writes (CONNECT) */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)

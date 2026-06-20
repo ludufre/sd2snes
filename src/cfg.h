@@ -64,6 +64,7 @@
 #define CFG_ENABLE_MENU_MUSIC            ("EnableMenuMusic")
 #define CFG_COVERS_IN_LISTS              ("ShowCoversInLists")
 #define CFG_ENABLE_MENU_SFX              ("EnableMenuSFX")
+#define CFG_ENABLE_WIFI                  ("EnableWifi")
 #define CFG_MENU_MUSIC_FILE              ("MenuMusicFile")
 #define CFG_SORT_FAVORITES               ("SortFavorites")
 #define CFG_SHOW_GAME_INFO               ("ShowGameInfo")
@@ -126,6 +127,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  sort_favorites;          /* CFG @ $13C: show the Favorites list alphabetically (display-only; the .cfg keeps recency order) */
   uint8_t  enable_cheat_overlay;    /* CFG @ $13D: in-game cheat overlay (pause via L+R+Y+Left to toggle cheats live). Forced off on special-chip games — the savestate machinery it reuses is unsupported there. */
   uint8_t  show_game_info;          /* CFG @ $13E: show the pre-boot game info screen (auto-skips when the ROM has no /sd2snes/info entry) */
+  uint8_t  enable_wifi;             /* CFG @ $13F: RESERVED WiFi companion master switch (0=off). No ESP link in this branch; placed here (NOT $BD: that overlapped bgm_name @ $BC) so the future Companion port has no cfg-offset drift. */
 } cfg_t;
 
 int cfg_save(void);
