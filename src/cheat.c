@@ -239,11 +239,16 @@ void cheat_wram_present(int enable) {
   fpga_write_cheat(7, flags);
 }
 
-/* read cheats from YAML file to ROM for menu usage */
-void cheat_yaml_load(uint8_t* romfilename) {
-  yaml_token_t token;
+/* Build the "Cheats for <name>" window title into PSRAM and open the cheat YAML
+   file.  Kept in a SEPARATE function from cheat_yaml_load on purpose: its
+   title[64] + line[256] scratch (~320 B) is then popped before the per-cheat
+   parse loop runs.  That loop drives the yaml parser, whose chain
+   (cheat_record_t + yaml_token_t + candidate buffer) already nearly fills the
+   LPC1756's ~1976-byte stack; keeping these buffers live across it overflowed
+   into .bss and hung the cheat menu (esp. via the deeper recents/favorites
+   path).  Sets the global file_res. */
+static void cheat_yaml_title_and_open(uint8_t* romfilename) {
   char line[256] = CHEAT_BASEDIR;
-  cheat_record_t cheat;
 
 /* Build "Cheats for <basename without extension>" in PSRAM at
   SRAM_CHEAT_TITLE_ADDR ($D80000) so the SNES menu can use it as the
@@ -288,6 +293,14 @@ void cheat_yaml_load(uint8_t* romfilename) {
   check_or_create_folder(CHEAT_BASEDIR);
   printf("Cheat YAML file: %s\n", line);
   yaml_file_open(line, FA_READ);
+}
+
+/* read cheats from YAML file to ROM for menu usage */
+void cheat_yaml_load(uint8_t* romfilename) {
+  yaml_token_t token;
+  cheat_record_t cheat;
+
+  cheat_yaml_title_and_open(romfilename);
   if(file_res) {
     printf("no cheat list YML found\n");
     sram_writeshort(0, SRAM_NUM_CHEATS);

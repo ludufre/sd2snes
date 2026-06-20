@@ -184,7 +184,15 @@ extern snes_romprops_t romprops;
 extern uint16_t current_features;
 
 unsigned recv_buffer_offset = 0;
-unsigned char recv_buffer[USB_BLOCK_SIZE];
+/* recv_buffer (512 B) is filled only by PIO memcpy/memmove from the CDC data --
+   never a DMA target -- so it can live in AHB SRAM instead of the CPU-local SRAM
+   that also holds the stack.  Moving it off main SRAM gives the deep cheat-load
+   call chain back ~512 B of headroom: the branch's added features grew .bss
+   enough to shrink the stack (~4 KB on master) to ~2 KB, and cheat_yaml_load +
+   the yaml parser (peak ~1960 B) was overflowing it (cheat menu hung).  Only
+   recv_buffer is relocated -- cmd_buffer/send_buffer below stay on main SRAM
+   (AHB SRAM has limited room left).  See IN_AHBRAM in config.h. */
+unsigned char recv_buffer[USB_BLOCK_SIZE] IN_AHBRAM;
 volatile unsigned char cmd_buffer[USB_BLOCK_SIZE];
 
 // double buffered because send only guarantees that a transfer is

@@ -256,28 +256,42 @@ int yaml_get_next(yaml_token_t *tok) {
   return 1;
 }
 
-/* search for next token with given properties */
-int yaml_search_next(yaml_token_t *tok, yaml_scope scope) {
-  yaml_token_t cmp;
+/* Core token search.  Uses a SINGLE candidate buffer.  This matters: a
+   yaml_token_t is ~272 bytes and the cheat loader's call chain runs on the
+   LPC1756's tiny (~1976-byte) stack -- the old code allocated a throwaway
+   "spec" yaml_token_t in BOTH yaml_next_item and yaml_get_value purely to carry
+   a type/key into the search, doubling the token buffers on the stack and
+   overflowing into .bss (cheat menu hung).  Here the spec is passed as scalars
+   and only the one candidate buffer lives on the stack.
+   Matches the next token of `type`; for KEY/STRING an optional `keystr`
+   (NULL or "" = match any name).  Writes the match into `out` if out != NULL. */
+static int yaml_search_core(yaml_token_type type, const char *keystr,
+                            yaml_scope scope, yaml_token_t *out) {
+  yaml_token_t cand;
   int found = 0;
-  while(!found && yaml_get_next(&cmp)) {
-    if(scope == YAML_SCOPE_ITEM && cmp.type == YAML_ITEM_START) {
+  while(!found && yaml_get_next(&cand)) {
+    if(scope == YAML_SCOPE_ITEM && cand.type == YAML_ITEM_START) {
       break;
     }
-    if(cmp.type == tok->type) {
-      switch(tok->type) {
-        case YAML_KEY:
-        case YAML_STRING:
-          if(!tok->stringvalue[0] || !strcasecmp(tok->stringvalue, cmp.stringvalue)) {
-            found = 1;
-          }
-          break;
-        default: found = 1;
+    if(cand.type == type) {
+      if(type == YAML_KEY || type == YAML_STRING) {
+        if(!keystr || !keystr[0] || !strcasecmp(keystr, cand.stringvalue)) {
+          found = 1;
+        }
+      } else {
+        found = 1;
       }
     }
-    if(found) *tok = cmp;
+    if(found && out) *out = cand;
   }
   return found;
+}
+
+/* search for next token with given properties (tok = spec in / match out) */
+int yaml_search_next(yaml_token_t *tok, yaml_scope scope) {
+  const char *key = (tok->type == YAML_KEY || tok->type == YAML_STRING)
+                  ? tok->stringvalue : NULL;
+  return yaml_search_core(tok->type, key, scope, tok);
 }
 
 void yaml_seek(uint32_t offset) {
@@ -312,9 +326,7 @@ void yaml_rewind_item() {
 
 /* search for next item start ("^- ") */
 int yaml_next_item() {
-  yaml_token_t cmp;
-  cmp.type = YAML_ITEM_START;
-  return yaml_search_next(&cmp, YAML_SCOPE_GLOBAL);
+  return yaml_search_core(YAML_ITEM_START, NULL, YAML_SCOPE_GLOBAL, NULL);
 }
 
 /* retrieve value of a given key (returns next hit) */
@@ -324,12 +336,8 @@ int yaml_get_value(const char *key, yaml_token_t *tok, yaml_scope scope) {
   if(scope == YAML_SCOPE_ITEM) {
     yaml_rewind_item();
   }
-  yaml_token_t cmp;
-  cmp.type = YAML_KEY;
-  strncpy(cmp.stringvalue, key, YAML_BUFLEN);
-  cmp.stringvalue[YAML_BUFLEN] = 0;
-  /* look for key */
-  found = yaml_search_next(&cmp, scope);
+  /* look for the key (no throwaway spec token -- pass the key as a scalar) */
+  found = yaml_search_core(YAML_KEY, key, scope, NULL);
   /* now move to value */
   if(found) {
     found = yaml_get_next(tok);
