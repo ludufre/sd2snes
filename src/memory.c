@@ -831,6 +831,21 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
         if(!r) deassert_reset();
         return r;
       }
+      /* The patch may change only the MAPPER without changing the FPGA core —
+         most commonly a HiROM -> ExHiROM promotion when an expansion grows the
+         ROM past 4 MB (e.g. Bahamut Lagoon English: 3 MB HiROM -> 8 MB ExHiROM,
+         Tales of Phantasia-style).  set_mapper() ran before the patch with the
+         PRE-patch mapper, and the core-change branch above only fires on a core
+         swap, so a same-core mapper change would otherwise leave an 8 MB ExHiROM
+         image addressed as 4 MB HiROM -> the SNES reads garbage and black-
+         screens.  The core is already correct and the ROM mask was expanded
+         above, so just re-program the FPGA mapper register here (no reload). */
+      if(ips_recore_props.mapper_id != romprops.mapper_id) {
+        printf("IPS: patch changed mapper %d -> %d (same core) -> reprogramming FPGA mapper\n",
+               romprops.mapper_id, ips_recore_props.mapper_id);
+        romprops.mapper_id = ips_recore_props.mapper_id;
+        set_mapper(romprops.mapper_id);
+      }
     }
     deassert_reset();
   }

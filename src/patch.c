@@ -345,7 +345,6 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
      * may contain old data from a previously loaded larger ROM.
      * ------------------------------------------------------------------ */
     uint32_t max_end = 0;
-    uint32_t min_offset = 0xFFFFFFFFUL;
     uint32_t adj = 0;
     uint32_t adj_max_end = 0;
     uint8_t  rec[3];
@@ -367,11 +366,9 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
             if (br != 3) break;
             uint32_t offset = ((uint32_t)rec[0] << 16) | ((uint32_t)rec[1] << 8) | rec[2];
             uint32_t rle_count = ((uint16_t)rle[0] << 8) | rle[1];
-            if (offset < min_offset) min_offset = offset;
             if (offset + rle_count > max_end) max_end = offset + rle_count;
         } else {
             uint32_t offset = ((uint32_t)rec[0] << 16) | ((uint32_t)rec[1] << 8) | rec[2];
-            if (offset < min_offset) min_offset = offset;
             if (offset + (uint32_t)hunk_size > max_end) max_end = offset + (uint32_t)hunk_size;
             /* Skip data bytes */
             f_lseek(&file_handle, file_handle.fptr + hunk_size);
@@ -380,26 +377,22 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
     /* If the patch writes beyond the original ROM, zero-fill the extension
      * so that gaps between IPS records contain 0x00 as expected by the hack. */
-    /* Determine the header-offset correction factor.
-     * If the IPS was authored using a ROM with a copier header (common for
-     * older IPS tools), its record offsets include those 512 header bytes.
-     * When the ROM was loaded into SRAM without the header (rom_header_size==0
-     * but the IPS starts below offset 512) we auto-detect this and compensate
-     * so that the patch data lands at the correct SRAM positions. */
+    /* Header-offset correction.  The device loads the ROM with its copier header
+     * (rom_header_size bytes, 0 or 512) stripped, so an IPS authored against that
+     * same file form lands correctly when we shift record offsets down by exactly
+     * the stripped header.
+     *
+     * We deliberately do NOT try to GUESS a 512-byte header from the record
+     * offsets.  The old heuristic (adj=512 when the lowest record offset was
+     * < 512, or when max_end-512 was a power of two) was both unreliable AND
+     * inverted: a low offset means the patch writes the early ROM region, i.e. it
+     * is an UNHEADERED patch that must NOT be shifted.  It silently corrupted
+     * every legit unheadered patch that touches the start of the ROM -- e.g.
+     * Zelda: Parallel Worlds (lowest offset 22) came out shifted by 512 and
+     * failed its CRC.  Standard tools (Lunar IPS / Floating IPS / RomPatcher.js)
+     * apply records at their literal offsets; matching the patch's header
+     * convention to the ROM is the user's responsibility, exactly as on a PC. */
     adj = rom_header_size;
-    if (adj == 0 && min_offset < 512)
-        adj = 512;
-    /* Secondary detection: IPS authored from a headered ROM where every
-     * record offset includes the 512-byte copier header, and the last
-     * record happens to end past the min_offset threshold.  A reliable
-     * fingerprint is max_end == (power-of-2 ROM size) + 512 — the exact
-     * file size of a headered ROM image.  Example: Mario Kart R has
-     * max_end = 0x100200 = 1 MB + 512, so max_end - 512 = 0x100000 = 2^20. */
-    if (adj == 0 && max_end > 512) {
-        uint32_t maybe_romsize = max_end - 512;
-        if (maybe_romsize && (maybe_romsize & (maybe_romsize - 1)) == 0)
-            adj = 512;
-    }
     if (adj > 0)
         printf("IPS: header offset correction: %lu bytes\n", (unsigned long)adj);
 
