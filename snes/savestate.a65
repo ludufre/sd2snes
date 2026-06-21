@@ -289,7 +289,17 @@ controller_reg
 	jmp ss_overlay
 ss_probe_done:
 
+	; Overlay-only mode: when in-game savestates are OFF the firmware still installs this
+	; handler (so the cheat-overlay probe above can run) but sets CS_CTRL=0.  In that case
+	; skip ALL save/load/slot handling below -- the save/load inputs are unconfigured
+	; ($0000) and would otherwise match every frame.  CS_CTRL != 0 = savestates active.
 	sep #$20 : .as
+	lda @CS_CTRL
+	bne ss_actions_on
+	rep #$30 : .al : .xl
+	jmp ss_exit
+ss_actions_on:
+	.as                  ; reached via bne with A still 8-bit (sep above); keep snescom in sync
 	lda @CS_SLOT
 	rep #$30 : .al : .xl
 	beq skipslot

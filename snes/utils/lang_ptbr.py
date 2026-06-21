@@ -103,7 +103,7 @@ TRANSLATIONS = {
     'mdesc_ingame_buttons': 'Botões no jogo (reset, cheats{127}{128}). Requer hook ativo.',
     'mdesc_ingame_cheat_overlay': 'Menu de cheats no jogo (segure L+R+Y+Esq) p/ ligar/desligar ao vivo. Requer hook. Não funciona em chips especiais.',
     'mdesc_ingame_holdoff': 'Espera 10s antes de ativar o hook',
-    'mdesc_ingame_savestate': 'Savestates no jogo. Padrão: Salvar Start+L, Carregar Start+R',
+    'mdesc_ingame_savestate': 'Savestates no jogo. Padrão: Salvar Start+R, Carregar Start+L',
     'mdesc_savestate_slots': 'Slots de savestate. Select+Dpad escolhe o slot',
     'mdesc_loadstate_delay': 'Ajustar atraso ao carregar state (frames)',
     'mdesc_sgb_enable_hooks': 'Necessário para botões no jogo',

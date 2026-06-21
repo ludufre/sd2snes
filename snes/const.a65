@@ -317,7 +317,7 @@ mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F c
 mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
 mdesc_ingame_cheat_overlay        .byt "In-game cheat menu (hold L+R+Y+Left) to toggle cheats live. Requires in-game hook. Does not work on special-chip games.", 0
 mdesc_ingame_holdoff              .byt "Wait 10 seconds before enabling hook (helps some games boot with hook enabled)", 0
-mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+L / Load - Start+R", 0
+mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+R / Load - Start+L", 0
 mdesc_savestate_slots             .byt "Enable savestate slots. Select+Dpad: Each direction is a slot to choose", 0
 mdesc_loadstate_delay             .byt "Adjust the load state delay (frames)", 0
 mdesc_sgb_enable_hooks            .byt "Required for in-game buttons", 0

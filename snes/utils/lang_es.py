@@ -105,7 +105,7 @@ TRANSLATIONS = {
     'mdesc_ingame_buttons': 'Botones en juego (reset, activar/desactivar trucos{127}{128}). Requiere el hook activado.',
     'mdesc_ingame_cheat_overlay': 'Menú de trucos en juego (manten L+R+Y+Izq) para activarlos al vuelo. Requiere hook. No funciona con chips especiales.',
     'mdesc_ingame_holdoff': 'Espera 10 segundos antes de activar el hook (ayuda a algunos juegos a arrancar con el hook activado)',
-    'mdesc_ingame_savestate': 'Activar savestates en juego y elegir mando. Predet.: Guardar - Start+L / Cargar - Start+R',
+    'mdesc_ingame_savestate': 'Activar savestates en juego y elegir mando. Predet.: Guardar - Start+R / Cargar - Start+L',
     'mdesc_savestate_slots': 'Activar ranuras de savestate. Select+Dpad: cada dirección es una ranura',
     'mdesc_loadstate_delay': 'Ajustar el retardo de carga de estado (frames)',
     'mdesc_sgb_enable_hooks': 'Necesario para los botones en juego',
