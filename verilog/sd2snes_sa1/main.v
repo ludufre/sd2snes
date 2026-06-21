@@ -471,6 +471,9 @@ wire [31:0] cheat_pgm_data;
 wire [7:0] cheat_data_out;
 wire [2:0] cheat_pgm_idx;
 
+// BS Memory Pack flash-erase request -> exposed in the MCU status word (mcu_cmd)
+wire [1:0] bs_erase_seq;
+wire [3:0] bs_erase_blk;
 mcu_cmd snes_mcu_cmd(
   .clk(CLK2),
   .snes_sysclk(SNES_SYSCLK),
@@ -588,8 +591,6 @@ address snes_addr(
   .bs_erase_seq(bs_erase_seq),
   .bs_erase_blk(bs_erase_blk)
 );
-wire [1:0] bs_erase_seq;
-wire [3:0] bs_erase_blk;
 
 reg pad_latch = 0;
 reg [4:0] pad_cnt = 0;

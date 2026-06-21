@@ -127,9 +127,12 @@ wire [23:0] ROM_ADDR_pre = (SNES_ADDR[22]
 // bit of the 3-bit MMC block = "block >= 4".
 wire BS_PACK_HIT = featurebits[FEAT_BSSLOT] & ROM_ADDR_pre[22];
 
+`ifndef MK2
 // --- BS Memory Pack flash command FSM (writable slot) ----------------------
 // Like sd2snes_base/bsx.v, but keyed on the resolved pack offset so it follows
 // the SuperMMC.  Command port = pack offset 0.  Idle for ROM packs (G Next).
+// Gated out on mk2: SA-1 packs are read-only (read via SuperMMC, never flash
+// commands), so this whole FSM is dead there -- drop it to fit the Spartan-3.
 reg bs_flash_ovr_r = 1'b0;     // 1 = vendor/status override active (not read-array)
 reg bs_flash_status_r = 1'b0;  // 1 = status mode ($80); 0 = vendor mode ("M P")
 reg bs_flash_we_r = 1'b0;      // armed: the next pack write is the program data byte
@@ -215,6 +218,14 @@ always @(*) begin
   endcase
 end
 assign BS_FLASH_DOUT = bs_flash_dout_r;
+`else
+// mk2: flash FSM gated out -- tie the outputs off (pack still reads via SuperMMC below).
+assign IS_FLASHWR   = 1'b0;
+assign BS_FLASH_OVR = 1'b0;
+assign BS_FLASH_DOUT = 8'h00;
+assign bs_erase_seq = 2'b00;
+assign bs_erase_blk = 4'h0;
+`endif
 
 // TODO: add programmable address map
 assign SRAM_SNES_ADDR = (IS_SAVERAM
