@@ -83,6 +83,26 @@ uint8_t checkChksum(uint16_t cchk, uint16_t chk) {
   return res;
 }
 
+/* Carts needing the $80-$9F -> upper-1MB boot remap (FEAT_BSLOROM) -- they run code
+   there and must boot with no pack, so it can't be auto-detected (a normal >2MB LoROM
+   RPG has the same header).  Derby (reset JML $80:854D), Sound Novel (SPC driver from
+   $8C:FE00).  The pack itself is auto-detected at load (memory.c), no list. */
+static int smc_needs_bslorom(const uint8_t *name) {
+  static const char *const tbl[] = {
+    "DERBY STALLION 96",
+    "SOUND NOVEL-TCOOL",
+  };
+  for(unsigned t = 0; t < sizeof(tbl) / sizeof(tbl[0]); t++) {
+    const char *want = tbl[t];
+    unsigned i;
+    for(i = 0; want[i]; i++) {
+      if((uint8_t)want[i] != name[i]) break;
+    }
+    if(!want[i]) return 1; /* whole prefix matched */
+  }
+  return 0;
+}
+
 void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   uint8_t score, maxscore=1, score_idx=2; /* assume LoROM */
   uint8_t ext_coprocessor=0;
@@ -106,6 +126,11 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->fpga_features = 0;
   props->fpga_dspfeat = 0;
   props->fpga_conf = NULL;
+  /* romprops is a persistent global: clear the error latch each id so a stale
+     MENU_ERR_NOIMPL from a previous unsupported-chip ROM can't reject the next
+     valid game (the prereq check in load_rom reads romprops.error). */
+  props->error = MENU_ERR_OK;
+  props->error_param = NULL;
   for(uint8_t num = 0; num < 6; num++) {
     score = smc_headerscore(hdr_addr[num], header, file_offset);
     //printf("%d: offset = %lX; score = %d\n", num, hdr_addr[num], score);
@@ -317,7 +342,13 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
     props->has_combo = 1;
     props->fpga_features |= FEAT_COMBO;
   }
-  
+
+  /* $80-$9F boot remap for the listed LoROM slot carts (see smc_needs_bslorom).
+     The pack window itself is auto-detected at load in memory.c. */
+  if(props->mapper_id == 1 && !props->fpga_conf && smc_needs_bslorom(header->name)) {
+    props->fpga_features |= FEAT_BSLOROM;
+  }
+
   if(header->romsize == 0 || header->romsize > 13) {
     props->romsize_bytes = 1024;
     header->romsize = 0;
@@ -328,6 +359,10 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
       }
     }
   }
+  /* clamp shift counts from the (possibly corrupt) header: a raw byte >= 32
+     would be undefined behavior and could yield a bogus ramsize/sram_memset len */
+  if(header->ramsize > 13) header->ramsize = 0;
+  if(header->expramsize > 13) header->expramsize = 0;
   props->ramsize_bytes = (uint32_t)1024 << header->ramsize;
   props->romsize_bytes = (uint32_t)1024 << header->romsize;
   props->expramsize_bytes = (uint32_t)1024 << header->expramsize;

@@ -30,7 +30,7 @@ print_count     .word 0     ; how many characters may be printed?
 print_done      .word 0     ; how many characters were printed?
 print_over      .byt 0      ; was the string printed incompletely?
 ;----------language selection----------
-cur_lang        .byt 0      ; active menu language (0=EN, 1=pt-BR); mirrors CFG_LANGUAGE
+cur_lang        .byt 0      ; active menu language (0=EN, 1=BR, 2=ES, 3=DE)
 resolve_ptr     .byt 0,0,0  ; resolve_str: zero-page long ptr to read a dispatch-table entry
 kv_len_tmp      .byt 0      ; menu_kv_value_len: resolved kv-value length out-param
 ;----------parameters for dma----------
@@ -66,6 +66,35 @@ window_h        .byt 0
 window_tmp      .word 0
 window_tbank    .byt 0
 window_taddr    .word 0
+;----------description box (mdesc_* of the selected menu item)----------
+; NOTE: desc_menu_ptr and desc_ptr MUST stay < $100 in this segment so the
+; [dp],y indirect-long reads (with DP=0) resolve via the low-RAM mirror.
+menu_desc_on    .byt 0      ; 1 while a show_menu level has an active description box
+menu_desc_shown .byt 0      ; 1 if a description box is currently drawn (and pushed)
+desc_menu_ptr   .byt 0,0,0  ; long ptr to the current menu structure (mdesc lookup) [<$100]
+desc_ptr        .byt 0,0,0  ; long ptr to the (resolved) mdesc string                [<$100]
+desc_box_y      .byt 0      ; top row of the description box
+desc_box_x      .byt 0      ; left column of the description box (aligned under the menu)
+desc_box_h      .byt 0      ; pushed box height (pop_window uses window_h as its BG1 row count)
+desc_menu_top   .byt 0      ; menu window top row
+desc_menu_bot   .byt 0      ; menu window bottom row
+desc_avail_below .byt 0     ; rows free below the menu (down to DESC_BOTROW)
+desc_avail_above .byt 0     ; rows free above the menu (up to DESC_TOPROW)
+desc_iw         .word 0     ; interior wrap width for the current box position
+desc_maxllen    .word 0     ; longest wrapped line (-> box hugs the text width)
+desc_lmax       .byt 0      ; max text lines that fit below the menu (>=1 when on)
+desc_trunc      .byt 0      ; 1 if the last drawn line ends with an ellipsis
+nlines          .byt 0      ; number of wrapped lines to draw
+desc_li         .byt 0      ; render loop line counter
+dl_eos          .word 0     ; desc_next_line: 1 if the line reached end of string
+dl_idx          .word 0     ; desc_next_line: current read index
+dl_start        .word 0     ; desc_next_line: current line start index
+dl_llen         .word 0     ; desc_next_line: current line length / copy counter
+dl_lastsp       .word 0     ; desc_next_line: last space index ($ffff=none) / scratch
+desc_save_xy    .word 0     ; saved window_x/window_y around the desc draw
+desc_save_wh    .word 0     ; saved window_w/window_h around the desc draw
+desc_ln_start   .word 0,0,0,0,0,0   ; per-line start index (<= MAX_DESC_LINES)
+desc_ln_len     .word 0,0,0,0,0,0   ; per-line length
 stringbuf
   .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
   .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -107,6 +136,9 @@ listsel_max         .byt 0
 listsel_pickbutton  .byt 0
 listsel_dirty       .byt 0
 listsel_backup      .byt 0
+fav_top             .byt 0      ; favorites scroll: index of the first visible entry
+fav_visible         .byt 0      ; favorites scroll: rows on screen (min(count, FAV_VISMAX))
+fav_row_cnt         .byt 0      ; favorites scroll: favsel_draw_rows loop counter (temp)
 ips_idx_tmp         .byt 0      ; IPS menu: loop counter / result temp
 
 screen_dma_disable  .word 0
@@ -246,7 +278,6 @@ pad_l           .byt 0
 pad_r           .byt 0
 mainmenu_active .byt 0
 egg_shown       .byt 0
-egg_hold        .byt 0
 
 ;------------------------
 snes_system_config
@@ -318,4 +349,37 @@ listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (d
 ;----------language switch redraw bookkeeping
 menu_drawn_lang        .byt 0    ; language the current show_menu window was drawn in
 mainmenu_relang        .byt 0    ; set when the language changed -> main menu re-shows
+
+;----------pre-boot game info screen (snes/gameinfo.a65). DirectColor mode-3 takeover.
+; Text is written into a BG2 tilemap buffer (WINDOW_STACK_BASE) as char codes; the
+; [dp],y string reads reuse longptr (< $100).
+gi_result       .byt 0     ; input loop result: 0 = play, 1 = cancel
+gi_col          .byt 0     ; text: current column
+gi_row          .byt 0     ; text: current row
+gi_max          .word 0    ; text: max chars for the current field
+gi_dy           .byt 0     ; desc wrap: current output row
+gi_done         .byt 0     ; desc wrap: 1 once the end of the string is reached
+gi_ls           .word 0    ; desc wrap: current line start index
+gi_pos          .word 0    ; desc wrap: scan position
+gi_lastsp       .word 0    ; desc wrap: last space index ($ffff = none)
+gi_hdma_mode    .byt 0,0,0,0,0,0,0  ; WRAM HDMA ch3 BGMODE table (like the menu's hdma_mode;
+                                    ; HDMA must read its table from WRAM, not ROM)
+gi_cover_y0     .byt 0     ; .cov-in-band: top Y of the OBJ cover grid (vert-centered in band)
+gi_desc_full    .byt 0     ; desc view: 0 = normal screen, 1 = full-description (Y) mode
+gi_desc_top     .byt 0     ; desc draw: first text row (GIB_DESC_R0 normal / GIB_FULL_R0 full)
+gi_desc_scroll  .word 0    ; full mode: wrapped-line scroll offset
+gi_desc_skip    .word 0    ; desc draw: wrapped lines to skip before drawing (= scroll)
+gi_desc_lines   .word 0    ; full mode: total wrapped lines (for the scroll clamp)
+gi_query_cmd    .byt 0     ; MCU command for the info query (GAME_INFO / _RECENT / _FAVORITE)
+gi_query_fill   .byt 0     ; 1 = fill MCU_PARAM from the browser selection; 0 = caller preset it (list index)
+gi_fmv_period   .byt 0     ; FMV: gin_loop iterations between frame advances (= 60/fps - 2, >=1)
+gi_fmv_delay    .byt 0     ; FMV: iterations left until the next frame advance (down-counter)
+gi_fmv_buf      .byt 0     ; FMV double-buffer: 0 = tile set A shown, 1 = set B shown
+gi_fmv_dst_vram .word 0    ; FMV advance: inactive set VRAM word base (DMA dest)
+gi_fmv_dst_char .word 0    ; FMV advance: inactive set first tile char (band tilemap box base)
+gi_nav_dir       .byt 0     ; in-panel game nav: 0 = next (down), 1 = prev (up)
+gi_nav_save_sel  .word 0    ; in-panel game nav: restore-on-clamp snapshot of filesel_sel
+gi_nav_save_ptr  .word 0    ; in-panel game nav: restore-on-clamp snapshot of dirptr_addr
+gi_nav_save_bank .word 0    ; in-panel game nav: restore-on-clamp snapshot of dirptr_bank
+gi_nav_idbefore  .word 0    ; in-panel game nav: entry id (dirptr_addr + filesel_sel*4) before a step
 _END            .byt 0

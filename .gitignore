@@ -80,7 +80,6 @@ utils/derle
 *.cof
 *.bak
 *.bmp
-*.png
 *.ods
 *.xls
 *.chi
@@ -152,7 +151,9 @@ obj/
 snes/menu.rtc
 snes/menu.srm
 
-# generated bilingual (EN+PT) menu strings (snes/utils/build_const.py)
+# generated multilingual menu strings (snes/utils/build_const.py): the $C0 neutral-data
+# file AND the $C1 localized string-pool/dispatch-table file (2-bank split). Both generated.
 snes/const_lang.a65
+snes/const_lang_str.a65
 
 /snes/utils/__pycache__

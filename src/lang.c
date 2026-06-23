@@ -1,8 +1,18 @@
 #include <stddef.h>
 #include "lang.h"
 #include "cfg.h"
+#include "config.h"   /* CONFIG_MK2 (autoconf.h): the Spartan-3 mk2 flash is tiny */
 
 extern cfg_t CFG;
+
+/* mk2 flash budget: the Spartan-3 mk2 firmware is right at the ~120 KB edge.
+   The tables below are firmware-only strings shown on a few internal screens
+   (sysinfo / FatFs errors / CIC+SGB state / cheat header); the main menu is
+   localized on the SNES side (m3nu.bin) and is unaffected. To reclaim ~0.9 KB
+   on mk2 ONLY, each German (LANG_DE) row falls back to the English strings
+   there - the duplicate EN literals merge (-fmerge-constants @ -Os), so they
+   cost no extra flash, while the German text is dropped. mk3 / mk3-STM32 keep
+   the real German strings. See CLAUDE.md "mk2 (LPC) flash CHEIA". */
 
 uint8_t lang_idx(void) {
   return CFG.language < NUM_LANG ? CFG.language : 0;
@@ -13,6 +23,12 @@ const char *const cicstatefriendly_l[NUM_LANG][4] = {
   /* LANG_EN   */ { "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used" },
   /* LANG_PTBR */ { "Original ou sem", "CIC original (falhou)", "SuperCIC ampliado", "SuperCIC detect. n/usado" },
   /* LANG_ES   */ { "Original o sin CIC", "CIC original (fall\x89)", "SuperCIC ampliado", "SuperCIC detect. sin uso" },
+#ifndef CONFIG_MK2
+  /* LANG_DE   */ { "Original/kein CIC", "Original CIC (Fehler)", "SuperCIC erweitert", "SuperCIC erkannt, ungenutzt" },
+#else
+  /* LANG_DE (mk2: English fallback, see header) */
+  { "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used" },
+#endif
 };
 
 /* FatFs FRESULT friendly names (fileops.c) -------------------------------- */
@@ -41,6 +57,26 @@ const char *const fresult_friendly_names_l[NUM_LANG][20] = {
     "Timeout del SD", "Acceso bloqueado", "Sin memoria", "Muchos arch. abiertos",
     "Par\x82m. inv\x82lido"
   },
+#ifndef CONFIG_MK2
+  /* LANG_DE */ {
+    "Kein Fehler", "Karten-I/O Fehler", "Interner FS-Fehler",
+    "Laufwerk nicht bereit", "Datei nicht gefunden", "Ordner nicht gefunden", "Ungueltiger Pfad",
+    "Zugriff verweigert", "Verweigert (existiert)", "Ungueltiges Objekt", "Schreibgeschuetzt",
+    "Ungueltiges Laufwerk", "Kein Arbeitsbereich", "Kein gueltiges FS", "mkfs() abgebrochen",
+    "Laufwerk Timeout", "Zugriff gesperrt", "Nicht genug Speicher", "Zu viele offene Dateien",
+    "Ungueltiger Parameter"
+  },
+#else
+  /* LANG_DE (mk2: English fallback, see header) */
+  {
+    "No error", "Card I/O error", "Internal FS driver error",
+    "Drive not ready", "File not found", "Directory not found", "Invalid path name",
+    "Access denied", "Access denied (exists)", "Invalid file object", "Write protected",
+    "Invalid drive specified", "No work area", "Not a valid file system", "mkfs() aborted",
+    "Drive access timeout", "Shared access locked", "Not enough memory", "Too many open files",
+    "Invalid parameter"
+  },
+#endif
 };
 
 /* sysinfo screen messages (sysinfo.c) ------------------------------------- */
@@ -87,6 +123,38 @@ const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
     [SI_SNES_CLK_MEASURING] = "Clock SNES: midiendo\x7f\x80",
     [SI_SNES_CLK]           = "Clock SNES: %ldHz",
   },
+#ifndef CONFIG_MK2
+  /* LANG_DE */ {
+    [SI_BUSY_DISK]          = "Berechne Speicherplatz\x7f\x80              ",
+    [SI_FW_VERSION]         = "    Firmware-Version: %s",
+    [SI_SD_REMOVED]         = "    *** SD entfernt/USB belegt ***    ",
+    [SI_SD_MAKER]           = "SD Hersteller:   0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "SD Produktname: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "SD Seriennr.:   %02x%02x%02x%02x, Herst. %d/%02d",
+    [SI_SD_ACC_TIME]        = "SD Zugriff:  %ld.%03ld / %ld.%03ld ms avg/max",
+    [SI_SD_ACC_MEASURING]   = "SD Zugriff:  messe\x7f\x80",
+    [SI_CARD_USAGE]         = "SD Nutzung: %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "CIC Status: %s",
+    [SI_SNES_CLK_MEASURING] = "SNES Takt: messe\x7f\x80",
+    [SI_SNES_CLK]           = "SNES Takt: %ldHz",
+  },
+#else
+  /* LANG_DE (mk2: English fallback, see header) */
+  {
+    [SI_BUSY_DISK]          = "Calculating disk space\x7f\x80                ",
+    [SI_FW_VERSION]         = "    Firmware version: %s",
+    [SI_SD_REMOVED]         = "    *** SD Card removed/USB busy ***    ",
+    [SI_SD_MAKER]           = "SD Maker/OEM:    0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "SD Product Name: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "SD Serial No.:   %02x%02x%02x%02x, Mfd. %d/%02d",
+    [SI_SD_ACC_TIME]        = "SD acc. time: %ld.%03ld / %ld.%03ld ms avg/max",
+    [SI_SD_ACC_MEASURING]   = "SD acc. time: measuring\x7f\x80  ",
+    [SI_CARD_USAGE]         = "Card usage: %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "CIC state: %s",
+    [SI_SNES_CLK_MEASURING] = "SNES master clock: measuring\x7f\x80",
+    [SI_SNES_CLK]           = "SNES master clock: %ldHz    ",
+  },
+#endif
 };
 
 /* SGB BIOS state words (sysinfo.c) ---------------------------------------- */
@@ -94,10 +162,22 @@ const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT] = {
   /* LANG_EN   */ { "missing", "mismatch", "ok", "checking" },
   /* LANG_PTBR */ { "ausente", "errado", "ok", "lendo" },
   /* LANG_ES   */ { "ausente", "err\x89neo", "ok", "leyendo" },
+#ifndef CONFIG_MK2
+  /* LANG_DE   */ { "fehlt", "falsch", "ok", "pruefe" },
+#else
+  /* LANG_DE (mk2: English fallback, see header) */
+  { "missing", "mismatch", "ok", "checking" },
+#endif
 };
 
 const char *const cheatmenu_l[NUM_LANG][CHEATMENU_COUNT] = {
   /* LANG_EN   */ { "Cheats for ", "(no name)" },
-  /* LANG_PTBR */ { "Trapa\x8d""as para ", "(sem nome)" },
+  /* LANG_PTBR */ { "Cheats para ", "(sem nome)" },
   /* LANG_ES   */ { "Trucos para ", "(sin nombre)" },
+#ifndef CONFIG_MK2
+  /* LANG_DE   */ { "Cheats fuer ", "(kein Name)" },
+#else
+  /* LANG_DE (mk2: English fallback, see header) */
+  { "Cheats for ", "(no name)" },
+#endif
 };

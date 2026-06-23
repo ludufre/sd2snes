@@ -124,8 +124,13 @@ void append_file_basename(char *dirbase, char *filename, char *extension, int nu
   } else {
     append++;
   }
-  strncat(dirbase, append, num-strlen(dirbase));
-  strcpy(strrchr(dirbase, (int)'.'), extension);
+  strncat(dirbase, append, num-strlen(dirbase)-1);
+  char *dot = strrchr(dirbase, (int)'.');
+  if(dot) {
+    strcpy(dot, extension);
+  } else {
+    strncat(dirbase, extension, num-strlen(dirbase)-1);
+  }
 }
 
 FRESULT check_or_create_folder(TCHAR *dir) {

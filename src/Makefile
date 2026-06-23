@@ -78,9 +78,9 @@ include version.mk
 # List C source files here. (C dependencies are automatically generated.)
 SRC  = main.c ff.c ccsbcs.c
 SRC += printf.c fileops.c fpga.c fpga_spi.c snes.c smc.c
-SRC += memory.c filetypes.c faulthandler.c sort.c crc32.c cic.c cover.c patch.c
+SRC += memory.c filetypes.c faulthandler.c sort.c crc32.c cic.c cover.c patch.c theme.c
 SRC += cli.c ymodem.c rle.c msu1.c crc16.c sysinfo.c
-SRC += cfg.c cheat.c yaml.c savestate.c sgb.c hwinfo.c lang.c
+SRC += cfg.c cheat.c yaml.c savestate.c sgb.c hwinfo.c lang.c gameinfo.c
 
 SRC += usbdesc.c usbcore.c usbuser.c cdcuser.c usbinterface.c
 
@@ -163,11 +163,23 @@ CFLAGS += -O$(OPT)
 CFLAGS += $(CPUFLAGS) -nostartfiles
 #CFLAGS += -funsigned-char -funsigned-bitfields -fpack-struct -fshort-enums
 CFLAGS += -Wall -Wstrict-prototypes -Werror -Wno-strict-aliasing
-CFLAGS += -Wa,-adhlns=$(OBJDIR)/$(<:.c=.lst)
 CFLAGS += -I$(OBJDIR) -I$(CONFIG_ARCH)
 CFLAGS += $(patsubst %,-I%,$(EXTRAINCDIRS))
 CFLAGS += $(CSTANDARD)
 CFLAGS += -ffunction-sections -fdata-sections
+
+# Link-Time Optimization: mk2 ONLY (LPC1754, 128 KB flash). LTO shrinks the build
+# ~2 KB so it fits; mk3/mk3-stm32 have room to spare and stay non-LTO (no LTO risk on
+# the configs that don't need it, incl. the untested stm32). Under -flto the per-C
+# assembler listing (-Wa,-adhlns) must be OFF: the compile emits GIMPLE (no asm) and
+# at link $< is an object, so the LTO codegen step would write the listing over a .o.
+# (-flto also needs `used` on the .fwhdr placeholder in main.c so it survives
+# whole-program GC; KEEP() in the linker script protects only against --gc-sections.)
+ifeq ($(CONFIG_MK2),y)
+  CFLAGS += -flto
+else
+  CFLAGS += -Wa,-adhlns=$(OBJDIR)/$(<:.c=.lst)
+endif
 
 #---------------- Assembler Options ----------------
 #  -Wa,...:   tell GCC to pass this to the assembler.

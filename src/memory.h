@@ -38,16 +38,20 @@ extern char current_filename[];
 #define SRAM_SAVE_ADDR               (0xE00000L)
 
 #define SRAM_MENU_ADDR               (0xC00000L)
-#define SRAM_DIR_ADDR                (0xC10000L)
+#define SRAM_DIR_ADDR                (0xC20000L)
 #define SRAM_DB_ADDR                 (0xC80000L)
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
+#define SRAM_GAMEINFO_TILES_ADDR     (0xCA0000L) /* bank CA: game-info DirectColor 8bpp tiles (up to ~48KB) */
+#define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
+#define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay && !special_chip. The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
 #define SRAM_CHEAT_CODE_STRINGS_ADDR (0xD40000L) /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans D4..D7, leaving D0..D3 free for up to 512 cheat records. */
 
 #define SRAM_CHEAT_TITLE_ADDR        (0xD80000L) /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
 #define SRAM_CHEAT_FLAGS_ADDR        (0xFF0500L) /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle. */
+#define SRAM_CHEAT_NAMES_ADDR        (0xFF0800L) /* in-game cheat overlay: first CHEAT_NAME_INGAME_MAX names, CHEAT_NAME_INGAME_LEN bytes each (31 visible + NUL), staged at game load. 64*32 = 2 KB -> fills FF0800..FF0FFF (up to FF1000=SRAM_CMD_ADDR). */
 
 #define SRAM_SKIN_ADDR               (0xF00000L)
 
@@ -64,8 +68,23 @@ extern char current_filename[];
 #define SRAM_SYSINFO_ADDR            (0xFF1200L)
 #define SRAM_LASTGAME_ADDR           (0xFF1420L)
 #define SRAM_LASTGAME_DIR_ADDR       (0xFF1F00L)
-#define SRAM_FAVORITEGAMES_ADDR      (0xFF4000L)
+/* Favorites mirror, 20*256 = 0x1400 bytes -> 0xFF6000..0xFF73FF.  Relocated out of
+   the old 0xFF4000 slot (which only fit 10 entries before LAST_GAME_FILE) into the
+   free gap past IPS_LIST so growing to 20 needed only this one address (kept in
+   lockstep with FAVORITE_GAMES in snes/memmap.i65).  Old 0xFF4000..0xFF49FF is now
+   unused.  MAX_FAVORITE_GAMES (cfg.h) sizes this; nothing else lives up to SCRATCHPAD. */
+#define SRAM_FAVORITEGAMES_ADDR      (0xFF6000L)
+/* base ROM basename of the most recent game, for reset_to_menu==3 (Rom) pre-select.
+   Distinct from SRAM_LASTGAME_ADDR[0] (the recents *display* name, which for a
+   patch-aware "<rom>\t<patch>" entry is the patch name and would never match a
+   TYPE_ROM entry in the folder). Lives in the (now fully) free gap before
+   IPS_LIST (0xFF5000); the favorites list was moved off 0xFF4000 to 0xFF6000. */
+#define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
+/* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Sits AFTER the
+   favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
+   info panel clobbers the favorites list (lockstep with GAMEINFO in snes/memmap.i65). */
+#define SRAM_GAMEINFO_ADDR           (0xFF7400L)
 #define SRAM_SCRATCHPAD              (0xFFFF00L)
 #define SRAM_DIRID                   (0xFFFFF0L)
 #define SRAM_RELIABILITY_SCORE       (0x100)
@@ -115,5 +134,13 @@ uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc);
 uint16_t calc_sram_sum(uint32_t base_addr, uint32_t size);
 uint8_t sram_reliable(void);
 void sram_memset(uint32_t base_addr, uint32_t len, uint8_t val);
+
+/* BS 8M Memory Pack: 1MB in PSRAM at 0x900000, mapped LoROM $C0-$DF / HiROM $E0-$EF
+   when FEAT_BSSLOT is set (0x900000 must match BS_PACK_HIT in address.v).  SD: .mpk */
+#define BS_PACK_ADDR  0x900000
+#define BS_PACK_SIZE  0x100000
+uint8_t load_bs_pack(uint8_t* filename);  /* returns 1 if a real pack was loaded */
+void save_bs_pack(uint8_t* filename);
+uint32_t calc_pack_crc_inreset(void);     /* reset-tolerant pack CRC for prepare_reset */
 
 #endif

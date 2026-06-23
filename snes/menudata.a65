@@ -395,6 +395,21 @@ menu_enttab_browser:
  .byt  0,0,0
 
  .byt  MTYPE_VALUE
+ .word !mtext_browser_covlists
+ .byt  ^mtext_browser_covlists
+ .word !kv_yesno
+ .byt  ^kv_yesno
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_COVERS_IN_LISTS
+ .byt  ^CFG_COVERS_IN_LISTS
+ .word !mdesc_browser_covlists
+ .byt  ^mdesc_browser_covlists
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_covers-1)
+ .byt  ^(mfunc_isenabled_covers-1)
+
+ .byt  MTYPE_VALUE
  .word !mtext_browser_menumusic
  .byt  ^mtext_browser_menumusic
  .word !kv_onoff
@@ -404,6 +419,34 @@ menu_enttab_browser:
  .byt  ^CFG_ENABLE_MENU_MUSIC
  .word !mdesc_browser_menumusic
  .byt  ^mdesc_browser_menumusic
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_menusfx
+ .byt  ^mtext_browser_menusfx
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_MENU_SFX
+ .byt  ^CFG_ENABLE_MENU_SFX
+ .word !mdesc_browser_menusfx
+ .byt  ^mdesc_browser_menusfx
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_gameinfo
+ .byt  ^mtext_browser_gameinfo
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_SHOW_GAME_INFO
+ .byt  ^CFG_SHOW_GAME_INFO
+ .word !mdesc_browser_gameinfo
+ .byt  ^mdesc_browser_gameinfo
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0
@@ -421,6 +464,46 @@ menu_enttab_browser:
 ; .byt  0,0,0
 ; .byt  0,0,0
 ; .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_sortfav
+ .byt  ^mtext_browser_sortfav
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_SORT_FAVORITES
+ .byt  ^CFG_SORT_FAVORITES
+ .word !mdesc_browser_sortfav
+ .byt  ^mdesc_browser_sortfav
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !mtext_browser_restoretheme
+ .byt  ^mtext_browser_restoretheme
+ .word !restore_theme-1
+ .byt  ^restore_theme
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_browser_restoretheme
+ .byt  ^mdesc_browser_restoretheme
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !mtext_browser_restoremusic
+ .byt  ^mtext_browser_restoremusic
+ .word !restore_music-1
+ .byt  ^restore_music-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_browser_restoremusic
+ .byt  ^mdesc_browser_restoremusic
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
 
  .byt 0
 
@@ -669,6 +752,21 @@ menu_enttab_ingame:
  .byt  ^CFG_ENABLE_INGAME_BUTTONS
  .word !mdesc_ingame_buttons
  .byt  ^mdesc_ingame_buttons
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_hooks-1)
+ .byt  ^(mfunc_isenabled_hooks-1)
+
+ .byt  MTYPE_VALUE
+ .word !mtext_ingame_cheat_overlay
+ .byt  ^mtext_ingame_cheat_overlay
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_CHEAT_OVERLAY
+ .byt  ^CFG_ENABLE_CHEAT_OVERLAY
+ .word !mdesc_ingame_cheat_overlay
+ .byt  ^mdesc_ingame_cheat_overlay
  .byt  0,0,0
  .byt  0,0,0
  .word !(mfunc_isenabled_hooks-1)
@@ -1018,18 +1116,39 @@ menu_enttab_filesel_context_spc:
  .byt  ^text_filesel_selected_file ; for this menu
 ; ENTRIES
  .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_add_to_favorites
- .byt  ^text_filesel_context_add_to_favorites
- .word !add_selected_file_to_favorites-1
- .byt  ^add_selected_file_to_favorites-1
+ .word !text_filesel_set_as_bgm
+ .byt  ^text_filesel_set_as_bgm
+ .word !set_selected_spc_as_bgm-1
+ .byt  ^set_selected_spc_as_bgm-1
  .byt  0
  .byt  0,0,0
- .word !mdesc_filesel_context_add_to_favorites
- .byt  ^mdesc_filesel_context_add_to_favorites
+ .word !mdesc_filesel_set_as_bgm
+ .byt  ^mdesc_filesel_set_as_bgm
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_selected_file-1
+ .byt  ^delete_selected_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0
+
+menu_enttab_filesel_context_skin:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_filesel_selected_file ; window title
+ .byt  ^text_filesel_selected_file ; for this menu
+; ENTRIES
+; Themes (.thm) have no save file -> Delete only (no "Delete save").
  .byt  MTYPE_FUNC_CLOSE
  .word !text_filesel_context_delete_file
  .byt  ^text_filesel_context_delete_file
@@ -1117,18 +1236,11 @@ menu_enttab_filesel_favorites_context:
 
  .byt  0
 
-mfunc_set_bsx_time:
-  php
-  sep #$20 : .as
-  lda #^CFG_BSX_TIME
-  pha
-  pea !CFG_BSX_TIME
-    jsr time_init
-  pla
-  pla
-  pla
-  plp
-  rtl
+; dead code removed: mfunc_set_bsx_time was unreferenced.
+ .as
+ .byt 0,0,0,0,0,0,0,0   ; 8
+ .byt 0,0,0,0,0,0,0,0   ; 8
+ .byt 0                 ; 1  -> 17 bytes
 
 mfunc_isenabled_always:
   sec
@@ -1144,10 +1256,20 @@ mfunc_isenabled_hooks:
   ror
   rtl
 
-mfunc_isdisabled_hooks:
-  lda @CFG_ENABLE_INGAME_HOOK
-  eor #$00
-  ror
+; dead code removed: mfunc_isdisabled_hooks was an unreferenced inverse of
+; mfunc_isenabled_hooks.  8 bytes zero-filled to keep menu-binary alignment.
+ .byt 0,0,0,0,0,0,0,0   ; 8 bytes total
+
+; Grey the "Favorites/Recents" sub-option whenever Show covers is Off. ShowCovers
+; holds 0/1/2 (off/large/small), so the eor/ror trick used above (assumes 0/1)
+; would mis-flag value 2 -> branch on != 0 instead. Carry set = drawn disabled.
+mfunc_isenabled_covers:
+  lda @CFG_SHOW_COVERS
+  bne mfunc_isenabled_covers_on
+  sec                        ; covers off -> grey the sub-option
+  rtl
+mfunc_isenabled_covers_on:
+  clc                        ; covers on (large/small) -> enabled
   rtl
 
 mfunc_isenabled_savestate:
@@ -1194,6 +1316,7 @@ kv_language:
 .word $0000, !text_lang_en : .byt ^text_lang_en
 .word $0001, !text_lang_ptbr : .byt ^text_lang_ptbr
 .word $0002, !text_lang_es : .byt ^text_lang_es
+.word $0003, !text_lang_de : .byt ^text_lang_de
 .word $ffff
 
 kv_bsx_timesource:
@@ -1232,11 +1355,6 @@ kv_yesno:
 .word $0001, !text_yes : .byt ^text_yes
 .word $ffff
 
-kv_scic_yesno:
-.word $0000, !text_no : .byt ^text_no
-.word $0001, !text_yes : .byt ^text_yes
-.word $ffff
-
 kv_vmode:
 .word $0002, !text_auto : .byt ^text_auto
 kv_vmode_noauto:
@@ -1257,13 +1375,6 @@ kv_gsu_speed:
 kv_sgb_clock:
 .word $0000, !text_sgb_clock1 : .byt ^text_sgb_clock1
 .word $0001, !text_sgb_clock2 : .byt ^text_sgb_clock2
-.word $ffff
-
-kv_region:
-.word $0000, !text_off : .byt ^text_off
-.word $0001, !text_auto : .byt ^text_auto
-.word $0002, !text_pal : .byt ^text_pal
-.word $0003, !text_ntsc : .byt ^text_ntsc
 .word $ffff
 
 kv_screensaver_timeout:

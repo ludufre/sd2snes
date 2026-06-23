@@ -32,7 +32,7 @@ extern uint8_t ips_pending_index;
  *   the ROM stem (case-insensitive).  Up to IPS_MAX_PATCHES entries are
  *   sorted alphabetically and written to SRAM at sram_addr:
  *
- *     [sram_addr + 0]                          1 byte  num_patches (0..7)
+ *     [sram_addr + 0]                          1 byte  num_patches (0..IPS_MAX_PATCHES)
  *     [sram_addr + 1 + N*IPS_NAME_LEN]        64 bytes display name (null-terminated)
  *     [sram_addr + 512 + N*IPS_PATH_LEN]     256 bytes full SD path  (null-terminated)
  *
@@ -53,9 +53,13 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr);
  *
  *   rom_header_size is the number of bytes that were skipped at the start of
  *   the ROM file when loading into SRAM (i.e. the copier-header size, typically
- *   0 or 512).  If the IPS has records at offsets below 512 and rom_header_size
- *   is 0 the function auto-detects that the patch was authored for a headered
- *   ROM and applies a 512-byte offset correction automatically.
+ *   0 or 512).  Records are applied at offset - rom_header_size, exactly like a
+ *   PC tool (Lunar IPS / Floating IPS / RomPatcher.js) applies them to the same
+ *   header-stripped file form.  The function does NOT try to guess a header from
+ *   the record offsets: that heuristic was inverted and corrupted legit
+ *   unheadered patches that touch the start of the ROM (e.g. Zelda Parallel
+ *   Worlds).  Matching the patch's header convention to the ROM is the caller's
+ *   job, the same as on a PC.
  *
  *   Returns the highest (offset + size) seen across all records — adjusted for
  *   the header offset — on success, or 0 on error.  If the returned value

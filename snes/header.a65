@@ -29,6 +29,15 @@ NMI_16bit:
     pha : phx : phy : phd : phb
     jsl @NMI_ROUTINE
     rep #$30 : .al : .xl
+    ; fork: keep the MSU-1 DAC (menu sound effects) at full volume.  $2006 is the
+    ; MSU audio volume - only the SNES can set it (the MCU has no command for it),
+    ; so the menu writes it every frame.  Done in 8-bit A with DB=0 so ONLY $2006
+    ; is touched (a 16-bit store would also write $2007 = audio control).  Registers
+    ; are already saved above; harmless no-op unless the MCU has enabled FEAT_MSU1.
+    sep #$20 : .as
+    lda #$00 : pha : plb
+    lda #$ff : sta $2006
+    rep #$20 : .al
 int_exit:
     plb : pld : ply : plx : pla
   plp
@@ -69,7 +78,7 @@ NMI_8bit:
 
 *= $C0FFD5  .byt $31 ; rom map + speed (HiROM FastROM)
 *= $C0FFD6  .byt $55 ; rom type   SRTC
-*= $C0FFD7  .byt $06 ; rom size   64 kByte
+*= $C0FFD7  .byt $07 ; rom size   128 kByte
 *= $C0FFD8  .byt $03 ; sram size  8 kBit
 ;*= $C0FFD9  .byt $09 ; rom region 9 = Germany
 *= $C0FFD9  .byt $01 ; rom region 1 = USA

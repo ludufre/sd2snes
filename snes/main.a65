@@ -12,7 +12,6 @@ GAME_MAIN:
   sta @MCU_CMD  ; clear MCU command register
   sta @MCU_PARAM ; clear MCU command parameters
   sta @MCU_PARAM+2
-  stz dbg_ptr
   lda WARM_SIGNATURE ; Was CMD_RESET issued before reset?
   cmp #$fa50    ; If yes, then perform warm boot procedure
   bne coldboot
@@ -75,6 +74,19 @@ coldboot:       ; Regular, cold-start init
   ; leave BGM_STATE=1 and the music would never restart. (snescom: no long stz.)
   lda #$00
   sta @BGM_STATE
+  ; fork: menu sound effects - start with an empty SFX mailbox ($2A region is
+  ; not touched by clear_wram; a stale value would play one ghost blip at boot).
+  sta @SFX_MAILBOX
+  ; fork: the description-box gates live in the $7E WRAM data segment, which
+  ; clear_wram fills with $55 (NOT 0). Left non-zero, the Recent/Favorite lists
+  ; (menu_select_noinit) fire menu_desc_redraw on the first Up/Down with a garbage
+  ; desc_menu_ptr ($555555) and a garbage desc_box_h -> pop_window restores $55
+  ; tilemap rows -> the list/screen garbles. menu_desc_on is otherwise only ever
+  ; cleared inside show_menu, so a list opened straight from the file browser
+  ; (before any menu) inherits $55. Zero it here, like BGM_STATE/listcover_active.
+  ; (A is still #$00.)
+  sta @menu_desc_on
+  sta @menu_desc_shown
   jsr waitblank
   jsr snes_init
   jsr setup_gfx
@@ -112,7 +124,7 @@ coldboot_autoboot_out:
   ; whole menu draws in the right language from the first frame.
   sep #$20 : .as
   lda @CFG_LANGUAGE
-  cmp #$03
+  cmp #$04
   bcc +
   lda #$00              ; unknown -> English
 + sta @cur_lang
@@ -722,8 +734,12 @@ game_handshake:
   rts
 
 game_handshake_error:
-; TODO display meaningful error message
+; MCU NACKed the load (missing chip BIOS/firmware, or unsupported chip). The ROM
+; never booted -> the menu is still live. Close the loading window, show the error
+; (names the missing file/chip via @MCU_ERR_CODE/@MCU_ERR_MSG), return to the
+; browser. No reset.
   jsr pop_window
+  jsr show_error_msg
   plp
   rts
 

@@ -19,6 +19,7 @@ int led_writeledstate = 0;
 int led_pwmstate = 0;
 
 extern cfg_t CFG;
+extern uint8_t fpga_boot_led;
 
 void rdyled(unsigned int state) {
   if(led_pwmstate) {
@@ -147,6 +148,35 @@ void led_error() {
   static int led_error_count = 0, saved_error_count = 0;
   static int framecount = 0, pausecount = 0;
   static int last_file_res = 0;
+#ifdef CONFIG_MK2
+  /* mk2 only: cfgware lives on the SD, so a failed boot has no on-screen message.
+     Signal it from HERE -- runs on SysTick every 10 ms no
+     matter where the boot code is stuck -- as a two-colour siren:
+       fpga_boot_led == 1  no SD card           -> green<->red
+       fpga_boot_led == 2  fpga_mini missing    -> green<->yellow                  */
+  static int nosd_frame = 0, nosd_phase = 0;
+  if(fpga_boot_led == 1) {              /* no SD card: green<->red siren */
+    readled(0);                         /* yellow off */
+    if(++nosd_frame >= 20) {            /* ~200 ms at 10 ms/tick */
+      nosd_frame = 0;
+      nosd_phase ^= 1;
+      rdyled(nosd_phase);               /* green */
+      writeled(nosd_phase ^ 1);         /* red: opposite of green */
+    }
+    return;
+  }
+  if(fpga_boot_led == 2) {              /* fpga_mini missing: green<->yellow siren */
+    writeled(0);                        /* red off */
+    if(++nosd_frame >= 20) {            /* ~200 ms at 10 ms/tick */
+      nosd_frame = 0;
+      nosd_phase ^= 1;
+      rdyled(nosd_phase);               /* green */
+      readled(nosd_phase ^ 1);          /* yellow: opposite of green */
+    }
+    return;
+  }
+  nosd_frame = 0; nosd_phase = 0;
+#endif
   if(file_res != last_file_res) {
     led_error_count = file_res;
     saved_error_count = led_error_count;

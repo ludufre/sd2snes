@@ -191,6 +191,7 @@ last_win_y      .byt 12
 last_win_w      .byt 60
 
 text_ellipse                      .byt 127, 128, 0
+text_empty                        .byt 0                 ; empty string -> draw_window draws no title
 text_mm_file                      .byt "File Browser", 0
 text_mm_last                      .byt "Recent Games", 0
 text_mm_favorites                 .byt "Favorite Games", 0
@@ -200,6 +201,7 @@ text_mm_language                  .byt "Language", 0
 text_lang_en                      .byt "English", 0
 text_lang_ptbr                    .byt "Portugu", 135, "s", 0
 text_lang_es                      .byt "Espa", 154, "ol", 0
+text_lang_de                      .byt "Deutsch", 0
 mtext_cfg_time                    .byt "Set Clock", 0
 mtext_cfg_bsx                     .byt "BS-X Settings", 0
 mtext_cfg_browser                 .byt "Browser Settings", 0
@@ -219,13 +221,20 @@ mtext_browser_screensaver         .byt "Screensaver", 0
 mtext_browser_screensaver_timeout .byt "Fade screen after", 0
 mtext_browser_ledbright           .byt "LED brightness", 0
 mtext_browser_showcov             .byt "Show covers", 0
+mtext_browser_covlists            .byt " ",129,"Favorites/Recents", 0
 mtext_cfg_patch                   .byt "Patch Options", 0
 mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
 mtext_browser_menumusic           .byt "Menu music", 0
+mtext_browser_menusfx             .byt "Menu sounds", 0
+mtext_browser_sortfav             .byt "Sort favorites", 0
+mtext_browser_gameinfo            .byt "Game info before boot", 0
+mtext_browser_restoretheme        .byt "Restore theme", 0
+mtext_browser_restoremusic        .byt "Restore music", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
 mtext_ingame_shortreset           .byt "Reset to menu", 0
 mtext_ingame_enable               .byt "In-game hook", 0
 mtext_ingame_buttons              .byt " ",129,"In-game buttons", 0
+mtext_ingame_cheat_overlay        .byt " ",129,"Cheat menu", 0
 mtext_ingame_holdoff              .byt " ",129,"Initial holdoff", 0
 mtext_ingame_savestate            .byt "In-game savestates", 0
 mtext_savestate_slots             .byt " ",129,"Savestate slots", 0
@@ -248,7 +257,7 @@ mtext_chip_gsu_speed              .byt "SuperFX speed", 0
 mtext_chip_msu1_volume_boost      .byt "MSU-1 volume boost", 0
 
 mdesc_mm_last                     .byt "Show up to 10 most recently played games", 0
-mdesc_mm_favorites                .byt "Show up to 10 favorite games", 0
+mdesc_mm_favorites                .byt "Show up to 20 favorite games", 0
 mdesc_mm_cfg                      .byt "Configure the sd2snes", 0
 mdesc_mm_sysinfo                  .byt "Info about FW version, SD Card, SNES, CIC", 127, 128, 0
 mdesc_mm_language                 .byt "Set the menu/firmware language", 0
@@ -271,15 +280,22 @@ mdesc_browser_screensaver         .byt "Fade-out the screen after some time", 0
 mdesc_browser_screensaver_timeout .byt "Set time after which to fade the screen", 0
 mdesc_browser_ledbright           .byt "Change brightness of LEDs", 0
 mdesc_browser_showcov             .byt "Show game covers in the menu", 0
+mdesc_browser_covlists            .byt "Show covers in the Recent and Favorite lists too", 0
 mdesc_cfg_patch                   .byt "Options for IPS/BPS soft-patching", 0
 mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (much slower load)", 0
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0
+mdesc_browser_menusfx             .byt "Play sound effects when navigating the menu", 0
+mdesc_browser_sortfav             .byt "Sort the favorites list alphabetically", 0
+mdesc_browser_gameinfo            .byt "Show cover, screenshot and info before booting a ROM that has a /sd2snes/info entry", 0
+mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
+mdesc_browser_restoremusic        .byt "Revert the menu background music to the default (menu.spc)", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
 mdesc_ingame_shortreset           .byt "Go back to menu on short reset (Off/On/Folder/ROM). Folder: return to last game folder. ROM: also pre-select the ROM.", 0
 mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
 mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
+mdesc_ingame_cheat_overlay        .byt "In-game cheat menu (hold L+R+Y+Left) to toggle cheats live. Requires in-game hook. Does not work on special-chip games.", 0
 mdesc_ingame_holdoff              .byt "Wait 10 seconds before enabling hook (helps some games boot with hook enabled)", 0
-mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+L / Load - Start+R", 0
+mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+R / Load - Start+L", 0
 mdesc_savestate_slots             .byt "Enable savestate slots. Select+Dpad: Each direction is a slot to choose", 0
 mdesc_loadstate_delay             .byt "Adjust the load state delay (frames)", 0
 mdesc_sgb_enable_hooks            .byt "Required for in-game buttons", 0
@@ -315,6 +331,8 @@ mdesc_recent_context_remove_from_recent .byt "Remove selected file from the rece
 
 text_filesel_set_as_autoboot .byt "Set as autoboot", 0
 mdesc_filesel_set_as_autoboot .byt "Boot this ROM automatically on next power-on (hold START during powerup/reset to cancel)", 0
+text_filesel_set_as_bgm .byt "Set as menu music", 0
+mdesc_filesel_set_as_bgm .byt "Use this SPC as the menu background music", 0
 
 text_filesel_context_delete_file .byt "Delete", 0
 mdesc_filesel_context_delete_file .byt "Delete the selected file", 0
@@ -347,6 +365,14 @@ text_last           .byt "Recent games", 0
 text_favorite       .byt "Favorite games", 0
 text_no_last        .byt "No recent games", 0
 text_no_favorite    .byt "No favorite games", 0
+text_favorites_full .byt "Favorites list full", 0
+
+; game-load error popup (game_handshake_error -> show_error_msg). line 1 = this
+; template (chosen by MCU_ERR_CODE), line 2 = the raw basename/chip from the MCU
+; ($FF1001). Keep <= 26 cols (text_err_ budget in build_const.py WIDTH_LIMITS).
+text_err_supplfile  .byt "Required file not found:", 0
+text_err_noimpl     .byt "Chip not supported:", 0
+text_err_generic    .byt "Load error:", 0
 text_system         .byt "CPU/PPU1/PPU2: a/b/c        VMode: x0Hz",0
 
 text_on_p1      .byt "On: P1", 0
@@ -447,6 +473,16 @@ loading_win_h   .byt 1
 text_cheat      .byt "Cheats for ", 0
 text_ips_header .byt "Patches", 0
 text_ips_nopatch .byt "[No patch]", 0
+
+; pre-boot game info screen (snes/gameinfo.a65)
+text_gi_developer .byt "Developer", 0
+text_gi_year      .byt "Year", 0
+text_gi_players   .byt "Players", 0
+text_gi_genre     .byt "Genre", 0
+text_gi_chip      .byt "Chip", 0
+text_gi_footer    .byt "A: Play   B: Back   Y: Description", 0
+text_gi_footer_nav .byt "A:Play B:Back Y:Desc Up/Down:Game", 0
+text_gi_footer_full .byt "B: Back   Up/Down: Scroll", 0
 cheat_win_x     .byt 6
 cheat_win_y     .byt 11
 cheat_win_w     .byt 52
@@ -479,3 +515,4 @@ gfxptr_info     .byt "_GFXPTR_"
                 .word oam_data_l
                 .word oam_data_h
                 .word palette
+                .word logo_tiles

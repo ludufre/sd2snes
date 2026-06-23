@@ -1,17 +1,17 @@
 <h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Demostración">
-<img src="gfx/langs.gif" width="384" alt="El menú principal en Inglés, Portugués de Brasil y Español">
+<img src="gfx/langs.gif" width="384" alt="El menú principal en Inglés, Portugués de Brasil, Español y Alemán">
 
 Una experiencia de firmware más amigable para sd2snes/FXPAK: idiomas, carátulas de juegos, música en el menú, parches y un regreso al menú más práctico.
 
-**🌐 Idioma:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · Español
+**🌐 Idioma:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · Español · [Deutsch 🇩🇪](README-DE.md)
 
 **Más información:** el sitio [sd2snes.ludufre.com](https://sd2snes.ludufre.com) reúne más detalles, guías y ejemplos visuales sobre este fork.
 
 > **¿Qué es esto?**
 >
-> Este es un fork del [firmware original de sd2snes](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf). Mantiene la base del firmware original y añade mejoras pensadas para quien usa el cartucho: menú en Portugués de Brasil, Inglés y Español, carátulas de juegos, música en el menú, selección de parches IPS/BPS y mejores opciones de regreso al menú.
+> Este es un fork del [firmware original de sd2snes](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf). Mantiene la base del firmware original y añade mejoras pensadas para quien usa el cartucho: menú en Portugués de Brasil, Inglés, Español y Alemán, carátulas de juegos, música en el menú, selección de parches IPS/BPS y mejores opciones de regreso al menú.
 >
 > Usa este repositorio para dudas o errores relacionados con la **traducción**, el **selector de idioma**, las **carátulas**, la **música del menú**, el **selector de parches** o el **editor de temas de este fork**. Para problemas del firmware principal que no estén relacionados con estas funciones, usa el proyecto original.
 
@@ -28,16 +28,22 @@ Necesitas:
 > [!NOTE]
 > Este proyecto no incluye juegos/ROMs. Usa tus propios archivos obtenidos legalmente.
 
+> [!IMPORTANT]
+> **Hardware Mk.II:** el sd2snes original (Mk.II) tiene poca memoria de programa en el MCU. Desde la **v2.12**, el bootstrap de la FPGA se carga desde la tarjeta SD en lugar del firmware, lo que liberó cerca de **21 KB** y le da al Mk.II bastante más margen. Sigue siendo la placa más justa de las dos, así que algunas funciones futuras podrían quedar **solo en Mk.III / FXPAK PRO** (o desactivadas en Mk.II) por falta de espacio. El Mk.III / FXPAK PRO no se ve afectado, y todo en esta versión funciona en ambos.
+
 ## Qué añade este fork
 
-- **Idiomas:** elige Portugués de Brasil, Inglés o Español directamente desde el menú.
+- **Idiomas:** elige Portugués de Brasil, Inglés, Español o Alemán directamente desde el menú.
+- **Descripciones de opciones:** una breve línea de ayuda traducida para la opción de menú seleccionada, en un cuadro flotante (colocado encima o debajo del menú automáticamente).
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
+- **Pantalla de info del juego:** antes de que una ROM arranque, ve una pantalla de detalles con su carátula, una captura y los metadatos (desarrollador, año, jugadores, género, chip especial) más una breve descripción, leídos de `/sd2snes/info/<rom>.yml`. Con la pantalla activada aparece para toda ROM: una sin entrada de info igual obtiene la pantalla con el nombre del archivo como título y — si existe una carátula `<rom>.cov` al lado — esa box art en el lugar donde iría la carátula del `.gd`. Para una **captura animada**, coloca un `<rom>.fmv` (generado desde cualquier vídeo con `utils/gen_fmv.py`) junto a la carátula — la caja de la captura lo reproduce en bucle mientras la carátula `<rom>.cov` permanece al lado. Se activa en *Opciones del Navegador* (activado por defecto).
 - **Música en el menú:** reproduce una pista `.spc` de fondo mientras navegas.
+- **Sonidos del menú:** efectos de sonido de navegación opcionales (cursor, confirmar, volver, error) que suenan en el DAC de audio del cartucho, independientes de la música.
 - **Parches IPS/BPS:** elige parches de traducción, hacks o correcciones antes de iniciar un juego, sin modificar la ROM en la tarjeta SD.
-- **Gestor de cheats:** el sd2snes original ya aplica trucos — este fork añade un menú para **activar y desactivar** los códigos de un juego en la consola (desde `/sd2snes/cheats/<rom>.yml`), sin editar el YAML en el PC. Puedes descargar cheats listos en [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)".
+- **Gestor de cheats:** el sd2snes original ya aplica trucos — este fork añade un menú para **activar y desactivar** los códigos de un juego en la consola (desde `/sd2snes/cheats/<rom>.yml`), sin editar el YAML en el PC. Puedes descargar cheats listos en [gamehacking.org](https://gamehacking.org/system/snes) exportando como "FXPak Pro 1.7 (.yml)", o descargarlos automáticamente con la app **sd2snes Covers** (identificados por CRC32).
 - **Borrar archivo y partida:** borra el archivo seleccionado o solo su partida (`.srm`) directamente desde el menú, sin sacar la tarjeta SD.
 - **Mejoras en el regreso al menú:** vuelve a la misma carpeta o incluso a la misma ROM después de un reset corto.
-- **Temas personalizados:** edita el logo, la fuente, la paleta, el fondo y los colores del selector con el editor de temas hecho para este fork.
+- **Temas (firmware 2.9+):** elige el tema del menú — logo, colores, fondo y barra de selección — **en la propia consola**, desde cualquier carpeta de la tarjeta. Descarga temas listos en la [galería](https://sd2snes.ludufre.com/gallery/) o crea el tuyo en el [editor web](https://sd2snes.ludufre.com/theme/).
 
 ## Instalación
 
@@ -70,13 +76,14 @@ Para recibir una notificación de GitHub cada vez que se publique una nueva vers
 
 ## Idiomas
 
-<img src="gfx/langs.gif" width="512" alt="El menú principal en Inglés, Portugués de Brasil y Español">
+<img src="gfx/langs.gif" width="512" alt="El menú principal en Inglés, Portugués de Brasil, Español y Alemán">
 
-El menú puede funcionar en tres idiomas:
+El menú puede funcionar en cuatro idiomas:
 
 - **Português:** traducción al Portugués de Brasil para menús, mensajes y pantallas.
 - **English:** idioma original y predeterminado del firmware.
 - **Español:** traducción al Español para menús, mensajes y pantallas.
+- **Deutsch:** traducción al Alemán para menús, mensajes y pantallas.
 
 Abre **Idioma** en el menú principal, elige el idioma que quieras y el menú cambia de inmediato. Tu elección queda guardada para la próxima vez que enciendas la consola.
 
@@ -119,15 +126,23 @@ Al abrir un juego con parches compatibles, el menú muestra un selector de parch
 - Elige un parche para usarlo en este arranque.
 - Se muestran hasta **8** parches por juego.
 
-## Música del menú
+## Música y sonidos del menú
 
-El menú puede reproducir música de fondo mientras navegas. El archivo debe ser un **`.spc`** llamado `menu.spc` y estar en esta ruta:
+El menú puede reproducir **música de fondo** mientras navegas, además de cuatro **efectos de sonido de navegación** opcionales (cursor, confirmar, volver, error). Solo suenan en el menú y nunca afectan a tus juegos.
+
+La forma más fácil de configurar ambos es el **Creador de Sonidos** en la web: elige la música, crea los efectos y descarga los archivos listos para copiar a la tarjeta. Todo se ejecuta en tu navegador — no se sube nada a ningún sitio.
+
+### 👉 [sd2snes.ludufre.com/sounds](https://sd2snes.ludufre.com/sounds/)
+
+### Música de fondo (`menu.spc`)
+
+La música es un archivo **`.spc`** llamado `menu.spc`, en esta ruta:
 
 ```text
 /sd2snes/menu.spc
 ```
 
-Para añadir música:
+Para añadir música a mano:
 
 1. Descarga un archivo `.spc`.
 2. Renómbralo como `menu.spc`.
@@ -137,12 +152,29 @@ Para añadir música:
 Buenos lugares para encontrar archivos `.spc`:
 
 - [snesmusic.org](https://snesmusic.org)
-- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc)
+- [zophar.net/music](https://www.zophar.net/music/nintendo-snes-spc) — tiene una vista previa en MP3 de cada pista, así que puedes escuchar antes de descargar.
 
 Puedes activar o desactivar la música en **Configuración → Opciones del Navegador → Música del menú**.
 
+También puedes elegir la música **sin renombrar nada**: selecciona cualquier **`.spc`** en el navegador de archivos, pulsa **Y** para el menú contextual y elige **Definir como música del menú**. El menú se recarga con esa pista como nueva música de fondo y la recuerda entre reinicios; `/sd2snes/menu.spc` queda como reserva. Para volver a él, usa **Configuración → Opciones del Navegador → Restaurar música**.
+
 > [!TIP]
 > Algunas bandas sonoras vienen como archivos `.rsn`. Un `.rsn` suele ser un archivo comprimido con varios `.spc` dentro. Extrae el `.rsn` y elige uno de los archivos `.spc`.
+
+### Sonidos de navegación (efectos)
+
+Cuatro efectos cortos y opcionales suenan mientras te mueves por el menú. Cada uno es un archivo separado en `/sd2snes/`:
+
+| Archivo | Suena cuando |
+| --- | --- |
+| `sfx_cursor.pcm` | el cursor se mueve |
+| `sfx_confirm.pcm` | abres o confirmas (A) |
+| `sfx_back.pcm` | vuelves atrás (B) |
+| `sfx_error.pcm` | una acción no está permitida |
+
+Son archivos **MSU‑1 PCM** (16 bits estéreo, 44,1 kHz). Suenan en el DAC de audio del cartucho, así que nunca interrumpen la música `.spc`. Un conjunto por defecto viene con el firmware, así que el menú ya tiene sonidos de fábrica — usa el Creador de Sonidos de arriba para personalizarlos o cambiarlos. (Si falta un archivo, ese efecto queda en silencio.)
+
+Puedes activar o desactivar los efectos en **Configuración → Opciones del Navegador → Sonidos del menú**.
 
 ## Trucos (cheats)
 
@@ -168,8 +200,33 @@ Para conseguir archivos de trucos listos:
 2. Exporta sus códigos usando el formato **FXPak Pro 1.7 (.yml)**.
 3. Renombra el archivo para que coincida con la ROM y colócalo en `/sd2snes/cheats/` en la tarjeta SD.
 
+> [!TIP]
+> La app **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** descarga trucos listos automáticamente — identifica cada ROM por su CRC32 y guarda los archivos `<rom>.yml` en una carpeta `cheats/`, listos para copiar en `/sd2snes/cheats/`.
+
 > [!NOTE]
 > Si una ROM no tiene un `.yml` en `/sd2snes/cheats/` (o el archivo no tiene códigos), el menú muestra el mensaje "no hay trucos para esta ROM".
+
+## Menú de trucos en el juego
+
+Además del gestor de trucos del menú, este fork puede abrir un **menú de trucos sobre el juego en marcha**, para activar y desactivar códigos sin reiniciar.
+
+Mientras juegas, manten **L + R + Y + Izquierda** para pausar y abrir la superposición:
+
+- **Arriba/Abajo** mueve el cursor.
+- **A** activa o desactiva el código resaltado.
+- **B** cierra la superposición y aplica tus cambios en el juego en marcha.
+
+Viene **activado por defecto**. Desactívalo en **Configuration → In-game Settings → In-game hook → Cheat menu**.
+
+> [!TIP]
+> La app **[sd2snes Covers](https://github.com/ludufre/sd2snes-covers)** también descarga automáticamente los trucos de cada juego.
+
+> [!NOTE]
+> Limitaciones actuales:
+> - Solo se listan los primeros **64** trucos.
+> - Los cambios hechos en la superposición **no se guardan** en el archivo `.yml` — solo valen para la sesión de juego actual.
+> - Como los savestates, **no funciona en juegos con Chips Especiales** (SA-1, SuperFX, etc.).
+> - El diseño todavía es tosco (en progreso).
 
 ## Borrar archivo y partida guardada
 
@@ -196,24 +253,26 @@ Configúralo en **Configuración → Opciones en Juego → Reset al menú**:
 
 Las opciones **Carpeta** y **ROM** funcionan después de un reset de vuelta al menú. Al encender la consola desde cero, sigue iniciando en el menú principal normal.
 
-## Tema personalizado
+## Temas
 
-Puedes personalizar el logo, la fuente, la paleta, el fondo y los colores del selector del menú.
+Desde el firmware **2.9**, cambias todo el aspecto del menú — **logo, colores, fondo y barra de selección** — en la propia consola, sin PC.
 
-Usa el editor de temas hecho para este fork:
+1. Pon archivos de tema `.thm` en **cualquier carpeta** de la tarjeta — vale cualquier nombre, solo no puede ser la carpeta oculta `/sd2snes`.
+2. En el menú, entra en esa carpeta y pulsa **A** en un tema. El menú recarga con el tema.
+3. Para volver al aspecto original, usa **Configuración → Opciones del Navegador → Restaurar tema** en el menú.
+
+Puedes conseguir temas de dos formas:
+
+**Galería — temas listos, descarga en un clic:**
+
+### 👉 [sd2snes.ludufre.com/gallery](https://sd2snes.ludufre.com/gallery/)
+
+**Editor de temas — crea el tuyo:** sube un logo (con transparencia), elige los colores y descarga un `.thm`.
 
 ### 👉 [sd2snes.ludufre.com/theme](https://sd2snes.ludufre.com/theme/)
 
-> [!IMPORTANT]
-> El editor oficial de temas de sd2snes no soporta el formato de tema de este fork. Usa el editor anterior al editar el `m3nu.bin` de este firmware.
-
-Flujo básico para editar un tema:
-
-1. Abre el editor de temas.
-2. Sube tu `m3nu.bin`.
-3. Sube un **PNG 128×56** si quieres cambiar el logo.
-4. Elige las partes que quieres modificar.
-5. Descarga el archivo editado y cópialo de nuevo a la tarjeta SD.
+> [!NOTE]
+> Avanzado: también hay un [editor de `m3nu.bin`](https://sd2snes.ludufre.com/theme/) que parchea el menú completo (el flujo antiguo). El editor oficial de temas de sd2snes no soporta el formato de este fork.
 
 ## Problemas comunes
 
@@ -229,9 +288,27 @@ Comprueba que las carátulas estén activadas, que cada archivo `.cov` tenga el 
 
 Comprueba que el archivo se llame exactamente `menu.spc`, que esté en `/sd2snes/menu.spc` y que realmente sea un archivo `.spc`. MP3 y WAV no funcionan.
 
+**Los sonidos de navegación no suenan.**
+
+Comprueba que la opción **Sonidos del menú** esté activada, y que `sfx_cursor.pcm`, `sfx_confirm.pcm`, `sfx_back.pcm` y `sfx_error.pcm` estén en `/sd2snes/` y sean archivos **MSU‑1 PCM**. Vienen con el firmware; si los borraste, cópialos de nuevo del paquete del release o recréalos en el [Creador de Sonidos](https://sd2snes.ludufre.com/sounds/).
+
 **Un parche no aparece.**
 
 Comprueba que el parche esté en la misma carpeta que la ROM, que empiece con el nombre de la ROM y que termine en `.ips` o `.bps`.
+
+**Mk.II (Spartan‑3): la pantalla queda en negro y un LED parpadea como una sirena.**
+
+A partir de la **v2.12**, en el **Mk.II** (FPGA Spartan‑3) el bootstrap de la FPGA (`fpga_mini`) se carga desde la tarjeta SD en lugar de ir incrustado en el firmware, lo que libera espacio de flash para las funciones del fork. (El Mk.III / FXPAK PRO no se ve afectado: sigue mostrando los mensajes en pantalla.) Por eso, cuando el Mk.II no puede mostrar la pantalla de arranque, indica el motivo mediante los **LED** en lugar de texto. Esto **no** es un fallo:
+
+- **Sin tarjeta SD** → sirena verde ↔ rojo. Inserta una tarjeta y apaga/enciende.
+
+  <img src="misc/led_no_sd.gif" width="100" alt="No SD card — green/red">
+
+- **`/sd2snes/fpga_mini.bit` ausente o ilegible** → sirena verde ↔ amarillo. Restáuralo desde el paquete de release y apaga/enciende.
+
+  <img src="misc/led_fpga_mini.gif" width="100" alt="No FPGA — green/yellow">
+
+`fpga_mini.bit` viene en el release v2.12+; basta con mantener los archivos del release en `/sd2snes/`.
 
 ## Notas avanzadas
 
@@ -247,11 +324,13 @@ La verificación de integridad para BPS se puede activar en **Configuración →
 
 Esta opción viene **Desactivada por defecto**. Cuando está activada, el firmware vuelve a leer la ROM después de aplicar un parche BPS para confirmar que se aplicó correctamente. Esto hace que la carga de BPS sea más lenta; por ejemplo, un parche BPS de 4 MB puede añadir unos 15 segundos a la carga, en promedio. Los parches IPS no son verificados por esta opción.
 
-### Limitaciones de la música del menú
+### Limitaciones de la música y los sonidos del menú
 
-Solo se admiten archivos `.spc`. Un archivo `.spc` no es una grabación de audio común; es una instantánea del estado del chip de sonido del SNES y tiene un límite de 64 KB. No existe una conversión directa de MP3 a SPC.
+Para la música, solo se admiten archivos `.spc`. Un archivo `.spc` no es una grabación de audio común; es una instantánea del estado del chip de sonido del SNES y tiene un límite de 64 KB. No existe una conversión directa de MP3 a SPC — el Creador de Sonidos te deja elegir y escuchar un `.spc`, pero no genera uno a partir de otro audio.
 
 Cuando la música se carga al iniciar, después de un reset o después de activar la opción, el menú puede pausarse brevemente mientras el archivo se envía al chip de sonido del SNES. Abrir un `.spc` desde el navegador de archivos pausa la música de fondo y la reanuda cuando vuelves con el botón B.
+
+Los efectos de navegación son aparte: son clips cortos en **MSU‑1 PCM** reproducidos en el DAC de audio del cartucho (16 bits estéreo, 44,1 kHz), así que la música sigue sonando en el chip de sonido del SNES mientras se dispara un efecto. Manténlos cortos (bastante menos de un segundo) para que se sientan ágiles.
 
 ### Formato del tema
 
@@ -296,10 +375,13 @@ Ese paso es pesado y necesita el instalador de Xilinx ISE 14.7 y una licencia We
 
 El soporte para parches IPS/BPS y el trabajo original de reset al menú vienen de [@Xeroxxx](https://github.com/mrehkopf/sd2snes/pull/293), con cambios realizados en este fork.
 
+El trabajo del menú de trucos viene de [@Relikk](https://github.com/Relikk).
+
 Contribuidores del repositorio original de sd2snes listados por GitHub:
 
 - [@mrehkopf](https://github.com/mrehkopf)
 - [@RedGuyyyy](https://github.com/RedGuyyyy)
+- [@Relikk](https://github.com/Relikk)
 - [@github-user-name](https://github.com/github-user-name)
 - [@furious](https://github.com/furious)
 - [@redacted173](https://github.com/redacted173)

@@ -63,6 +63,37 @@
 #define COVER_C9_META_H             $C93A02    /* h_spr */
 #define COVER_C9_META_NPAL          $C93A03    /* n_palettes */
 #define COVER_STATUS_OK             $01
+
+/* ---- pre-boot game info screen (snes/gameinfo.a65) ----
+   One composited DirectColor (CG-Direct-Select) BG1 image (cover + screenshot,
+   utils/gen_dcimage.py) is staged by the MCU (CMD_GAME_INFO): 8bpp tiles -> bank
+   $CA, 16-bit tilemap -> bank $CB. The parsed metadata struct lands at GAMEINFO
+   ($FF6000); the menu reads it by fixed offset (mirror src/gameinfo.h). */
+#define GI_TILES                    $CA0000    /* 8bpp DirectColor tiles */
+#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap */
+
+/* gameinfo_meta_t. MUST sit AFTER the favorites mirror ($FF6000..$FF73FF) -- overlapping it
+   clobbers the favorites list when a favorite's info panel opens. Lockstep with src/memory.h. */
+#define GAMEINFO                    $FF7400    /* gameinfo_meta_t (src/gameinfo.h) */
+#define GI_STATUS                   $FF7402    /* 0 NONE, 1 OK, 2 ERROR */
+#define GI_FLAGS                    $FF7403    /* bit0 = image.gd staged */
+#define GI_IMG_W                    $FF7404    /* image width in 8x8 tiles */
+#define GI_IMG_H                    $FF7405    /* image height in tiles */
+#define GI_IMG_NTILES               $FF7406    /* unique tiles (uint16) */
+#define GI_TITLE                    $FF7408    /* char[40] font-encoded */
+#define GI_DEVELOPER                $FF7430    /* char[40] */
+#define GI_YEAR                     $FF7458    /* char[6]  e.g. "1994" */
+#define GI_PLAYERS                  $FF745E    /* char[4]  e.g. "2" */
+#define GI_GENRE                    $FF7462    /* char[32] */
+#define GI_CHIP                     $FF7482    /* char[24] */
+#define GI_DESCRIPTION              $FF749A    /* char[256] one line; menu word-wraps */
+#define GI_FMV_FPS                  $FF759A    /* FMV playback fps (when GI_FLAG_FMV) */
+#define GI_FMV_FRAMES               $FF759B    /* FMV total frames (uint16; info/debug) */
+#define GI_STATUS_OK                $01
+#define GI_FLAG_IMAGE               $01
+#define GI_FLAG_FMV                 $02        /* animated <rom>.fmv: cover = sibling .cov (OBJ),
+                                                  screenshot box streams from GI_TILES ($CA0000),
+                                                  pumped by CMD_FMV_NEXT (see snes/gameinfo.a65) */
 /* ---- small (half-size) cover: WRAM scratch + downscale LUT ----
    When ShowCovers == 2 the menu resamples the staged 16x16-block tiles down to
    one 8x8 tile per block (nearest-neighbour, even pixels) into COVER_SMALL_TILEBUF,
@@ -87,7 +118,10 @@
                                               FPGA region, which is NOT cleared by clear_wram and
                                               survives a reset, so coldboot explicitly zeroes it
                                               (main.a65) -- every non-warm reset lands in coldboot.
-                                              0=not loaded (reload), 1=playing, 2=tried-no-spc. */
+                                              0=not loaded (reload), 1=playing, 2=tried-no-spc,
+                                              3=music off + DSP-unmute stub running (keeps the
+                                              cart MSU-1 DAC audible for the menu sound effects),
+                                              4=tried-no-spc + DSP-unmute stub running. */
 
 #define BRAM_PAYLOAD                $002A10
 #define BRAM_RETURN_VECTOR          $002A6C
@@ -115,13 +149,17 @@
 #define WRAM_WAIT_MCU               $7EF200
 #define WRAM_LOAD_ULTRA16_CFG       $7EF210
 
-#define ROOT_DIR                    $C10000
+#define ROOT_DIR                    $C20000
 
 #define NUM_CHEATS                  $FF0700
+#define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
 #define CHEAT_FLAGS                 $FF0500 /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle, MCU also keeps it in sync. */
+#define CHEAT_NAMES                 $FF0800 /* in-game cheat overlay: first CHEAT_OVL_MAX names, CHEAT_NAME_LEN bytes each, staged by firmware at game load ($D00000 records are game ROM in-game). 64*32=2KB fills $FF0800..$FF0FFF. */
+#define CHEAT_OVL_MAX               64      /* in-game overlay covers the first 64 cheats */
+#define CHEAT_NAME_LEN              32      /* bytes per staged in-game name */
 
 #define SPC_DATA                    $FD0000
 #define SPC_HEADER                  $FE0000
@@ -129,13 +167,19 @@
 
 #define FILESEL_CWD                 $FF0000
 #define CFG_ADDR                    $FF0100
+#define MCU_ERR_CODE                $FF1000 /* MCU snes_menu_errmsg: error code (1 byte). 0=OK,2=SUPPLFILE(missing chip BIOS),3=NOIMPL(unsupported chip). game_handshake_error reads this. */
+#define MCU_ERR_MSG                 $FF1001 /* MCU error string (basename/chip name, NUL-term), $FF1001..$FF1040. NB overlaps SRAM_PARAM_ADDR($FF1004) on the MCU side -- benign, PARAM already consumed in this flow. */
+/* error codes -- must match MENU_ERR_* in src/snes.h */
+#define MENU_ERR_SUPPLFILE          $02
+#define MENU_ERR_NOIMPL             $03
 #define ST_MCU_ADDR                 $FF1100
 #define ST_SNES_ADDR                $FF1110
 #define SYSINFO_BLK                 $FF1200
 #define LAST_GAME                   $FF1420
 #define LAST_GAME_DIR               $FF1F00
 #define WRAM_BAK                    $FF2000
-#define FAVORITE_GAMES              $FF4000
+#define FAVORITE_GAMES              $FF6000 /* 20*256 = $1400 -> $FF6000..$FF73FF. Moved off $FF4000 (only fit 10) into the free gap past IPS_LIST so favorites could grow to 20. Lockstep with SRAM_FAVORITEGAMES_ADDR (src/memory.h). Old $FF4000..$FF49FF now unused. */
+#define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (now-fully-free gap before IPS_LIST $FF5000; favorites moved off $FF4000 to $FF6000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
 
 #define CMD_LOADROM                 $01 /* shortcut - load ROM with default settings */
 #define CMD_SETRTC                  $02
@@ -180,12 +224,44 @@
 #define CMD_DELETE_SRM_RECENT       $29 /* MCU_PARAM low byte: recent index. Delete only the .srm (ROM stays in recents). */
 #define CMD_LOAD_CHT_RECENT         $2a /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_load. */
 #define CMD_SAVE_CHT_RECENT         $2b /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_save. */
+#define CMD_SET_THEME               $2c /* selected .thm in a visible folder (MCU_PARAM set like LOADROM): store full path, reload menu */
+#define CMD_CLR_THEME               $2d /* clear menu theme to baked default, reload menu */
+#define CMD_SET_MENU_SPC            $2e /* selected .spc (MCU_PARAM set like LOADROM): store full path in CFG.bgm_name, enable music */
+#define CMD_CLR_MENU_SPC            $2f /* clear CFG.bgm_name -> menu BGM falls back to /sd2snes/menu.spc */
+/* WiFi-in-menu commands RESERVED for the Companion port (lockstep with src/snes.h):
+   WiFi owns $30-$33, so game-info lives at $34-$37. No menu/MCU handler in this
+   branch -- reserved so adding WiFi later needs zero command renumbering. */
+#define CMD_WIFI_SCAN               $30 /* RESERVED (Companion): queue an AP scan on the ESP */
+#define CMD_WIFI_GET                $31 /* RESERVED (Companion): write current status + scan list to WIFI_BLK */
+#define CMD_WIFI_CONNECT            $32 /* RESERVED (Companion): connect using ssid/pass written to WIFI_BLK */
+#define CMD_WIFI_FORGET             $33 /* RESERVED (Companion): forget the saved network */
+#define CMD_GAME_INFO               $34 /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot (non-booting, like LOAD_COVER) */
+#define CMD_GAME_INFO_RECENT        $35 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
+#define CMD_GAME_INFO_FAVORITE      $36 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
+#define CMD_FMV_NEXT                $37 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
+#define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
+
+/* WiFi status/scan block + connect params, RESERVED for the Companion port.
+   Aliases SYSINFO_BLK ($FF1200, both modal so they never coexist) -- consumes no
+   new memory. Layout MUST match src/snes.h WIFI_OFF_*. */
+#define WIFI_BLK                    $FF1200
+#define WIFI_OFF_CONNECTED          0    /* u8 */
+#define WIFI_OFF_RSSI               1    /* i8 */
+#define WIFI_OFF_SSID               2    /* char[33] */
+#define WIFI_OFF_IP                 35   /* char[16] */
+#define WIFI_OFF_SCAN_CNT           51   /* u8 */
+#define WIFI_OFF_SCAN_SEQ           52   /* u8 */
+#define WIFI_OFF_APS                53   /* scan_cnt * {i8 rssi, u8 enc, char ssid[33]} */
+#define WIFI_AP_STRIDE              35
+#define WIFI_OFF_REQ_SSID           340  /* char[33] - menu writes (CONNECT) */
+#define WIFI_OFF_REQ_PASS           373  /* char[64] - menu writes (CONNECT) */
 
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */
 #define IPS_MAX_PATCHES             8        /* maximum patches per ROM */
 #define CMD_SAVESTATE               $40
 #define CMD_LOADSTATE               $41
+#define CMD_CHEAT_REPROGRAM         $42 /* in-game cheat overlay: reconcile BSRAM flag mirror ($FF0500) into canonical records + re-deploy cheats live */
 #define CMD_MCU_RDY                 $55
 #define CMD_RESET                   $80
 #define CMD_RESET_TO_MENU           $81
@@ -242,8 +318,16 @@
 #define CFG_LANGUAGE                    CFG_ADDR+$00B7
 #define CFG_PATCH_VERIFY_INTEGRITY      CFG_ADDR+$00B8
 #define CFG_ENABLE_MENU_MUSIC           CFG_ADDR+$00B9
+#define CFG_COVERS_IN_LISTS             CFG_ADDR+$00BA
+#define CFG_ENABLE_MENU_SFX             CFG_ADDR+$00BB
+#define CFG_MENU_MUSIC_FILE             CFG_ADDR+$00BC
+#define CFG_SORT_FAVORITES              CFG_ADDR+$013C
+#define CFG_ENABLE_CHEAT_OVERLAY        CFG_ADDR+$013D
+#define CFG_SHOW_GAME_INFO              CFG_ADDR+$013E
+#define CFG_ENABLE_WIFI                 CFG_ADDR+$013F /* RESERVED (Companion master switch). Placed at $13F (NOT $BD: that overlapped CFG_MENU_MUSIC_FILE $BC, 128B) so the WiFi port slots in with no cfg-offset drift. Lockstep with src/cfg.h. */
 
 #define MENU_ENTRY_SIZE             23
+#define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */
 
 #define ST_RTC_VALID                ST_MCU_ADDR+$0000
 #define ST_NUM_RECENT_GAMES         ST_MCU_ADDR+$0001
@@ -251,6 +335,7 @@
 #define ST_NUM_FAVORITE_GAMES       ST_MCU_ADDR+$0003
 #define ST_AUTOBOOT_ENABLED         ST_MCU_ADDR+$0004
 #define ST_RESET_TO_MENU_ACTIVE     ST_MCU_ADDR+$0005
+#define ST_FAVORITES_FULL           ST_MCU_ADDR+$0006 /* 1 if the last add-favorite was refused (list full) */
 
 #define ST_IS_U16                   ST_SNES_ADDR+$0000
 #define ST_U16_CFG                  ST_SNES_ADDR+$0001

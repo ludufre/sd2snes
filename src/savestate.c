@@ -29,7 +29,18 @@ void savestate_program() {
  * 2C00 "EXE" hook is now left alone so it doesn't clash with USB hook features
  */
 
-  savestate_enable_handler(CFG.enable_ingame_savestate);
+  /* The in-game cheat overlay's combo probe (L+R+Y+Left) lives inside this savestate
+     handler, so the handler must run whenever the overlay is usable -- even with in-game
+     savestates OFF.  Gate the overlay on the in-game hook (matches the menu greying via
+     mfunc_isenabled_hooks) plus its own toggle, minus enhancement-chip games (the savestate
+     machinery the overlay reuses is unsupported there -- same list as cheat.c). */
+  uint8_t special_chip = romprops.has_dspx || romprops.has_cx4 || romprops.has_obc1
+                      || romprops.has_gsu  || romprops.has_sa1 || romprops.has_sdd1
+                      || romprops.has_spc7110;
+  int overlay_only = !CFG.enable_ingame_savestate
+                  && CFG.enable_ingame_hook && CFG.enable_cheat_overlay && !special_chip;
+
+  savestate_enable_handler(CFG.enable_ingame_savestate || overlay_only);
   if(CFG.enable_ingame_savestate) {
     sram_writeshort(0x0101, SS_REQ_ADDR);
     sram_writebyte(CFG.loadstate_delay, SS_DELAY_ADDR);
@@ -38,6 +49,12 @@ void savestate_program() {
     savestate_set_inputs();
     savestate_set_fixes();
     load_backup_state();
+  } else if(overlay_only) {
+    /* Overlay-only: the handler is installed purely so the cheat-overlay probe can run.
+       CS_CTRL=0 makes the handler skip ALL save/load/slot handling below the probe (the
+       save/load inputs are unconfigured here and would otherwise match every frame) --
+       see snes/savestate.a65 at ss_probe_done.  The probe stays gated by CHEAT_OVL_GATE. */
+    sram_writebyte(0, SS_CTRL_ADDR);
   }
 }
 

@@ -1,6 +1,6 @@
 /* sd2snes - per-ROM cover preview (MCU side)
  *
- * Loads a sibling "<rom>.cov" (8bpp BG cover, .cov v3) from the SD card into
+ * Loads a sibling "<rom>.cov" (4bpp OBJ-sprite cover, .cov v4) from the SD card into
  * the bank-C9 staging area shared with the SNES menu. The MCU only validates
  * the header and STREAMS bytes; it never decodes images.
  *
@@ -74,5 +74,11 @@
  * sram_addr (bank C9), and write the meta block. Returns 1 on success,
  * 0 otherwise. Never hangs. */
 int load_cover(const uint8_t *rom_path, uint32_t sram_addr);
+
+/* load_cover_path: stream an explicit .cov path (v4 16-wide OR v5 dense) into
+ * sram_addr (any free bank) in the COVER_OFF_* layout. Used by the game-info
+ * screen to stage the cover + screenshot. Returns 1 on success, 0 otherwise.
+ * Bounded + fail-safe; never hangs. */
+int load_cover_path(const char *cov_path, uint32_t sram_addr);
 
 #endif

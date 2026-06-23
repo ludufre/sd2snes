@@ -36,6 +36,7 @@
 #include "led.h"
 #include "sort.h"
 #include "cfg.h"
+#include "msu1.h"   /* menu_sfx_pump: keep a playing effect fed during dir scans */
 
 #include "timer.h"
 
@@ -73,6 +74,7 @@ printf("opendir res=%d\n", res);
 printf("start\n");
   if (res == FR_OK) {
     for (;;) {
+      menu_sfx_pump();  /* keep a playing menu effect fed while scanning a big dir */
       res = f_readdir(&dir, &fno);
       if(res != FR_OK || fno.fname[0] == 0 || numentries >= 16000)break;
       fn = *fno.lfname ? fno.lfname : fno.fname;
@@ -81,6 +83,7 @@ printf("start\n");
         switch(type) {
           case TYPE_ROM:
           case TYPE_SPC:
+          case TYPE_SKIN:   /* theme files (.thm/.skin) are listed like ROMs */
           case TYPE_SUBDIR:
           case TYPE_PARENT:
             /* omit entries with hidden or system attribute -- but NEVER the
@@ -98,7 +101,8 @@ printf("start\n");
               if(fn[0]=='.') continue; /* omit dot files */
               make_filesize_string(buf, fno.fsize);
               if(CFG.hide_extensions) {
-                *(strrchr(fn, '.')) = 1;
+                char *dot = strrchr(fn, '.');
+                if(dot) *dot = 1;
               }
             }
             fnlen = strlen(fn);
@@ -107,6 +111,13 @@ printf("start\n");
               fn[fnlen+1] = 0;
               fnlen++;
             }
+            /* The file-string table grows from base_addr+0x10000 ($C30000) up
+               toward SRAM_DB_ADDR ($C80000). That region shrank to banks $C3..$C7
+               when SRAM_DIR_ADDR moved $C1->$C2 (the 128K menu now owns bank $C1).
+               Stop before the next entry would spill into the cheat-DB staging at
+               $C8 and corrupt it. goto, not break: break would only exit the
+               switch, not this scan loop. */
+            if(file_tbl_off + fnlen + 7 >= SRAM_DB_ADDR) goto dir_full;
             /* write file size string */
             sram_writeblock(buf, file_tbl_off, 6);
             /* write file name string (leaf) */
@@ -124,6 +135,7 @@ printf("start\n");
       }
     }
   }
+dir_full:
   /* write directory termination */
   sram_writelong(0, ptr_tbl_off);
   if(CFG.sort_directories) {
@@ -168,8 +180,8 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
   if(!strcasecmp(ext+1, "CHT")) {
     return TYPE_CHT;
   }
-  if(!strcasecmp(ext+1, "SKIN")) {
-    return TYPE_SKIN;
+  if(!strcasecmp(ext+1, "SKIN") || !strcasecmp(ext+1, "THM")) {
+    return TYPE_SKIN;   /* menu theme file (see theme.c) */
   }
   return TYPE_UNKNOWN;
 }

@@ -27,6 +27,21 @@
 
 #define CHEAT_FLAG_ENABLE (0x80)
 #define CHEAT_NUM_CODES_PER_CHEAT (40)
+/* WRAM cheats are emitted as a 6-byte LDA/STA/RTS chain starting at
+   SNESCMD_WRAM_CHEATS; the chain must stay below the next snescmd vector
+   (SNESCMD_NMI_RESET). 20 matches the documented capability with margin. */
+#define CHEAT_WRAM_MAX (20)
+/* Records live in the $D00000 PSRAM bank group D0..D3 (512 * 512 bytes). */
+#define CHEAT_RECORD_MAX (512)
+
+/* In-game cheat overlay: the first CHEAT_NAME_INGAME_MAX cheat descriptions are
+ * staged into the SNES-visible BSRAM window (SRAM_CHEAT_NAMES_ADDR, $FF0800) at
+ * game load. The canonical PSRAM records at $D00000 hold the full descriptions,
+ * but during a game that bank IS the game's own ROM, so the in-game overlay
+ * cannot reach them — it reads these BSRAM copies instead. 64*32 = 2 KB, which
+ * fills $FF0800..$FF0FFF exactly (up to $FF1000 = SRAM_CMD_ADDR). */
+#define CHEAT_NAME_INGAME_MAX (64)
+#define CHEAT_NAME_INGAME_LEN (32)
 
 typedef union _cheat_patch_record {
   struct __attribute__ ((__packed__)) _patch_fields {
@@ -75,6 +90,10 @@ void cheat_yaml_save(uint8_t *romfilename);
 
 /* toggle bit 7 of the flag byte for a cheat record (CMD_TOGGLE_CHT) */
 void cheat_toggle_flag(int index);
+
+/* in-game live re-program (CMD_CHEAT_REPROGRAM): reconcile the BSRAM flag
+   mirror into the canonical PSRAM records and re-deploy all cheats */
+void cheat_reprogram_from_mirror(void);
 
 /* convert cheat code in string format to binary */
 uint32_t cheat_str2bin(char *string);

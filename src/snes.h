@@ -67,9 +67,42 @@
 #define SNES_CMD_DELETE_SRM_RECENT   (0x29) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE, delete only the .srm (ROM stays in recents). */
 #define SNES_CMD_LOAD_CHT_RECENT     (0x2a) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_load. */
 #define SNES_CMD_SAVE_CHT_RECENT     (0x2b) /* MCU_PARAM low byte: recent index. Resolve path via LAST_FILE then cheat_yaml_save. */
+#define SNES_CMD_SET_THEME           (0x2c) /* selected .thm (any visible folder): get_selected_name -> store full path in CFG.skin_name, then reload menu */
+#define SNES_CMD_CLR_THEME           (0x2d) /* clear the menu theme back to the baked default, then reload menu */
+#define SNES_CMD_SET_MENU_SPC        (0x2e) /* selected .spc (any visible folder): get_selected_name -> store full path in CFG.bgm_name, enable music, then reload menu (in-place restart black-screened; see main.c) */
+#define SNES_CMD_CLR_MENU_SPC        (0x2f) /* clear CFG.bgm_name -> revert menu BGM to the /sd2snes/menu.spc fallback */
+/* WiFi-in-menu commands (bridged to the ESP via uart_proto WIFI_* opcodes).
+   RESERVED here so the command map stays lockstep with feat-esp32companion: the
+   Companion port owns 0x30-0x33, which is why game-info lives at 0x34-0x37 below.
+   No MCU handler in this branch (no ESP link yet) -- adding WiFi later is purely
+   additive (fill in the cases), with zero command renumbering. */
+#define SNES_CMD_WIFI_SCAN           (0x30) /* RESERVED (Companion): queue an AP scan on the ESP */
+#define SNES_CMD_WIFI_GET            (0x31) /* RESERVED (Companion): write current status + scan list to SRAM (WIFI_BLK) */
+#define SNES_CMD_WIFI_CONNECT        (0x32) /* RESERVED (Companion): connect using ssid/pass the menu wrote to SRAM */
+#define SNES_CMD_WIFI_FORGET         (0x33) /* RESERVED (Companion): forget the saved network */
+/* game-info commands live at 0x34-0x37 (WiFi owns 0x30-0x33) -- see reservation note above */
+#define SNES_CMD_GAME_INFO           (0x34) /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot for the pre-boot info screen (non-booting; like LOAD_COVER) */
+#define SNES_CMD_GAME_INFO_RECENT    (0x35) /* like GAME_INFO but for the recent game at the index in MCU_PARAM (resolved via LAST_FILE) */
+#define SNES_CMD_GAME_INFO_FAVORITE  (0x36) /* like GAME_INFO but for the favorite game at the index in MCU_PARAM (resolved via FAVORITES_FILE) */
+#define SNES_CMD_FMV_NEXT            (0x37) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
+
+/* WiFi SRAM block layout (base = SRAM_SYSINFO_ADDR; menu side = WIFI_BLK $FF1200).
+   RESERVED for the Companion port -- aliases the sysinfo block (both modal, so they
+   never coexist). Kept here so the future WiFi code uses the same offsets. */
+#define WIFI_OFF_CONNECTED  0    /* u8  */
+#define WIFI_OFF_RSSI       1    /* i8  */
+#define WIFI_OFF_SSID       2    /* char[33] */
+#define WIFI_OFF_IP         35   /* char[16] */
+#define WIFI_OFF_SCAN_CNT   51   /* u8  */
+#define WIFI_OFF_SCAN_SEQ   52   /* u8  */
+#define WIFI_OFF_APS        53   /* scan_cnt * { i8 rssi, u8 enc, char ssid[33] } = 35B each */
+#define WIFI_AP_STRIDE      35
+#define WIFI_OFF_REQ_SSID   340  /* char[33] - menu writes (CONNECT) */
+#define WIFI_OFF_REQ_PASS   373  /* char[64] - menu writes (CONNECT) */
 
 #define SNES_CMD_SAVESTATE           (0x40)
 #define SNES_CMD_LOADSTATE           (0x41)
+#define SNES_CMD_CHEAT_REPROGRAM     (0x42) /* in-game cheat overlay: reconcile BSRAM flag mirror ($FF0500) into the canonical PSRAM records and re-deploy all cheats live (no reboot) */
 
 #define SNES_CMD_RESET               (0x80)
 #define SNES_CMD_RESET_TO_MENU       (0x81)
@@ -104,6 +137,7 @@
 #define SNESCMD_MCU_CMD              (0x2a00)
 #define SNESCMD_SNES_CMD             (0x2a02)
 #define SNESCMD_MCU_PARAM            (0x2a04)
+#define SNESCMD_SFX_MAILBOX          (0x2be0) /* menu sound effects: effect+1 (1-4), 0 = consumed. Dedicated byte in the unreferenced $2BB4-$2BEF gap. NOT 0x2a08: MCU_PARAM is a 12-byte region (0x2a04-0x2a0f; settime uses +11) - parking the mailbox inside it corrupted cover request params and saved garbled favorites names. */
 #define SNESCMD_INGAME_HOOK          (0x2a10)
 #define SNESCMD_RESET_HOOK           (0x2a7d)
 #define SNESCMD_WRAM_CHEATS          (0x2ad8)
@@ -168,6 +202,7 @@ typedef struct __attribute__ ((__packed__)) _mcu_status {
   uint8_t num_favorite_games;
   uint8_t autoboot_enabled;        /* 1 if an autoboot ROM is configured */
   uint8_t reset_to_menu_active;    /* 1 if this boot is a reset-to-menu (not cold power-on) */
+  uint8_t favorites_full;          /* 1 if the last "add favorite" was refused (list at MAX_FAVORITE_GAMES) */
 } mcu_status_t;
 
 typedef struct __attribute__ ((__packed__)) _snes_status {

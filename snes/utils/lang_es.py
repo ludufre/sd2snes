@@ -3,8 +3,8 @@
 Maps const.a65 string labels -> es text. Accented chars are written as real
 UTF-8 here; build_const.py encodes them to the font byte codes.
 Placeholders: {129}=submenu icon, {127}{128}=ellipsis control bytes.
-mdesc_* item descriptions are NOT rendered by the current menu (build_const
-skips them), so they stay English at build time and cost no ROM space.
+mdesc_* item descriptions ARE rendered now (the selected option's help box) and
+localized like the rest; the pool lives in bank $C1 (see build_const.py).
 """
 
 TRANSLATIONS = {
@@ -39,6 +39,7 @@ TRANSLATIONS = {
     'mtext_ingame_shortreset': 'Reset al menú',
     'mtext_ingame_enable': 'Hook en juego',
     'mtext_ingame_buttons': ' {129}Botones en juego',
+    'mtext_ingame_cheat_overlay': ' {129}Menú de trucos',
     'mtext_ingame_holdoff': ' {129}Espera inicial',
     'mtext_ingame_savestate': 'Savestates en juego',
     'mtext_savestate_slots': ' {129}Ranuras de savestate',
@@ -60,7 +61,7 @@ TRANSLATIONS = {
     'mtext_chip_gsu_speed': 'Velocidad SuperFX',
     'mtext_chip_msu1_volume_boost': 'Aumento volumen MSU-1',
     'mdesc_mm_last': 'Muestra hasta 10 juegos recientes',
-    'mdesc_mm_favorites': 'Muestra hasta 10 juegos favoritos',
+    'mdesc_mm_favorites': 'Muestra hasta 20 juegos favoritos',
     'mdesc_mm_cfg': 'Configurar el sd2snes',
     'mdesc_mm_sysinfo': 'Info de FW, SD, SNES, CIC{127}{128}',
     'mdesc_cfg_time': 'Ajustar fecha y hora',
@@ -87,8 +88,9 @@ TRANSLATIONS = {
     'mdesc_ingame_shortreset': 'Volver al menú con reset corto (Des/Act/Carpeta/ROM). Carpeta: vuelve a la última carpeta. ROM: además preselecciona la ROM.',
     'mdesc_ingame_enable': 'Necesario para botones en juego y trucos 7E/7F',
     'mdesc_ingame_buttons': 'Botones en juego (reset, activar/desactivar trucos{127}{128}). Requiere el hook activado.',
+    'mdesc_ingame_cheat_overlay': 'Menú de trucos en juego (manten L+R+Y+Izq) para activarlos al vuelo. Requiere hook. No funciona con chips especiales.',
     'mdesc_ingame_holdoff': 'Espera 10 segundos antes de activar el hook (ayuda a algunos juegos a arrancar con el hook activado)',
-    'mdesc_ingame_savestate': 'Activar savestates en juego y elegir mando. Predet.: Guardar - Start+L / Cargar - Start+R',
+    'mdesc_ingame_savestate': 'Activar savestates en juego y elegir mando. Predet.: Guardar - Start+R / Cargar - Start+L',
     'mdesc_savestate_slots': 'Activar ranuras de savestate. Select+Dpad: cada dirección es una ranura',
     'mdesc_loadstate_delay': 'Ajustar el retardo de carga de estado (frames)',
     'mdesc_sgb_enable_hooks': 'Necesario para los botones en juego',
@@ -120,6 +122,8 @@ TRANSLATIONS = {
     'mdesc_recent_context_remove_from_recent': 'Quita el archivo de la lista de recientes',
     'text_filesel_set_as_autoboot': 'Definir como autoboot',
     'mdesc_filesel_set_as_autoboot': 'Arranca esta ROM en el próximo encendido (mantén START para cancelar)',
+    'text_filesel_set_as_bgm': 'Definir como música del menú',
+    'mdesc_filesel_set_as_bgm': 'Usar este SPC como música de fondo del menú',
     'text_filesel_context_delete_file': 'Eliminar',
     'mdesc_filesel_context_delete_file': 'Elimina el archivo seleccionado',
     'text_filesel_context_delete_srm': 'Eliminar save',
@@ -145,6 +149,10 @@ TRANSLATIONS = {
     'text_favorite': 'Juegos favoritos',
     'text_no_last': 'Sin recientes',
     'text_no_favorite': 'Sin favoritos',
+    'text_favorites_full': 'Favoritos lleno',
+    'text_err_supplfile': 'Archivo no hallado:',
+    'text_err_noimpl': 'Chip no soportado:',
+    'text_err_generic': 'Error al cargar:',
     'text_on_p1': 'Sí: P1',
     'text_on_p2': 'Sí: P2',
     'text_on': 'Sí',
@@ -188,12 +196,33 @@ TRANSLATIONS = {
     'text_saving': 'Guardando{127}{128}                      ',
     'text_cheat': 'Trucos para ',
     'text_ips_nopatch': '[Sin patch]',
+    'text_ips_header': 'Parches',
     'cheat_tab_head': 'Nombre                                    Activo',
     'cheat_tab_hint_text': ' A:Hab./Desh.   B:Guardar & Salir ',
     'mtext_browser_showcov': 'Mostrar carátulas',
     'mdesc_browser_showcov': 'Mostrar las carátulas de los juegos en el menú',
+    'mtext_browser_covlists': ' {129}Favoritos/Recientes',
+    'mdesc_browser_covlists': 'Mostrar carátulas también en las listas Recientes y Favoritos',
     'mtext_browser_menumusic': 'Música del menú',
+    'mtext_browser_menusfx': 'Sonidos del menú',
     'mdesc_browser_menumusic': 'Reproducir música de fondo (menu.spc) en el menú',
+    'mtext_browser_sortfav': 'Ordenar favoritos',
+    'mdesc_browser_sortfav': 'Ordenar la lista de favoritos alfabéticamente',
+    'mtext_browser_restoretheme': 'Restaurar tema',
+    'mdesc_browser_restoretheme': 'Restaurar el tema del menú al predeterminado',
+    'mtext_browser_restoremusic': 'Restaurar música',
+    'mdesc_browser_restoremusic': 'Restaurar la música del menú al predeterminado (menu.spc)',
     'text_mm_language': 'Idioma',
     'mdesc_mm_language': 'Definir el idioma del menú/firmware',
+    'mdesc_browser_menusfx': 'Reproducir efectos de sonido al navegar por el menú',
+    'mtext_browser_gameinfo': 'Info del juego antes',
+    'mdesc_browser_gameinfo': 'Muestra carátula, captura e info antes de iniciar una ROM que tenga una entrada en /sd2snes/info',
+    'text_gi_developer': 'Desarrollador',
+    'text_gi_year': 'Año',
+    'text_gi_players': 'Jugadores',
+    'text_gi_genre': 'Género',
+    'text_gi_chip': 'Chip',
+    'text_gi_footer': 'A: Jugar  B: Volver  Y: Descripción',
+    'text_gi_footer_nav': 'A:Jugar B:Volver Y:Desc Arr/Abj:Juego',
+    'text_gi_footer_full': 'B: Volver  Arriba/Abajo: Desplazar',
 }
