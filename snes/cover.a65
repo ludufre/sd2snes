@@ -51,22 +51,31 @@ cover_init:
   ldx #COVER_OBJ_VRAM_BASE
   stx $2116
   DMA7(#$09, #COVER_OBJ_CLEAR_LEN, #^zero, #!zero, #$18)
+  ; a zeroed blank tile for the header BG cols 16..31 (the OBJ name table now owns
+  ; the old blank char $100, so use a dedicated tile in free VRAM after the logo)
+  ldx #COVER_BLANK_VRAM
+  stx $2116
+  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
   ; clear the BG tilemap WRAM buffers (BG2_TILE_BUF $7EA000 .. BG1_TILE_BUF $7EBFFF)
-  ; to char 0. The NMI copies BG2_TILE_BUF rows 0-8 into the BG2 header every frame.
+  ; to char 0 (the menu's transparent clear char). clear_wram fills WRAM with $55,
+  ; and the NMI copies BG2_TILE_BUF rows 0-8 into the BG2 header every frame; the
+  ; old opaque logo used to hide that garbage, so removing the logo exposed it.
   ldx #$a000
   stx $2181
   stz $2183
   DMA7(#$08, #$2000, #^zero, #!zero, #$80)
-  ; load the baked header logo: 256x56 DIRECT-COLOR tiles -> VRAM $6000 (char $300).
-  ; The logo is CG Direct Select (BG1, Mode 3, $2130 D0=1 set in video_init): the
-  ; character data IS the colour, no CGRAM used, so the cover OBJ owns the whole
-  ; CGRAM 128..255 -> no palette conflict, full logo shown ALWAYS, no crop.
+  ; load the baked header logo: tiles -> VRAM $6000 (char $300), palette -> CGRAM
+  ; 64 (free pal 4+5). setup_gfx calls cover_init AFTER the main palette DMA, so
+  ; the logo palette is not clobbered.
   ldx #COVER_LOGO_VRAM
   stx $2116
   DMA7(#$01, #COVER_LOGO_TILEBYTES, #^logo_tiles, #!logo_tiles, #$18)
-  ; build the full 256x56 header (logo_charmap = per-cell tilemap word pal3<<10|char)
-  ; in WRAM and upload it once. The header is STATIC; the cover just floats over it.
+  lda #COVER_LOGO_CGB
+  sta $2121
+  DMA7(#$00, #COVER_LOGO_PALBYTES, #^logo_pal, #!logo_pal, #$22)
+  ; build the header in WRAM (logo cols 0..15 + blank cols 16..31) and upload it
   jsr cover_logo_to_buf
+  jsr cover_clear_area
   jsr cover_dma_header
   jsr cover_build_packtbl   ; build the even-bit-pack LUT used by the small-cover downscale
   plp
@@ -200,8 +209,8 @@ csbc_out:
   rts
 
 ; -- cover_dma_header: upload the 224-entry header tilemap from BG1_TILE_BUF
-;    (full logo cols 0..31, or logo cols 0..15 + blank cols 16..31 when cropped) to
-;    VRAM. One pure DMA, fits in VBlank. Caller must have the screen blanked.
+;    (logo cols 0..15 + blank/cover cols 16..31) to VRAM. One pure DMA, fits in
+;    VBlank. Caller must have the screen blanked.
 cover_dma_header:
   php
   rep #$10 : .xl
@@ -211,23 +220,69 @@ cover_dma_header:
   plp
   rts
 
-; -- cover_logo_to_buf: copy the full 256x56 header into BG1_TILE_BUF from
-;    logo_charmap (224 little-endian BG1 tilemap words: pal3<<10 | char, built by
-;    utils/bake_logo.py for the Direct-Color logo). The tilemap shadow is contiguous
-;    row-major, so this is a flat word copy. Runs ONCE from cover_init; the header is
-;    static (the cover floats over it as OBJ, never touching the BG). Both @long,x so
-;    it is DB-independent.
+; -- cover_logo_to_buf: write the header logo's 16x7 tilemap (cols 0..15, char
+;    $300+) into BG1_TILE_BUF. The logo lives here permanently (cover/hide touch
+;    only cols 16..31), so this runs ONCE from cover_init.
 cover_logo_to_buf:
   php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda #COVER_LOGO_CHAR
+  sta cover_char
+  sep #$20 : .as
+  stz cover_ty
+clb_row:
   rep #$30 : .al : .xl
-  ldx #$0000
-clb_loop:
-  lda @logo_charmap, x
+  lda cover_ty
+  and #$00ff
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl                       ; X = row*64 (byte offset of col 0)
+  tax
+  sep #$20 : .as
+  ldy #$0000
+clb_col:
+  rep #$20 : .al
+  lda cover_char
   sta @BG1_TILE_BUF, x
+  inc cover_char
+  sep #$20 : .as
   inx
   inx
-  cpx #$01C0                ; 224 tilemap words
-  bcc clb_loop
+  iny
+  cpy #COVER_LOGO_COLS
+  bcc clb_col
+  inc cover_ty
+  lda cover_ty
+  cmp #7
+  bcc clb_row
+  plp
+  rts
+
+; -- cover_clear_area: blank the cover area (cols 16..31) of header rows 0..6 in
+;    BG1_TILE_BUF, leaving the logo (cols 0..15) intact. col>=16 <=> byte&$20.
+cover_clear_area:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+cca_loop:
+  txa
+  and #$20
+  beq cca_next
+  rep #$20 : .al
+  lda #COVER_BLANK_CHAR
+  sta @BG1_TILE_BUF, x
+  sep #$20 : .as
+cca_next:
+  inx
+  inx
+  cpx #$01C0
+  bcc cca_loop
   plp
   rts
 

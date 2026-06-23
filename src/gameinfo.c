@@ -123,6 +123,36 @@ static int gi_load_image(const char *path, gameinfo_meta_t *meta) {
   return 1;
 }
 
+/* Banked .gd, FMV path: stage the tilemap (-> SRAM_GAMEINFO_TMAP_ADDR) and ONLY the cover bank
+ * (first 256 tiles -> bank C9 / SRAM_COVER_ADDR, free here since the OBJ cover isn't used) so the
+ * SNES can DMA the cover into window-0 while the .fmv owns window-1 ($CA0000). The snapshot bank
+ * (tiles 256..) is not staged -- the FMV replaces it. Banked .gd has bank0 padded to 256, so
+ * ntiles >= 256; an old global .gd (ntiles < 256) is rejected (re-export). Returns 1 on success. */
+static int gi_load_cover_bank(const char *path, gameinfo_meta_t *meta) {
+  uint8_t hdr[GD_HEADER_SIZE];
+  UINT got;
+  file_open((uint8_t *)path, FA_READ);
+  if(file_res) return 0;
+  file_res = f_read(&file_handle, hdr, GD_HEADER_SIZE, &got);
+  if(file_res || got != GD_HEADER_SIZE
+     || hdr[0] != GD_MAGIC0 || hdr[1] != GD_MAGIC1 || hdr[2] != GD_VERSION) {
+    file_close(); return 0;
+  }
+  uint8_t  w = hdr[4], h = hdr[5];
+  uint16_t ntiles = (uint16_t)(hdr[6] | (hdr[7] << 8));
+  if(w == 0 || w > 32 || h == 0 || h > 32 || ntiles < 256 || ntiles > 512) {
+    file_close(); return 0;
+  }
+  if(!gi_stream(SRAM_GAMEINFO_TMAP_ADDR, (uint32_t)w * h * 2)) { file_close(); return 0; }
+  if(!gi_stream(SRAM_COVER_ADDR,         256u * 64u))          { file_close(); return 0; }
+  file_close();
+  meta->img_w_tiles   = w;
+  meta->img_h_tiles   = h;
+  meta->img_num_tiles = ntiles;
+  meta->flags |= GAMEINFO_FLAG_IMAGE;
+  return 1;
+}
+
 /* ---- animated screenshot (.fmv) streaming -------------------------------------
  * One .fmv is held open and read SEQUENTIALLY, one fixed-size frame per CMD_FMV_NEXT,
  * looping at EOF. A DEDICATED FIL (not the shared file_handle) so it survives across
@@ -347,18 +377,21 @@ void gameinfo_load(uint8_t *rom_path) {
     int is_fmv = 0;
     if(fmv_eligible) {
       gi_join(path, sizeof(path), base, ".fmv");
-      is_fmv = gi_fmv_begin(path, &meta);
+      is_fmv = gi_fmv_begin(path, &meta);    /* stages frame 0 -> $CA0000, cur=0 */
     }
+    /* Option B: the cover ALWAYS comes from the .gd (BG, window-0). In the .fmv case only the cover
+     * bank is staged (-> C9; frames keep $CA0000); in the static case the whole .gd goes to $CA0000.
+     * The OBJ .cov is now just the fallback when there is no .gd. */
+    gi_join(path, sizeof(path), base, ".gd");
+    int has_gd = is_fmv ? gi_load_cover_bank(path, &meta)
+                        : gi_load_image(path, &meta);
+    if(!has_gd)
+      load_cover(rom_path, SRAM_COVER_ADDR);
     if(is_fmv) {
-      load_cover(rom_path, SRAM_COVER_ADDR); /* OBJ cover next to the FMV box */
       /* optional sibling <rom>.pcm: loop it through the DAC while the screen is open. Silent
        * if absent. The menu stops it when the info screen closes (main.c / idle watchdog). */
       gi_join(path, sizeof(path), base, ".pcm");
       menu_music_play(path);
-    } else {
-      gi_join(path, sizeof(path), base, ".gd");
-      if(!gi_load_image(path, &meta))
-        load_cover(rom_path, SRAM_COVER_ADDR);
     }
   }
 

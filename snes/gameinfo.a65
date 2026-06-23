@@ -574,7 +574,14 @@ gi_upload_band:
   lda @GI_FLAGS
   and #GI_FLAG_FMV
   beq giub_no_fmv
-  jsr gi_fmv_band              ; .fmv -> animated screenshot box (window 1) + .cov cover (OBJ)
+  lda @GI_FLAGS               ; .fmv: cover from .gd (BG window 0) if present, else .cov (OBJ)
+  and #GI_FLAG_IMAGE
+  beq giub_fmv_obj
+  jsr gi_fmv_band_gd          ; .fmv + .gd -> BG cover (C9 -> window 0) + FMV (window 1)
+  plp
+  rts
+giub_fmv_obj:
+  jsr gi_fmv_band             ; .fmv without .gd -> animated box + .cov cover (OBJ), fallback
   plp
   rts
 giub_no_fmv:
@@ -860,9 +867,41 @@ gi_fmv_band:
   plp
   rts
 
-; -- gi_fmv_build_tmap: fill GI_TMAP_BUF (32x16) with the blank char, then overwrite the FMV
-;    box with sequential tile chars from gi_fmv_dst_char (the active/target set's base char --
-;    set by the caller). 16-bit throughout.
+; -- gi_fmv_band_gd: .fmv WITH a .gd cover. The cover bank (staged by gi_load_cover_bank in bank
+;    C9) goes to window-0 as BG (no OBJ); frame 0 -> window-1 set A; band tilemap = the .gd cover
+;    region (remapped) + the FMV box (set A chars). Runs in gi_dc_show's forced blank (frame 0 is
+;    one un-split 6912-byte DMA). .as/.xl.
+gi_fmv_band_gd:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; cover bank (C9 $C90000) -> window-0 ($2000): 256 tiles ($4000 bytes)
+  ldx #GI_IMG_VRAM0 : stx $2116
+  DMA7(#$01, #$4000, #^COVER_C9_TILES, #!COVER_C9_TILES, #$18)
+  ; zero the FMV band fill tile (#984 @ $7B00): value-0 pixels = transparent -> gradient
+  ldx #GI_FMV_BLANK_VRAM : stx $2116
+  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
+  ; FMV frame 0 (staged by the MCU at GI_TILES $CA0000) -> tile set A ($6000, window-1)
+  ldx #GI_FMV_VRAM_A : stx $2116
+  DMA7(#$01, #GI_FMV_FRAME_B, #^GI_TILES, #!GI_TILES, #$18)
+  ; band tilemap: the .gd cover region (remapped) then overwrite the box with set A chars.
+  jsr gi_remap_tilemap        ; GI_TMAP ($CB0000) -> GI_TMAP_BUF (cover -> window-0 chars)
+  rep #$20 : .al
+  lda #GI_FMV_TILE0_CHAR_A : sta gi_fmv_dst_char
+  sep #$20 : .as
+  stz gi_fmv_buf              ; set A active
+  jsr gi_fmv_box_tmap         ; box cells (= the snapshot cells) -> set A; cover region preserved
+  ldx #GI_BG1_TMAP : stx $2116
+  DMA7(#$01, #GI_BAND_TMAP_B, #^GI_TMAP_BUF, #!GI_TMAP_BUF, #$18)
+  ; clear the BG2 band rows 0..15 (transparent)
+  ldx #GI_BG2_TMAP : stx $2116
+  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
+  ; (no gi_cover_float -- the cover is BG now)
+  plp
+  rts
+
+; -- gi_fmv_build_tmap: OBJ path -- fill GI_TMAP_BUF (32x16) with the blank char, then draw the
+;    FMV box (via gi_fmv_box_tmap). Used when there is no .gd cover (capa = OBJ).
 gi_fmv_build_tmap:
   php
   rep #$30 : .al : .xl
@@ -874,29 +913,39 @@ gfbt_fill:
   inx
   cpx #GI_BAND_TMAP_B
   bcc gfbt_fill
-  ; box: GI_FMV_H rows of GI_FMV_W cells, sequential chars from the target set's base
+  plp
+  .as                          ; keep the assembler in step (see gi_fmv_box_tmap note)
+  jsr gi_fmv_box_tmap
+  rts
+
+; -- gi_fmv_box_tmap: overwrite ONLY the FMV box cells in GI_TMAP_BUF with sequential tile chars
+;    from gi_fmv_dst_char (the active/target set's base char -- set by the caller). The rest of the
+;    buffer is left intact, so the .gd cover region survives between frames (Option B). 16-bit.
+gi_fmv_box_tmap:
+  php
+  rep #$30 : .al : .xl
   lda gi_fmv_dst_char
   sta gi_pos                   ; gi_pos = running tile char (16-bit scratch)
   ldx #(GI_FMV_ROW0*32+GI_FMV_COL0)*2   ; X = byte offset of the box's first cell
   ldy #GI_FMV_H                ; Y = rows remaining
-gfbt_row:
+gfbx_row:
   phy
   ldy #GI_FMV_W                ; Y = cols remaining
-gfbt_col:
+gfbx_col:
   lda gi_pos
   sta @GI_TMAP_BUF, x
   inc gi_pos
   inx
   inx
   dey
-  bne gfbt_col
+  bne gfbx_col
   ply
   txa                          ; advance X to the next row's box start (+ (32-W) cells)
   clc
   adc #(32-GI_FMV_W)*2
   tax
   dey
-  bne gfbt_row
+  bne gfbx_row
   plp
   .as                          ; plp restored 8-bit A at runtime; keep the assembler in step
                                ; (the rep #$30/.al above would leak .al into the next routine
@@ -986,8 +1035,16 @@ gfa_dst_ready:
   ldx gi_fmv_dst_vram : stx $2116
   DMA7(#$01, #GI_FMV_HALF_B, #^GI_TILES, #!GI_TILES, #$18)
   jsr cover_blank_end
-  ; rebuild the band tilemap (box -> inactive set chars) for the atomic flip in window 2
+  ; rebuild the band tilemap (box -> inactive set chars) for the atomic flip in window 2.
+  ; .gd cover path: only rewrite the box (the cover region in GI_TMAP_BUF persists between frames);
+  ; OBJ path: full rebuild (blank + box). A is 8-bit here (.as).
+  lda @GI_FLAGS : and #GI_FLAG_IMAGE
+  beq gfa_full_tmap
+  jsr gi_fmv_box_tmap
+  bra gfa_tmap_done
+gfa_full_tmap:
   jsr gi_fmv_build_tmap
+gfa_tmap_done:
   ; window 2: second half -> inactive set + half, then flip the band tilemap (atomic)
   jsr cover_blank_begin
   rep #$20 : .al
