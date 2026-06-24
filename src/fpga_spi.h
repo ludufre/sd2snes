@@ -116,6 +116,8 @@
 #define FPGA_CMD_MSUGETVOLUME    (0xf4)
 #define FPGA_CMD_MSUREAD         (0xf5)
 #define FPGA_CMD_MSUGETSCADDR    (0xf6)
+#define FPGA_CMD_BSXDLSET        (0xf7) /* BS-X over-the-air download: stage descriptor */
+#define FPGA_CMD_BSXDLSEQ        (0xf8) /* BS-X download drain notify (read) */
 #define FPGA_CMD_CONFIG_READ     (0xf9)
 #define FPGA_CMD_CONFIG_WRITE    (0xfa)
 #define FPGA_CMD_GETSYSCLK       (0xfe)
@@ -126,6 +128,9 @@ extern uint16_t current_features;
 void fpga_spi_init(void);
 uint8_t fpga_test(void);
 uint16_t fpga_status(void);
+void fpga_bs_dl_set(uint8_t ctl, uint16_t chan, uint32_t base, uint16_t frames);
+uint8_t fpga_bs_dl_seq(void);
+void fpga_bs_dl_dbg(uint8_t *out);   /* DEBUG (TEMPORARY) */
 void set_mcu_addr(uint32_t);
 void set_dac_addr(uint16_t);
 void dac_play(void);

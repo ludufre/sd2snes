@@ -156,4 +156,6 @@ snes/menu.srm
 snes/const_lang.a65
 snes/const_lang_str.a65
 
-/snes/utils/__pycache__
+# Python build artifacts (anywhere: snes/utils, verilog, utils, ...)
+__pycache__/
+*.pyc

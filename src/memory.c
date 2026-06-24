@@ -474,6 +474,17 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     load_sram_offload((uint8_t*)"/sd2snes/bsxbios.bin", 0x800000, LOADRAM_AUTOSKIP_HEADER);
     printf("attempting to load BS data file /sd2snes/bsxpage.bin...\n");
     load_sram_offload((uint8_t*)"/sd2snes/bsxpage.bin", 0x900000, 0);
+    /* The base-unit Memory Pack is the .bs at 0x000000, which is the READ-ONLY ROM-staging
+       region -- the SNES can't write a downloaded save there.  Load a SECOND copy to the
+       WRITABLE PSRAM at 0x400000 (where address.v BS_BASE_PACK maps $C0:xxxx) so the Town can
+       SAVE downloaded programs.  The BSX BIOS at 0x800000 runs the city; the .bs at 0x000000
+       stays the boot ROM.  Use load_sram_offload (sd_offload DMA, ZERO MCU buffer): a 1KB
+       staging buffer overflowed the LPC1756's ~1.5KB stack headroom and corrupted the firmware
+       (USB wedged even in the menu). */
+    load_sram_offload(filename, 0x400000, LOADRAM_AUTOSKIP_HEADER);
+    /* sync the pack erase seq to the FPGA's current value so a stale seq doesn't trigger a
+       spurious erase of the freshly-loaded 0x400000 pack on the first in-game poll. */
+    bs_pack_erase_seq = (fpga_status() >> 11) & 0x3;
     printf("Type: %02x\n", romprops.header.destcode);
     set_bsx_regs(0xf6, 0x09);
     uint16_t rombase;

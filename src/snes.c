@@ -369,16 +369,29 @@ uint8_t snes_main_loop() {
      does it: fill the block (bits 11..8) -- or the whole pack (bit7) -- with 0xFF.  Runs
      independent of autosave so delete works regardless; the change then rides the
      autosave path below to persist.  bs_pack_erase_toggle is synced at load. */
-  if(romprops.fpga_features & FEAT_BSSLOT) {
+  if(romprops.mapper_id == 3) {   /* BS-X: slotted .mpk pack OR broadcast download pack */
+    /* The slotted .mpk pack lives at BS_PACK_ADDR=0x900000 (FEAT_BSSLOT).  The base-unit
+       BROADCAST (.bs boot) instead saves a DOWNLOADED program to the BSX_IS_PSRAM pack at
+       0x400000 (address.v BS_BASE_PACK) -- 0x900000 there is the broadcast page, so the pack is
+       the separate 0x400000 region.  The flash program write is AND (clear-only), so the target
+       block MUST be erased to 0xFF first; otherwise the AND with stale data corrupts it -> the
+       Town's read-back verify fails -> Error 21 / No Stored Data. */
+    uint32_t pack_base = (romprops.fpga_features & FEAT_BSSLOT) ? BS_PACK_ADDR : 0x400000;
     uint16_t bs_st = fpga_status();
     uint8_t seq = (bs_st >> 11) & 0x3;       /* status bits 12-11 */
     if(seq != bs_pack_erase_seq) {
       bs_pack_erase_seq = seq;
       uint8_t blk = ((bs_st >> 8) & 0x7) | (((bs_st >> 7) & 1) << 3); /* bits 10-8 + bit7 */
-      if(blk == 0xF) {
-        sram_memset(BS_PACK_ADDR, BS_PACK_SIZE, 0xFF);     /* chip erase */
-      } else {
-        sram_memset(BS_PACK_ADDR + ((uint32_t)blk << 16), 0x10000, 0xFF);
+      /* The slotted .mpk pack is erased HERE by the MCU (no bus contention -- it's a game, not a
+         live download).  The base-unit BROADCAST pack is erased SYNCHRONOUSLY BY THE FPGA instead
+         (main.v BS_ERASE_*, on the same erase-seq): the async MCU sram_memset raced the Town's
+         program writes under download contention and wiped the just-written directory -> Error 21. */
+      if(romprops.fpga_features & FEAT_BSSLOT) {
+        if(blk == 0xF) {
+          sram_memset(pack_base, BS_PACK_SIZE, 0xFF);
+        } else {
+          sram_memset(pack_base + ((uint32_t)blk << 16), 0x10000, 0xFF);
+        }
       }
     }
   }

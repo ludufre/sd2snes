@@ -88,6 +88,17 @@ module mcu_cmd(
   output [7:0] bsx_regs_set_out,
   output bsx_regs_reset_we,
 
+  // BS-X over-the-air download: descriptor (MCU->FPGA) + drain notify (FPGA->MCU)
+  output bs_dl_arm_out,
+  output [9:0] bs_dl_chan_out,
+  output [16:0] bs_dl_base_out,
+  output [15:0] bs_dl_frames_out,
+  output bs_dl_stage_out,
+  input [1:0] bs_dl_seq_in,
+  input [15:0] bs_dl_dbg_q_in,    // DEBUG probe (TEMPORARY)
+  input [15:0] bs_dl_dbg_sf_in,
+  input [7:0]  bs_dl_dbg_fl_in,
+
   // generic RTC
   output [55:0] rtc_data_out,
   output rtc_pgm_we,
@@ -152,6 +163,13 @@ reg reg_we_buf; initial reg_we_buf = 0;
 reg [7:0] bsx_regs_set_out_buf;
 reg [7:0] bsx_regs_reset_out_buf;
 reg bsx_regs_reset_we_buf;
+// BS-X download descriptor (opcode 0xf7)
+reg [7:0]  bs_dl_ctl_buf = 0;       // bit0 = arm, bit1 = stage strobe
+reg        bs_dl_arm_buf = 0;
+reg [9:0]  bs_dl_chan_buf = 0;
+reg [16:0] bs_dl_base_buf = 0;
+reg [15:0] bs_dl_frames_buf = 0;
+reg        bs_dl_stage_buf = 0;
 
 reg [55:0] rtc_data_out_buf;
 reg rtc_pgm_we_buf;
@@ -376,6 +394,22 @@ always @(posedge clk) begin
           32'h4:
             bsx_regs_reset_we_buf <= 1'b0;
         endcase
+      8'hf7:   // BS-X download descriptor (base/frames set before the stage strobe)
+        case (spi_byte_cnt)
+          32'h2: bs_dl_ctl_buf        <= param_data;         // bit0=arm, bit1=stage
+          32'h3: bs_dl_chan_buf[7:0]  <= param_data;
+          32'h4: bs_dl_chan_buf[9:8]  <= param_data[1:0];
+          32'h5: bs_dl_base_buf[7:0]  <= param_data;
+          32'h6: bs_dl_base_buf[15:8] <= param_data;
+          32'h7: bs_dl_base_buf[16]    <= param_data[0];
+          32'h8: bs_dl_frames_buf[7:0] <= param_data;        // 22-byte frames (16-bit: 32KB DG = 1490)
+          32'h9: bs_dl_frames_buf[15:8]<= param_data;
+          32'ha: begin
+            bs_dl_arm_buf   <= bs_dl_ctl_buf[0];
+            bs_dl_stage_buf <= bs_dl_ctl_buf[1];             // pulse (rising) when staging
+          end
+          32'hb: bs_dl_stage_buf <= 1'b0;                    // clear the strobe
+        endcase
       8'he7:
         case (spi_byte_cnt)
           32'h2: begin
@@ -507,6 +541,15 @@ always @(posedge clk) begin
       endcase
     else if (cmd_data[7:0] == 8'hF4)
       MCU_DATA_IN_BUF <= msu_volumerq;
+    else if (cmd_data[7:0] == 8'hf8)
+      case (spi_byte_cnt)                          // BS-X download drain notify + DEBUG probe
+        32'h1: MCU_DATA_IN_BUF <= {6'b0, bs_dl_seq_in};  // byte1: drain seq (unchanged)
+        32'h2: MCU_DATA_IN_BUF <= bs_dl_dbg_q_in[7:0];   // DEBUG: dl_queue lo
+        32'h3: MCU_DATA_IN_BUF <= bs_dl_dbg_q_in[15:8];  //        dl_queue hi
+        32'h4: MCU_DATA_IN_BUF <= bs_dl_dbg_sf_in[7:0];  //        staged_frames lo
+        32'h5: MCU_DATA_IN_BUF <= bs_dl_dbg_sf_in[15:8]; //        staged_frames hi
+        32'h6: MCU_DATA_IN_BUF <= bs_dl_dbg_fl_in;       //        flags {first,armed,staged,need,pf_l,dt_l,..}
+      endcase
     else if (cmd_data[7:0] == 8'hFE)
       case (spi_byte_cnt)
         32'h1:
@@ -584,6 +627,11 @@ assign msu_ptr_out = MSU_PTR_OUT_BUF;
 assign bsx_regs_reset_we = bsx_regs_reset_we_buf;
 assign bsx_regs_reset_out = bsx_regs_reset_out_buf;
 assign bsx_regs_set_out = bsx_regs_set_out_buf;
+assign bs_dl_arm_out    = bs_dl_arm_buf;
+assign bs_dl_chan_out   = bs_dl_chan_buf;
+assign bs_dl_base_out   = bs_dl_base_buf;
+assign bs_dl_frames_out = bs_dl_frames_buf;
+assign bs_dl_stage_out  = bs_dl_stage_buf;
 
 assign rtc_data_out = rtc_data_out_buf;
 assign rtc_pgm_we = rtc_pgm_we_buf;

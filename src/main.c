@@ -17,6 +17,7 @@
 #include "snes.h"
 #include "cover.h"
 #include "gameinfo.h"
+#include "bsx_dl.h"
 #include "led.h"
 #include "sort.h"
 #include "cic.h"
@@ -901,6 +902,8 @@ int main(void) {
         
         if(getticks() > loop_ticks + 25) {
           loop_ticks = getticks();
+          /* BS-X over-the-air download bridge (bounded; only for the Town / mapper 3) */
+          if(romprops.mapper_id == 3) bsx_dl_service();
  //         sram_reliable();
           printf("%s ", get_cic_statename(get_cic_state()));
           cmd=snes_main_loop();

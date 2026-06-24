@@ -562,6 +562,22 @@ dma snes_dma (
 // BS Memory Pack flash-erase request -> exposed in the MCU status word (mcu_cmd)
 wire [1:0] bs_erase_seq;
 wire [3:0] bs_erase_blk;
+// BS-X over-the-air download (satellite receiver): FPGA serves the program stream
+// from the ring at 0x980000; the MCU feeds fragments + polls the drain notify.
+wire bs_dl_enable;          // route the $218C read to the ring (address.v)
+wire [16:0] bs_dl_offset;
+wire [1:0] bs_dl_seq;       // notify -> mcu_cmd status 0xF5
+// Driven by the mcu_cmd 0xe8 descriptor opcode.  The mcu_cmd buffers reset to 0, so on a
+// fresh boot bs_dl_arm=0 -> bs_dl_armed=0 -> the legacy page/RTC/pack/erase path is
+// byte-IDENTICAL until the firmware/host arms it (receiver dormant until a download).
+wire bs_dl_arm;
+wire [9:0] bs_dl_chan;
+wire bs_dl_stage;
+wire [16:0] bs_dl_base;
+wire [15:0] bs_dl_frames;
+wire [15:0] bs_dl_dbg_q;    // DEBUG probe (TEMPORARY)
+wire [15:0] bs_dl_dbg_sf;
+wire [7:0]  bs_dl_dbg_fl;
 bsx snes_bsx(
   .clkin(CLK2),
   .use_bsx(use_bsx),
@@ -570,6 +586,8 @@ bsx snes_bsx(
 
   .pgm_we(bsx_regs_reset_we),
   .snes_addr_in(SNES_ADDR),
+  .mapped_addr_in(CTX_ROM_ADDRr),  // DEBUG (TEMP): the RESOLVED CTX write target (latched at WR_end)
+  .ctx_we_hit_in(CTX_WE_HIT),      // DEBUG (TEMP): the CTX write actually commits to SDRAM this cycle
   .reg_data_in(BSX_SNES_DATA_IN),
   .reg_data_out(BSX_SNES_DATA_OUT),
   .reg_oe_falling(SNES_RD_start),
@@ -586,8 +604,23 @@ bsx snes_bsx(
   .bs_page_offset(bs_page_offset),
   .feat_bs_base_enable(feat_bs_base_enable),
   .bs_erase_seq(bs_erase_seq),
-  .bs_erase_blk(bs_erase_blk)
+  .bs_erase_blk(bs_erase_blk),
+  .bs_dl_enable(bs_dl_enable),
+  .bs_dl_offset(bs_dl_offset),
+  .bs_dl_seq(bs_dl_seq),
+  .bs_dl_arm(bs_dl_arm),
+  .bs_dl_chan(bs_dl_chan),
+  .bs_dl_stage(bs_dl_stage),
+  .bs_dl_base(bs_dl_base),
+  .bs_dl_frames(bs_dl_frames),
+  .bs_dl_dbg_q(bs_dl_dbg_q),     // DEBUG (TEMPORARY)
+  .bs_dl_dbg_sf(bs_dl_dbg_sf),
+  .bs_dl_dbg_fl(bs_dl_dbg_fl),
+  .bs_ctx_target(BS_CTX_TARGET), // base-unit pack target computed in bsx.v from its held snes_addr
+  .bs_ctx_use(BS_CTX_USE)        // 1 = this flash write is a non-slotted (broadcast) write
 );
+wire [23:0] BS_CTX_TARGET;
+wire        BS_CTX_USE;
 
 spi snes_spi(
   .clk(CLK2),
@@ -670,6 +703,15 @@ mcu_cmd snes_mcu_cmd(
   .bsx_regs_set_out(bsx_regs_set_bits),
   .bsx_regs_reset_out(bsx_regs_reset_bits),
   .bsx_regs_reset_we(bsx_regs_reset_we),
+  .bs_dl_arm_out(bs_dl_arm),
+  .bs_dl_chan_out(bs_dl_chan),
+  .bs_dl_base_out(bs_dl_base),
+  .bs_dl_frames_out(bs_dl_frames),
+  .bs_dl_stage_out(bs_dl_stage),
+  .bs_dl_seq_in(bs_dl_seq),
+  .bs_dl_dbg_q_in(bs_dl_dbg_q),     // DEBUG (TEMPORARY)
+  .bs_dl_dbg_sf_in(bs_dl_dbg_sf),
+  .bs_dl_dbg_fl_in(bs_dl_dbg_fl),
   .rtc_data_out(rtc_data_in),
   .rtc_pgm_we(rtc_pgm_we),
   .srtc_reset(srtc_reset),
@@ -720,6 +762,8 @@ address snes_addr(
   .bs_page_offset(bs_page_offset),
   .bs_page(bs_page),
   .bs_page_enable(bs_page_enable),
+  .bs_dl_enable(bs_dl_enable),
+  .bs_dl_offset(bs_dl_offset),
   .bsx_tristate(bsx_tristate),
   //SRTC
   .srtc_enable(srtc_enable),
@@ -956,8 +1000,90 @@ assign ROM_OE = 1'b0;
 reg[17:0] SNES_DEAD_CNTr;
 initial SNES_DEAD_CNTr = 0;
 
-// context engine request -- also reused for the BS flash program write.
+// BS flash program write: the CTX target must be the mapping of the HELD flash-write address.
+//
+// The primary `address` mapper (MAPPED_SNES_ADDR) is fed SNES_ADDR_early (pipeline stages 3-2,
+// +1 internal reg), i.e. ~2 stages AHEAD of the held address.  IS_FLASHWR (= bsx flash_writable)
+// is instead derived from bsx.v's snes_addr = registered SNES_ADDR (stages 5-4 + 1 reg).  So when
+// IS_FLASHWR finally asserts at WR_end, MAPPED_SNES_ADDR and any FIXED-delay tap of it have already
+// slid onto the SNES's NEXT access (the Town reading a $7E WRAM var right after STA $C0:7FB0) --
+// latching it sent the directory byte to 0xF5xxxx (WRAM) instead of 0x407FB0 (the pack) -> the
+// directory never updated -> Error 21.  A fixed delay can't converge: the bus is moving and the
+// surrounding WRAM accesses are dense, so the alignment is instruction-timing-dependent.
+//
+// Fix: a SECOND address mapper fed the HELD taps -- SNES_ADDR (stages 5-4) / SNES_ROMSEL (5-4) --
+// Feed the held mapper a STABLE LATCH of the flash-write address, not the live moving bus.  address.v
+// mixes epochs internally (it uses the SNES_ADDR_early PORT combinationally AND a +1-registered copy),
+// so feeding it the live SNES_ADDR mis-maps at WR_end -- by then SNES_ADDR (stages 5-4) is already the
+// Town's next ($7E WRAM) access while the flash byte sits one stage deeper.  IS_FLASHWR (= bsx
+// flash_writable) is qualified on bsx.v's snes_addr = SNES_ADDR delayed +1, so SNES_ADDR_d1 is that
+// exact epoch; latch it into FLASH_TGT_ADDR whenever IS_FLASHWR is high (only true during the flash
+// program byte) and hold it.  Now both the early port and the internal +1 reg see the same stable
+// value -> the mapping is consistent -> map($C0:7FB0)=0x407FB0 (base) / map($Cn:8000)=0x900000+off (.mpk).
+reg [23:0] SNES_ADDR_d1   = 24'h0; always @(posedge CLK2) SNES_ADDR_d1 <= SNES_ADDR;
+reg [23:0] FLASH_TGT_ADDR = 24'h0; always @(posedge CLK2) if(IS_FLASHWR) FLASH_TGT_ADDR <= SNES_ADDR_d1;
+wire [23:0] MAPPED_HELD_ADDR;
+address snes_addr_held(
+  .CLK(CLK2),
+  .MAPPER(MAPPER),
+  .featurebits(featurebits),
+  .SNES_ADDR_early(FLASH_TGT_ADDR),    // STABLE latched flash-write address (held while IS_FLASHWR)
+  .SNES_WRITE_early(SNES_WRITE_early),
+  .SNES_PA(SNES_PA),
+  .SNES_ROMSEL(SNES_ROMSEL),           // HELD ROMSEL (stages 5-4)
+  .ROM_ADDR(MAPPED_HELD_ADDR),         // the only output we use: mapped pack target of the held addr
+  .ROM_HIT(),
+  .IS_SAVERAM(),
+  .IS_ROM(),
+  .IS_WRITABLE(),
+  .IS_PATCH(),
+  .SAVERAM_BASE(SAVERAM_BASE),
+  .SAVERAM_MASK(SAVERAM_MASK),
+  .ROM_MASK(ROM_MASK),
+  .map_unlock(map_unlock),
+  .map_Ex_rd_unlock(map_Ex_rd_unlock_r),
+  .map_Ex_wr_unlock(map_Ex_wr_unlock_r),
+  .map_Fx_rd_unlock(map_Fx_rd_unlock_r),
+  .map_Fx_wr_unlock(map_Fx_wr_unlock_r),
+  .snescmd_unlock(snescmd_unlock),
+  .msu_enable(),
+  .dma_enable(),
+  .use_bsx(),
+  .bsx_regs(bsx_regs),
+  .bs_page_offset(bs_page_offset),
+  .bs_page(bs_page),
+  .bs_page_enable(bs_page_enable),
+  .bs_dl_enable(bs_dl_enable),
+  .bs_dl_offset(bs_dl_offset),
+  .bsx_tristate(),
+  .srtc_enable(),
+  .r213f_enable(),
+  .r2100_hit(),
+  .snescmd_enable(),
+  .nmicmd_enable(),
+  .return_vector_enable(),
+  .branch1_enable(),
+  .branch2_enable(),
+  .branch3_enable(),
+  .exe_enable(),
+  .map_enable()
+);
+
+// SYNCHRONOUS broadcast-pack erase, done by the FPGA (not the slow async MCU memset that races
+// the Town's program writes under bus contention and wipes the just-written directory).  On the
+// bsx erase-seq change (a Town $D0 erase-confirm), memset the target block to 0xFF word-by-word
+// through the same CTX write engine, during the FPGA flash busy-timer window -- so it finishes
+// before the Town programs.  Only for the base-unit broadcast pack (~feat_bs_slot); the slotted
+// .mpk keeps the MCU erase.  bs_erase_blk = block (0xF = whole 1MB pack).
+reg [1:0]  bs_erase_seq_d = 2'b0;
+reg        BS_ERASE_ACTr  = 1'b0;
+reg [23:0] BS_ERASE_PTRr  = 24'h0;
+reg [23:0] BS_ERASE_TOPr  = 24'h0;
+wire [23:0] bs_erase_blk_base = {4'h4, bs_erase_blk, 16'h0000};   // 0x400000 + blk*0x10000
+
+// context engine request -- also reused for the BS flash program write AND the FPGA pack erase.
 always @(posedge CLK2) begin
+  bs_erase_seq_d <= bs_erase_seq;
   if(CTX_WRQ) begin
     CTX_WR_PENDr <= 1'b1;
     RQ_CTX_RDYr <= 1'b0;
@@ -965,17 +1091,36 @@ always @(posedge CLK2) begin
     CTX_ROM_DATAr <= CTX_DOUT;
     CTX_ROM_WORDr <= CTX_WORD;
   end
+  // FPGA pack-erase: write 0xFFFF word-by-word over the block (takes priority over the flash
+  // program write, but they never overlap -- the busy timer holds the Town until erase is done).
+  else if(BS_ERASE_ACTr & ~CTX_WR_PENDr & (BS_ERASE_PTRr != BS_ERASE_TOPr)) begin
+    CTX_WR_PENDr <= 1'b1;
+    CTX_ROM_ADDRr <= BS_ERASE_PTRr;
+    CTX_ROM_DATAr <= 16'hffff;
+    CTX_ROM_WORDr <= 1'b1; // word write
+  end
   // BS flash program byte: the live SNES byte is valid at WR_end.  Skip $FF (flash AND
   // makes it a no-op, so it preserves the byte the game wrote earlier, e.g. the name).
   else if(SNES_WR_end & IS_FLASHWR & (SNES_DATA != 8'hff) & ~CTX_WR_PENDr) begin
     CTX_WR_PENDr <= 1'b1;
-    CTX_ROM_ADDRr <= MAPPED_SNES_ADDR;
+    CTX_ROM_ADDRr <= BS_CTX_USE ? BS_CTX_TARGET : MAPPED_SNES_ADDR;  // broadcast: bsx-computed pack target; .mpk: original mapper
     CTX_ROM_DATAr <= {SNES_DATA, SNES_DATA};
     CTX_ROM_WORDr <= 1'b0; // byte write
   end
   else if(STATE & ST_CTX_WR_END) begin
     CTX_WR_PENDr <= 1'b0;
     RQ_CTX_RDYr <= 1'b1;
+    if(BS_ERASE_ACTr) begin                 // advance the erase pointer one word
+      BS_ERASE_PTRr <= BS_ERASE_PTRr + 24'd2;
+      if((BS_ERASE_PTRr + 24'd2) >= BS_ERASE_TOPr) BS_ERASE_ACTr <= 1'b0;
+    end
+  end
+  // arm the erase on a fresh erase-seq from bsx (broadcast pack only); placed last so a brand
+  // new $D0 always (re)starts a full block memset.
+  if((bs_erase_seq != bs_erase_seq_d) & ~feat_bs_slot) begin
+    BS_ERASE_ACTr <= 1'b1;
+    BS_ERASE_PTRr <= (bs_erase_blk == 4'hf) ? 24'h400000 : bs_erase_blk_base;
+    BS_ERASE_TOPr <= (bs_erase_blk == 4'hf) ? 24'h500000 : (bs_erase_blk_base + 24'h010000);
   end
 end
 
@@ -1194,8 +1339,14 @@ assign ROM_WE = SD_DMA_TO_ROM
                 ? MCU_WRITE
                 : CTX_WE_HIT ? 1'b0
                 : DMA_WE_HIT ? 1'b0
-                // flash program writes (IS_FLASHWR) are done by the CTX path above, not here
-                : (ROM_HIT & ~loop_enable & IS_WRITABLE & SNES_CPU_CLK) ? SNES_WRITE
+                // flash program writes (IS_FLASHWR) are done by the CTX path above, not here.
+                // ENFORCE it with ~IS_FLASHWR: a base-unit pack address that ALSO satisfies
+                // IS_WRITABLE (BSX_IS_PSRAM, e.g. the lower banks $C0-$C3) would otherwise fire
+                // this SYNCHRONOUS write with the STALE pre-WR_end byte (0xFF right after an erase)
+                // and clobber the correct decoupled CTX write -> those banks read back 0xFF while
+                // the BS_BASE_PACK upper banks (IS_WRITABLE=0) commit -> the directory/header at
+                // $C0:7FB0 never lands -> Town verify fails -> Error 21.
+                : (ROM_HIT & ~loop_enable & IS_WRITABLE & ~IS_FLASHWR & SNES_CPU_CLK) ? SNES_WRITE
                 : MCU_WE_HIT ? 1'b0
                 : 1'b1;
 
@@ -1210,7 +1361,7 @@ assign SNES_DATABUS_OE = (msu_enable & ReadOrWrite_r) ? 1'b0 :
                          (bsx_data_ovr & ~IS_PATCH & ReadOrWrite_r) ? 1'b0 :
                          (srtc_enable & ReadOrWrite_r) ? 1'b0 :
                          (snescmd_enable & ReadOrWrite_r) ? (~(snescmd_unlock | feat_cmd_unlock | (map_snescmd_wr_unlock_r & ~SNES_WRITE) | (map_snescmd_rd_unlock_r & ~SNES_READ))) :
-                         (bs_page_enable & ~SNES_READ) ? 1'b0 :
+                         ((bs_page_enable | bs_dl_enable) & ~SNES_READ) ? 1'b0 :
                          (r213f_enable & ~SNES_PARD) ? 1'b0 :
                          (r2100_enable & ~SNES_PAWR) ? 1'b0 :
                          (snoop_4200_enable & ~SNES_WRITE) ? 1'b0 :

@@ -58,7 +58,9 @@ module address(
   output map_enable,
   input [8:0] bs_page_offset,
   input [9:0] bs_page,
-  input bs_page_enable
+  input bs_page_enable,
+  input bs_dl_enable,        // BS-X over-the-air download: read the ring at 0x980000
+  input [16:0] bs_dl_offset
 );
 
 /* feature bits. see src/fpga_spi.c for mapping */
@@ -82,6 +84,17 @@ wire BS_SLOT = featurebits[FEAT_BSSLOT];
 wire [19:0] LOROM_OFF = {SNES_ADDR[20:16], SNES_ADDR[14:0]};
 wire BS_PACK_HIT    = BS_SLOT & (SNES_ADDR[23:21] == 3'b110); // LoROM pack $C0-$DF
 wire BS_PACK_HIT_HI = BS_SLOT & (SNES_ADDR[23:20] == 4'he);   // HiROM pack $E0-$EF
+// BASE-cart Memory Pack flash window: $C0-$DF:$0000-$7FFF (LoROM lower half), NOT slotted.
+// The Town BIOS SAVES a downloaded program here via the Intel/Sharp flash protocol; the data
+// must land in the WRITABLE pack PSRAM at 0x400000 (mirrors the slotted BS_PACK_HIT->0x900000).
+// Without this it falls to the "else" (BSX_ADDR & 0x0fffff = cart ROM, read-only) -> the write
+// is dropped, the Town's read-back verify fails, and the save aborts (Error 21 / No Stored Data).
+/* Full $C0-$DF base-unit pack window.  NB: NO ~SNES_ADDR[15] gate -- under the MCC HiROM-linear
+   mode (set_bsx_regs(0xf6) -> bsx_regs[2]=1) the 512KB LoROM program BODY is written to the UPPER
+   half ($Cn:8000-$FFFF); gating ~A15 dropped every body write -> the pack stayed 0xFF -> Error 21.
+   With bsx_regs[2]=1, BSX_ADDR={1'b0,SNES_ADDR[22:0]} is already 64KB-linear, so 0x400000+(BSX_ADDR
+   & 0x0fffff) maps $C0:8000->0x408000, $C1:0000->0x410000 ... $CF:FFFF->0x4FFFFF with no aliasing. */
+wire BS_BASE_PACK   = ~BS_SLOT & (SNES_ADDR[23:21] == 3'b110);
 
 // BS-LOROM (Derby): $80-$9F map to the upper 1MB (file $200000+), not $00-$1F
 wire BSLOROM = featurebits[FEAT_BSLOROM];
@@ -188,6 +201,15 @@ assign bsx_tristate = (MAPPER_DEC[3'b011]) & ~BSX_IS_CARTROM & ~BSX_IS_PSRAM & B
 assign IS_WRITABLE = IS_SAVERAM
                      |IS_PATCH // allow writing of the patch region
                      |((MAPPER_DEC[3'b011]) & BSX_IS_PSRAM);
+                     /* BS_BASE_PACK ($C0:0000-$7FFF base-unit pack) is deliberately NOT in IS_WRITABLE.
+                        Its flash save goes through the DECOUPLED CTX path (IS_FLASHWR), exactly like the
+                        slotted .mpk pack (whose $C0:8000+ flash writes also have IS_WRITABLE=0 yet commit
+                        -- the target 0x400000 is writable PSRAM).  Marking it writable ALSO enables the
+                        SYNCHRONOUS ROM_WE write (main.v:1236), which writes the STALE pre-WR_end byte
+                        (0xFF right after an erase) OVER the correct CTX byte -> the saved program reads
+                        back 0xFF -> Town read-back verify fails -> Error 21.  Only the BS_BASE_PACK ->
+                        0x400000 mapping (SRAM_SNES_ADDR below) is needed: the CTX write AND the array
+                        read-back both hit the 0x400000 pack. */
 
 wire [23:0] BSX_ADDR = bsx_regs[2] ? {1'b0, SNES_ADDR[22:0]}
                                    : {2'b00, SNES_ADDR[22:16], SNES_ADDR[14:0]};
@@ -227,8 +249,12 @@ assign SRAM_SNES_ADDR = IS_PATCH
                               ? (24'h800000 + ({SNES_ADDR[22:16], SNES_ADDR[14:0]} & 24'h0fffff))
                               : BSX_IS_PSRAM
                               ? (24'h400000 + (BSX_ADDR & 24'h07FFFF))
+                              : bs_dl_enable
+                              ? (24'h980000 + {7'b0, bs_dl_offset})   // download ring (upper, unused half of the 1MB pack)
                               : bs_page_enable
                               ? (24'h900000 + {bs_page,bs_page_offset})
+                              : BS_BASE_PACK
+                              ? (24'h400000 + (BSX_ADDR & 24'h0fffff))   /* base-cart pack -> WRITABLE 0x400000 copy of the .bs (same offset as the 0x00xxxx read) */
                               : (BSX_ADDR & 24'h0fffff)
                            )
                            :(MAPPER_DEC[3'b110])
@@ -254,7 +280,7 @@ assign SRAM_SNES_ADDR = IS_PATCH
 
 assign ROM_ADDR = SRAM_SNES_ADDR;
 
-assign ROM_HIT = IS_ROM | IS_WRITABLE | bs_page_enable;
+assign ROM_HIT = IS_ROM | IS_WRITABLE | bs_page_enable | bs_dl_enable;
 
 assign msu_enable = featurebits[FEAT_MSU1] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff8) == 16'h2000));
 assign dma_enable = (featurebits[FEAT_DMA1] | map_unlock | snescmd_unlock) & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff0) == 16'h2020));

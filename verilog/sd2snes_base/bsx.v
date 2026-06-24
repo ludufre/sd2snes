@@ -24,6 +24,8 @@ module bsx(
   input reg_oe_rising,
   input reg_we_rising,
   input [23:0] snes_addr_in,
+  input [23:0] mapped_addr_in,  // DEBUG (TEMP): now fed CTX_ROM_ADDRr (the RESOLVED CTX write target)
+  input        ctx_we_hit_in,   // DEBUG (TEMP): main.v CTX_WE_HIT (the CTX write actually commits)
   input [7:0] reg_data_in,
   output [7:0] reg_data_out,
   input [7:0] reg_reset_bits,
@@ -44,7 +46,30 @@ module bsx(
   // sram_memset(0xFF)).  bs_erase_seq increments on each erase; the MCU compares it
   // to its last-seen value and erases bs_erase_blk (0xF = whole pack).
   output [1:0] bs_erase_seq,
-  output [3:0] bs_erase_blk
+  output [3:0] bs_erase_blk,
+  // --- BS-X satellite RECEIVER (over-the-air program download) ----------------
+  // The Town downloads a program via the $218A/$218B/$218C queue/prefix/data stream
+  // (the DCD-BSA receiver the stock FPGA never implemented).  The MCU streams
+  // 22-byte-aligned fragments into a ring at 0x980000 and stages a descriptor; the
+  // FPGA serves them drain-gated.  Behavior is a register-for-register port of the
+  // golden model bsx_receiver_model.py (validated byte-exact).  Until bs_dl_arm is
+  // set on the tuned channel the legacy page path is byte-IDENTICAL to before.
+  output bs_dl_enable,         // route $218C read to the download ring (0x980000)
+  output [16:0] bs_dl_offset,  // byte offset into the ring (<=128KB window)
+  output [1:0] bs_dl_seq,      // notify: +1 once per fragment-needed (MCU compares, like bs_erase_seq)
+  input bs_dl_arm,             // MCU: 1 = a download is active
+  input [9:0] bs_dl_chan,      // the channel (page number) that carries the program
+  input bs_dl_stage,           // MCU: rising = a fragment is staged in the ring
+  input [16:0] bs_dl_base,     // ring offset of the staged fragment
+  input [15:0] bs_dl_frames,   // 22-byte frames in the staged fragment (a 32KB data group = 1490)
+  // --- DEBUG probe (read live via opcode 0xf8) — TEMPORARY -----------------------
+  output [15:0] bs_dl_dbg_q,   // bs_dl_queue (frames left to advertise)
+  output [15:0] bs_dl_dbg_sf,  // bs_dl_staged_frames (loaded frame count)
+  output [7:0]  bs_dl_dbg_fl,  // {first,armed,staged,need,pf_latch,dt_latch,2'b0}
+  // CTX flash-write target computed HERE from snes_addr (the proven-correct held flash-write address),
+  // bypassing address.v's epoch-mixing.  Only for the base-unit (broadcast) pack ($C0-$DF -> 0x400000).
+  output [23:0] bs_ctx_target, // = 0x400000 + (BSX_ADDR & 0x0fffff): where the directory byte must land
+  output        bs_ctx_use     // this is a base-unit (non-slotted) flash program write -> use bs_ctx_target
 );
 
 `define BSX_ENABLE
@@ -78,11 +103,13 @@ wire base_enable = feat_bs_base_enable
                    & (use_bsx) && (!snes_addr[22] && (snes_addr[15:0] >= 16'h2188)
                                  && (snes_addr[15:0] <= 16'h219f));
 
-// flash window: base $C0, LoROM slot $C0-$DF, HiROM slot $E0-$EF
+// flash window: base-unit AND LoROM slot $C0-$DF, HiROM slot $E0-$EF.
+// NB: the base case is the FULL $C0-$DF bank (was just bank $C0).  The Town programs/erases the
+// 512KB LoROM body across banks $C0..$Cn (HiROM-linear MCC mode), so flash_writable + the command
+// handler must cover the whole window or the upper banks' program bytes are never written.
 wire flash_enable = bs_hirom
                     ? (snes_addr[23:20] == 4'he)
-                    : ((snes_addr[23:16] == 8'hc0)
-                       | (bs_slot & (snes_addr[23:21] == 3'b110)));
+                    : (snes_addr[23:21] == 3'b110);
 
 // command/vendor mode returns the register; array mode ($FF) reads PSRAM
 wire flash_ovr = (use_bsx) && (flash_enable & flash_ovr_r);
@@ -92,7 +119,14 @@ assign flash_writable = (use_bsx)
                         && flash_enable
                         && flash_we_r;
 
-assign data_ovr = (cart_enable | base_enable | flash_ovr) & ~bs_page_enable;
+// CTX target computed from snes_addr (the held flash-write address; sf-capture proved this register
+// holds $C0:7FB0 at the write).  Base-unit pack = 0x400000 + (BSX_ADDR & 0x0fffff); the broadcast runs
+// HiROM-linear (bsx_regs[2]=1 via set_bsx_regs 0xf6) so the offset is snes_addr[19:0] -> $C0:7FB0 =>
+// 0x407FB0, $C4:xxxx => 0x44xxxx, etc.  bs_ctx_use selects this over address.v for non-slotted writes.
+assign bs_ctx_target = {4'h4, snes_addr[19:0]};
+assign bs_ctx_use    = flash_writable & ~bs_slot;
+
+assign data_ovr = (cart_enable | base_enable | flash_ovr) & ~bs_page_enable & ~bs_dl_enable;
 
 // --- Flash block-erase tracking -------------------------------------------
 // block-erase = $20 (setup) then $D0 (confirm) at the block address.
@@ -107,7 +141,9 @@ assign bs_erase_seq = bs_erase_seq_r;
 assign bs_erase_blk = bs_erase_blk_r;
 wire [3:0] erase_blk_of_addr = bs_hirom ? snes_addr[19:16] : snes_addr[20:17];
 // busy timer held after a $D0 so the game waits while the MCU erases the block (~0.4s)
-reg [24:0] erase_busy_cnt = 0;
+reg [27:0] erase_busy_cnt = 0;  // widened 25->28 bits (~0.35s -> ~2.8s): hold the Town in status-poll
+                                // long enough for the ASYNC MCU sram_memset erase to finish BEFORE the
+                                // Town programs, else the late erase wipes the just-written directory.
 wire erase_busy = (erase_busy_cnt != 0);
 
 
@@ -127,7 +163,63 @@ wire bs_sta1_en = base_addr == 5'h10;
 wire bs_stb1_en = base_addr == 5'h11;
 wire bs_page1_en = base_addr == 5'h12;
 
-assign bs_page_enable = base_enable & ((|bs_page0 & (bs_page0_en | bs_sta0_en | bs_stb0_en))
+// === BS-X satellite RECEIVER (stream 0) — port of bsx_receiver_model.py =======
+// $218A=0x0a Queue, $218B=0x0b Prefix, $218C=0x0c Data.  Armed only while the Town
+// is tuned to the program channel; otherwise the legacy page path is byte-identical.
+reg [16:0] bs_dl_addr = 0;          // running ring offset (= base + bytes read)
+reg [15:0] bs_dl_queue = 0;         // 22-byte frames left to ADVERTISE (a 32KB data group = 1490 > 8 bits)
+reg [7:0]  bs_pf_queue = 0;         // advertised status frames not yet read (cap 0x7F)
+reg [7:0]  bs_dt_queue = 0;         // advertised data frames not yet read (cap 0x7F)
+reg [4:0]  bs_data_cnt = 0;         // 0..21 byte counter within the current frame
+reg        bs_dl_first = 1'b1;      // next $218B carries the 0x10 Packet-Start
+reg        bs_pf_latch = 0;
+reg        bs_dt_latch = 0;
+reg        bs_dl_need = 0;          // one-shot gate for the notify
+reg [1:0]  bs_dl_seq_r = 0;
+reg        bs_dl_staged = 0;        // a fragment descriptor is waiting to be loaded
+reg [16:0] bs_dl_staged_base = 0;
+reg [15:0] bs_dl_staged_frames = 0;
+reg        bs_dl_stage_s = 0;       // edge detect of bs_dl_stage
+// DEBUG (TEMPORARY) — capture the Town's SAVE writes during a download, FILTERED to the
+// pack write windows (flash $C0-$EF OR PSRAM $x6000-$7FFF in banks $80-$FF) to exclude the
+// city's normal writes.  Answers WHERE the save lands (which did NOT reach PSRAM 0x400000).
+reg        bs_dbg90_seen = 0;       // reused: "a pack-window write was captured this session"
+reg [23:0] bs_cap_min    = 24'hffffff; // min pack-window write address
+reg [23:0] bs_cap_max    = 0;       // max pack-window write address
+reg [15:0] bs_cap_cnt    = 0;       // count of pack-window writes (saturating)
+reg        bs_cap_flash  = 0;       // any write hit the $C0-$EF flash window
+reg        bs_cap_6xxx   = 0;       // any write hit the $80-$FF:6000-7FFF PSRAM window
+reg        bs_cap_cmdran = 0;       // the flash command handler (gated by regs_outr[12]) ran
+reg        bs_cap_fwr    = 0;       // flash_writable asserted (a program byte went to the CTX path)
+reg        bs_cap_regsC  = 0;       // latched regs_outr[12] (flash-write-enable) — avoids forward ref
+reg        bs_dl_arm_s   = 0;
+assign bs_dl_seq = bs_dl_seq_r;
+assign bs_dl_offset = bs_dl_addr;
+// DEBUG probe (TEMPORARY) — repurposed: the captured save-write address + path
+assign bs_dl_dbg_q  = bs_cap_min[23:8];                           // RESOLVED CTX write target [23:8] (where CTX commits)
+assign bs_dl_dbg_sf = bs_cap_max[23:8];                           // FIRST SNES flash-write addr [23:8] ($C0:7Fxx?)
+assign bs_dl_dbg_fl = {bs_dbg90_seen, bs_cap_flash, bs_cap_6xxx,  // seen, flash-window, $x6xxx
+                       bs_cap_regsC, bs_cap_cmdran, bs_cap_fwr,   // FLASH-ENABLE, cmd-ran, prog-wr
+                       bs_cap_cnt[9:8]};                          // count magnitude (low)
+
+wire bs_dl_armed = bs_dl_arm & (bs_page0 == bs_dl_chan);
+// $218C ($218 base_addr 0x0c) read serves the ring at 0x980000 instead of 0x900000
+assign bs_dl_enable = base_enable & bs_dl_armed & bs_page0_en;
+
+// delta terms (combine the every-clock pacer with per-frame read drains)
+wire bs_pacer_inc = bs_dl_armed & (bs_dl_queue != 8'h0) & (bs_pf_queue < 8'h7f)
+                                & bs_pf_latch & bs_dt_latch;
+wire bs_pf_dec = reg_oe_rising & bs_dl_armed & bs_stb0_en  & (bs_pf_queue != 8'h0); // $218B read
+wire bs_dt_dec = reg_oe_rising & bs_dl_armed & bs_page0_en & (bs_data_cnt == 5'd21)
+                                                          & (bs_dt_queue != 8'h0);  // $218C 22nd byte
+// values returned to the SNES on a read (reg_oe_falling mux)
+wire [7:0] bs_queue_val  = bs_pf_queue;                                  // $218A (cap 0x7F -> bit7 clear)
+wire [7:0] bs_prefix_val = bs_pf_latch                                   // 0 until $218B latched (model read_prefix)
+                         ? ((bs_dl_first ? 8'h10 : 8'h00)                // Packet-Start
+                          | ((bs_dl_queue == 8'h0 && bs_pf_queue == 8'h1) ? 8'h80 : 8'h00)) // Packet-End
+                         : 8'h00;
+
+assign bs_page_enable = base_enable & ((|bs_page0 & ~bs_dl_armed & (bs_page0_en | bs_sta0_en | bs_stb0_en))
                                       |(|bs_page1 & (bs_page1_en | bs_sta1_en | bs_stb1_en)));
 
 assign bs_page_out = (bs_page0_en | bs_sta0_en | bs_stb0_en) ? bs_page0 : bs_page1;
@@ -263,7 +355,12 @@ always @(posedge clkin) begin
     case(base_addr)
       5'h0b: begin
         bs_stb0_offset <= bs_stb0_offset + 1;
-        base_regs[5'h0d] <= base_regs[5'h0d] | reg_data_in;
+        // Accumulate the prefix flags into the $218D status (golden model read_prefix:
+        // status |= prefix).  While ARMED the receiver returns bs_prefix_val on $218B, so
+        // OR THAT (not reg_data_in) into $218D — the Town reads $218D for the Packet-End
+        // (0x80); without this it stays 0x00 and reception fails with Error 21.  ($218D
+        // read + clear already exists below for base_addr 0x0d.)
+        base_regs[5'h0d] <= base_regs[5'h0d] | (bs_dl_armed ? bs_prefix_val : reg_data_in);
       end
       5'h0c: bs_page0_offset <= bs_page0_offset + 1;
       5'h11: begin
@@ -276,7 +373,9 @@ always @(posedge clkin) begin
     if(cart_enable)
       reg_data_outr <= {regs_outr[reg_addr], 7'b0};
     else if(base_enable) begin
-      case(base_addr)
+      if (bs_dl_armed && bs_sta0_en) reg_data_outr <= bs_queue_val;        // $218A Queue
+      else if (bs_dl_armed && bs_stb0_en) reg_data_outr <= bs_prefix_val;  // $218B Prefix
+      else case(base_addr)                                                 // ($218C data = ring via bs_dl_enable)
         5'h0c, 5'h12: begin
           case (bs_page1_offset)
             4: reg_data_outr <= 8'h3;
@@ -365,11 +464,11 @@ always @(posedge clkin) begin
           // port, $D0 at the block address ($C4:8000 -> block 2).
           if(erase_setup_r) begin
             bs_erase_seq_r <= bs_erase_seq_r + 1'b1; bs_erase_blk_r <= erase_blk_of_addr;
-            erase_busy_cnt <= {25{1'b1}};
+            erase_busy_cnt <= {28{1'b1}};
             flash_ovr_r <= 1'b1; flash_status_r <= 1'b1;
           end else if(erase_all_setup_r) begin
             bs_erase_seq_r <= bs_erase_seq_r + 1'b1; bs_erase_blk_r <= 4'hf;
-            erase_busy_cnt <= {25{1'b1}};
+            erase_busy_cnt <= {28{1'b1}};
             flash_ovr_r <= 1'b1; flash_status_r <= 1'b1;
           end
           erase_setup_r <= 1'b0; erase_all_setup_r <= 1'b0;
@@ -390,6 +489,94 @@ always @(posedge clkin) begin
           flash_ovr_r <= 1'b1; flash_status_r <= 1'b1;
         end
       end
+    end
+  end
+end
+
+// === BS-X RECEIVER FSM — drives only bs_dl_* regs (legacy path untouched) ======
+// Register-for-register port of bsx_receiver_model.py.  The "fully consumed" test
+// REQUIRES bs_dl_queue==0 (not just the pf/dt queues) so a $218A read landing right
+// after a load — before the pacer advertises a frame — does not skip the fragment.
+always @(posedge clkin) begin
+  bs_dl_stage_s <= bs_dl_stage;
+  if (bs_dl_stage & ~bs_dl_stage_s) begin   // MCU staged a fragment in the ring
+    bs_dl_staged        <= 1'b1;
+    bs_dl_staged_base   <= bs_dl_base;
+    bs_dl_staged_frames <= bs_dl_frames;
+  end
+
+  if (reg_we_rising && base_enable && (base_addr == 5'h09)) begin
+    // channel (re)tune -> reset the stream sequence (mirrors the bs_page0 reset)
+    bs_dl_queue <= 8'h0; bs_pf_queue <= 8'h0; bs_dt_queue <= 8'h0;
+    bs_data_cnt <= 5'h0; bs_dl_first <= 1'b1; bs_dl_need <= 1'b0;
+    bs_dl_staged <= 1'b0;   // discard a fragment staged for the OLD channel (model _reset_fragment_seq)
+  end else if (reg_we_rising && base_enable && (base_addr == 5'h0b)) begin
+    bs_pf_latch <= (reg_data_in != 8'h0); bs_pf_queue <= 8'h0;   // $218B latch enable / ack
+  end else if (reg_we_rising && base_enable && (base_addr == 5'h0c)) begin
+    bs_dt_latch <= (reg_data_in != 8'h0); bs_dt_queue <= 8'h0;   // $218C latch enable / ack
+  end else if (reg_oe_rising && bs_dl_armed && bs_sta0_en) begin
+    // $218A read: advance to the next fragment ONLY when fully consumed
+    if (bs_dl_queue == 8'h0 && bs_pf_queue == 8'h0 && bs_dt_queue == 8'h0) begin
+      bs_data_cnt <= 5'h0;
+      if (bs_dl_staged) begin
+        bs_dl_addr   <= bs_dl_staged_base;
+        bs_dl_queue  <= bs_dl_staged_frames;
+        bs_dl_first  <= 1'b1;
+        bs_dl_need   <= 1'b0;
+        bs_dl_staged <= 1'b0;
+      end else if (!bs_dl_need) begin            // edge: notify the MCU exactly once
+        bs_dl_need  <= 1'b1;
+        bs_dl_seq_r <= bs_dl_seq_r + 1'b1;
+      end
+    end
+  end else begin
+    // every-clock pacer + per-frame read drains, delta-combined (race-safe)
+    bs_pf_queue <= bs_pf_queue + bs_pacer_inc - bs_pf_dec;
+    bs_dt_queue <= bs_dt_queue + bs_pacer_inc - bs_dt_dec;
+    bs_dl_queue <= bs_dl_queue - bs_pacer_inc;
+    if (bs_pf_dec) bs_dl_first <= 1'b0;           // $218B consumed -> Packet-Start spent
+    if (reg_oe_rising && bs_dl_armed && bs_page0_en && (bs_dt_queue != 8'h0)) begin // $218C data byte read
+      // advance ONLY when a data frame is advertised (model read_data: `if dt_queue:`);
+      // a stray/early $218C with dt_queue==0 must not move the ring ptr or the %22 phase.
+      bs_dl_addr  <= bs_dl_addr + 1'b1;
+      bs_data_cnt <= (bs_data_cnt == 5'd21) ? 5'd0 : (bs_data_cnt + 1'b1);
+    end
+  end
+end
+
+// DEBUG (TEMPORARY) — capture the Town's SAVE writes, FILTERED to the pack write windows:
+// the $C0-$EF flash window (flash_enable) OR a $x6000-$7FFF write in banks $80-$FF.  Tracks
+// min/max address + count + which window(s) hit.  Cleared when a new download arms.
+wire bs_wr_pack = reg_we_rising & (flash_enable
+                                 | (snes_addr[23] & (snes_addr[15:13] == 3'b011)));
+always @(posedge clkin) begin
+  bs_dl_arm_s <= bs_dl_arm;
+  if (bs_dl_arm & ~bs_dl_arm_s) begin           // new download armed -> clear capture
+    bs_dbg90_seen <= 1'b0;
+    bs_cap_min    <= 24'hffffff; // reused: MIN SNES write addr while flash_writable (across the save)
+    bs_cap_max    <= 24'h0;      // reused: MAX SNES write addr while flash_writable (across the save)
+    bs_cap_cnt    <= 16'h0;
+    bs_cap_flash  <= 1'b0;
+    bs_cap_6xxx   <= 1'b0;
+    bs_cap_cmdran <= 1'b0;
+    bs_cap_fwr    <= 1'b0;
+    bs_cap_regsC  <= 1'b0;
+  end else begin
+    if (bs_wr_pack) begin
+      if (bs_cap_cnt != 16'hffff)      bs_cap_cnt <= bs_cap_cnt + 16'h1;
+      if (flash_enable)                bs_cap_flash <= 1'b1;
+    end
+    if (bs_slot)                       bs_cap_6xxx  <= 1'b1;  // MEASURE: is this pack treated as SLOTTED? (fl bit5)
+    // did the flash command handler run (gate regs_outr[12]|bs_slot)? did a program byte write?
+    if (reg_we_rising & flash_enable & (regs_outr[4'hc] | bs_slot)) bs_cap_cmdran <= 1'b1;
+    if (reg_we_rising & flash_writable & bs_ctx_use) bs_cap_regsC <= 1'b1; // MEASURE: bs_ctx_use during flash write (fl bit4)
+    if (reg_we_rising & flash_writable) begin   // a program byte (flash) write from the SNES
+      bs_cap_fwr <= 1'b1;
+      if (~bs_cap_fwr) bs_cap_max <= snes_addr; // the FIRST SNES flash-write address ($C0:7FB0?)
+    end
+    if (ctx_we_hit_in & ~bs_dbg90_seen) begin   // the FIRST time the CTX write ACTUALLY commits to SDRAM
+      bs_dbg90_seen <= 1'b1;                     // (repurposed) "a CTX write committed this save"
+      bs_cap_min    <= mapped_addr_in;           // = CTX_ROM_ADDRr: where the CTX write RESOLVED to
     end
   end
 end
