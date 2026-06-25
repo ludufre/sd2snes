@@ -349,4 +349,9 @@ listcover_lastsel      .byt 0    ; last listsel_sel a cover was requested for (d
 ;----------language switch redraw bookkeeping
 menu_drawn_lang        .byt 0    ; language the current show_menu window was drawn in
 mainmenu_relang        .byt 0    ; set when the language changed -> main menu re-shows
+; fork: scratch for bgm_clear_aram_for_launch (game-launch ARAM clear, issue #3).
+; Written BEFORE backup_wram so they survive the warm reset; both sit low in the
+; data segment, well inside the backup_wram window ($7E:0000-$1FFF).
+gh_cmd_bak             .byt 0    ; the launch command byte, kept across the warm reset
+mcuparam_bak           .byt 0,0,0,0,0,0,0,0,0,0,0,0 ; MCU_PARAM (12B) across the warm reset
 _END            .byt 0

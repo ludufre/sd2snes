@@ -704,6 +704,11 @@ wram_load_ultra16_cfg_src:
   rtl
 
 game_handshake:
+  jsr bgm_clear_aram_for_launch ; fork (issue #3): if the menu music is playing,
+                            ; warm-reset first so the launched game inherits a clean
+                            ; ARAM (no leftover echo buffer -> no MSU-1 crackle).
+                            ; Transparent: no-op unless music is playing, and it
+                            ; preserves A (the command) + MCU_PARAM across the reset.
   php
   sep #$20 : .as
   pha

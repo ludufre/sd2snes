@@ -81,7 +81,7 @@ SECTIONS
      its VMA region is `ram` (not flash), so ld does NOT region-check that LMA.
      Without this, an oversized build links "fine" and silently spills .data past
      the end of flash -> corrupt initialized globals on boot. mk2 (128K) hits the
-     wall first; this turns it into a hard link error. See CLAUDE.md "mk2 flash". */
+     wall first; this turns it into a hard link error. */
   ASSERT(__data_load_end <= ORIGIN(flash) + LENGTH(flash),
          "FIRMWARE TOO LARGE: .data overflows flash - shrink .text/.rodata (or gate features per-config)")
 
