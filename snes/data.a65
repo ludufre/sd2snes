@@ -383,4 +383,10 @@ gi_nav_save_ptr  .word 0    ; in-panel game nav: restore-on-clamp snapshot of di
 gi_nav_save_bank .word 0    ; in-panel game nav: restore-on-clamp snapshot of dirptr_bank
 gi_nav_idbefore  .word 0    ; in-panel game nav: entry id (dirptr_addr + filesel_sel*4) before a step
 gi_desc_rl       .byt 0     ; desc draw: active last text row (GIB_NORM_DESC_RL normal / GIB_DESC_RL full)
+
+; fork: scratch for bgm_clear_aram_for_launch (game-launch ARAM clear, issue #3).
+; Written BEFORE backup_wram so they survive the warm reset; both sit low in the
+; data segment, well inside the backup_wram window ($7E:0000-$1FFF).
+gh_cmd_bak             .byt 0    ; the launch command byte, kept across the warm reset
+mcuparam_bak           .byt 0,0,0,0,0,0,0,0,0,0,0,0 ; MCU_PARAM (12B) across the warm reset
 _END            .byt 0
