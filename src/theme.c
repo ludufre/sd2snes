@@ -32,9 +32,12 @@ static const char GFXPTR_MAGIC[8] = { '_','G','F','X','P','T','R','_' };
 #define THEME_VERSION   1
 #define THEME_NSLOTS    9
 
-/* Window of the loaded menu image scanned for the _GFXPTR_ magic. The table
- * sits a few KB in (~0x2B3x in the fork); this range gives generous headroom. */
-#define THEME_GFXPTR_SCAN_START  0x2000
+/* Window of the loaded menu image scanned for the _GFXPTR_ magic. The table's
+ * offset shifts with the menu layout: ~0x2EB1 in the old 128px-logo build, but
+ * ~0x103C once the header logo went full-width (256px) and const.a65 was
+ * reorganised. Start low enough to catch both -- the 8-byte magic won't false-
+ * match in code/palette/tile data, and the scan stops at the first hit. */
+#define THEME_GFXPTR_SCAN_START  0x0800
 #define THEME_GFXPTR_SCAN_END    0x6000
 
 /* Per-slot byte cap == the region's size in the fork menu build. Writes are
@@ -50,7 +53,7 @@ static const uint16_t theme_slot_max[THEME_NSLOTS] = {
   96,     /* 5 oam_data_l             */
   9,      /* 6 oam_data_h             */
   512,    /* 7 palette                */
-  7168,   /* 8 logo_tiles             */
+  14336,  /* 8 logo_tiles (full-width 256x56) */
 };
 
 /* Stream `len` bytes from the open theme file, writing the first min(len,cap)
@@ -70,6 +73,29 @@ static int theme_stream(uint32_t dest, uint32_t len, uint32_t cap) {
     }
     done += got;
     len  -= got;
+  }
+  return 1;
+}
+
+/* The header logo is 8bpp, char-base $300, laid out row-major (tile r*COLS+c)
+ * over THEME_LOGO_ROWS rows. The full-width region is 32 cols/row; a legacy
+ * (non-[full]) theme carries only the 16-col half. Row width is derived from the
+ * region cap at runtime so it tracks the menu geometry (not re-hard-coded). */
+#define THEME_SLOT_LOGO_TILES  8
+#define THEME_LOGO_ROWS        7
+
+/* Place a half-width (cap/2) legacy logo LEFT-ANCHORED in the full-width region:
+ * per row, stream the theme's left 16 cols and blank the right 16 cols with
+ * transparent (pixel 0 -> backdrop gradient) tiles. A plain linear copy would
+ * re-flow the 16-wide rows into the 32-wide grid and scramble the logo. Reuses
+ * theme_stream (bounded read+stage) and sram_memset (bounded fill). */
+static int theme_stream_logo_left(uint32_t dest, uint32_t cap) {
+  uint32_t row_full = cap / THEME_LOGO_ROWS;   /* 2048: one 32-col row */
+  uint32_t row_half = row_full / 2;            /* 1024: 16-col half     */
+  for(uint32_t r = 0; r < THEME_LOGO_ROWS; r++) {
+    uint32_t rowdst = dest + r * row_full;
+    if(!theme_stream(rowdst, row_half, row_half)) return 0;  /* left: theme */
+    sram_memset(rowdst + row_half, row_half, 0);             /* right: blank */
   }
   return 1;
 }
@@ -144,6 +170,16 @@ void theme_apply(void) {
     if(cap == 0 || gfxptr[slot] == 0) {
       /* unknown/unthemable slot: consume payload, keep file aligned */
       if(!theme_stream(0, len, 0)) { file_close(); return; }
+      continue;
+    }
+    /* legacy half-width logo (len == cap/2) on a full-width region: render it
+       left-anchored instead of letting a linear copy scramble it. */
+    if(slot == THEME_SLOT_LOGO_TILES && (uint32_t)len * 2 == cap) {
+      if(!theme_stream_logo_left(SRAM_MENU_ADDR + gfxptr[slot], cap)) {
+        printf("theme: logo stream error\n");
+        file_close();
+        return;
+      }
       continue;
     }
     if(!theme_stream(SRAM_MENU_ADDR + gfxptr[slot], len, cap)) {

@@ -1020,6 +1020,81 @@ bgm_silence_reset:
 -
   bra -
 
+;---------------------------------------
+; bgm_clear_aram_for_launch (fork): called at the very top of game_handshake,
+; before ANY ROM is launched. While the menu music plays (BGM_STATE==1) the
+; S-SMP holds the song program AND a LIVE echo buffer in ARAM. The game-launch
+; reset returns the S-SMP to IPL but does NOT clear ARAM, so a game that uses
+; S-DSP echo (e.g. Super Metroid) inherits that loud buffer and crackles in its
+; MSU-1/echo audio until it recycles (issue #3: only with menu music on; the
+; music-off / stock-firmware path is silent because apu_ram_init already zeroed
+; ARAM). Fix: warm-reset here -- apu_ram_init zeroes ARAM during the warm boot
+; and leaves the S-SMP clean at IPL, exactly the state the launched game expects.
+;
+; States 0/2/3/4 already have a clean ARAM (apu_ram_init ran at boot; neither the
+; silent IPL nor the sfx_dsp_unmute stub ever writes the echo buffer) -> no-op.
+;
+; The warm boot clears MCU_PARAM+0..+3 and trashes A, so the 12-byte MCU_PARAM
+; and the launch command byte are stashed in WRAM (data.a65 vars, inside the
+; backup_wram window) and restored on resume. set_bank's plp;rts unwinds to
+; bcal_resume, which restores them and rts's back into game_handshake exactly as
+; if this were an ordinary subroutine return -- the caller is none the wiser.
+; A=launch command on entry (8-bit, as every game_handshake caller sets it).
+bgm_clear_aram_for_launch:
+  php                      ; preserve caller flags (restored on the no-op path)
+  sep #$20 : .as
+  rep #$10 : .xl
+  sta @gh_cmd_bak          ; stash the launch command byte
+  lda @BGM_STATE
+  cmp #$01                 ; 1 = music playing -> ARAM holds a live echo buffer
+  beq bcal_clear
+  lda @gh_cmd_bak          ; clean already -> restore A and return untouched
+  plp
+  rts
+bcal_clear:
+  ldx #$0000               ; back up MCU_PARAM (warm boot clears +0..+3)
+- lda @MCU_PARAM, x
+  sta @mcuparam_bak, x
+  inx
+  cpx #$000c
+  bne -
+  plp                      ; drop our entry P; rebuild the warm-reset frame so
+  pea !(bcal_resume-1)     ; set_bank's plp;rts lands in bcal_resume (mirrors the
+  php                      ; pea/php/SAVED_SP idiom of bgm_silence_reset above)
+  rep #$20 : .al
+  tsc
+  sta @SAVED_SP
+  lda #$fa50
+  sta @WARM_SIGNATURE
+  eor #$ffff
+  sta @WARM_COMPLEMENT
+  sep #$20 : .as
+  sei
+  stz $2100
+  jsr backup_wram          ; snapshots low WRAM incl. gh_cmd_bak / mcuparam_bak
+  lda #CMD_RESET
+  sta @MCU_CMD
+-
+  bra -
+bcal_resume:
+  ; warm boot done: ARAM zeroed by apu_ram_init, S-SMP silent at IPL.
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  sta @BGM_STATE           ; truthful: nothing playing now (an aborted launch then
+                           ; reloads the music via bgm_update, state 0)
+  lda #$01
+  sta @filesel_dirty       ; warm boot cleared VRAM -> repaint the browser if the
+                           ; launch aborts (missing chip) and returns to it
+  ldx #$0000               ; restore MCU_PARAM
+- lda @mcuparam_bak, x
+  sta @MCU_PARAM, x
+  inx
+  cpx #$000c
+  bne -
+  lda @gh_cmd_bak          ; A = launch command for game_handshake's pha
+  rts
+
 filesel_key_x:
   jsr snd_fx_confirm    ; opening the main menu
   jsr cover_menu_off    ; hide the box-art cover behind the menu (reloads on close)

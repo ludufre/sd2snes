@@ -12,7 +12,7 @@ extern cfg_t CFG;
    on mk2 ONLY, each German (LANG_DE) row falls back to the English strings
    there - the duplicate EN literals merge (-fmerge-constants @ -Os), so they
    cost no extra flash, while the German text is dropped. mk3 / mk3-STM32 keep
-   the real German strings. See CLAUDE.md "mk2 (LPC) flash CHEIA". */
+   the real German strings. */
 
 uint8_t lang_idx(void) {
   return CFG.language < NUM_LANG ? CFG.language : 0;

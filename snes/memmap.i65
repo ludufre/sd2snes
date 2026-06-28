@@ -21,15 +21,11 @@
 #define COVER_OBJ_VRAM_BASE         $2000      /* OBJ name-table base (VRAM words) */
 #define COVER_OBJ_CLEAR_LEN         $2000      /* bytes cleared at init (256 4bpp tiles) */
 #define COVER_OBSEL                 $01        /* $2101: size tbl0 (8/16), name sel 0, base $2000 */
-/* The old BG-cover used char $100 (word $2000) as a zeroed transparent tile, but
-   that word is now the OBJ name table. So the header BG (cols 16..31) uses a
-   dedicated blank char in free VRAM after the logo ($6000..$6DFF). */
-#define COVER_BLANK_VRAM            $7800      /* VRAM word of the zeroed header blank tile */
-#define COVER_BLANK_CHAR            $03C0      /* BG1 char of the blank tile ($7800 / $20) */
-#define COVER_OBJ_X_RIGHT           256        /* right edge of the cover = screen edge; a w=8
-                                                  cover fills cols 16..31 (logo owns 0..15). The
+/* The header logo is now FULL-WIDTH (cols 0..31), so there is no blank cover area
+   to fill: the old COVER_BLANK_VRAM/COVER_BLANK_CHAR tile is gone. */
+#define COVER_OBJ_X_RIGHT           256        /* right edge of the cover = screen edge; the
                                                   256 wrap is handled in cover_build_oam (lda #0). */
-#define COVER_OBJ_Y0                0          /* top of the cover in px (0 = touches the screen top) */
+#define COVER_OBJ_Y0                0          /* TEMP: top-right (Y=0) to preview overlap vs header */
 #define COVER_OBJ_MAX_W             8          /* 16-wide name grid -> <= 8 sprites wide */
 #define COVER_OBJ_MAX_H             8          /* 256-tile page -> <= 8 sprites tall */
 #define COVER_OBJ_ATTR              $30        /* OAM attr base: OBJ priority 3 (bits5-4), no flip */
@@ -40,16 +36,15 @@
                                                   > the 3-frame d-pad auto-repeat so held scrolling
                                                   never fires a cover; 6 = faster load, still safe) */
 #define COVER_TIMEOUT               180        /* frames before giving up on the MCU */
-/* ---- header logo (8bpp BG1, left side; baked tiles in logo_gfx.a65) ----
-   The logo lives permanently in BG1_TILE_BUF cols 0..15 (written once at init);
-   the OBJ cover floats on the right, so the logo is never overwritten. */
+/* ---- header logo (8bpp BG1, FULL-WIDTH 256x56; baked tiles in logo.a65) ----
+   The logo lives permanently in BG1_TILE_BUF cols 0..31 (written once at init);
+   the OBJ cover floats below it (COVER_OBJ_Y0), so the logo is never overwritten. */
 #define COVER_LOGO_VRAM            $6000      /* VRAM word dest for logo tile 0 (= char $300) */
 #define COVER_LOGO_CHAR            $0300      /* BG1 char number of logo tile 0 */
 #define COVER_LOGO_CGB             $40        /* CGRAM 64: logo palette base (pal 4+5, free) */
-#define COVER_LOGO_COLS            16         /* logo width in 8px tiles (128px, cols 0..15) */
-#define COVER_LOGO_TILEBYTES       $1C00      /* 16*7*64 = 7168 bytes */
+#define COVER_LOGO_COLS            32         /* logo width in 8px tiles (256px, full-width cols 0..31) */
+#define COVER_LOGO_TILEBYTES       $3800      /* 32*7*64 = 14336 bytes */
 #define COVER_LOGO_PALBYTES        $0040      /* 32 colours * 2 = 64 bytes */
-#define COVER_AREA_COL             16         /* logo owns cols 0..15 of the header tilemap */
 /* bank-C9 staging layout (must match src/cover.h COVER_OFF_*) */
 #define SRAM_COVER_ADDR             $C90000
 #define COVER_C9_TILES              $C90000    /* 4bpp tiles (name-grid order) */
@@ -66,8 +61,18 @@
    utils/gen_dcimage.py) is staged by the MCU (CMD_GAME_INFO): 8bpp tiles -> bank
    $CA, 16-bit tilemap -> bank $CB. The parsed metadata struct lands at GAMEINFO
    ($FF6000); the menu reads it by fixed offset (mirror src/gameinfo.h). */
-#define GI_TILES                    $CA0000    /* 8bpp DirectColor tiles */
-#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap */
+#define GI_TILES                    $CA0000    /* 8bpp DirectColor tiles (.gd) / FMV frame tiles (.fmv) */
+#define GI_FMV_PAL                  $CA1B00    /* .fmv v3: FMV frame palette (256B) right after the 6912B frame at GI_TILES; -> CGRAM 128 */
+#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap (.gd) / .fmv v3 cover palette (160B) -> CGRAM 48 */
+/* paletted band cover region (left): 16x16 tiles (128x128px) at col 1. Cover tiles DMA to window-0
+   ($2000 = char #256); 256 tiles span #256..511 ($2000..$3FFF) -- MUST stay <= 256 tiles or it spills
+   into $4000 (the body's BG2 font), corrupting the background (the bottom cover row overwrote BG2
+   font #0..31). 17 wide (272 tiles, -> $41FF) did exactly that. Cell (r,c) -> char GI_COVER_CHAR0 + r*GI_COVER_W + c. */
+#define GI_COVER_CHAR0              $0100      /* window-0 first tile char (#256) */
+#define GI_COVER_COL0              1          /* cover left column in the 32-wide band (px 8) */
+#define GI_COVER_ROW0              0
+#define GI_COVER_W                 16         /* cover width  in tiles (128 px) */
+#define GI_COVER_H                 16         /* cover height in tiles (128 px) -- 16x16 = 256 = window-0 cap */
 
 /* gameinfo_meta_t. MUST sit AFTER the favorites mirror ($FF6000..$FF73FF) -- overlapping it
    clobbers the favorites list when a favorite's info panel opens. Lockstep with src/memory.h. */
@@ -87,10 +92,15 @@
 #define GI_FMV_FPS                  $FF759A    /* FMV playback fps (when GI_FLAG_FMV) */
 #define GI_FMV_FRAMES               $FF759B    /* FMV total frames (uint16; info/debug) */
 #define GI_STATUS_OK                $01
-#define GI_FLAG_IMAGE               $01
-#define GI_FLAG_FMV                 $02        /* animated <rom>.fmv: cover = sibling .cov (OBJ),
-                                                  screenshot box streams from GI_TILES ($CA0000),
+#define GI_FLAG_IMAGE               $01        /* legacy DirectColor .gd (RETIRED; band is paletted) */
+#define GI_FLAG_FMV                 $02        /* cover-LESS <rom>.fmv v4 screenshot/animation staged at
+                                                  GI_TILES ($CA0000); 1 frame = static, N = animated;
                                                   pumped by CMD_FMV_NEXT (see snes/gameinfo.a65) */
+#define GI_FLAG_COVER               $04        /* <rom>.gcv paletted 120c cover staged (CGRAM 48..167);
+                                                  without it the cover region shows the gradient */
+#define GI_FLAG_COVER_OBJ           $08        /* FALLBACK (no .gcv): the <rom>.cov staged in C9 -> float it
+                                                  as OBJ box-art CENTERED in the .gcv 128x128 cover box.
+                                                  Mutually exclusive with GI_FLAG_COVER (.gcv wins). */
 /* ---- small (half-size) cover: WRAM scratch + downscale LUT ----
    When ShowCovers == 2 the menu resamples the staged 16x16-block tiles down to
    one 8x8 tile per block (nearest-neighbour, even pixels) into COVER_SMALL_TILEBUF,
@@ -225,21 +235,25 @@
 #define CMD_CLR_THEME               $2d /* clear menu theme to baked default, reload menu */
 #define CMD_SET_MENU_SPC            $2e /* selected .spc (MCU_PARAM set like LOADROM): store full path in CFG.bgm_name, enable music */
 #define CMD_CLR_MENU_SPC            $2f /* clear CFG.bgm_name -> menu BGM falls back to /sd2snes/menu.spc */
-#define CMD_WIFI_SCAN               $30 /* queue an AP scan on the ESP */
-#define CMD_WIFI_GET                $31 /* write current status + scan list to WIFI_BLK */
-#define CMD_WIFI_CONNECT            $32 /* connect using ssid/pass written to WIFI_BLK */
-#define CMD_WIFI_FORGET             $33 /* forget the saved network */
-/* game-info commands relocated to $34-$37 in the esp32companion merge: WiFi owns $30-$33 (lockstep with src/snes.h) */
+/* WiFi-in-menu commands RESERVED for the Companion port (lockstep with src/snes.h):
+   WiFi owns $30-$33, so game-info lives at $34-$37. No menu/MCU handler in this
+   branch -- reserved so adding WiFi later needs zero command renumbering. */
+#define CMD_WIFI_SCAN               $30 /* RESERVED (Companion): queue an AP scan on the ESP */
+#define CMD_WIFI_GET                $31 /* RESERVED (Companion): write current status + scan list to WIFI_BLK */
+#define CMD_WIFI_CONNECT            $32 /* RESERVED (Companion): connect using ssid/pass written to WIFI_BLK */
+#define CMD_WIFI_FORGET             $33 /* RESERVED (Companion): forget the saved network */
 #define CMD_GAME_INFO               $34 /* parse /sd2snes/info/<rom>.yml + stage cover/screenshot (non-booting, like LOAD_COVER) */
 #define CMD_GAME_INFO_RECENT        $35 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
 #define CMD_GAME_INFO_FAVORITE      $36 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
 #define CMD_FMV_NEXT                $37 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
-
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
-/* WiFi status/scan block + connect params. Aliases SYSINFO_BLK (both modal, so
-   they never coexist). Layout MUST match src/snes.h WIFI_OFF_*. */
-#define WIFI_BLK                    $FF1200
+/* WiFi status/scan block + connect params, RESERVED for the Companion port.
+   Own dedicated 437-byte block ($FF4000..$FF41B5) in the free gap left by the old
+   favorites slot ($FF4000..$FF49FF, vacated when favorites moved to $FF6000) -- no
+   longer aliases SYSINFO_BLK, so the WiFi and sysinfo screens can coexist. Layout
+   MUST match src/snes.h WIFI_OFF_* (lockstep with SRAM_WIFI_ADDR in src/memory.h). */
+#define WIFI_BLK                    $FF4000
 #define WIFI_OFF_CONNECTED          0    /* u8 */
 #define WIFI_OFF_RSSI               1    /* i8 */
 #define WIFI_OFF_SSID               2    /* char[33] */
@@ -251,7 +265,6 @@
 #define WIFI_OFF_REQ_SSID           340  /* char[33] - menu writes (CONNECT) */
 #define WIFI_OFF_REQ_PASS           373  /* char[64] - menu writes (CONNECT) */
 
-#define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */
 #define IPS_MAX_PATCHES             8        /* maximum patches per ROM */
@@ -320,7 +333,9 @@
 #define CFG_SORT_FAVORITES              CFG_ADDR+$013C
 #define CFG_ENABLE_CHEAT_OVERLAY        CFG_ADDR+$013D
 #define CFG_SHOW_GAME_INFO              CFG_ADDR+$013E
-#define CFG_ENABLE_WIFI                 CFG_ADDR+$013F /* relocated from $BD: overlapped CFG_MENU_MUSIC_FILE ($BC, 128B) in the esp32companion merge (lockstep with src/cfg.h) */
+#define CFG_ENABLE_WIFI                 CFG_ADDR+$013F /* RESERVED (Companion master switch). Placed at $13F (NOT $BD: that overlapped CFG_MENU_MUSIC_FILE $BC, 128B) so the WiFi port slots in with no cfg-offset drift. Lockstep with src/cfg.h. */
+#define CFG_GAME_INFO_VIDEO             CFG_ADDR+$0140 /* play the .fmv clip on the game info screen (off -> static .gss snapshot) */
+#define CFG_GAME_INFO_MUSIC             CFG_ADDR+$0141 /* play the clip's .pcm soundtrack (requires CFG_GAME_INFO_VIDEO) */
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

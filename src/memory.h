@@ -68,11 +68,18 @@ extern char current_filename[];
 #define SRAM_SYSINFO_ADDR            (0xFF1200L)
 #define SRAM_LASTGAME_ADDR           (0xFF1420L)
 #define SRAM_LASTGAME_DIR_ADDR       (0xFF1F00L)
+/* WiFi status/scan + connect block, RESERVED for the Companion port. Its OWN dedicated
+   437-byte block (0xFF4000..0xFF41B5) in the free gap left when favorites moved off the
+   old 0xFF4000 slot to 0xFF6000 -- no longer aliases SRAM_SYSINFO_ADDR, so the WiFi and
+   sysinfo screens can coexist. Layout = WIFI_OFF_* in src/snes.h; lockstep with WIFI_BLK
+   in snes/memmap.i65. LAST_GAME_FILE (0xFF4A00) stays clear above it. */
+#define SRAM_WIFI_ADDR               (0xFF4000L)
 /* Favorites mirror, 20*256 = 0x1400 bytes -> 0xFF6000..0xFF73FF.  Relocated out of
    the old 0xFF4000 slot (which only fit 10 entries before LAST_GAME_FILE) into the
    free gap past IPS_LIST so growing to 20 needed only this one address (kept in
-   lockstep with FAVORITE_GAMES in snes/memmap.i65).  Old 0xFF4000..0xFF49FF is now
-   unused.  MAX_FAVORITE_GAMES (cfg.h) sizes this; nothing else lives up to SCRATCHPAD. */
+   lockstep with FAVORITE_GAMES in snes/memmap.i65).  The old 0xFF4000 slot now hosts
+   SRAM_WIFI_ADDR (437 B); the rest of 0xFF4000..0xFF49FF stays free.  MAX_FAVORITE_GAMES
+   (cfg.h) sizes this; nothing else lives up to SCRATCHPAD. */
 #define SRAM_FAVORITEGAMES_ADDR      (0xFF6000L)
 /* base ROM basename of the most recent game, for reset_to_menu==3 (Rom) pre-select.
    Distinct from SRAM_LASTGAME_ADDR[0] (the recents *display* name, which for a

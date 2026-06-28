@@ -13,7 +13,7 @@ import struct
 import numpy as np
 from PIL import Image
 
-FORK_LOGO_COLS = 16          # fork logo is 16x7 tiles = 128x56 px
+FORK_LOGO_COLS = 32          # fork logo is 32x7 tiles = 256x56 px (full-width)
 FORK_LOGO_ROWS = 7
 FORK_LOGO_CGBASE = 64        # logo palette lives at CGRAM 64..95
 FORK_LOGO_NCOLORS = 32       # 32-colour logo palette (64 bytes)
@@ -166,12 +166,12 @@ def decode_logo(data, off, cols, rows, pal_bytes, cgbase=0, transparent_index=0)
 
 # ---- refit an image to the fork logo format ----
 def encode_fork_logo(img, keep_alpha=True):
-    """img: PIL image (any size/mode). Resized to 128x56 and quantised to a
-    32-colour palette. Returns (logo_pal_bytes[64], logo_tiles_bytes[7168]).
+    """img: PIL image (any size/mode). Resized to 256x56 and quantised to a
+    32-colour palette. Returns (logo_pal_bytes[64], logo_tiles_bytes[14336]).
 
     Pixel encoding matches the fork: opaque pixel -> value 64+palidx, fully
     transparent pixel (alpha<128) -> value 0 (shows the menu background)."""
-    W, H = FORK_LOGO_COLS * 8, FORK_LOGO_ROWS * 8   # 128 x 56
+    W, H = FORK_LOGO_COLS * 8, FORK_LOGO_ROWS * 8   # 256 x 56
     img = img.convert("RGBA").resize((W, H), Image.LANCZOS)
     rgba = np.asarray(img)
     alpha = rgba[:, :, 3]
@@ -179,9 +179,11 @@ def encode_fork_logo(img, keep_alpha=True):
 
     rgb = Image.fromarray(rgba[:, :, :3], "RGB")
     # quantise the whole frame to 32 colours, then build the index map
-    q = rgb.quantize(colors=FORK_LOGO_NCOLORS, method=Image.Quantize.MAXCOVERAGE, dither=Image.Dither.NONE)
+    # No dither: the header is a clean logo/wordmark; FS dither only grains it.
+    q = rgb.quantize(colors=FORK_LOGO_NCOLORS, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
     idx = np.asarray(q, np.uint8)                    # HxW, values 0..31
-    qpal = q.getpalette()[:FORK_LOGO_NCOLORS * 3]    # RGB triples
+    qpal = q.getpalette() or []                      # RGB triples
+    qpal = (qpal + [0] * (FORK_LOGO_NCOLORS * 3))[:FORK_LOGO_NCOLORS * 3]  # pad: image may have <32 colours
 
     logo_pal = bytearray()
     for i in range(FORK_LOGO_NCOLORS):

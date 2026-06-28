@@ -65,7 +65,11 @@
 ; mode-5 row) is left BLANK as a seam margin: the BGMODE switch glitches its top scanline,
 ; which shows up in blank/space cells (it garbled the title when the title sat on row 16).
 ;   17 title | 18 gap | 19 Developer + chip | 20 Year|Genre|Players (3 cols) |
-;   21..26 description | 27 footer (fixed). Row 18 is a small breather under the title.
+;   22..24 description (3 lines, ellipsis) | 25 gap | 26 footer. Row 16 + the footer at 26
+;   (NOT 27) make the footer land on the SAME scanline as the browser's status bar (the
+;   browser shifts its mode-5 content up via BG2VOFS=11 in setup_224, so its print_y=28 ==
+;   our print_y=26 at VOFS=0), and the blank row 25 mirrors the browser's gap between the
+;   last list row and its status bar. Row 18 is a small breather under the title.
 #define GI_DESC_IW       58
 #define GIB_TITLE_ROW    17
 #define GIB_LBL_X        2
@@ -92,10 +96,11 @@
 #define GI_CHIP_TILE     160        ; OAM tile number (top-left of the 2x2)
 #define GIB_DESC_X       2
 #define GIB_DESC_R0      22        ; short (normal) description: first row (row 21 = gap under metadata)
+#define GIB_NORM_DESC_RL 24        ; short (normal) description: last row -> 3 lines (22..24), ellipsis
 #define GIB_FULL_R0      17        ; full (Y) description: first row (over the title/metadata)
-#define GIB_DESC_RL      26        ; last text row in BOTH modes (footer is below, always fixed)
-#define GIB_FULL_ROWS    10        ; rows 17..26 -> the full-description scroll window height
-#define GIB_FOOT_ROW     27
+#define GIB_DESC_RL      25        ; full (Y) description: last text row (footer is below, always fixed)
+#define GIB_FULL_ROWS    9         ; rows 17..25 -> the full-description scroll window height
+#define GIB_FOOT_ROW     26        ; footer row: aligns with the browser status bar (see layout note)
 
 ; -- gameinfo_select_file: drop-in for the `jsr ips_select_file` in filesel.a65.
 gameinfo_select_file:
@@ -341,13 +346,30 @@ gnav_clamp:
 ;    dirptr_addr / dirptr_bank UNCHANGED when already at the last / first entry. .as in/out.
 gnav_down:
   .as : .xl
+  ; Clamp on the folder's FIXED end pointer (dirend_addr = entry_count*4), NOT the
+  ; window-relative dirend_onscreen / dirend_idx: in-panel nav skips the list redraw that
+  ; refreshes those flags, so once we start scrolling they go stale (stuck "off-screen") and
+  ; the old end-of-list clamp never fired -> dirptr_addr ran off the end of the directory
+  ; table and the panel showed garbage fichas for games not in the folder.  dirend_addr is set
+  ; once per CMD_READDIR and never changes during nav, so it stays correct here.
+  ; sel_off = dirptr_addr + filesel_sel*4; refuse the step when sel_off+4 reaches/passes dirend_addr.
+  rep #$20 : .al
+  lda filesel_sel
+  and #$00ff
+  asl
+  asl
+  clc
+  adc dirptr_addr
+  clc
+  adc #$04
+  cmp dirend_addr
+  sep #$20 : .as
+  bcs gnd_out                ; sel_off+4 >= dirend_addr -> already at the last entry: clamp (no move)
   lda listdisp
   dec
   cmp filesel_sel
   bne gnd_noscroll
-  lda dirend_onscreen        ; cursor on the bottom row: scroll unless the last entry shows
-  bne gnd_out
-  rep #$20 : .al
+  rep #$20 : .al             ; cursor on the bottom row: scroll the window down (bound-checked above)
   lda dirptr_addr
   clc
   adc #$04
@@ -357,15 +379,7 @@ gnav_down:
   sep #$20 : .as
   rts
 gnd_noscroll:
-  lda dirend_onscreen
-  beq +
-  lda dirend_idx
-  lsr
-  lsr
-  cmp filesel_sel
-  beq gnd_out                ; filesel_sel == last visible entry -> clamp
-  bcc gnd_out                ; filesel_sel  > last visible entry -> clamp
-+ lda filesel_sel
+  lda filesel_sel
   inc
   sta filesel_sel
 gnd_out:
@@ -568,58 +582,15 @@ gidcs_nofmv:
 ;    window 1; the band tilemap numbers are remapped (+256 / +512) and written to BG1 rows
 ;    0..15; the BG2 band rows are cleared (transparent). .as/.xl.
 gi_upload_band:
+  ; The DECOUPLED paletted band: cover (.gcv, left) + screenshot/FMV (.fmv, right), each region
+  ; optional (gated by GI_FLAG_COVER / GI_FLAG_FMV inside gi_fmv_band_v3). When there is NO .gcv,
+  ; gi_fmv_band_v3 floats the browser <rom>.cov as OBJ box-art in the .gcv cover spot (GI_FLAG_COVER_OBJ
+  ; -> gi_cover_float). The legacy DirectColor (.gd / gi_remap_tilemap) path below is DEAD CODE
+  ; (kept in place to avoid churn; never reached).
   php
   sep #$20 : .as
   rep #$10 : .xl
-  lda @GI_FLAGS
-  and #GI_FLAG_FMV
-  beq giub_no_fmv
-  jsr gi_fmv_band              ; .fmv -> animated screenshot box (window 1) + .cov cover (OBJ)
-  plp
-  rts
-giub_no_fmv:
-  lda @GI_FLAGS
-  and #GI_FLAG_IMAGE
-  bne giub_go
-  jsr gi_cover_show            ; no .gd image -> float the .cov box-art in the band
-  plp                          ;                 (or a plain gradient band if no .cov)
-  rts
-giub_go:
-  ; tiles 0..255 -> window 0 ($2000-$3FFF). DMA the whole window; >256 unique tiles spill
-  ; to window 1 below, <256 leaves unreferenced tiles (harmless).
-  ldx #GI_IMG_VRAM0
-  stx $2116
-  DMA7(#$01, #$4000, #^GI_TILES, #!GI_TILES, #$18)
-  ; tiles 256.. -> window 1 ($6000-$7FFF), only if num_tiles > 256
-  rep #$20 : .al
-  lda @GI_IMG_NTILES
-  cmp #257
-  bcc giub_tmap
-  sec
-  sbc #256
-  asl : asl : asl : asl : asl : asl   ; *64 = byte count for window 1
-  sta gi_pos
-  sep #$20 : .as
-  ldx #GI_IMG_VRAM1
-  stx $2116
-  lda #$01 : sta $4370
-  lda #$18 : sta $4371
-  rep #$20 : .al
-  lda #!GI_TILES+$4000 : sta $4372    ; source = GI_TILES + 256*64
-  lda gi_pos : sta $4375
-  sep #$20 : .as
-  lda #^GI_TILES : sta $4374
-  lda #$80 : sta $420b
-giub_tmap:
-  ; remap the band tilemap into the WRAM buffer, then DMA -> BG1 rows 0..15
-  jsr gi_remap_tilemap
-  ldx #GI_BG1_TMAP
-  stx $2116
-  DMA7(#$01, #GI_BAND_TMAP_B, #^GI_TMAP_BUF, #!GI_TMAP_BUF, #$18)
-  ; clear the BG2 band (rows 0..15) so the image shows through
-  ldx #GI_BG2_TMAP
-  stx $2116
-  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
+  jsr gi_fmv_band_v3
   plp
   rts
 
@@ -631,7 +602,8 @@ gi_remap_tilemap:
   ldx #$0000
 grt_loop:
   lda @GI_TMAP, x
-  and #$03ff                  ; tile number (ignore any flip/pal bits)
+  pha                         ; keep the original entry (DirectColor palette bits 10-12)
+  and #$03ff                  ; tile number (bits 0-9)
   cmp #$0100
   bcc grt_lo
   clc
@@ -641,6 +613,10 @@ grt_lo:
   clc
   adc #$0100                  ; #<256 -> +256 (window 0, tile #256..)
 grt_store:
+  sta @GI_TMAP_BUF, x         ; remapped tile (<=$3ff, so bits 10-12 are clear)
+  pla                         ; original entry
+  and #$1c00                  ; keep only the palette bits (10-12)
+  ora @GI_TMAP_BUF, x         ; OR them onto the remapped tile number
   sta @GI_TMAP_BUF, x
   inx
   inx
@@ -650,15 +626,16 @@ grt_store:
   rts
 
 ; ===========================================================================
-; .cov box-art floated in the band -- the fallback when there is no image.gd.
+; .cov box-art floated in the band -- the FALLBACK when there is no .gcv (GI_FLAG_COVER_OBJ).
 ;
-; The .gd band is mode-3 DirectColor BG1; with no .gd we instead clear the band BG
-; to the menu gradient and float the staged <rom>.cov as OBJ sprites in the band's
-; left "hero" spot (the same place the .gd cover occupies). The MCU's gameinfo_load
-; staged the .cov into bank C9 (load_cover) -- the SAME C9 layout the browser cover
-; uses -- so we reuse cover.a65's geometry helper and OAM format, only repositioning
-; the grid. Runs inside gi_dc_show's forced blank, so a single (un-split) tile DMA is
-; safe (no VBlank budget to honour, unlike the live browser cover). .as/.xl in.
+; The paletted band leaves window-0 ($2000) free without a .gcv BG cover, so we float the
+; staged <rom>.cov as OBJ sprites CENTERED in the same 128x128 spot the .gcv cover occupies
+; (the menu gradient shows through the band BG behind it). The MCU's gameinfo_load staged the
+; .cov into bank C9 (load_cover) -- the SAME C9 layout the browser cover uses -- so we reuse
+; cover.a65's geometry helper and OAM format, only repositioning the grid. Runs inside
+; gi_dc_show's forced blank, so a single (un-split) tile DMA is safe (no VBlank budget to
+; honour, unlike the live browser cover). gi_cover_float is called from gi_fmv_band_v3.
+; (gi_cover_show below is the legacy .gd-era entry; DEAD CODE, kept to avoid churn.) .as/.xl in.
 ; ===========================================================================
 gi_cover_show:
   php
@@ -732,7 +709,19 @@ gi_cover_build_oam:
   lda #!COVER_C9_BLOCKMAP : sta cover_ptr
   sep #$20 : .as
   lda #^COVER_C9_BLOCKMAP : sta cover_ptr+2
-  lda #GI_COVER_X0 : sta cover_x0            ; left hero margin (the .gd cover spot)
+  ; x0 = GI_COVER_X0 + (128 - w*16)/2 -- CENTER the cover in the .gcv 128px box (cols 1..16,
+  ; px 8..136). The .gcv art is letterbox-fit + H-centered by the Manager, so the .cov fallback
+  ; must center too (left-aligning at GI_COVER_X0 put it off the .gcv spot). w*16 <= 128 (max 8).
+  lda cover_w
+  asl : asl : asl : asl                      ; w*16 (cover width in px)
+  sta cover_scr
+  lda #128
+  sec
+  sbc cover_scr                              ; 128 - w*16
+  lsr                                        ; (128 - w*16)/2
+  clc
+  adc #GI_COVER_X0                           ; + box left edge (px 8)
+  sta cover_x0
   ; y0 = (128 - h*16) / 2  -- vertically center the cover within the band
   lda cover_h
   asl : asl : asl : asl                      ; h*16
@@ -831,9 +820,115 @@ gi_blank_tref .word GI_BAND_BLANK_CHAR       ; fixed DMA source: BG1 entry -> bl
 ; builds the screen in gi_dc_show's forced blank; gi_fmv_tick (one call/frame) paces the MCU
 ; pump at the .fmv's fps. The MCU streams frames into GI_TILES; see src/gameinfo.c.
 ; ===========================================================================
+; -- gi_fmv_band_v3: the PALETTED band, DECOUPLED. Cover (.gcv, CGRAM 48..167, 120c) and screenshot/
+;    FMV (.fmv, CGRAM 168..255, 88c) are SEPARATE assets, each region drawn ONLY if its flag is set
+;    (GI_FLAG_COVER / GI_FLAG_FMV) -- an absent asset leaves that region blank (gradient). $2130 D0=0
+;    (paletted). Builds the band tilemap (cover region + FMV box + blank). Forced blank. .as/.xl in.
+gi_fmv_band_v3:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$10 : sta $2130         ; PALETTED band (gi_dc_show set $11 = DirectColor; D0=0 here)
+  ; --- cover region (.gcv) -- only if GI_FLAG_COVER ---
+  lda @GI_FLAGS
+  and #GI_FLAG_COVER
+  beq gfb_no_cover
+  lda #48 : sta $2121          ; cover palette (120 colours, 240 B) -> CGRAM 48..167 (GI_TMAP $CB0000)
+  DMA7(#$00, #$00f0, #^GI_TMAP, #!GI_TMAP, #$22)
+  ; cover tiles (paletted 8bpp, idx 48..167) -> window-0 ($2000): 256 tiles ($4000 B) from C9 (16x16,
+  ; #256..511 = $2000..$3FFF EXACTLY -- must NOT exceed 256 or it spills into $4000 = body BG2 font)
+  ldx #GI_IMG_VRAM0 : stx $2116
+  DMA7(#$01, #$4000, #^COVER_C9_TILES, #!COVER_C9_TILES, #$18)
+gfb_no_cover:
+  ; zero the FMV band fill tile (#984 @ $7B00): value-0 = transparent -> gradient
+  ldx #GI_FMV_BLANK_VRAM : stx $2116
+  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
+  ; --- screenshot/FMV region (.fmv) -- only if GI_FLAG_FMV (frame 0; 1-frame = static) ---
+  lda @GI_FLAGS
+  and #GI_FLAG_FMV
+  beq gfb_no_fmv
+  lda #168 : sta $2121         ; FMV frame-0 palette (88 colours, 176 B) -> CGRAM 168..255
+  DMA7(#$00, #$00b0, #^GI_FMV_PAL, #!GI_FMV_PAL, #$22)
+  ldx #GI_FMV_VRAM_A : stx $2116
+  DMA7(#$01, #GI_FMV_FRAME_B, #^GI_TILES, #!GI_TILES, #$18)
+gfb_no_fmv:
+  ; band tilemap: cover region (if COVER) + FMV box (if FMV) + blank
+  rep #$20 : .al
+  lda #GI_FMV_TILE0_CHAR_A : sta gi_fmv_dst_char
+  sep #$20 : .as
+  stz gi_fmv_buf              ; set A active
+  jsr gi_fmv_build_tmap_v3
+  ldx #GI_BG1_TMAP : stx $2116
+  DMA7(#$01, #GI_BAND_TMAP_B, #^GI_TMAP_BUF, #!GI_TMAP_BUF, #$18)
+  ldx #GI_BG2_TMAP : stx $2116
+  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
+  ; FALLBACK cover: no .gcv but a <rom>.cov is staged in C9 -> float it as OBJ box-art, centered
+  ; in the SAME 128px spot the .gcv cover occupies. Window-0 $2000 is free (no .gcv BG tiles), so
+  ; the OBJ name base reuses it. gi_cover_float no-ops if the C9 status isn't OK. Mutually
+  ; exclusive with GI_FLAG_COVER (the .gcv BG path above). Runs in gi_dc_show's forced blank.
+  lda @GI_FLAGS
+  and #GI_FLAG_COVER_OBJ
+  beq gfbv3_done
+  jsr gi_cover_float
+gfbv3_done:
+  plp
+  rts
+
+; -- gi_fmv_build_tmap_v3: fill GI_TMAP_BUF with the blank char, lay the cover region (window-0
+;    chars GI_COVER_CHAR0 + r*GI_COVER_W + c, 17x16 at col GI_COVER_COL0), then overlay the FMV box
+;    (gi_fmv_box_tmap, set A/B chars from gi_fmv_dst_char). 16-bit; leaves .as for the box call.
+gi_fmv_build_tmap_v3:
+  php
+  rep #$30 : .al : .xl
+  lda #GI_FMV_BLANK_CHAR
+  ldx #$0000
+gtv3_fill:
+  sta @GI_TMAP_BUF, x
+  inx
+  inx
+  cpx #GI_BAND_TMAP_B
+  bcc gtv3_fill
+  ; cover region only if GI_FLAG_COVER (16-bit read of the flags word; mask bit 2, high byte ignored)
+  lda @GI_FLAGS
+  and #GI_FLAG_COVER
+  beq gtv3_no_cover
+  lda #GI_COVER_CHAR0
+  sta gi_pos                   ; running cover tile char
+  ldx #(GI_COVER_ROW0*32+GI_COVER_COL0)*2
+  ldy #GI_COVER_H
+gtv3_crow:
+  phy
+  ldy #GI_COVER_W
+gtv3_ccol:
+  lda gi_pos
+  sta @GI_TMAP_BUF, x
+  inc gi_pos
+  inx
+  inx
+  dey
+  bne gtv3_ccol
+  ply
+  txa
+  clc
+  adc #(32-GI_COVER_W)*2
+  tax
+  dey
+  bne gtv3_crow
+gtv3_no_cover:
+  plp
+  .as
+  ; FMV box only if GI_FLAG_FMV (else the box cells stay blank -> gradient)
+  lda @GI_FLAGS
+  and #GI_FLAG_FMV
+  beq gtv3_done
+  jsr gi_fmv_box_tmap          ; overlay the FMV box on top of the blank fill
+gtv3_done:
+  rts
+
 ; -- gi_fmv_band: blank fill tile + frame-0 tiles into set A, the band tilemap (box -> set A
 ;    chars, the rest -> blank), clear the BG2 band, then float the .cov cover as OBJ. Runs in
 ;    gi_dc_show's forced blank, so frame 0 is ONE un-split 6912-byte DMA (no VBlank budget). .as/.xl.
+;    (LEGACY DirectColor path; the v3 paletted path gi_fmv_band_v3 above supersedes it.)
 gi_fmv_band:
   php
   sep #$20 : .as
@@ -860,9 +955,41 @@ gi_fmv_band:
   plp
   rts
 
-; -- gi_fmv_build_tmap: fill GI_TMAP_BUF (32x16) with the blank char, then overwrite the FMV
-;    box with sequential tile chars from gi_fmv_dst_char (the active/target set's base char --
-;    set by the caller). 16-bit throughout.
+; -- gi_fmv_band_gd: .fmv WITH a .gd cover. The cover bank (staged by gi_load_cover_bank in bank
+;    C9) goes to window-0 as BG (no OBJ); frame 0 -> window-1 set A; band tilemap = the .gd cover
+;    region (remapped) + the FMV box (set A chars). Runs in gi_dc_show's forced blank (frame 0 is
+;    one un-split 6912-byte DMA). .as/.xl.
+gi_fmv_band_gd:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; cover bank (C9 $C90000) -> window-0 ($2000): 256 tiles ($4000 bytes)
+  ldx #GI_IMG_VRAM0 : stx $2116
+  DMA7(#$01, #$4000, #^COVER_C9_TILES, #!COVER_C9_TILES, #$18)
+  ; zero the FMV band fill tile (#984 @ $7B00): value-0 pixels = transparent -> gradient
+  ldx #GI_FMV_BLANK_VRAM : stx $2116
+  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
+  ; FMV frame 0 (staged by the MCU at GI_TILES $CA0000) -> tile set A ($6000, window-1)
+  ldx #GI_FMV_VRAM_A : stx $2116
+  DMA7(#$01, #GI_FMV_FRAME_B, #^GI_TILES, #!GI_TILES, #$18)
+  ; band tilemap: the .gd cover region (remapped) then overwrite the box with set A chars.
+  jsr gi_remap_tilemap        ; GI_TMAP ($CB0000) -> GI_TMAP_BUF (cover -> window-0 chars)
+  rep #$20 : .al
+  lda #GI_FMV_TILE0_CHAR_A : sta gi_fmv_dst_char
+  sep #$20 : .as
+  stz gi_fmv_buf              ; set A active
+  jsr gi_fmv_box_tmap         ; box cells (= the snapshot cells) -> set A; cover region preserved
+  ldx #GI_BG1_TMAP : stx $2116
+  DMA7(#$01, #GI_BAND_TMAP_B, #^GI_TMAP_BUF, #!GI_TMAP_BUF, #$18)
+  ; clear the BG2 band rows 0..15 (transparent)
+  ldx #GI_BG2_TMAP : stx $2116
+  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
+  ; (no gi_cover_float -- the cover is BG now)
+  plp
+  rts
+
+; -- gi_fmv_build_tmap: OBJ path -- fill GI_TMAP_BUF (32x16) with the blank char, then draw the
+;    FMV box (via gi_fmv_box_tmap). Used when there is no .gd cover (capa = OBJ).
 gi_fmv_build_tmap:
   php
   rep #$30 : .al : .xl
@@ -874,29 +1001,39 @@ gfbt_fill:
   inx
   cpx #GI_BAND_TMAP_B
   bcc gfbt_fill
-  ; box: GI_FMV_H rows of GI_FMV_W cells, sequential chars from the target set's base
+  plp
+  .as                          ; keep the assembler in step (see gi_fmv_box_tmap note)
+  jsr gi_fmv_box_tmap
+  rts
+
+; -- gi_fmv_box_tmap: overwrite ONLY the FMV box cells in GI_TMAP_BUF with sequential tile chars
+;    from gi_fmv_dst_char (the active/target set's base char -- set by the caller). The rest of the
+;    buffer is left intact, so the .gd cover region survives between frames (Option B). 16-bit.
+gi_fmv_box_tmap:
+  php
+  rep #$30 : .al : .xl
   lda gi_fmv_dst_char
   sta gi_pos                   ; gi_pos = running tile char (16-bit scratch)
   ldx #(GI_FMV_ROW0*32+GI_FMV_COL0)*2   ; X = byte offset of the box's first cell
   ldy #GI_FMV_H                ; Y = rows remaining
-gfbt_row:
+gfbx_row:
   phy
   ldy #GI_FMV_W                ; Y = cols remaining
-gfbt_col:
+gfbx_col:
   lda gi_pos
   sta @GI_TMAP_BUF, x
   inc gi_pos
   inx
   inx
   dey
-  bne gfbt_col
+  bne gfbx_col
   ply
   txa                          ; advance X to the next row's box start (+ (32-W) cells)
   clc
   adc #(32-GI_FMV_W)*2
   tax
   dey
-  bne gfbt_row
+  bne gfbx_row
   plp
   .as                          ; plp restored 8-bit A at runtime; keep the assembler in step
                                ; (the rep #$30/.al above would leak .al into the next routine
@@ -986,10 +1123,14 @@ gfa_dst_ready:
   ldx gi_fmv_dst_vram : stx $2116
   DMA7(#$01, #GI_FMV_HALF_B, #^GI_TILES, #!GI_TILES, #$18)
   jsr cover_blank_end
-  ; rebuild the band tilemap (box -> inactive set chars) for the atomic flip in window 2
-  jsr gi_fmv_build_tmap
-  ; window 2: second half -> inactive set + half, then flip the band tilemap (atomic)
+  ; rebuild the band tilemap (box -> inactive set chars) for the atomic flip in window 2.
+  ; v3 paletted path: ONLY rewrite the box -- the cover region in GI_TMAP_BUF persists between
+  ; frames (laid once by gi_fmv_build_tmap_v3). A is 8-bit here (.as).
+  jsr gi_fmv_box_tmap
+  ; window 2: new frame's palette -> CGRAM 128..255, second tile half, then flip the tilemap (atomic)
   jsr cover_blank_begin
+  lda #168 : sta $2121         ; the MCU staged the new frame's 88-colour palette at GI_FMV_PAL
+  DMA7(#$00, #$00b0, #^GI_FMV_PAL, #!GI_FMV_PAL, #$22)   ; -> CGRAM 168..255 (176 B)
   rep #$20 : .al
   lda gi_fmv_dst_vram : clc : adc #GI_FMV_HALF_W : tax
   sep #$20 : .as
@@ -1031,8 +1172,8 @@ gi_draw_body:
   plp
   rts
 
-; -- gi_build_body_normal: title (17) | Developer + chip badge (18) | Year|Genre|Players
-;    (19, 3 columns) | short description (21..26) | footer (27). .as/.xl in.
+; -- gi_build_body_normal: title (17) | Developer + chip badge (19) | Year|Genre|Players
+;    (20, 3 columns) | short description (22..24, 3 lines) | gap (25) | footer (26). .as/.xl in.
 gi_build_body_normal:
   php
   sep #$20 : .as
@@ -1071,8 +1212,9 @@ gi_build_body_normal:
   ldx #!text_gi_players : lda #^text_gi_players : jsr gi_puts
   lda #GIB_M3_VAL : sta print_x : lda #$02 : sta print_pal : lda #6 : sta print_count
   ldx #!GI_PLAYERS : lda #^GI_PLAYERS : jsr gi_puts
-  ; short description (rows GIB_DESC_R0..GIB_DESC_RL, no scroll)
+  ; short description (rows GIB_DESC_R0..GIB_NORM_DESC_RL = 3 lines, no scroll)
   lda #GIB_DESC_R0 : sta gi_desc_top
+  lda #GIB_NORM_DESC_RL : sta gi_desc_rl
   rep #$20 : .al
   stz gi_desc_skip
   sep #$20 : .as
@@ -1094,10 +1236,10 @@ gif_put:
   plp
   rts
 
-; -- gi_dma_body: DMA body rows 16..27 of both BG buffers to VRAM. Caller must have
+; -- gi_dma_body: DMA body rows 16..26 of both BG buffers to VRAM. Caller must have
 ;    the screen blanked (forced blank in gi_dc_show, or cover_blank_begin live). .xl.
-; DMA rows 16..31 (16 rows): rows 16..27 are the body; 28..31 are cleared blank to wipe
-; the browser's status bar (clock, drawn at tile row 28) so it can't linger below the footer.
+; DMA rows 16..31 (16 rows): rows 16..26 are the body (footer on 26); 27..31 are cleared
+; blank to wipe the browser's status bar (clock, drawn at tile row 28) so it can't linger.
 gi_dma_body:
   php
   rep #$10 : .xl
@@ -1283,10 +1425,11 @@ gi_meta_lbl:
   lda #14 : sta print_count
   rts
 
-; -- gi_draw_desc: wrap GI_DESCRIPTION into rows [gi_desc_top .. GIB_DESC_RL], first
+; -- gi_draw_desc: wrap GI_DESCRIPTION into rows [gi_desc_top .. gi_desc_rl], first
 ;    skipping gi_desc_skip wrapped lines (Y-mode scroll). gw_trunc still ellipsizes at
-;    GIB_DESC_RL when text remains, so the bottom row shows "..." until you scroll to the
-;    end. gi_desc_top/gi_desc_skip are set by the caller (build_normal / full_redraw). .as/.xl.
+;    gi_desc_rl when text remains, so the bottom row shows "..." until you scroll to the
+;    end. gi_desc_top/gi_desc_rl/gi_desc_skip are set by the caller (build_normal sets the
+;    3-line clamp GIB_NORM_DESC_RL; full_redraw sets GIB_DESC_RL). .as/.xl.
 gi_draw_desc:
   php
   sep #$20 : .as
@@ -1298,7 +1441,7 @@ gi_draw_desc:
   plp
   rts
 gdd_go:
-  ; gi_dy = top during the skip too: top < GIB_DESC_RL, so a skipped line never ellipsizes
+  ; gi_dy = top during the skip too: top < gi_desc_rl, so a skipped line never ellipsizes
   lda gi_desc_top : sta gi_dy
   stz gi_done
   rep #$20 : .al
@@ -1330,9 +1473,9 @@ gdd_loop:
   lda gi_done
   bne gdd_done
   inc gi_dy
-  lda gi_dy
-  cmp #GIB_DESC_RL+1
-  bcc gdd_loop
+  lda gi_desc_rl               ; keep drawing while gi_dy <= gi_desc_rl (active last row)
+  cmp gi_dy
+  bcs gdd_loop
 gdd_done:
   plp
   rts
@@ -1350,7 +1493,7 @@ gi_count_lines:
   rep #$10 : .xl
   jsr gi_desc_ptr
   stz gi_done
-  stz gi_dy                    ; 0 < GIB_DESC_RL -> never truncates while counting
+  stz gi_dy                    ; 0 < gi_desc_rl -> never truncates while counting
   rep #$20 : .al
   stz gi_ls
   stz gi_desc_lines
@@ -1375,7 +1518,7 @@ gicl_loop:
   rts
 
 ; ===========================================================================
-; Full-description (Y) mode: the description takes the whole text area (rows 17..26,
+; Full-description (Y) mode: the description takes the whole text area (rows 17..25,
 ; over the title/metadata) with Up/Down scroll; the band (cover/screenshot) and the
 ; fixed footer stay. Live redraws DMA through cover_blank_begin/end (flash-free).
 ; ===========================================================================
@@ -1417,6 +1560,7 @@ gi_desc_full_redraw:
   rep #$10 : .xl
   jsr gi_clear_body_buf
   lda #GIB_FULL_R0 : sta gi_desc_top
+  lda #GIB_DESC_RL : sta gi_desc_rl
   rep #$20 : .al
   lda gi_desc_scroll : sta gi_desc_skip
   sep #$20 : .as
@@ -1556,7 +1700,7 @@ gw_eos:
   rts
 gw_trunc:
   lda gi_dy
-  cmp #GIB_DESC_RL
+  cmp gi_desc_rl
   bcc gw_out
   jsr gw_append_ellipsis
   lda #$01 : sta gi_done

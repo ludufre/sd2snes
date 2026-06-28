@@ -478,6 +478,36 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_gameinfo_video
+ .byt  ^mtext_browser_gameinfo_video
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GAME_INFO_VIDEO
+ .byt  ^CFG_GAME_INFO_VIDEO
+ .word !mdesc_browser_gameinfo_video
+ .byt  ^mdesc_browser_gameinfo_video
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_gameinfo-1)        ; grey when Game Info is off
+ .byt  ^(mfunc_isenabled_gameinfo-1)
+
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_gameinfo_music
+ .byt  ^mtext_browser_gameinfo_music
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GAME_INFO_MUSIC
+ .byt  ^CFG_GAME_INFO_MUSIC
+ .word !mdesc_browser_gameinfo_music
+ .byt  ^mdesc_browser_gameinfo_music
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_gameinfo_music-1)  ; grey when Game Info OR Show video is off
+ .byt  ^(mfunc_isenabled_gameinfo_music-1)
+
 ; .byt  MTYPE_VALUE
 ; .word !mtext_browser_screensaver_timeout
 ; .byt  ^mtext_browser_screensaver_timeout
@@ -1279,6 +1309,23 @@ mfunc_isenabled_never:
 
 mfunc_isenabled_hooks:
   lda @CFG_ENABLE_INGAME_HOOK
+  eor #$ff
+  ror
+  rtl
+
+; Grey the Game Info video sub-option whenever Game Info is off (0/1 -> eor/ror).
+mfunc_isenabled_gameinfo:
+  lda @CFG_SHOW_GAME_INFO
+  eor #$ff
+  ror
+  rtl
+
+; Grey the "play video music" sub-option whenever Game Info OR Show video is off
+; (the .pcm only plays alongside the clip). AND of two 0/1 flags, like
+; mfunc_isenabled_savestate below. Carry set = drawn disabled.
+mfunc_isenabled_gameinfo_music:
+  lda @CFG_SHOW_GAME_INFO
+  and @CFG_GAME_INFO_VIDEO
   eor #$ff
   ror
   rtl

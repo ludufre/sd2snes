@@ -31,29 +31,50 @@
                                         * title + "-" fields + (if present) its .cov in the band */
 #define GAMEINFO_STATUS_ERROR (0x02)   /* present but unusable */
 
-#define GAMEINFO_FLAG_IMAGE   (0x01)   /* <rom>.gd (DirectColor) staged ok */
-#define GAMEINFO_FLAG_FMV     (0x02)   /* <rom>.fmv animated screenshot streaming; the
-                                        * cover is the sibling <rom>.cov (OBJ). Frame 0
-                                        * is staged at SRAM_GAMEINFO_TILES_ADDR; the menu
-                                        * pumps CMD_FMV_NEXT to advance (gameinfo_fmv_next) */
+#define GAMEINFO_FLAG_IMAGE   (0x01)   /* legacy DirectColor .gd (RETIRED; the band is paletted now) */
+#define GAMEINFO_FLAG_FMV     (0x02)   /* <rom>.fmv (cover-LESS v4) screenshot/animation staged at
+                                        * SRAM_GAMEINFO_TILES_ADDR; 1 frame = static, N = animated.
+                                        * The menu pumps CMD_FMV_NEXT to advance (gameinfo_fmv_next) */
+#define GAMEINFO_FLAG_COVER   (0x04)   /* <rom>.gcv paletted 120c cover staged (palette -> $CB0000,
+                                        * tiles -> C9). Without it the cover region shows the gradient */
+#define GAMEINFO_FLAG_COVER_OBJ (0x08) /* FALLBACK when no .gcv: the browser <rom>.cov (next to the ROM)
+                                        * staged into C9 (load_cover); the menu floats it as OBJ box-art
+                                        * centered in the SAME 128x128 spot the .gcv cover occupies.
+                                        * Mutually exclusive with GAMEINFO_FLAG_COVER (.gcv wins). */
 
-/* DirectColor .gd image header (utils/gen_dcimage.py); little-endian. */
-#define GD_MAGIC0           ('G')
-#define GD_MAGIC1           ('D')
-#define GD_VERSION          (0x01)
-#define GD_HEADER_SIZE      (12)
-
-/* Animated screenshot .fmv container (utils/gen_fmv.py); little-endian. A fixed-size
- * 8bpp DirectColor box (BOX_W x BOX_H tiles) per frame, NO dedup (same slots every
- * frame) so the firmware streams one block per frame and the SNES re-DMAs it in place.
- * Geometry is fixed: it MUST match GI_FMV_W/GI_FMV_H in snes/gameinfo.a65. */
+/* .fmv container (paletted, little-endian). A fixed-size 8bpp box (FMV_BOX_W x FMV_BOX_H tiles) per
+ * frame, NO dedup (same slots every frame) so the firmware streams one block per frame and the SNES
+ * re-DMAs it in place. Geometry MUST match GI_FMV_W/GI_FMV_H in snes/gameinfo.a65. */
 #define FMV_MAGIC0          ('F')
 #define FMV_MAGIC1          ('V')
-#define FMV_VERSION         (0x01)
-#define FMV_HEADER_SIZE     (12)
 #define FMV_BOX_W           (12)       /* box width  in 8x8 tiles (96 px) */
 #define FMV_BOX_H           (9)        /* box height in 8x8 tiles (72 px) */
 #define FMV_FRAME_BYTES     (FMV_BOX_W * FMV_BOX_H * 64)   /* 6912 */
+
+/* .gcv standalone cover file (paletted 120c, DECOUPLED from the .fmv so it survives FMV-off):
+ * header(8) + palette(120*2=240 -> CGRAM 48..167) + tiles(16x16=256 8bpp, value=48+idx if opaque,
+ * else 0). Staged: palette -> SRAM_GAMEINFO_TMAP_ADDR ($CB0000), tiles -> SRAM_COVER_ADDR (bank C9).
+ * MUST match lib/bandpal.js (GCV_*) and snes/gameinfo.a65 (GI_COVER_*). */
+#define GCV_MAGIC0            ('G')
+#define GCV_MAGIC1            ('C')
+#define GCV_VERSION           (0x01)
+#define GCV_HEADER_SIZE       (8)
+#define GCV_W                 (16)        /* cover width  in 8x8 tiles (128 px) */
+#define GCV_H                 (16)        /* cover height in 8x8 tiles (128 px); 16x16 = 256 tiles = window-0 */
+#define GCV_NCOLORS           (120)
+#define GCV_PAL_BYTES         (GCV_NCOLORS * 2)          /* 240 -> CGRAM 48..167 */
+#define GCV_TILE_BYTES        (GCV_W * GCV_H * 64)       /* 16384 (256 tiles, <= window-0 cap) */
+
+/* .fmv - cover-LESS paletted screenshot/animation: 88 colours (CGRAM 168..255, per frame), box 12x9
+ * (96x72). 1 frame = static screenshot, N = animated. The cover is the sibling .gcv. header(16) +
+ * N*(palette 176 -> CGRAM 168 + tiles 6912, value=168+idx). MUST match lib/bandpal.js. Frame tiles ->
+ * $CA0000, palette -> $CA1B00. */
+#define FMV_VERSION           (0x01)
+#define FMV_HEADER_SIZE       (16)
+#define FMV_NCOLORS           (88)
+#define FMV_FRAME_PAL_BYTES   (FMV_NCOLORS * 2)                       /* 176 -> CGRAM 168..255 */
+#define FMV_FRAME_STRIDE      (FMV_FRAME_PAL_BYTES + FMV_FRAME_BYTES) /* 176 + 6912 = 7088 */
+#define FMV_DATA_START        (FMV_HEADER_SIZE)                       /* 16 = first frame */
 
 /* packed metadata struct -> SRAM_GAMEINFO_ADDR. Byte offsets are mirrored in
  * snes/memmap.i65 (GI_*). Text fields are font-encoded NUL-terminated strings (so

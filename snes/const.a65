@@ -249,7 +249,9 @@ wifi_keys_hi                      .byt "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_@
 mtext_browser_menumusic           .byt "Menu music", 0
 mtext_browser_menusfx             .byt "Menu sounds", 0
 mtext_browser_sortfav             .byt "Sort favorites", 0
-mtext_browser_gameinfo            .byt "Game info before boot", 0
+mtext_browser_gameinfo            .byt "Game Info", 0
+mtext_browser_gameinfo_video      .byt " ", 129, "Show video", 0
+mtext_browser_gameinfo_music      .byt " ", 129, "Play video music", 0
 mtext_browser_restoretheme        .byt "Restore theme", 0
 mtext_browser_restoremusic        .byt "Restore music", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
@@ -309,6 +311,8 @@ mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the 
 mdesc_browser_menusfx             .byt "Play sound effects when navigating the menu", 0
 mdesc_browser_sortfav             .byt "Sort the favorites list alphabetically", 0
 mdesc_browser_gameinfo            .byt "Show cover, screenshot and info before booting a ROM that has a /sd2snes/info entry", 0
+mdesc_browser_gameinfo_video      .byt "Play the animated clip on the game info screen (off shows a static snapshot)", 0
+mdesc_browser_gameinfo_music      .byt "Play the clip's soundtrack while it shows. Requires Show video.", 0
 mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
 mdesc_browser_restoremusic        .byt "Revert the menu background music to the default (menu.spc)", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0

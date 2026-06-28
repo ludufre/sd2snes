@@ -56,12 +56,23 @@ snd_fx_error:
   rts
 
 ; ---------------------------------------------------------------------------
-; sfx_dsp_unmute: upload + start a tiny SPC700 program that just unmutes the
-; S-DSP (FLG=$20: soft-reset off, mute off, echo off; master volume $7f) and
-; idles forever. With NO music playing the S-DSP sits in its IPL reset/mute
-; state and the console's audio path gates the cart's MSU-1 DAC output - menu
-; sound effects become inaudible (characterized on hardware 2026-06-12). This
-; stub reproduces the "music is playing" condition minus the music.
+; sfx_dsp_unmute: upload + start a tiny SPC700 program that puts the S-DSP into
+; a KNOWN-SILENT-but-running state and idles forever. With NO music playing the
+; S-DSP sits in its IPL reset/mute state and the console's audio path gates the
+; cart's MSU-1 DAC output - menu sound effects become inaudible (characterized
+; on hardware 2026-06-12). Taking the DSP out of reset/mute re-opens that path.
+;
+; BUT just flipping FLG=$20 + MVOL=$7f (what this used to do) unmutes the DSP
+; while its voice/echo registers still hold whatever GARBAGE they powered up
+; with (KON, per-voice volumes, EON/EVOL/ESA are undefined at cold boot). At
+; MVOL=$7f that garbage plays continuously => the clicks/pops Mk.II users heard
+; with menu music off after a power-cycle. It only stopped on entering a game or
+; re-enabling music because both reinitialize the DSP to a clean state.
+;
+; Fix: scrub every voice/echo register WHILE STILL MUTED, then unmute LAST. The
+; cart's MSU-1 DAC passthrough depends only on FLG (not on the DSP voice mix), so
+; SFX stay audible exactly as before; the DSP's own voice mix is forced to pure
+; silence so nothing leaks through on the unmute.
 ;
 ; Standard IPL upload protocol, EVERY wait bounded (~65k polls): on timeout,
 ; carry set and the APU is left as-is (fail-safe: silent effects, alive menu).
@@ -69,14 +80,45 @@ snd_fx_error:
 ; S-SMP is at IPL (boot / after a silence warm-reset / after a failed bgm load).
 ; ---------------------------------------------------------------------------
 sfx_dsp_stub_code:
-  .byt $8f, $6c, $f2   ; mov $f2, #$6c   DSP addr = FLG
-  .byt $8f, $20, $f3   ; mov $f3, #$20   soft-reset off, mute OFF, echo off
-  .byt $8f, $0c, $f2   ; mov $f2, #$0c   DSP addr = MVOL_L
-  .byt $8f, $7f, $f3   ; mov $f3, #$7f
-  .byt $8f, $1c, $f2   ; mov $f2, #$1c   DSP addr = MVOL_R
-  .byt $8f, $7f, $f3   ; mov $f3, #$7f
+  ; --- keep the DSP MUTED while we scrub it (no transient on the way in) ---
+  .byt $8f, $6c, $f2   ; mov $f2,#$6c    DSP addr = FLG
+  .byt $8f, $60, $f3   ; mov $f3,#$60    soft-reset OFF, MUTE ON, echo-write off
+  ; --- key everything off ---
+  .byt $8f, $5c, $f2   ; mov $f2,#$5c    DSP addr = KOFF
+  .byt $8f, $ff, $f3   ; mov $f3,#$ff    key off all 8 voices
+  .byt $8f, $4c, $f2   ; mov $f2,#$4c    DSP addr = KON
+  .byt $8f, $00, $f3   ; mov $f3,#$00    no key-on
+  ; --- kill the echo path entirely (ESA is garbage at cold boot) ---
+  .byt $8f, $4d, $f2   ; mov $f2,#$4d    DSP addr = EON
+  .byt $8f, $00, $f3   ; mov $f3,#$00    no voice feeds echo
+  .byt $8f, $2c, $f2   ; mov $f2,#$2c    DSP addr = EVOL_L
+  .byt $8f, $00, $f3   ; mov $f3,#$00
+  .byt $8f, $3c, $f2   ; mov $f2,#$3c    DSP addr = EVOL_R
+  .byt $8f, $00, $f3   ; mov $f3,#$00
+  .byt $8f, $0d, $f2   ; mov $f2,#$0d    DSP addr = EFB
+  .byt $8f, $00, $f3   ; mov $f3,#$00    no echo feedback
+  ; --- zero every voice's L/R volume (regs $00/$01,$10/$11,..$70/$71) ---
+  .byt $8d, $00        ; mov y,#$00      Y = the value 0 to write
+  .byt $e8, $00        ; mov a,#$00      A = running DSP register address
+  ; sfx_vol_loop:                        (loop body = 16 bytes, see bne offset)
+  .byt $c4, $f2        ; mov $f2,a       DSP addr = A   -> VOL_L of this voice
+  .byt $cb, $f3        ; mov $f3,y       = 0
+  .byt $bc             ; inc a           -> VOL_R address
+  .byt $c4, $f2        ; mov $f2,a
+  .byt $cb, $f3        ; mov $f3,y       = 0
+  .byt $60             ; clrc
+  .byt $88, $0f        ; adc a,#$0f      A += 15  -> next voice VOL_L ($x0)
+  .byt $68, $80        ; cmp a,#$80      past voice 7?
+  .byt $d0, $f0        ; bne sfx_vol_loop (-16)
+  ; --- main volume back up, THEN unmute (DSP mix is silent now) ---
+  .byt $8f, $0c, $f2   ; mov $f2,#$0c    DSP addr = MVOL_L
+  .byt $8f, $7f, $f3   ; mov $f3,#$7f
+  .byt $8f, $1c, $f2   ; mov $f2,#$1c    DSP addr = MVOL_R
+  .byt $8f, $7f, $f3   ; mov $f3,#$7f
+  .byt $8f, $6c, $f2   ; mov $f2,#$6c    DSP addr = FLG
+  .byt $8f, $20, $f3   ; mov $f3,#$20    soft-reset off, MUTE OFF, echo-write off
   .byt $2f, $fe        ; bra *           idle forever
-#define SFX_STUB_LEN  20
+#define SFX_STUB_LEN  82
 #define SFX_STUB_ADDR $0200
 
 ; Mirrors apu_ram_init (spc700.a65) EXACTLY: same stock helpers
