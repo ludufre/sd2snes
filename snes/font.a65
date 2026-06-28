@@ -1,4 +1,8 @@
-.link page $c0
+.link page $c1
+; ^ font moved $C0 -> $C1: frees ~8 KB so the full-width 256x56 header logo fits the
+;   nearly-full $C0. The font is non-themable (theme.c slot 0, cap 0) and DMA'd
+;   bank-agnostically (#^font/#!font in genfonts), so the bank move is transparent.
+;   fontedit.py preserves this header verbatim on regen.
 font    .byt  $00, $00, $00, $00, $00, $00, $00, $00
         .byt  $00, $00, $00, $00, $00, $00, $00, $00
         .byt  $00, $00, $00, $00, $00, $00, $00, $00

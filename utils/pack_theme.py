@@ -67,7 +67,7 @@ SLOT_MAX = {
     SLOT_OAM_L: 96,
     SLOT_OAM_H: 9,
     SLOT_PALETTE: 512,
-    SLOT_LOGO_TILES: 7168,
+    SLOT_LOGO_TILES: 14336,
 }
 SLOT_NAME = {
     SLOT_FONT: "font", SLOT_LOGO_PAL: "logo_pal", SLOT_HDMA_MATH: "hdma_math_src",

@@ -21,15 +21,11 @@
 #define COVER_OBJ_VRAM_BASE         $2000      /* OBJ name-table base (VRAM words) */
 #define COVER_OBJ_CLEAR_LEN         $2000      /* bytes cleared at init (256 4bpp tiles) */
 #define COVER_OBSEL                 $01        /* $2101: size tbl0 (8/16), name sel 0, base $2000 */
-/* The old BG-cover used char $100 (word $2000) as a zeroed transparent tile, but
-   that word is now the OBJ name table. So the header BG (cols 16..31) uses a
-   dedicated blank char in free VRAM after the logo ($6000..$6DFF). */
-#define COVER_BLANK_VRAM            $7800      /* VRAM word of the zeroed header blank tile */
-#define COVER_BLANK_CHAR            $03C0      /* BG1 char of the blank tile ($7800 / $20) */
-#define COVER_OBJ_X_RIGHT           256        /* right edge of the cover = screen edge; a w=8
-                                                  cover fills cols 16..31 (logo owns 0..15). The
+/* The header logo is now FULL-WIDTH (cols 0..31), so there is no blank cover area
+   to fill: the old COVER_BLANK_VRAM/COVER_BLANK_CHAR tile is gone. */
+#define COVER_OBJ_X_RIGHT           256        /* right edge of the cover = screen edge; the
                                                   256 wrap is handled in cover_build_oam (lda #0). */
-#define COVER_OBJ_Y0                0          /* top of the cover in px (0 = touches the screen top) */
+#define COVER_OBJ_Y0                0          /* TEMP: top-right (Y=0) to preview overlap vs header */
 #define COVER_OBJ_MAX_W             8          /* 16-wide name grid -> <= 8 sprites wide */
 #define COVER_OBJ_MAX_H             8          /* 256-tile page -> <= 8 sprites tall */
 #define COVER_OBJ_ATTR              $30        /* OAM attr base: OBJ priority 3 (bits5-4), no flip */
@@ -40,16 +36,15 @@
                                                   > the 3-frame d-pad auto-repeat so held scrolling
                                                   never fires a cover; 6 = faster load, still safe) */
 #define COVER_TIMEOUT               180        /* frames before giving up on the MCU */
-/* ---- header logo (8bpp BG1, left side; baked tiles in logo_gfx.a65) ----
-   The logo lives permanently in BG1_TILE_BUF cols 0..15 (written once at init);
-   the OBJ cover floats on the right, so the logo is never overwritten. */
+/* ---- header logo (8bpp BG1, FULL-WIDTH 256x56; baked tiles in logo.a65) ----
+   The logo lives permanently in BG1_TILE_BUF cols 0..31 (written once at init);
+   the OBJ cover floats below it (COVER_OBJ_Y0), so the logo is never overwritten. */
 #define COVER_LOGO_VRAM            $6000      /* VRAM word dest for logo tile 0 (= char $300) */
 #define COVER_LOGO_CHAR            $0300      /* BG1 char number of logo tile 0 */
 #define COVER_LOGO_CGB             $40        /* CGRAM 64: logo palette base (pal 4+5, free) */
-#define COVER_LOGO_COLS            16         /* logo width in 8px tiles (128px, cols 0..15) */
-#define COVER_LOGO_TILEBYTES       $1C00      /* 16*7*64 = 7168 bytes */
+#define COVER_LOGO_COLS            32         /* logo width in 8px tiles (256px, full-width cols 0..31) */
+#define COVER_LOGO_TILEBYTES       $3800      /* 32*7*64 = 14336 bytes */
 #define COVER_LOGO_PALBYTES        $0040      /* 32 colours * 2 = 64 bytes */
-#define COVER_AREA_COL             16         /* logo owns cols 0..15 of the header tilemap */
 /* bank-C9 staging layout (must match src/cover.h COVER_OFF_*) */
 #define SRAM_COVER_ADDR             $C90000
 #define COVER_C9_TILES              $C90000    /* 4bpp tiles (name-grid order) */
