@@ -68,6 +68,8 @@
 #define CFG_MENU_MUSIC_FILE              ("MenuMusicFile")
 #define CFG_SORT_FAVORITES               ("SortFavorites")
 #define CFG_SHOW_GAME_INFO               ("ShowGameInfo")
+#define CFG_GAME_INFO_VIDEO              ("GameInfoVideo")
+#define CFG_GAME_INFO_MUSIC             ("GameInfoMusic")
 #define CFG_ENABLE_CHEAT_OVERLAY         ("EnableCheatOverlay")
 
 typedef enum {
@@ -128,6 +130,8 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_cheat_overlay;    /* CFG @ $13D: in-game cheat overlay (pause via L+R+Y+Left to toggle cheats live). Forced off on special-chip games — the savestate machinery it reuses is unsupported there. */
   uint8_t  show_game_info;          /* CFG @ $13E: show the pre-boot game info screen (auto-skips when the ROM has no /sd2snes/info entry) */
   uint8_t  enable_wifi;             /* CFG @ $13F: RESERVED WiFi companion master switch (0=off). No ESP link in this branch; placed here (NOT $BD: that overlapped bgm_name @ $BC) so the future Companion port has no cfg-offset drift. */
+  uint8_t  game_info_video;         /* CFG @ $140: play the animated .fmv clip on the game info screen (off -> static .gss snapshot) */
+  uint8_t  game_info_music;         /* CFG @ $141: play the clip's .pcm soundtrack (only while the .fmv clip is shown; requires game_info_video) */
 } cfg_t;
 
 int cfg_save(void);

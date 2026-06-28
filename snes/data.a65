@@ -382,4 +382,5 @@ gi_nav_save_sel  .word 0    ; in-panel game nav: restore-on-clamp snapshot of fi
 gi_nav_save_ptr  .word 0    ; in-panel game nav: restore-on-clamp snapshot of dirptr_addr
 gi_nav_save_bank .word 0    ; in-panel game nav: restore-on-clamp snapshot of dirptr_bank
 gi_nav_idbefore  .word 0    ; in-panel game nav: entry id (dirptr_addr + filesel_sel*4) before a step
+gi_desc_rl       .byt 0     ; desc draw: active last text row (GIB_NORM_DESC_RL normal / GIB_DESC_RL full)
 _END            .byt 0

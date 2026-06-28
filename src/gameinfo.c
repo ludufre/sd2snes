@@ -6,11 +6,14 @@
 #include "ff.h"
 #include "fileops.h"
 #include "memory.h"
+#include "cfg.h"      /* cfg_t / CFG : game info "Show video" + "Play video music" toggles */
 #include "yaml.h"
 #include "cover.h"
 #include "msu1.h"     /* menu_music_* : looping FMV audio via the MSU-1 DAC */
 #include "timer.h"    /* getticks()/MS_TO_TICKS/time_after for the FMV idle watchdog */
 #include "gameinfo.h"
+
+extern cfg_t CFG;   /* game info "Show video" / "Play video music" toggles (game_info_video/_music) */
 
 /* UTF-8 codepoint -> sd2snes font byte. MUST match the ACCENTS map in
  * snes/utils/build_const.py (and snes/font.a65). Only the Latin accents the font
@@ -93,63 +96,25 @@ static int gi_stream(uint32_t addr, uint32_t size) {
   return 1;
 }
 
-/* Load the DirectColor /sd2snes/info/<rom>.gd: validate the header, stream the tilemap into
- * SRAM_GAMEINFO_TMAP_ADDR and the 8bpp tiles into SRAM_GAMEINFO_TILES_ADDR, and
- * record the geometry in the meta struct. Returns 1 on success. Bounded/fail-safe. */
-static int gi_load_image(const char *path, gameinfo_meta_t *meta) {
-  uint8_t hdr[GD_HEADER_SIZE];
+/* Load the standalone /sd2snes/info/<rom>.gcv (paletted 120c cover, DECOUPLED from the .fmv):
+ * validate the header, stream the palette into SRAM_GAMEINFO_TMAP_ADDR ($CB0000 -> the SNES DMAs it
+ * to CGRAM 48..167) and the 8bpp cover tiles into SRAM_COVER_ADDR (bank C9). Returns 1 on success.
+ * Bounded/fail-safe; on any error the cover region just shows the gradient. */
+static int gi_load_gcv(const char *path) {
+  uint8_t hdr[GCV_HEADER_SIZE];
   UINT got;
   file_open((uint8_t *)path, FA_READ);
   if(file_res) return 0;
-  file_res = f_read(&file_handle, hdr, GD_HEADER_SIZE, &got);
-  if(file_res || got != GD_HEADER_SIZE
-     || hdr[0] != GD_MAGIC0 || hdr[1] != GD_MAGIC1 || hdr[2] != GD_VERSION) {
+  file_res = f_read(&file_handle, hdr, GCV_HEADER_SIZE, &got);
+  if(file_res || got != GCV_HEADER_SIZE
+     || hdr[0] != GCV_MAGIC0 || hdr[1] != GCV_MAGIC1 || hdr[2] != GCV_VERSION
+     || hdr[4] != GCV_W || hdr[5] != GCV_H) {
     file_close(); return 0;
   }
-  uint8_t  w = hdr[4], h = hdr[5];
-  uint16_t ntiles = (uint16_t)(hdr[6] | (hdr[7] << 8));
-  /* VRAM holds at most 512 unique 8bpp tiles (two 256-tile windows, see snes/gameinfo.a65) */
-  if(w == 0 || w > 32 || h == 0 || h > 32 || ntiles == 0 || ntiles > 512) {
-    file_close(); return 0;
-  }
-  /* file order: header, tilemap (w*h*2), tiles (ntiles*64) */
-  if(!gi_stream(SRAM_GAMEINFO_TMAP_ADDR,  (uint32_t)w * h * 2)) { file_close(); return 0; }
-  if(!gi_stream(SRAM_GAMEINFO_TILES_ADDR, (uint32_t)ntiles * 64)) { file_close(); return 0; }
+  /* file order: header(8), palette (GCV_PAL_BYTES), tiles (GCV_TILE_BYTES) */
+  if(!gi_stream(SRAM_GAMEINFO_TMAP_ADDR, GCV_PAL_BYTES)) { file_close(); return 0; }
+  if(!gi_stream(SRAM_COVER_ADDR,         GCV_TILE_BYTES)) { file_close(); return 0; }
   file_close();
-  meta->img_w_tiles   = w;
-  meta->img_h_tiles   = h;
-  meta->img_num_tiles = ntiles;
-  meta->flags |= GAMEINFO_FLAG_IMAGE;
-  return 1;
-}
-
-/* Banked .gd, FMV path: stage the tilemap (-> SRAM_GAMEINFO_TMAP_ADDR) and ONLY the cover bank
- * (first 256 tiles -> bank C9 / SRAM_COVER_ADDR, free here since the OBJ cover isn't used) so the
- * SNES can DMA the cover into window-0 while the .fmv owns window-1 ($CA0000). The snapshot bank
- * (tiles 256..) is not staged -- the FMV replaces it. Banked .gd has bank0 padded to 256, so
- * ntiles >= 256; an old global .gd (ntiles < 256) is rejected (re-export). Returns 1 on success. */
-static int gi_load_cover_bank(const char *path, gameinfo_meta_t *meta) {
-  uint8_t hdr[GD_HEADER_SIZE];
-  UINT got;
-  file_open((uint8_t *)path, FA_READ);
-  if(file_res) return 0;
-  file_res = f_read(&file_handle, hdr, GD_HEADER_SIZE, &got);
-  if(file_res || got != GD_HEADER_SIZE
-     || hdr[0] != GD_MAGIC0 || hdr[1] != GD_MAGIC1 || hdr[2] != GD_VERSION) {
-    file_close(); return 0;
-  }
-  uint8_t  w = hdr[4], h = hdr[5];
-  uint16_t ntiles = (uint16_t)(hdr[6] | (hdr[7] << 8));
-  if(w == 0 || w > 32 || h == 0 || h > 32 || ntiles < 256 || ntiles > 512) {
-    file_close(); return 0;
-  }
-  if(!gi_stream(SRAM_GAMEINFO_TMAP_ADDR, (uint32_t)w * h * 2)) { file_close(); return 0; }
-  if(!gi_stream(SRAM_COVER_ADDR,         256u * 64u))          { file_close(); return 0; }
-  file_close();
-  meta->img_w_tiles   = w;
-  meta->img_h_tiles   = h;
-  meta->img_num_tiles = ntiles;
-  meta->flags |= GAMEINFO_FLAG_IMAGE;
   return 1;
 }
 
@@ -177,38 +142,39 @@ static void gi_fmv_close(void) {
   if(gi_fmv_open) { f_close(&gi_fmv_fil); gi_fmv_open = 0; }
 }
 
-/* stream ONE frame (FMV_FRAME_BYTES) from the current file position into PSRAM at
- * SRAM_GAMEINFO_TILES_ADDR. A glitched read is retried in place (rewind to the frame start)
- * a few times before giving up. Bounded; on persistent error closes the file and returns 0. */
+/* stream `size` bytes from the open .fmv (gi_fmv_fil) into PSRAM at `addr`, pumping the FMV DAC
+ * between chunks so the audio buffer never starves mid-read. Bounded; 0 on read error. */
+static int gi_fmv_stream(uint32_t addr, uint32_t size) {
+  UINT got;
+  while(size) {
+    UINT want = (size > sizeof(file_buf)) ? sizeof(file_buf) : (UINT)size;
+    if(f_read(&gi_fmv_fil, file_buf, want, &got) || got != want) return 0;
+    sram_writeblock(file_buf, addr, (uint16_t)got);
+    addr += got; size -= got;
+    menu_sfx_pump();
+  }
+  return 1;
+}
+
+/* Stage ONE v3 frame (palette + tiles) from the current file position. On disk a frame is the
+ * 256-byte FMV palette THEN the 6912-byte tiles: the palette goes to $CA1B00 (the SNES DMAs it to
+ * CGRAM 128..255 each frame) and the tiles to $CA0000 (re-DMA'd to the FMV VRAM set). A glitched
+ * read rewinds to the frame start and retries. Bounded; closes the file on persistent error. */
 static int gi_fmv_read_frame(void) {
-  DWORD start = gi_fmv_fil.fptr;       /* frame start, so a failed chunk can rewind + retry */
+  DWORD start = gi_fmv_fil.fptr;
   int tries;
   for(tries = 0; tries < FMV_READ_RETRIES; tries++) {
-    uint32_t addr = SRAM_GAMEINFO_TILES_ADDR;
-    uint32_t size = FMV_FRAME_BYTES;
-    UINT got;
-    int ok = 1;
-    if(tries && f_lseek(&gi_fmv_fil, start)) break;   /* rewind to retry; seek error -> give up */
-    while(size) {
-      UINT want = (size > sizeof(file_buf)) ? sizeof(file_buf) : (UINT)size;
-      if(f_read(&gi_fmv_fil, file_buf, want, &got) || got != want) { ok = 0; break; }
-      sram_writeblock(file_buf, addr, (uint16_t)got);
-      addr += got; size -= got;
-      /* The 6912-byte frame read is the longest stretch with no DAC refill -> the FMV audio
-         buffer (~11.6 ms) can starve mid-read and click. Pump the DAC after each ~512-byte
-         chunk (file_buf already staged): every chunk is a refill point, so it never starves.
-         No-op when no FMV music is playing (menusfx_active == 0). */
-      menu_sfx_pump();
-    }
-    if(ok) return 1;
+    if(tries && f_lseek(&gi_fmv_fil, start)) break;
+    if(gi_fmv_stream(SRAM_GAMEINFO_TILES_ADDR + FMV_FRAME_BYTES, FMV_FRAME_PAL_BYTES)
+       && gi_fmv_stream(SRAM_GAMEINFO_TILES_ADDR, FMV_FRAME_BYTES)) return 1;
   }
   gi_fmv_close();
   return 0;
 }
 
-/* Open <rom>.fmv, validate the header, stage frame 0, and arm the meta struct. Leaves the
- * file positioned at frame 1 (gi_fmv_cur = 0). Returns 1 on success. Fixed geometry MUST
- * match GI_FMV_W/GI_FMV_H on the SNES side. Bounded + fail-safe. */
+/* Open <rom>.fmv (v4, cover-LESS), validate, stage frame 0, and arm the meta struct. Leaves the file
+ * at frame 1 (gi_fmv_cur = 0). 1 frame = static screenshot (the pump no-ops). The cover is the
+ * sibling .gcv (gi_load_gcv), staged separately. Bounded. */
 static int gi_fmv_begin(const char *fmvpath, gameinfo_meta_t *meta) {
   uint8_t hdr[FMV_HEADER_SIZE];
   UINT got;
@@ -217,25 +183,24 @@ static int gi_fmv_begin(const char *fmvpath, gameinfo_meta_t *meta) {
   if(f_read(&gi_fmv_fil, hdr, FMV_HEADER_SIZE, &got) || got != FMV_HEADER_SIZE
      || hdr[0] != FMV_MAGIC0 || hdr[1] != FMV_MAGIC1 || hdr[2] != FMV_VERSION
      || hdr[4] != FMV_BOX_W   || hdr[5] != FMV_BOX_H) { f_close(&gi_fmv_fil); return 0; }
-  uint16_t nframes = (uint16_t)(hdr[6] | (hdr[7] << 8));
+  uint16_t nframes = (uint16_t)(hdr[8] | (hdr[9] << 8));
   if(nframes == 0) { f_close(&gi_fmv_fil); return 0; }
+  /* cover-LESS: the cover is the sibling .gcv, so there is NO cover block to stage here */
   gi_fmv_frames = nframes;
-  gi_fmv_fps    = hdr[8] ? hdr[8] : 12;
+  gi_fmv_fps    = hdr[7] ? hdr[7] : 12;
   gi_fmv_cur    = 0;
   gi_fmv_open   = 1;
-  gi_fmv_last_tick = getticks();         /* arm the idle watchdog */
+  gi_fmv_last_tick = getticks();
   if(!gi_fmv_read_frame()) return 0;     /* stage frame 0; file now at frame 1 */
-  gi_join(gi_fmv_path, sizeof(gi_fmv_path), fmvpath, "");  /* remember it for a reopen */
+  gi_join(gi_fmv_path, sizeof(gi_fmv_path), fmvpath, "");
   meta->flags     |= GAMEINFO_FLAG_FMV;
   meta->fmv_frames = nframes;
   meta->fmv_fps    = gi_fmv_fps;
   return 1;
 }
 
-/* Self-heal: a transient SD read closed the .fmv mid-playback. Reopen the saved path (no meta
- * or frame-0 re-stage) and seek to the frame after the one currently shown, so the normal
- * sequential advance resumes where it left off (at wrap the next call re-seeks anyway).
- * Bounded; on failure leaves gi_fmv_open = 0 and the panel just holds its last frame. */
+/* Self-heal: a transient SD read closed the .fmv mid-playback. Reopen + re-seek to the next frame.
+ * The cover block stays staged in PSRAM (not cleared), so it is NOT restreamed. Bounded. */
 static int gi_fmv_reopen(void) {
   uint8_t hdr[FMV_HEADER_SIZE];
   UINT got;
@@ -247,7 +212,7 @@ static int gi_fmv_reopen(void) {
      || hdr[4] != FMV_BOX_W   || hdr[5] != FMV_BOX_H) { f_close(&gi_fmv_fil); return 0; }
   nextf = (uint32_t)gi_fmv_cur + 1u;
   if(nextf >= gi_fmv_frames) nextf = 0;
-  if(f_lseek(&gi_fmv_fil, FMV_HEADER_SIZE + nextf * FMV_FRAME_BYTES)) { f_close(&gi_fmv_fil); return 0; }
+  if(f_lseek(&gi_fmv_fil, FMV_DATA_START + nextf * FMV_FRAME_STRIDE)) { f_close(&gi_fmv_fil); return 0; }
   gi_fmv_open = 1;
   return 1;
 }
@@ -271,14 +236,14 @@ void gameinfo_fmv_next(void) {
     if((uint32_t)(gi_fmv_cur - target) < (uint32_t)(gi_fmv_frames / 2u))
       return;                                                 /* video slightly ahead -> hold */
     /* loop wrap (target jumped back near 0) -> seek there (cheap, near the file start) */
-    if(f_lseek(&gi_fmv_fil, FMV_HEADER_SIZE + target * FMV_FRAME_BYTES)) { gi_fmv_close(); return; }
+    if(f_lseek(&gi_fmv_fil, FMV_DATA_START + target * FMV_FRAME_STRIDE)) { gi_fmv_close(); return; }
     if(gi_fmv_read_frame()) gi_fmv_cur = (uint16_t)target;
     return;
   }
   /* forward: read up to target (catch-up discards the skipped frames; the last read stays in
    * $CA0000). A large jump -- which steady play never produces -- seeks instead. */
   if(target - gi_fmv_cur > 30u) {
-    if(f_lseek(&gi_fmv_fil, FMV_HEADER_SIZE + target * FMV_FRAME_BYTES)) { gi_fmv_close(); return; }
+    if(f_lseek(&gi_fmv_fil, FMV_DATA_START + target * FMV_FRAME_STRIDE)) { gi_fmv_close(); return; }
     if(gi_fmv_read_frame()) gi_fmv_cur = (uint16_t)target;
     return;
   }
@@ -374,24 +339,36 @@ void gameinfo_load(uint8_t *rom_path) {
   gi_fmv_path[0] = 0;                         /* invalidate the saved reopen path */
   menu_music_stop();                         /* and any prior FMV audio clip */
   {
-    int is_fmv = 0;
-    if(fmv_eligible) {
-      gi_join(path, sizeof(path), base, ".fmv");
-      is_fmv = gi_fmv_begin(path, &meta);    /* stages frame 0 -> $CA0000, cur=0 */
+    /* DECOUPLED paletted band: the cover (.gcv, left) and the screenshot/FMV region (right) are
+     * SEPARATE files, each into its own CGRAM range. The right region comes from EITHER the animated
+     * clip (.fmv) OR the static snapshot (.gss) -- two files, so a future "no preview clip" toggle can
+     * fall back to the snapshot. Either region absent -> gradient. No DirectColor .gd / OBJ .cov. */
+    gi_join(path, sizeof(path), base, ".gcv");
+    if(gi_load_gcv(path)) {
+      meta.flags |= GAMEINFO_FLAG_COVER;                       /* cover -> C9 + CGRAM 48..167 */
+    } else {
+      /* FALLBACK: no .gcv -> stage the browser <rom>.cov (next to the ROM) into C9 and let the
+       * menu float it as OBJ box-art in the SAME spot the .gcv cover would occupy. load_cover
+       * derives "<rom>.cov" from rom_path and writes the C9 meta/status itself; bounded + fail-safe. */
+      if(load_cover(rom_path, SRAM_COVER_ADDR)) meta.flags |= GAMEINFO_FLAG_COVER_OBJ;
     }
-    /* Option B: the cover ALWAYS comes from the .gd (BG, window-0). In the .fmv case only the cover
-     * bank is staged (-> C9; frames keep $CA0000); in the static case the whole .gd goes to $CA0000.
-     * The OBJ .cov is now just the fallback when there is no .gd. */
-    gi_join(path, sizeof(path), base, ".gd");
-    int has_gd = is_fmv ? gi_load_cover_bank(path, &meta)
-                        : gi_load_image(path, &meta);
-    if(!has_gd)
-      load_cover(rom_path, SRAM_COVER_ADDR);
-    if(is_fmv) {
-      /* optional sibling <rom>.pcm: loop it through the DAC while the screen is open. Silent
-       * if absent. The menu stops it when the info screen closes (main.c / idle watchdog). */
-      gi_join(path, sizeof(path), base, ".pcm");
-      menu_music_play(path);
+    if(fmv_eligible) {
+      int shown = 0;
+      /* the animated clip (.fmv) is gated by the "Show video" toggle; off -> static snapshot below */
+      if(CFG.game_info_video) {
+        gi_join(path, sizeof(path), base, ".fmv");
+        if(gi_fmv_begin(path, &meta)) {      /* sets GAMEINFO_FLAG_FMV; N frames -> animated */
+          shown = 1;
+          if(CFG.game_info_music) {          /* clip soundtrack gated by the "Play video music" toggle */
+            gi_join(path, sizeof(path), base, ".pcm");
+            menu_music_play(path);           /* clip audio; silent if absent */
+          }
+        }
+      }
+      if(!shown) {                           /* video off / clip absent: the static snapshot (.gss, 1 frame) */
+        gi_join(path, sizeof(path), base, ".gss");
+        gi_fmv_begin(path, &meta);           /* sets GAMEINFO_FLAG_FMV; 1 frame -> the pump no-ops */
+      }
     }
   }
 

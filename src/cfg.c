@@ -23,6 +23,8 @@ _Static_assert(offsetof(cfg_t, sort_favorites) == 0x13C, "cfg_t.sort_favorites m
 _Static_assert(offsetof(cfg_t, enable_cheat_overlay) == 0x13D, "cfg_t.enable_cheat_overlay must stay at CFG_ADDR+$13D");
 _Static_assert(offsetof(cfg_t, show_game_info) == 0x13E, "cfg_t.show_game_info must stay at CFG_ADDR+$13E");
 _Static_assert(offsetof(cfg_t, enable_wifi) == 0x13F, "cfg_t.enable_wifi must stay at CFG_ADDR+$13F (RESERVED for the Companion port; NOT $BD which overlapped bgm_name @ $BC)");
+_Static_assert(offsetof(cfg_t, game_info_video) == 0x140, "cfg_t.game_info_video must stay at CFG_ADDR+$140");
+_Static_assert(offsetof(cfg_t, game_info_music) == 0x141, "cfg_t.game_info_music must stay at CFG_ADDR+$141");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -71,10 +73,12 @@ cfg_t CFG_DEFAULT = {
   .covers_in_lists = 1,
   .enable_menu_sfx = 1,
   .bgm_name = "",
-  .sort_favorites = 0,
+  .sort_favorites = 1,
   .enable_cheat_overlay = 1,
   .show_game_info = 1,
   .enable_wifi = 0,
+  .game_info_video = 1,
+  .game_info_music = 1,
 };
 
 cfg_t CFG;
@@ -198,6 +202,10 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_MENU_MUSIC_FILE, (char*)CFG.bgm_name);
   f_printf(&file_handle, "\n#  %s: Show the game info screen (cover/screenshot/metadata) before booting a ROM that has a /sd2snes/info entry\n", CFG_SHOW_GAME_INFO);
   f_printf(&file_handle, "%s: %s\n", CFG_SHOW_GAME_INFO, CFG.show_game_info ? "true" : "false");
+  f_printf(&file_handle, "#  %s: Play the animated video clip on the game info screen (false: show a static snapshot instead)\n", CFG_GAME_INFO_VIDEO);
+  f_printf(&file_handle, "%s: %s\n", CFG_GAME_INFO_VIDEO, CFG.game_info_video ? "true" : "false");
+  f_printf(&file_handle, "#  %s: Play the video's soundtrack while the clip is showing (requires %s)\n", CFG_GAME_INFO_MUSIC, CFG_GAME_INFO_VIDEO);
+  f_printf(&file_handle, "%s: %s\n", CFG_GAME_INFO_MUSIC, CFG.game_info_music ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Enable the WiFi companion (false: no access point, no WebUI). RESERVED -- no ESP link in this build yet\n", CFG_ENABLE_WIFI);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_WIFI, CFG.enable_wifi ? "true" : "false");
   file_close();
@@ -372,6 +380,12 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_SHOW_GAME_INFO, &tok)) {
       CFG.show_game_info = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_GAME_INFO_VIDEO, &tok)) {
+      CFG.game_info_video = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_GAME_INFO_MUSIC, &tok)) {
+      CFG.game_info_music = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_ENABLE_WIFI, &tok)) {
       CFG.enable_wifi = tok.boolvalue ? 1 : 0;
