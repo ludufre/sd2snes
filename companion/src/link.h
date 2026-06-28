@@ -21,6 +21,10 @@ lerr_t proto_ls_next(uint8_t *buf, size_t bufsz, uint16_t *outlen, int *final);
 lerr_t proto_get_open(const char *path, uint8_t *status, uint32_t *total);
 lerr_t proto_get_data(uint32_t off, uint16_t want, uint8_t *status,
                       uint8_t *buf, uint16_t *got, int *final);
+// Pipelined GET: download [0,total) by bursting requests so the MCU streams replies back
+// to back. Calls sink(ctx,data,len) per chunk IN ORDER; sink returns nonzero to abort.
+typedef int (*get_sink_fn)(void *ctx, const uint8_t *data, uint16_t len);
+lerr_t proto_get_stream(uint32_t total, get_sink_fn sink, void *ctx);
 lerr_t proto_put_open(const char *path, uint32_t total, uint8_t *status);
 lerr_t proto_put_data(uint32_t off, const uint8_t *buf, uint16_t len,
                       uint8_t *status, uint16_t *credit);

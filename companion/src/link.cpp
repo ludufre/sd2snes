@@ -4,7 +4,9 @@
 #include "platform.h"
 #include "link.h"
 
-#define EXT_BAUD        921600
+#define EXT_BAUD        3000000   // MUST match the MCU (src/lpc175x/uart0.c). 3M is the
+                                  // LPC's clean max (4M needs DL=1 which the LPC fractional
+                                  // divider rejects -> dead link).
 #define RESP_TIMEOUT_MS 2000
 #define PUT_TIMEOUT_MS  6000      // a PUT_DATA/PUT_OPEN reply can lag while the MCU's SD
                                   // write allocates a cluster + flushes the FAT (seconds);
@@ -23,15 +25,20 @@ static uint16_t crc16_upd(uint16_t crc, uint8_t d) {
 }
 
 void link_init(void) {
-    LINK_SERIAL.setRxBufferSize(1024);
+    LINK_SERIAL.setRxBufferSize(16384);   // absorb a windowed-GET reply burst at 3M
 #if defined(ESP8266)
     LINK_SERIAL.begin(EXT_BAUD);
     LINK_SERIAL.swap();            // UART0 -> GPIO13(RX)/GPIO15(TX); USB stays free
 #else // ESP32 (UART2) / ESP32-C3 (UART1) - pins from platform.h
     LINK_SERIAL.begin(EXT_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
+    LINK_SERIAL.setRxTimeout(1);   // deliver tail bytes promptly (1-symbol RX timeout)
+    LINK_SERIAL.setRxFIFOFull(16); // fire the RX ISR at 16 (not ~120) bytes -> ~0.37ms of
+                                   // headroom before the 128B FIFO overflows when the WiFi
+                                   // stack briefly starves the ISR at 3M (else: LS empty /
+                                   // transfer stalls under active WiFi).
 #endif
     DBG_SERIAL.begin(115200);
-    DBG_SERIAL.println(F("\n[sd2snes-companion] MCU link up @921600"));
+    DBG_SERIAL.printf("\n[sd2snes-companion] MCU link up @%d\n", EXT_BAUD);
 }
 
 static void send_req(uint8_t op, const uint8_t *pl, uint16_t len, uint8_t *seq_out) {
@@ -49,6 +56,11 @@ static void send_req(uint8_t op, const uint8_t *pl, uint16_t len, uint8_t *seq_o
     *seq_out = s;
 }
 
+// BISECT: persistent RX staging buffer (bulk-read). Suspect for the LS breakage.
+static uint8_t  s_rx[1024];
+static int      s_rx_len = 0, s_rx_pos = 0;
+static void rxbuf_reset(void) { s_rx_len = s_rx_pos = 0; }
+
 static lerr_t recv_resp(uint8_t exp_seq, uint8_t *rtype, uint8_t *rpl,
                         uint16_t rpl_max, uint16_t *rlen, uint32_t timeout_ms) {
     enum { S_SOF, S_HDR, S_PL, S_CRC } st = S_SOF;
@@ -59,8 +71,14 @@ static lerr_t recv_resp(uint8_t exp_seq, uint8_t *rtype, uint8_t *rpl,
     uint32_t deadline = millis() + timeout_ms;
 
     while ((int32_t)(deadline - millis()) > 0) {
-        while (LINK_SERIAL.available()) {
-            uint8_t c = (uint8_t)LINK_SERIAL.read();
+        if (s_rx_pos >= s_rx_len) {                 // staging empty -> bulk refill
+            int avail = LINK_SERIAL.available();
+            if (avail <= 0) { yield(); continue; }
+            s_rx_len = LINK_SERIAL.read(s_rx, avail > (int)sizeof(s_rx) ? (int)sizeof(s_rx) : avail);
+            s_rx_pos = 0;
+        }
+        while (s_rx_pos < s_rx_len) {
+            uint8_t c = s_rx[s_rx_pos++];
             switch (st) {
             case S_SOF: if (c == UP_SOF) { st = S_HDR; hn = 0; } break;
             case S_HDR:
@@ -96,6 +114,7 @@ static lerr_t recv_resp(uint8_t exp_seq, uint8_t *rtype, uint8_t *rpl,
         }
         yield();   // feed the soft WDT while waiting for the MCU
     }
+    rxbuf_reset();   // drop partial/stale staged bytes so the next op parses clean
     return LERR_TIMEOUT;
 }
 
@@ -103,6 +122,9 @@ static lerr_t txn_to(uint8_t op, const uint8_t *pl, uint16_t len,
                      uint8_t *rtype, uint8_t *rpl, uint16_t rpl_max, uint16_t *rlen,
                      uint32_t to) {
     uint8_t seq;
+    rxbuf_reset();   // FIX: clear any leftover staged bytes (e.g. from a prior windowed
+                     // GET burst) so this request-reply parses its OWN reply, not stale
+                     // bytes -> was the LS "empty listing" bug after a transfer.
     send_req(op, pl, len, &seq);
     return recv_resp(seq, rtype, rpl, rpl_max, rlen, to);
 }
@@ -186,6 +208,49 @@ lerr_t proto_get_data(uint32_t off, uint16_t want, uint8_t *status,
     if (buf && g) memcpy(buf, r + 3, g);
     if (got) *got = g;
     if (final) *final = (rt & UP_TYPE_FINAL) ? 1 : 0;
+    return LOK;
+}
+
+// Pipelined GET: burst GET_WINDOW requests, then read the replies back-to-back (the MCU
+// is FIFO, multi-frame-poll). Removes the per-chunk round-trip wall of proto_get_data.
+// Uses recv_resp DIRECTLY (not txn) so the bulk-read staging holds the burst; the NEXT
+// txn op resets the staging. sink(ctx,data,len) per chunk IN ORDER; nonzero aborts.
+#define GET_WINDOW 32      // req=14B each -> 448B (fits MCU 512B RX ring)
+// helper: send a GET burst covering file offset `o`; fills *seq0/*cnt; returns bytes requested
+static uint32_t gs_send_burst(uint32_t o, uint32_t total, uint8_t *seq0, uint16_t *cnt) {
+    uint32_t rem = (total - o + UP_CHUNK - 1) / UP_CHUNK;
+    uint16_t n = rem < GET_WINDOW ? (uint16_t)rem : GET_WINDOW;
+    *seq0 = s_seq; *cnt = n;
+    for (uint16_t i = 0; i < n; i++) {
+        uint8_t req[6], sq;
+        wr_u32(req, o + (uint32_t)i * UP_CHUNK);
+        req[4] = (uint8_t)(UP_CHUNK & 0xff); req[5] = (uint8_t)(UP_CHUNK >> 8);
+        send_req(UP_OP_GET_DATA, req, 6, &sq);
+    }
+    return (uint32_t)n * UP_CHUNK;
+}
+// Pipelined GET: burst GET_WINDOW requests, read the replies back-to-back, sink each
+// chunk. The overlap of UART recv and WiFi TX is done by the caller (a producer-consumer
+// where the sink hands chunks to a WiFi-writer task on the other core); here we just keep
+// the MCU pipe full.
+lerr_t proto_get_stream(uint32_t total, get_sink_fn sink, void *ctx) {
+    uint8_t r[UP_MAX_PAYLOAD];
+    uint32_t off = 0;
+    while (off < total) {
+        uint8_t seq0; uint16_t burst;
+        gs_send_burst(off, total, &seq0, &burst);
+        for (uint16_t i = 0; i < burst; i++) {
+            uint8_t rt = 0; uint16_t rl = 0;
+            lerr_t e = recv_resp((uint8_t)(seq0 + i), &rt, r, sizeof(r), &rl, RESP_TIMEOUT_MS);
+            if (e) return e;
+            if (rl < 3 || r[0]) return LERR_FAIL;
+            uint16_t got = (uint16_t)(r[1] | (r[2] << 8));
+            if (got > rl - 3) got = rl - 3;
+            if (got && sink(ctx, r + 3, got)) return LOK;
+            off += got;
+            if ((rt & UP_TYPE_FINAL) || got == 0) return LOK;
+        }
+    }
     return LOK;
 }
 

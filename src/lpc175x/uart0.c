@@ -29,13 +29,13 @@ static IN_AHBRAM volatile uint8_t txbuf[TX_SIZE];
 static volatile unsigned int rx_ri, rx_wi;   /* ISR writes wi, main reads ri */
 static volatile unsigned int tx_ri, tx_wi;   /* main writes wi, ISR reads ri */
 
-/* 921600 @ 96MHz PCLK: DL=4, FDR=0x85 (FR=1.625) -> 923077 baud (+0.16%).
-   Reliable sweet spot for this wiring. Baud ladder tested (1MB): 921600=25s clean;
-   1.0M=25.8s clean but no faster (round-trip-bound); 1.2M=83s & 1.5M=99s (CRC
-   retries); 2M truncates. So higher baud gives nothing here. */
-#define UART0_DLL  4
+/* 3.0M @ 96MHz PCLK: DL=2, FDR=0x10 (no fractional) -> 96e6/(16*2) = 3.0M exact. This is
+   the clean MAX on the LPC: 4M would need DL=1, but the LPC fractional divider requires
+   DL>=2 (DL=1 -> wrong baud -> dead link, verified). Download is WiFi-bound anyway. Must
+   match companion EXT_BAUD. */
+#define UART0_DLL  2
 #define UART0_DLM  0
-#define UART0_FDR  0x85
+#define UART0_FDR  0x10
 
 void UART0_IRQHandler(void) {
   uint32_t iir = LPC_UART0->IIR;

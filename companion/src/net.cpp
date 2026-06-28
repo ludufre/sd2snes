@@ -6,14 +6,51 @@
   #include "esp_wifi.h"   // esp_wifi_get_config (read the saved STA SSID)
 #endif
 
-#define AP_PASS    "sd2snes0"   // >= 8 chars (WPA2)
-#define AP_OFF_MS  8000         // grace after connecting before dropping the AP
+#define AP_PASS         "sd2snes0"   // >= 8 chars (WPA2)
+#define CONNECT_TO_MS   15000        // give a STA join this long before falling back to the portal
 
 static char  s_ap[20];
 static bool  s_connected = false;
 static bool  s_ap_up     = true;
 static bool  s_wifi_on   = false;       // master: radio up at all (menu's EnableWifi)
-static unsigned long s_ap_off_at = 0;   // 0 = none scheduled
+static bool  s_connecting = false;      // a STA join is in flight (STA-only window)
+static unsigned long s_connect_deadline = 0;
+
+// Operational WiFi logging on the debug console (DBG_SERIAL = the C3's native
+// USB-CDC; only seen when someone runs `pio ... -t monitor`). Fires on state
+// changes only, so no spam. The disconnect-reason decode makes field diagnosis
+// (wrong key vs out-of-range vs auth/PMF reject) obvious without a lookup table.
+#if defined(ESP32)
+static const char *disc_reason_str(uint8_t r) {
+    switch (r) {
+        case 1:   return "UNSPECIFIED";
+        case 2:   return "AUTH_EXPIRE";
+        case 4:   return "ASSOC_EXPIRE";
+        case 15:  return "4WAY_HANDSHAKE_TIMEOUT -> wrong password (most common)";
+        case 200: return "BEACON_TIMEOUT";
+        case 201: return "NO_AP_FOUND -> SSID not in range / wrong name";
+        case 202: return "AUTH_FAIL -> password/auth rejected by the AP";
+        case 203: return "ASSOC_FAIL";
+        case 204: return "HANDSHAKE_TIMEOUT";
+        case 205: return "CONNECTION_FAIL";
+        default:  return "see esp_wifi_types.h";
+    }
+}
+
+static void on_wifi_event(WiFiEvent_t ev, WiFiEventInfo_t info) {
+    switch (ev) {
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            DBG_SERIAL.printf("[wifi] connected, IP %s\n", WiFi.localIP().toString().c_str());
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+            uint8_t r = info.wifi_sta_disconnected.reason;
+            DBG_SERIAL.printf("[wifi] STA disconnected, reason=%u (%s)\n", r, disc_reason_str(r));
+            break;
+        }
+        default: break;
+    }
+}
+#endif
 
 static void ap_bring_up(void) {
     if (s_ap_up) return;
@@ -38,14 +75,56 @@ static bool sta_has_creds(void) {
 #endif
 }
 
+// Associate to a network in STA-ONLY mode. The C3 has a single radio: an AP+STA
+// SoftAP pinned to channel 1 cannot coexist with a STA whose AP lives on another
+// channel (the common mesh / multi-AP case - same SSID on ch 1/6/11), so the join
+// keeps failing with reason 2. Drop the SoftAP for the attempt -> the radio is free
+// to follow the target's channel. The portal is restored from net_loop if the join
+// doesn't settle within CONNECT_TO_MS. ssid==NULL -> use the saved credentials.
+static void sta_join(const char *ssid, const char *pass) {
+    WiFi.softAPdisconnect(true);    // portal down for the duration of the attempt
+    s_ap_up = false;
+    WiFi.persistent(true);          // keep creds across the on/off cycle
+    WiFi.mode(WIFI_STA);            // STA-only: no channel pinned by the SoftAP
+#if defined(ESP32)
+    WiFi.setSleep(false);           // keep the radio awake during the handshake
+#endif
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+    // C3 SuperMini: weak antenna/power path -> at full TX power the auth frames come
+    // out distorted and the AP can't decode them -> reason 2 (AUTH_EXPIRE) even with a
+    // correct WPA2 key and -50 dBm RX. Lower TX power = cleaner signal (plenty close).
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+#endif
+    WiFi.disconnect(false);         // clear any half-open attempt, keep the radio on
+    delay(50);
+    if (ssid) WiFi.begin(ssid, pass);
+    else      WiFi.begin();         // saved creds
+    s_connecting = true;
+    s_connect_deadline = millis() + CONNECT_TO_MS;
+}
+
 void net_start(void) {
-    WiFi.persistent(true);          // SDK stores/auto-reconnects the last STA creds
-    WiFi.mode(WIFI_AP_STA);
+    WiFi.persistent(true);          // SDK stores the last STA creds
+#if defined(ESP32)
+    WiFi.setAutoReconnect(false);   // we drive (re)connects ourselves (STA-only); the
+                                    // core's auto-reconnect storms reason 2 in AP+STA
+#endif
+    WiFi.mode(WIFI_AP_STA);         // a mode must be set to read the AP MAC for the name
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);   // C3 SuperMini: tame TX so auth frames aren't distorted
+#endif
     uint8_t mac[6]; WiFi.softAPmacAddress(mac);
     snprintf(s_ap, sizeof(s_ap), "sd2snes-%02X%02X", mac[4], mac[5]);
-    WiFi.softAP(s_ap, AP_PASS, 1);
-    s_ap_up = true;
-    if (sta_has_creds()) WiFi.begin();   // reconnect only if a network is saved
+    s_connecting = false;
+    s_connected  = false;
+    if (sta_has_creds()) {
+        DBG_SERIAL.println(F("[wifi] saved creds -> STA-only auto-join"));
+        sta_join(NULL, NULL);       // try the saved network first (portal returns on timeout)
+    } else {
+        DBG_SERIAL.println(F("[wifi] no saved creds -> portal (SoftAP) only"));
+        WiFi.softAP(s_ap, AP_PASS, 1);
+        s_ap_up = true;
+    }
 }
 
 void net_loop(void) {
@@ -54,16 +133,21 @@ void net_loop(void) {
     bool now = (WiFi.status() == WL_CONNECTED);
     if (now && !s_connected) {
         s_connected = true;
-        s_ap_off_at = millis() + AP_OFF_MS;   // drop the AP after a short grace
+        s_connecting = false;   // joined; we are STA-only (AP was dropped for the attempt)
+        DBG_SERIAL.printf("[wifi] CONNECTED to \"%s\" ch=%d ip=%s (STA-only, portal off)\n",
+                          WiFi.SSID().c_str(), WiFi.channel(), WiFi.localIP().toString().c_str());
     } else if (!now && s_connected) {
         s_connected = false;
-        s_ap_off_at = 0;
-        ap_bring_up();                          // lost the link -> AP back for access
+        DBG_SERIAL.println(F("[wifi] link lost -> portal back"));
+        ap_bring_up();          // lost the link -> AP back for access
     }
-    if (s_ap_off_at && s_connected && (int32_t)(millis() - s_ap_off_at) >= 0) {
-        WiFi.mode(WIFI_STA);                    // connected and settled -> AP off
-        s_ap_up = false;
-        s_ap_off_at = 0;
+    // join didn't settle in time: stop trying and bring the portal back so the user
+    // still has the SoftAP/WebUI to retry from.
+    if (s_connecting && (int32_t)(millis() - s_connect_deadline) >= 0) {
+        s_connecting = false;
+        DBG_SERIAL.println(F("[wifi] join timed out -> portal back (SoftAP)"));
+        WiFi.disconnect(false);
+        ap_bring_up();
     }
 }
 
@@ -82,6 +166,7 @@ static ap_rec  s_scan[SCAN_CACHE];
 static int     s_scan_n = 0;
 static uint8_t s_scan_state = 0;     // 0 idle, 1 running, 2 done (fresh, unconsumed)
 static bool    s_scan_freed_sta = false;
+static bool    s_scan_was_connected = false;   // restore the STA link after the scan
 static unsigned long s_scan_at = 0;  // millis() when the running scan started
 
 // fold the SDK's raw scan list into s_scan[]: strongest entry per SSID, RSSI-sorted.
@@ -108,32 +193,43 @@ static void scan_harvest(int n) {
     s_scan_n = cnt;
 }
 
-// resume the STA reconnect we paused for the scan (only if we actually paused it)
+// After a scan, restore the STA link if we freed a *connected* one for the sweep. Joins
+// are driven explicitly via sta_join (STA-only) - a blind WiFi.begin() would restart an
+// AP+STA association that conflicts on multi-channel networks. autoReconnect is off, so
+// sta_join here is one-shot (no reason-2 storm).
 static void scan_resume_sta(void) {
-    if (!s_scan_freed_sta) return;
+    if (s_scan_freed_sta && s_scan_was_connected) sta_join(NULL, NULL);
     s_scan_freed_sta = false;
-    if (sta_has_creds()) WiFi.begin();
 }
 
 void net_scan_start(void) {
     if (!s_wifi_on) return;                 // radio off: no scan
-    if (s_scan_state == 1) return;          // already running -> coalesce
+    if (s_scan_state == 1 || s_scan_state == 3) return;   // already in progress -> coalesce
     WiFi.scanDelete();                      // drop any stale result
-    if (WiFi.status() != WL_CONNECTED) {
-        // an in-flight (auto-)reconnect keeps the radio busy and makes the scan bail
-        // out instantly, so free the idle STA first. persistent(false) keeps the
-        // ESP8266 disconnect from wiping the saved creds.
-        WiFi.persistent(false);
-        WiFi.disconnect(false /*keep WiFi on*/);
-        WiFi.persistent(true);
-        s_scan_freed_sta = true;
-    }
-    WiFi.scanNetworks(true /*async*/, false /*hidden*/);
-    s_scan_state = 1;
+    // ALWAYS free the STA before scanning so the sweep covers ALL channels. A *connected*
+    // STA parks the radio on its home channel, so a scan would only return that channel's
+    // APs -> the user can't see networks on other channels (1/11/...). Disconnect (keep
+    // creds) for the sweep; scan_resume_sta() reconnects afterwards if we were connected.
+    s_scan_was_connected = (WiFi.status() == WL_CONNECTED);
+    WiFi.persistent(false);                 // keep the ESP8266 from wiping saved creds
+    WiFi.disconnect(false /*keep WiFi on*/);
+    WiFi.persistent(true);
+    s_scan_freed_sta = true;
     s_scan_at = millis();
+    s_scan_state = 3;   // PENDING: let the disconnect settle before scanning. Scanning a
+                        // still-busy radio (mid-disconnect) makes scanNetworks bail out
+                        // instantly -> "no networks" when scanning while connected.
 }
 
 void net_scan_pump(void) {
+    if (s_scan_state == 3) {                 // pending: start the real scan once settled
+        if ((int32_t)(millis() - (s_scan_at + 250)) >= 0) {
+            WiFi.scanNetworks(true /*async*/, false /*hidden*/);
+            s_scan_state = 1;
+            s_scan_at = millis();
+        }
+        return;
+    }
     if (s_scan_state != 1) return;
     int n = WiFi.scanComplete();
     if (n == WIFI_SCAN_RUNNING) {
@@ -174,8 +270,8 @@ int net_scan_take(ap_rec *out, int max) {
 // same result to the menu.
 int net_scan(ap_rec *out, int max) {
     net_scan_start();
-    unsigned long deadline = millis() + SCAN_MAX_MS;
-    while (s_scan_state == 1 && (int32_t)(deadline - millis()) > 0) {
+    unsigned long deadline = millis() + SCAN_MAX_MS + 250;   // +settle window
+    while ((s_scan_state == 1 || s_scan_state == 3) && (int32_t)(deadline - millis()) > 0) {
         net_scan_pump();
         delay(50);                          // feed the WDT, let the SDK advance the scan
     }
@@ -187,16 +283,20 @@ int net_scan(ap_rec *out, int max) {
 void net_init(void) {
     // boot with the radio OFF; net_set_enabled(true) brings it up once the menu's
     // EnableWifi says so (secure-by-default: no AP/STA/WebUI until explicitly on).
+#if defined(ESP32)
+    WiFi.onEvent(on_wifi_event);    // DEBUG: connect/disconnect-reason trace
+#endif
     WiFi.persistent(true);          // keep saved STA creds across the on/off cycle
     WiFi.mode(WIFI_OFF);
     s_wifi_on = false;
     s_ap_up = false;
     s_connected = false;
-    s_ap_off_at = 0;
+    s_connecting = false;
 }
 
 void net_set_enabled(bool on) {
     if (on == s_wifi_on) return;    // no transition
+    DBG_SERIAL.printf("[wifi] radio %s by menu (EnableWifi=%d)\n", on ? "ENABLED" : "DISABLED", on);
     if (on) {
         net_start();                // SoftAP (+ STA auto-reconnect)
         s_wifi_on = true;
@@ -209,20 +309,22 @@ void net_set_enabled(bool on) {
         WiFi.mode(WIFI_OFF);        // radio fully off -> no AP, no WebUI
         s_connected = false;
         s_ap_up = false;
-        s_ap_off_at = 0;
+        s_connecting = false;
     }
 }
 
 bool net_connect(const char *ssid, const char *pass) {
-    ap_bring_up();                  // keep the AP up while (re)connecting
-    s_ap_off_at = 0;
-    WiFi.begin(ssid, pass);         // persists creds, async connect
+    DBG_SERIAL.printf("[wifi] connect request: ssid=\"%s\" (pass %u chars)\n",
+                      ssid, (unsigned)strlen(pass));   // password length only, never the value
+    sta_join(ssid, pass);           // STA-only join (frees the radio channel; portal back on timeout)
     return true;
 }
 
 void net_forget(void) {
     WiFi.disconnect(true);          // erase stored creds
     s_connected = false;
+    s_connecting = false;
+    s_ap_up = false;                // force ap_bring_up to re-create the portal
     ap_bring_up();
 }
 

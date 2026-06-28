@@ -36,6 +36,7 @@ static void bridge_once(void) {
     char ssid[UP_WIFI_SSID_MAX + 1] = {0}, pass[UP_WIFI_PASS_MAX + 1] = {0};
     if (proto_wifi_poll(&enabled, &action, ssid, sizeof(ssid), pass, sizeof(pass)) != LOK) return;
     net_set_enabled(enabled);    // menu's EnableWifi: radio up/down (secure-by-default off)
+    web_set_enabled(enabled);    // HTTP listener follows the radio (lwIP must be up first)
     if (!enabled) return;        // WiFi off: ignore scan/connect/forget
     if (action == UP_WIFI_SCAN_REQ) {
         net_scan_start();        // async; the result is pushed above once the radio finishes
@@ -51,7 +52,9 @@ void setup() {
     ota_check_and_apply();    // self-update from /sd2snes/espXX.bin if a newer .ver is on the SD
     net_init();               // radio OFF until the menu's EnableWifi turns it on (secure default)
     display_init();           // ST7789 status panel (no-op wiring still boots fine)
-    web_start();              // HTTP file manager + WiFi config + OTA
+    web_init();               // register HTTP routes; the listener starts with the radio
+                              // (web_set_enabled in the bridge) - begin() here would assert
+                              // (lwIP not up while the radio is off) and boot-loop the C3
 }
 
 void loop() {

@@ -403,6 +403,12 @@ static int parse_byte(uint8_t c) {
   return 0;
 }
 
+/* Bounded multi-frame poll (NO freeze): drain up to UP_POLL_MAX_FRAMES complete frames
+   per poll, flushing each reply. With the ESP bulk-reading replies + a windowed GET burst,
+   this keeps the pipe full without freezing the MCU. The TX ring self-limits (return when
+   full -> resume next poll). */
+#define UP_POLL_MAX_FRAMES 16
+
 void uart_proto_poll(void) {
   /* 1. flush a pending response first (built once; only the send is retried) */
   if (out_ready) {
@@ -411,17 +417,20 @@ void uart_proto_poll(void) {
     out_ready = 0;
   }
 
-  /* 2. consume RX; handle at most one complete frame per poll (one bounded step) */
-  int c;
-  while ((c = esplink_getbyte()) >= 0) {
-    if (parse_byte((uint8_t)c)) {
-      up_last_active = getticks();            /* mark the link as actively transferring */
-      handle_frame();                         /* executes the op, builds the reply */
-      if (out_ready && esplink_tx_space() >= (int)out_len) {
-        esplink_write(txframe, (int)out_len);
-        out_ready = 0;
-      }
-      return;
+  /* 2. drain up to UP_POLL_MAX_FRAMES frames, flushing each. Stop on empty RX or TX full. */
+  int budget = UP_POLL_MAX_FRAMES;
+  while (budget-- > 0) {
+    int got_frame = 0, c;
+    while ((c = esplink_getbyte()) >= 0) {
+      if (parse_byte((uint8_t)c)) { got_frame = 1; break; }
+    }
+    if (!got_frame) break;
+    up_last_active = getticks();
+    handle_frame();
+    if (out_ready) {
+      if (esplink_tx_space() < (int)out_len) return;   /* TX ring full -> resume next poll */
+      esplink_write(txframe, (int)out_len);
+      out_ready = 0;
     }
   }
 }

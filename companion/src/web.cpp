@@ -9,6 +9,7 @@
 #include "web.h"
 
 static WebServerT server(80);
+static bool s_up = false;        // listener begun (tracks the WiFi radio state)
 
 // upload state (single in-flight upload; single-threaded loop)
 static uint32_t g_up_off;
@@ -59,9 +60,11 @@ static void h_ls() {
     String path = server.hasArg("path") ? server.arg("path") : String("/");
     uint8_t st = 0xFF;
     if (proto_ls_open(path.c_str(), &st) != LOK || st) { reply_status(LOK, st); return; }
-    server.setContentLength(CONTENT_LENGTH_UNKNOWN);   // chunked
-    server.send(200, "application/json", "");
-    server.sendContent("{\"path\":\"" + jsonesc(path) + "\",\"entries\":[");
+    // Build the WHOLE body with a TIGHT proto_ls loop (no WiFi sendContent interleaved
+    // between LS_OPEN/LS_NEXT - at 3M that interleave races the UART recv -> empty list;
+    // the loop-context autols proves a tight loop returns every entry), THEN send once.
+    String body; body.reserve(8192);
+    body = "{\"path\":\"" + jsonesc(path) + "\",\"entries\":[";
     bool first = true;
     for (;;) {
         uint8_t buf[UP_MAX_PAYLOAD]; uint16_t len = 0; int fin = 0;
@@ -77,17 +80,35 @@ static void h_ls() {
             int nl = 0; while (i + nl < len && buf[i + nl]) nl++;
             String name; for (int k = 0; k < nl; k++) name += (char)buf[i + k];
             i += nl + 1;
-            String e = first ? "" : ",";
+            body += first ? "" : ",";
             first = false;
-            e += "{\"name\":\"" + jsonesc(name) + "\",\"dir\":" +
-                 (type == 0 ? "true" : "false") + ",\"size\":" + String(size) + "}";
-            server.sendContent(e);
+            body += "{\"name\":\"" + jsonesc(name) + "\",\"dir\":" +
+                    (type == 0 ? "true" : "false") + ",\"size\":" + String(size) + "}";
         }
         if (fin) break;
-        yield();
     }
-    server.sendContent("]}");
-    server.sendContent("");   // terminate chunked
+    body += "]}";
+    server.send(200, "application/json", body);
+}
+
+// download sink for proto_get_stream: batch chunks into ~4KB TCP writes (setNoDelay +
+// big writes beat the per-chunk Nagle stall). Single download at a time (single loop).
+// download sink: batch the pipelined-GET chunks into ~8KB TCP writes (setNoDelay + big
+// writes beat the per-chunk Nagle stall). Single download at a time (the loop blocks).
+static WiFiClient *s_dl_client = nullptr;
+static uint8_t s_dlbuf[8192]; static uint16_t s_dlfill = 0;
+static int dl_sink(void *ctx, const uint8_t *data, uint16_t len) {
+    (void)ctx;
+    while (len) {
+        uint16_t space = (uint16_t)sizeof(s_dlbuf) - s_dlfill;
+        uint16_t n = len < space ? len : space;
+        memcpy(s_dlbuf + s_dlfill, data, n); s_dlfill += n; data += n; len -= n;
+        if (s_dlfill == sizeof(s_dlbuf)) {
+            if (!s_dl_client->connected()) return 1;
+            s_dl_client->write(s_dlbuf, s_dlfill); s_dlfill = 0;
+        }
+    }
+    return s_dl_client->connected() ? 0 : 1;
 }
 
 static void h_dl() {
@@ -103,14 +124,10 @@ static void h_dl() {
     server.setContentLength(total);
     server.send(200, "application/octet-stream", "");
     WiFiClient client = server.client();
-    uint8_t buf[UP_CHUNK]; uint32_t off = 0;
-    while (off < total && client.connected()) {
-        uint16_t got = 0; int fin = 0;
-        if (proto_get_data(off, UP_CHUNK, &st, buf, &got, &fin) != LOK || st) break;
-        if (got) { client.write(buf, got); off += got; }
-        if (fin || got == 0) break;
-        yield();
-    }
+    client.setNoDelay(true);             // no Nagle: don't wait for an ACK per small write
+    s_dl_client = &client; s_dlfill = 0;
+    proto_get_stream(total, dl_sink, nullptr);                 // pipelined GET -> batched sink
+    if (s_dlfill && client.connected()) client.write(s_dlbuf, s_dlfill);   // flush tail
 }
 
 static void h_up_done() {
@@ -177,7 +194,14 @@ static void h_wifi_connect() {
 }
 static void h_wifi_forget() { net_forget(); reply_status(LOK, 0); }
 
-void web_start(void) {
+// Register the routes ONCE at boot. We deliberately do NOT call server.begin()
+// here: at boot the radio (and thus the lwIP tcpip stack) is OFF by design
+// (net_init -> WiFi.mode(WIFI_OFF)), and begin() binds a TCP socket through the
+// lwIP tcpip thread. With no stack up that asserts ("tcpip_send_msg_wait_sem ...
+// Invalid mbox") and the C3 boot-loops. The listener follows the radio instead
+// (web_set_enabled), so it only ever begins once net_set_enabled(true) has
+// brought lwIP up.
+void web_init(void) {
     server.on("/", HTTP_GET, h_index);
     server.on("/style.css", HTTP_GET, h_css);
     server.on("/app.js", HTTP_GET, h_js);
@@ -194,7 +218,17 @@ void web_start(void) {
     server.on("/api/wifi/status", HTTP_GET, h_wifi_status);
     server.on("/api/wifi/connect", HTTP_POST, h_wifi_connect);
     server.on("/api/wifi/forget", HTTP_POST, h_wifi_forget);
-    server.begin();
 }
 
-void web_loop(void) { server.handleClient(); }
+// Begin/stop the HTTP listener to match the WiFi master switch. Idempotent: the
+// caller (the MCU WiFi bridge) drives this every poll with the current state.
+// MUST be called only AFTER net_set_enabled(on) so the lwIP stack is already up
+// when on==true (see web_init for why begin() can't run at boot).
+void web_set_enabled(bool on) {
+    if (on == s_up) return;
+    if (on) server.begin();    // lwIP is up (radio just came on) -> safe to listen
+    else    server.stop();     // radio going down -> release the socket
+    s_up = on;
+}
+
+void web_loop(void) { if (s_up) server.handleClient(); }   // no-op until the radio is up
