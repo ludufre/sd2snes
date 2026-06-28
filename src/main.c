@@ -515,8 +515,8 @@ int main(void) {
         case SNES_CMD_WIFI_CONNECT: {
           /* the menu wrote ssid/pass into the WiFi SRAM block before issuing */
           char wssid[UP_WIFI_SSID_MAX + 1], wpass[UP_WIFI_PASS_MAX + 1];
-          sram_readstrn(wssid, SRAM_SYSINFO_ADDR + WIFI_OFF_REQ_SSID, sizeof(wssid));
-          sram_readstrn(wpass, SRAM_SYSINFO_ADDR + WIFI_OFF_REQ_PASS, sizeof(wpass));
+          sram_readstrn(wssid, SRAM_WIFI_ADDR + WIFI_OFF_REQ_SSID, sizeof(wssid));
+          sram_readstrn(wpass, SRAM_WIFI_ADDR + WIFI_OFF_REQ_PASS, sizeof(wpass));
           uart_wifi_request_connect(wssid, wpass);
           cmd=0;
           break;
@@ -525,7 +525,7 @@ int main(void) {
           /* snapshot the bridge state into the SRAM block for the menu to read */
           const uart_wifi_state_t *w = uart_wifi_state();
           uint8_t fld[WIFI_AP_STRIDE - 2 + 1];   /* 33-byte ssid field (zero-padded) */
-          uint32_t base = SRAM_SYSINFO_ADDR;
+          uint32_t base = SRAM_WIFI_ADDR;
           sram_writebyte(w->connected, base + WIFI_OFF_CONNECTED);
           sram_writebyte((uint8_t)w->rssi, base + WIFI_OFF_RSSI);
           memset(fld, 0, 33); strncpy((char *)fld, w->ssid, 32);

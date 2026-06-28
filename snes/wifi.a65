@@ -260,8 +260,8 @@ wdl_ssterm:
   lda #WIFI_STATUS_Y : sta print_y
   stz print_pal
   lda #16 : sta print_count
-  ldx #$1223                   ; WIFI_BLK + WIFI_OFF_IP (low word)
-  lda #$ff                     ; WIFI_BLK bank
+  ldx #!WIFI_BLK+WIFI_OFF_IP   ; WIFI_BLK + WIFI_OFF_IP (low word)
+  lda #^WIFI_BLK               ; WIFI_BLK bank
   jsr wifi_puts
 wdl_list:
   lda wifi_scan_cnt
@@ -303,11 +303,11 @@ wdl_mark:
   rep #$20 : .al
   txa
   clc
-  adc #$1200                   ; + WIFI_BLK low word
+  adc #!WIFI_BLK               ; + WIFI_BLK low word
   tax
   sep #$20 : .as
   stx print_src
-  lda #$ff                     ; WIFI_BLK bank
+  lda #^WIFI_BLK               ; WIFI_BLK bank
   sta print_bank
   lda #WIFI_CX+2 : sta print_x
   ; print_y already set; selection is shown by the '>' marker (no per-row repaint)
@@ -610,8 +610,8 @@ wcn_result:
   sta print_x
   lda #WIFI_MSG2_Y : sta print_y
   lda #16 : sta print_count
-  ldx #$1223                   ; WIFI_BLK + WIFI_OFF_IP (low word)
-  lda #$ff                     ; WIFI_BLK bank
+  ldx #!WIFI_BLK+WIFI_OFF_IP   ; WIFI_BLK + WIFI_OFF_IP (low word)
+  lda #^WIFI_BLK               ; WIFI_BLK bank
   jsr wifi_puts
   ; "press any button to go back"
   lda #WIFI_CX : sta print_x
