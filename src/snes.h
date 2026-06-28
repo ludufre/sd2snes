@@ -86,9 +86,10 @@
 #define SNES_CMD_GAME_INFO_FAVORITE  (0x36) /* like GAME_INFO but for the favorite game at the index in MCU_PARAM (resolved via FAVORITES_FILE) */
 #define SNES_CMD_FMV_NEXT            (0x37) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
 
-/* WiFi SRAM block layout (base = SRAM_SYSINFO_ADDR; menu side = WIFI_BLK $FF1200).
-   RESERVED for the Companion port -- aliases the sysinfo block (both modal, so they
-   never coexist). Kept here so the future WiFi code uses the same offsets. */
+/* WiFi SRAM block layout (base = SRAM_WIFI_ADDR; menu side = WIFI_BLK $FF4000).
+   RESERVED for the Companion port -- its own dedicated 437-byte block ($FF4000..$FF41B5),
+   no longer aliases the sysinfo block (so the two can coexist). Kept here so the future
+   WiFi code uses these offsets. */
 #define WIFI_OFF_CONNECTED  0    /* u8  */
 #define WIFI_OFF_RSSI       1    /* i8  */
 #define WIFI_OFF_SSID       2    /* char[33] */

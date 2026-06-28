@@ -249,9 +249,11 @@
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
 /* WiFi status/scan block + connect params, RESERVED for the Companion port.
-   Aliases SYSINFO_BLK ($FF1200, both modal so they never coexist) -- consumes no
-   new memory. Layout MUST match src/snes.h WIFI_OFF_*. */
-#define WIFI_BLK                    $FF1200
+   Own dedicated 437-byte block ($FF4000..$FF41B5) in the free gap left by the old
+   favorites slot ($FF4000..$FF49FF, vacated when favorites moved to $FF6000) -- no
+   longer aliases SYSINFO_BLK, so the WiFi and sysinfo screens can coexist. Layout
+   MUST match src/snes.h WIFI_OFF_* (lockstep with SRAM_WIFI_ADDR in src/memory.h). */
+#define WIFI_BLK                    $FF4000
 #define WIFI_OFF_CONNECTED          0    /* u8 */
 #define WIFI_OFF_RSSI               1    /* i8 */
 #define WIFI_OFF_SSID               2    /* char[33] */
