@@ -81,6 +81,31 @@ static bool sta_has_creds(void) {
 // keeps failing with reason 2. Drop the SoftAP for the attempt -> the radio is free
 // to follow the target's channel. The portal is restored from net_loop if the join
 // doesn't settle within CONNECT_TO_MS. ssid==NULL -> use the saved credentials.
+// Join the saved SSID's STRONGEST AP. WiFi.begin() (and even WIFI_CONNECT_AP_BY_SIGNAL)
+// grabbed a -69 ch6 sibling while a -53 ch11 one existed in the mesh -> slow. So scan all
+// channels ourselves, find the best-RSSI matching BSSID, and connect to THAT exact AP.
+static void sta_join_strongest(void) {
+#if defined(ESP32)
+    wifi_config_t cfg;
+    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
+        int n = WiFi.scanNetworks(false /*sync*/, false /*hidden*/);   // ~2-3s, all channels
+        int best = -1; int8_t br = -127;
+        for (int i = 0; i < n; i++)
+            if (WiFi.RSSI(i) > br && WiFi.SSID(i) == (const char *)cfg.sta.ssid) { best = i; br = WiFi.RSSI(i); }
+        if (best >= 0) {
+            DBG_SERIAL.printf("[wifi] join strongest %s ch=%d rssi=%d\n",
+                              WiFi.BSSIDstr(best).c_str(), WiFi.channel(best), (int)br);
+            WiFi.begin((const char *)cfg.sta.ssid, (const char *)cfg.sta.password,
+                       WiFi.channel(best), WiFi.BSSID(best));
+            WiFi.scanDelete();
+            return;
+        }
+        WiFi.scanDelete();
+    }
+#endif
+    WiFi.begin();                   // fallback: saved creds, default selection
+}
+
 static void sta_join(const char *ssid, const char *pass) {
     WiFi.softAPdisconnect(true);    // portal down for the duration of the attempt
     s_ap_up = false;
@@ -97,8 +122,8 @@ static void sta_join(const char *ssid, const char *pass) {
 #endif
     WiFi.disconnect(false);         // clear any half-open attempt, keep the radio on
     delay(50);
-    if (ssid) WiFi.begin(ssid, pass);
-    else      WiFi.begin();         // saved creds
+    if (ssid) WiFi.begin(ssid, pass);   // explicit network from the menu
+    else      sta_join_strongest();     // saved network: pick the strongest mesh AP
     s_connecting = true;
     s_connect_deadline = millis() + CONNECT_TO_MS;
 }
@@ -193,10 +218,9 @@ static void scan_harvest(int n) {
     s_scan_n = cnt;
 }
 
-// After a scan, restore the STA link if we freed a *connected* one for the sweep. Joins
-// are driven explicitly via sta_join (STA-only) - a blind WiFi.begin() would restart an
-// AP+STA association that conflicts on multi-channel networks. autoReconnect is off, so
-// sta_join here is one-shot (no reason-2 storm).
+// After a scan, restore the STA link via sta_join (which now re-scans + picks the STRONGEST
+// mesh AP) - so a scan also upgrades us to the best BSSID, not back to the weak one we were
+// on. autoReconnect is off, so sta_join here is one-shot (no reason-2 storm).
 static void scan_resume_sta(void) {
     if (s_scan_freed_sta && s_scan_was_connected) sta_join(NULL, NULL);
     s_scan_freed_sta = false;

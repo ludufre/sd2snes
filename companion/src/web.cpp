@@ -60,10 +60,15 @@ static void h_ls() {
     String path = server.hasArg("path") ? server.arg("path") : String("/");
     uint8_t st = 0xFF;
     if (proto_ls_open(path.c_str(), &st) != LOK || st) { reply_status(LOK, st); return; }
-    // Build the WHOLE body with a TIGHT proto_ls loop (no WiFi sendContent interleaved
-    // between LS_OPEN/LS_NEXT - at 3M that interleave races the UART recv -> empty list;
-    // the loop-context autols proves a tight loop returns every entry), THEN send once.
-    String body; body.reserve(8192);
+    // Stream the body in chunks: build into a String and flush (sendContent) at ~3KB so the
+    // heap stays bounded for ANY directory size. Building the WHOLE body in one String OOMs
+    // on a big dir -> the heap edge appends the 1-byte comma but drops the ~60-byte entry
+    // -> orphan commas -> invalid JSON. (The setRxFIFOFull fix already tames the 3M
+    // UART-vs-WiFi race, so the occasional flush between LS_NEXT reads is safe.)
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);   // chunked
+    server.send(200, "application/json", "");
+    server.client().setNoDelay(true);
+    String body; body.reserve(4096);
     body = "{\"path\":\"" + jsonesc(path) + "\",\"entries\":[";
     bool first = true;
     for (;;) {
@@ -85,10 +90,12 @@ static void h_ls() {
             body += "{\"name\":\"" + jsonesc(name) + "\",\"dir\":" +
                     (type == 0 ? "true" : "false") + ",\"size\":" + String(size) + "}";
         }
+        if (body.length() >= 3072) { server.sendContent(body); body = ""; }   // bound heap
         if (fin) break;
     }
     body += "]}";
-    server.send(200, "application/json", body);
+    server.sendContent(body);
+    server.sendContent("");   // end chunked
 }
 
 // download sink for proto_get_stream: batch chunks into ~4KB TCP writes (setNoDelay +
