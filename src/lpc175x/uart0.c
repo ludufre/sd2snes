@@ -29,10 +29,10 @@ static IN_AHBRAM volatile uint8_t txbuf[TX_SIZE];
 static volatile unsigned int rx_ri, rx_wi;   /* ISR writes wi, main reads ri */
 static volatile unsigned int tx_ri, tx_wi;   /* main writes wi, ISR reads ri */
 
-/* 3.0M @ 96MHz PCLK: DL=2, FDR=0x10 (no fractional) -> 96e6/(16*2) = 3.0M exact. This is
-   the clean MAX on the LPC: 4M would need DL=1, but the LPC fractional divider requires
-   DL>=2 (DL=1 -> wrong baud -> dead link, verified). Download is WiFi-bound anyway. Must
-   match companion EXT_BAUD. */
+/* 3.0M @ 96MHz PCLK: DL=2, FDR=0x10 (no fractional) -> 96e6/(16*2) = 3.0M exact. Clean
+   MAX on the LPC (4M needs DL=1 which the fractional divider rejects). The download
+   stalls were the ESP-side WiFi write blocking the loop, NOT the UART, so 3M stays.
+   Must match companion EXT_BAUD. */
 #define UART0_DLL  2
 #define UART0_DLM  0
 #define UART0_FDR  0x10

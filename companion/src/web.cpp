@@ -98,10 +98,11 @@ static void h_ls() {
     server.sendContent("");   // end chunked
 }
 
-// download sink for proto_get_stream: batch chunks into ~4KB TCP writes (setNoDelay +
-// big writes beat the per-chunk Nagle stall). Single download at a time (single loop).
-// download sink: batch the pipelined-GET chunks into ~8KB TCP writes (setNoDelay + big
-// writes beat the per-chunk Nagle stall). Single download at a time (the loop blocks).
+// download sink for proto_get_stream: batch the pipelined-GET chunks into 8KB TCP writes
+// (setNoDelay + big writes beat the per-chunk Nagle stall). client.write() blocks for TCP
+// flow control (resumes as the receiver ACKs) and returns on a dropped socket - that's the
+// reliable path. (availableForWrite() is unreliable on the ESP32 WiFiClient: it returns 0,
+// so a non-blocking gate never writes.) Single download at a time (the loop is busy here).
 static WiFiClient *s_dl_client = nullptr;
 static uint8_t s_dlbuf[8192]; static uint16_t s_dlfill = 0;
 static int dl_sink(void *ctx, const uint8_t *data, uint16_t len) {
@@ -112,7 +113,12 @@ static int dl_sink(void *ctx, const uint8_t *data, uint16_t len) {
         memcpy(s_dlbuf + s_dlfill, data, n); s_dlfill += n; data += n; len -= n;
         if (s_dlfill == sizeof(s_dlbuf)) {
             if (!s_dl_client->connected()) return 1;
-            s_dl_client->write(s_dlbuf, s_dlfill); s_dlfill = 0;
+            // client.write() is bounded by SO_SNDTIMEO (h_dl set client.setTimeout) so a
+            // stalled WiFi TX returns a SHORT write instead of blocking the loop forever
+            // (the wedge that left the WROOM unreachable). Short write -> abort cleanly.
+            size_t w = s_dl_client->write(s_dlbuf, s_dlfill);
+            if (w < s_dlfill) return 1;
+            s_dlfill = 0;
         }
     }
     return s_dl_client->connected() ? 0 : 1;
@@ -132,6 +138,8 @@ static void h_dl() {
     server.send(200, "application/octet-stream", "");
     WiFiClient client = server.client();
     client.setNoDelay(true);             // no Nagle: don't wait for an ACK per small write
+    client.setTimeout(8);                // 8s SO_SNDTIMEO: a stalled TX returns short, never
+                                         // blocks the loop forever (no more WROOM wedge)
     s_dl_client = &client; s_dlfill = 0;
     proto_get_stream(total, dl_sink, nullptr);                 // pipelined GET -> batched sink
     if (s_dlfill && client.connected()) client.write(s_dlbuf, s_dlfill);   // flush tail

@@ -84,26 +84,37 @@ static bool sta_has_creds(void) {
 // Join the saved SSID's STRONGEST AP. WiFi.begin() (and even WIFI_CONNECT_AP_BY_SIGNAL)
 // grabbed a -69 ch6 sibling while a -53 ch11 one existed in the mesh -> slow. So scan all
 // channels ourselves, find the best-RSSI matching BSSID, and connect to THAT exact AP.
-static void sta_join_strongest(void) {
+// Target SSID = explicit (from the menu) or the SAVED one (ssid==NULL, boot auto-join).
+static void sta_join_strongest(const char *ssid, const char *pass) {
 #if defined(ESP32)
-    wifi_config_t cfg;
-    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
+    char ss[33] = {0}, pw[64] = {0};
+    if (ssid) {
+        snprintf(ss, sizeof(ss), "%s", ssid);
+        snprintf(pw, sizeof(pw), "%s", pass ? pass : "");
+    } else {
+        wifi_config_t cfg;
+        if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK) {
+            snprintf(ss, sizeof(ss), "%s", (const char *)cfg.sta.ssid);
+            snprintf(pw, sizeof(pw), "%s", (const char *)cfg.sta.password);
+        }
+    }
+    if (ss[0]) {
         int n = WiFi.scanNetworks(false /*sync*/, false /*hidden*/);   // ~2-3s, all channels
         int best = -1; int8_t br = -127;
         for (int i = 0; i < n; i++)
-            if (WiFi.RSSI(i) > br && WiFi.SSID(i) == (const char *)cfg.sta.ssid) { best = i; br = WiFi.RSSI(i); }
+            if (WiFi.RSSI(i) > br && WiFi.SSID(i) == ss) { best = i; br = WiFi.RSSI(i); }
         if (best >= 0) {
             DBG_SERIAL.printf("[wifi] join strongest %s ch=%d rssi=%d\n",
                               WiFi.BSSIDstr(best).c_str(), WiFi.channel(best), (int)br);
-            WiFi.begin((const char *)cfg.sta.ssid, (const char *)cfg.sta.password,
-                       WiFi.channel(best), WiFi.BSSID(best));
+            WiFi.begin(ss, pw, WiFi.channel(best), WiFi.BSSID(best));
             WiFi.scanDelete();
             return;
         }
         WiFi.scanDelete();
     }
 #endif
-    WiFi.begin();                   // fallback: saved creds, default selection
+    if (ssid) WiFi.begin(ssid, pass);   // fallback: explicit creds, SDK picks the AP
+    else      WiFi.begin();             // fallback: saved creds
 }
 
 static void sta_join(const char *ssid, const char *pass) {
@@ -122,8 +133,7 @@ static void sta_join(const char *ssid, const char *pass) {
 #endif
     WiFi.disconnect(false);         // clear any half-open attempt, keep the radio on
     delay(50);
-    if (ssid) WiFi.begin(ssid, pass);   // explicit network from the menu
-    else      sta_join_strongest();     // saved network: pick the strongest mesh AP
+    sta_join_strongest(ssid, pass); // ALWAYS pick the strongest mesh AP (menu or saved)
     s_connecting = true;
     s_connect_deadline = millis() + CONNECT_TO_MS;
 }
@@ -134,11 +144,13 @@ void net_start(void) {
     WiFi.setAutoReconnect(false);   // we drive (re)connects ourselves (STA-only); the
                                     // core's auto-reconnect storms reason 2 in AP+STA
 #endif
-    WiFi.mode(WIFI_AP_STA);         // a mode must be set to read the AP MAC for the name
+    // Come up STA-only: with saved creds we just join, so no SoftAP is needed. The portal
+    // SoftAP is brought up below only when there are no creds (no unused AP broadcasting).
+    WiFi.mode(WIFI_STA);
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
     WiFi.setTxPower(WIFI_POWER_8_5dBm);   // C3 SuperMini: tame TX so auth frames aren't distorted
 #endif
-    uint8_t mac[6]; WiFi.softAPmacAddress(mac);
+    uint8_t mac[6]; WiFi.softAPmacAddress(mac);   // base MAC is readable in STA mode too
     snprintf(s_ap, sizeof(s_ap), "sd2snes-%02X%02X", mac[4], mac[5]);
     s_connecting = false;
     s_connected  = false;
@@ -147,6 +159,7 @@ void net_start(void) {
         sta_join(NULL, NULL);       // try the saved network first (portal returns on timeout)
     } else {
         DBG_SERIAL.println(F("[wifi] no saved creds -> portal (SoftAP) only"));
+        WiFi.mode(WIFI_AP_STA);     // bring the SoftAP up only when the portal is actually needed
         WiFi.softAP(s_ap, AP_PASS, 1);
         s_ap_up = true;
     }
@@ -311,7 +324,7 @@ void net_init(void) {
     WiFi.onEvent(on_wifi_event);    // DEBUG: connect/disconnect-reason trace
 #endif
     WiFi.persistent(true);          // keep saved STA creds across the on/off cycle
-    WiFi.mode(WIFI_OFF);
+    WiFi.mode(WIFI_OFF);            // radio off until the menu's EnableWifi turns it on
     s_wifi_on = false;
     s_ap_up = false;
     s_connected = false;

@@ -4,9 +4,9 @@
 #include "platform.h"
 #include "link.h"
 
-#define EXT_BAUD        3000000   // MUST match the MCU (src/lpc175x/uart0.c). 3M is the
-                                  // LPC's clean max (4M needs DL=1 which the LPC fractional
-                                  // divider rejects -> dead link).
+#define EXT_BAUD        3000000   // MUST match the MCU (src/lpc175x/uart0.c). 3M is the LPC's
+                                  // clean max. The download stalls were the ESP-side WiFi
+                                  // write blocking the loop, NOT the UART -> baud stays at 3M.
 #define RESP_TIMEOUT_MS 2000
 #define PUT_TIMEOUT_MS  6000      // a PUT_DATA/PUT_OPEN reply can lag while the MCU's SD
                                   // write allocates a cluster + flushes the FAT (seconds);
@@ -233,22 +233,36 @@ static uint32_t gs_send_burst(uint32_t o, uint32_t total, uint8_t *seq0, uint16_
 // chunk. The overlap of UART recv and WiFi TX is done by the caller (a producer-consumer
 // where the sink hands chunks to a WiFi-writer task on the other core); here we just keep
 // the MCU pipe full.
+#define STREAM_RETRIES 60   // total burst re-syncs allowed across a transfer
 lerr_t proto_get_stream(uint32_t total, get_sink_fn sink, void *ctx) {
     uint8_t r[UP_MAX_PAYLOAD];
     uint32_t off = 0;
+    int retries = 0;
     while (off < total) {
         uint8_t seq0; uint16_t burst;
         gs_send_burst(off, total, &seq0, &burst);
+        int err = 0;
         for (uint16_t i = 0; i < burst; i++) {
             uint8_t rt = 0; uint16_t rl = 0;
             lerr_t e = recv_resp((uint8_t)(seq0 + i), &rt, r, sizeof(r), &rl, RESP_TIMEOUT_MS);
-            if (e) return e;
-            if (rl < 3 || r[0]) return LERR_FAIL;
+            if (e || rl < 3 || r[0]) { err = 1; break; }
             uint16_t got = (uint16_t)(r[1] | (r[2] << 8));
             if (got > rl - 3) got = rl - 3;
-            if (got && sink(ctx, r + 3, got)) return LOK;
+            if (got && sink(ctx, r + 3, got)) return LOK;   // sink abort (client gone)
             off += got;
             if ((rt & UP_TYPE_FINAL) || got == 0) return LOK;
+        }
+        if (err) {
+            // CRC error / link de-sync mid-burst: a long transfer at 3M hits an occasional
+            // glitch and WITHOUT recovery the whole download stalls. Discard the rest of the
+            // broken burst's in-flight replies + resync, then re-request from the confirmed
+            // offset (already-sinked chunks advanced `off`, so no dup/gap). Stale-seq replies
+            // from the old burst are skipped by recv_resp's seq check.
+            if (++retries > STREAM_RETRIES) return LERR_FAIL;
+            delay(2);            // let the MCU finish flushing the aborted burst
+            link_drain();        // drop those bytes + reset the staging buffer
+        } else {
+            retries = 0;
         }
     }
     return LOK;
