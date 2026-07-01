@@ -325,6 +325,17 @@ static lerr_t simple_path_op(uint8_t op, const char *path, uint8_t *status) {
 lerr_t proto_rm(const char *path, uint8_t *status)    { return simple_path_op(UP_OP_RM, path, status); }
 lerr_t proto_mkdir(const char *path, uint8_t *status) { return simple_path_op(UP_OP_MKDIR, path, status); }
 
+// zero-payload ops that just return a 1-byte status (like proto_put_close)
+static lerr_t simple_op(uint8_t op, uint8_t *status) {
+    uint8_t r[1]; uint16_t rl = 0;
+    lerr_t e = txn(op, NULL, 0, NULL, r, sizeof(r), &rl);
+    if (e) return e;
+    if (status) *status = rl ? r[0] : 0xFF;
+    return LOK;
+}
+lerr_t proto_hot_reload(uint8_t *status) { return simple_op(UP_OP_HOT_RELOAD, status); }
+lerr_t proto_abort(uint8_t *status)      { return simple_op(UP_OP_ABORT, status); }
+
 lerr_t proto_mv(const char *from, const char *to, uint8_t *status) {
     uint8_t req[UP_MAX_PAYLOAD]; uint16_t fl = strlen(from) + 1, tl = strlen(to) + 1;
     if (fl + tl > UP_MAX_PAYLOAD) return LERR_FAIL;

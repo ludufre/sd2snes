@@ -54,6 +54,7 @@ static uint8_t  crc_n;
 static ESPLINK_BUF uint8_t txframe[6 + UP_MAX_PAYLOAD + 2];
 static uint16_t out_len;
 static uint8_t  out_ready;
+static volatile uint8_t menu_reload_req;   /* set by UP_OP_HOT_RELOAD, drained by main.c */
 static tick_t   up_last_active;   /* getticks() of the last complete frame */
 static ESPLINK_BUF uint8_t resp[UP_MAX_PAYLOAD];    /* scratch for big response payloads */
 
@@ -86,6 +87,7 @@ void uart_proto_init(void) {
   up_dir_open = 0;
   ls_carry_len = 0;
   up_last_active = 0;
+  menu_reload_req = 0;
   /* AHB SRAM is not zeroed at startup - clear the WiFi state explicitly. */
   wifi_pending = UP_WIFI_NONE;
   wifi_req_ssid[0] = 0;
@@ -306,6 +308,14 @@ static void handle_frame(void) {
     reply_status(op, seq, 0);
     break;
 
+  case UP_OP_HOT_RELOAD:
+    /* The WebUI wrote a new config.yml / theme / list; ask the menu to re-read it
+       without a power-cycle. Bounded and I/O-free: just flag it and reply; main.c
+       drains the flag and runs the existing cold menu reload (never blocks here). */
+    menu_reload_req = 1;
+    reply_status(op, seq, 0);
+    break;
+
   case UP_OP_WIFI_POLL: {
     /* resp: u8 enabled, u8 action, [ssid\0 pass\0 if action==connect].
        enabled is the menu's EnableWifi - a *persistent* flag re-sent every poll so
@@ -450,6 +460,12 @@ const uart_wifi_state_t *uart_wifi_state(void) { return &ws; }
 
 void uart_wifi_request_scan(void)   { wifi_pending = UP_WIFI_SCAN_REQ; }
 void uart_wifi_request_forget(void) { wifi_pending = UP_WIFI_FORGET; }
+
+/* main.c polls this each menu-loop pass; returns 1 exactly once per hot-reload request. */
+int uart_take_menu_reload(void) {
+  if (menu_reload_req) { menu_reload_req = 0; return 1; }
+  return 0;
+}
 
 void uart_wifi_request_connect(const char *ssid, const char *pass) {
   copy_str(wifi_req_ssid, ssid, UP_WIFI_SSID_MAX);

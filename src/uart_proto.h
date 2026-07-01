@@ -68,6 +68,11 @@
 #define UP_OP_WIFI_SCAN   0x12
 #define UP_OP_ESP_INFO    0x13   /* ESP->MCU: companion version string "x.y.z (CHIP)" */
 
+/* Menu hot-reload (0x40 range): the WebUI wrote a new config.yml / theme / list and
+   asks the menu to re-read it WITHOUT a power-cycle. The handler only sets a flag
+   (O(1), no I/O); main.c consumes it and triggers the existing cold menu reload. */
+#define UP_OP_HOT_RELOAD  0x40
+
 /* menu->ESP actions carried by WIFI_POLL */
 #define UP_WIFI_NONE      0
 #define UP_WIFI_SCAN_REQ  1
@@ -104,5 +109,8 @@ void uart_wifi_request_forget(void);
 /* ---- companion (ESP) identity, reported via UP_OP_ESP_INFO ---- */
 int  uart_esp_present(void);        /* 1 if the ESP reported in recently */
 const char *uart_esp_string(void); /* "x.y.z (CHIP)" or "" if never seen */
+
+/* ---- menu hot-reload request (set by UP_OP_HOT_RELOAD, consumed by main.c) ---- */
+int  uart_take_menu_reload(void);  /* returns 1 once if a hot-reload was requested, then clears */
 
 #endif

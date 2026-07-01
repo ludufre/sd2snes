@@ -32,6 +32,8 @@ lerr_t proto_put_close(uint8_t *status);
 lerr_t proto_rm(const char *path, uint8_t *status);
 lerr_t proto_mv(const char *from, const char *to, uint8_t *status);
 lerr_t proto_mkdir(const char *path, uint8_t *status);
+lerr_t proto_hot_reload(uint8_t *status);   // ask the menu to re-read config/theme/lists (no power-cycle)
+lerr_t proto_abort(uint8_t *status);         // cancel an in-flight file/dir op (frees the MCU handle)
 
 // WiFi-in-menu bridge (ESP is the client; the MCU buffers for the SNES menu).
 struct ap_rec { char ssid[33]; int8_t rssi; uint8_t enc; };

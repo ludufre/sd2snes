@@ -48,6 +48,10 @@
 #define UP_OP_WIFI_SCAN   0x12
 #define UP_OP_ESP_INFO    0x13   // ESP->MCU: companion version string "x.y.z (CHIP)"
 
+// Menu hot-reload (0x40 range): WebUI wrote a new config.yml / theme / list; ask the
+// menu to re-read it without a power-cycle. Zero payload, resp: u8 status(0=OK).
+#define UP_OP_HOT_RELOAD  0x40
+
 #define UP_WIFI_NONE      0
 #define UP_WIFI_SCAN_REQ  1
 #define UP_WIFI_CONNECT   2

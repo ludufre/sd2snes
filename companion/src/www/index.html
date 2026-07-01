@@ -3,33 +3,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>sd2snes</title>
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#131619">
+<title>sd2snes+ Companion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header><div class="wrap">
-  <h1>sd2snes</h1>
-  <span class="dev" id="dev">...</span>
+  <div class="brand">
+    <span class="logo" role="img" aria-label="sd2snes+"></span>
+    <span class="sub">Companion</span>
+    <span class="ver" id="ver">…</span>
+  </div>
+  <span class="dev conn off" id="dev">...</span>
 </div></header>
 
-<div class="wrap">
-  <div class="toolbar">
-    <div class="crumbs" id="crumbs"></div>
-    <button id="b_reload" onclick="reload()"></button>
-    <button id="b_mkdir" onclick="mkdir()"></button>
-    <label class="btn"><span id="b_upload"></span><input type="file" id="file" multiple hidden></label>
-    <label class="btn"><span id="b_ota"></span><input type="file" id="zip" accept=".zip,application/zip" hidden></label>
-    <button id="b_wifi" onclick="wifiOpen()"></button>
-  </div>
+<nav class="tabs" aria-label="sections">
+  <button data-tab="shelf"></button>
+  <button data-tab="files"></button>
+  <button data-tab="saves"></button>
+  <button data-tab="settings"></button>
+  <button data-tab="device"></button>
+</nav>
 
-  <div class="drop" id="drop"></div>
+<main>
+  <section id="tab-shelf" class="tab"><div class="wrap"><div class="shelf" id="shelf"></div></div></section>
 
-  <table>
-    <thead><tr><th id="b_cname"></th><th class="c-size" id="b_csize"></th><th class="c-act"></th></tr></thead>
-    <tbody id="list"></tbody>
-  </table>
-  <div id="status"></div>
-</div>
+  <section id="tab-files" class="tab"><div class="wrap">
+    <div class="toolbar">
+      <div class="crumbs" id="crumbs"></div>
+      <button id="b_select" onclick="toggleSel()"></button>
+      <button id="b_reload" onclick="reload()"></button>
+      <button id="b_mkdir" onclick="mkdir()"></button>
+      <label class="btn"><span id="b_upload"></span><input type="file" id="file" multiple hidden></label>
+      <input type="file" id="zip" accept=".zip,application/zip" hidden>
+    </div>
+    <div class="drop" id="drop"></div>
+    <table>
+      <thead><tr><th id="b_cname"></th><th class="c-size" id="b_csize"></th><th class="c-act"></th></tr></thead>
+      <tbody id="list"></tbody>
+    </table>
+    <div id="status"></div>
+    <div id="selbar" class="selbar"></div>
+  </div></section>
+
+  <section id="tab-saves" class="tab"><div class="wrap"></div></section>
+  <section id="tab-settings" class="tab"><div class="wrap"></div></section>
+  <section id="tab-device" class="tab"><div class="wrap"></div></section>
+</main>
 
 <div class="ov" id="ov"><div class="card">
   <h3 id="ovTitle"></h3>
@@ -48,8 +72,50 @@
   <div class="pstat" id="otastat" style="display:none"><span id="otaPct">0%</span><span id="otaInfo"></span></div>
   <div class="msg" id="otamsg"></div>
   <div class="row">
-    <button id="b_otago" onclick="otaWrite()"></button>
+    <button id="b_otago" class="primary" onclick="otaWrite()"></button>
     <button id="b_otacancel" onclick="otaClose()"></button>
+  </div>
+</div></div>
+
+<div class="ov" id="fwpick"><div class="card">
+  <h3 id="fwpickTitle"></h3>
+  <div class="fn" id="fwpickSub"></div>
+  <div class="fwpickrow">
+    <button id="fwpickOnline" class="fwpickbtn primary" onclick="fwPickOnline()"></button>
+    <button id="fwpickLocal" class="fwpickbtn" onclick="fwPickLocal()"></button>
+  </div>
+  <div class="msg" id="fwpickMsg"></div>
+  <div class="row"><button id="fwpickClose" onclick="fwPickClose()"></button></div>
+</div></div>
+
+<div class="ov" id="fwov"><div class="card fwcard">
+  <div class="fwhead">
+    <h3 id="b_fwtitle"></h3>
+    <a class="fwrepo" href="https://github.com/ludufre/sd2snes/releases" target="_blank" rel="noopener">ludufre/sd2snes</a>
+    <span class="grow"></span>
+    <button id="b_fwlocal" onclick="fwLocal()"></button>
+    <button id="b_fwclose" class="fwx" onclick="fwClose()"></button>
+  </div>
+  <div class="fwmsg" id="fwmsg"></div>
+  <div class="fwbody" id="fwbody">
+    <div class="rlist" id="fwlist"></div>
+    <div class="rnotes" id="fwnotes"></div>
+  </div>
+  <div class="fwfoot" id="fwfoot">
+    <span class="fwdest" id="fwdest"></span>
+    <span class="grow"></span>
+    <span class="fwbtns" id="fwbtns"></span>
+  </div>
+</div></div>
+
+<div class="ov" id="cov"><div class="card covcard">
+  <h3 id="covTitle"></h3>
+  <div class="fn" id="covName"></div>
+  <div class="covview" id="covView"></div>
+  <div class="covmeta" id="covMeta"></div>
+  <div class="row">
+    <button id="covDl" class="primary"></button>
+    <button id="covClose" onclick="covClose()"></button>
   </div>
 </div></div>
 
@@ -58,8 +124,8 @@
   <div class="fn" id="wstat">...</div>
   <div class="wlist" id="wlist"></div>
   <div class="row">
-    <button id="wforget" onclick="wifiForget()"></button>
-    <button id="wscan" onclick="wifiScan()"></button>
+    <button id="wforget" class="danger" onclick="wifiForget()"></button>
+    <button id="wscan" class="primary" onclick="wifiScan()"></button>
     <button id="b_wclose" onclick="wclose()"></button>
   </div>
 </div></div>

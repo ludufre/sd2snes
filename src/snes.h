@@ -85,6 +85,7 @@
 #define SNES_CMD_GAME_INFO_RECENT    (0x35) /* like GAME_INFO but for the recent game at the index in MCU_PARAM (resolved via LAST_FILE) */
 #define SNES_CMD_GAME_INFO_FAVORITE  (0x36) /* like GAME_INFO but for the favorite game at the index in MCU_PARAM (resolved via FAVORITES_FILE) */
 #define SNES_CMD_FMV_NEXT            (0x37) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
+#define SNES_CMD_HOT_RELOAD          (0x38) /* SYNTHETIC (never sent by the SNES): menu_main_loop returns this when the Companion asked for a hot-reload (UP_OP_HOT_RELOAD) -> main.c sets menu_reload so the menu re-reads config.yml/theme/lists without a power-cycle. */
 
 /* WiFi SRAM block layout (base = SRAM_WIFI_ADDR; menu side = WIFI_BLK $FF4000).
    RESERVED for the Companion port -- its own dedicated 437-byte block ($FF4000..$FF41B5),

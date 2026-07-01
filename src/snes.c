@@ -507,6 +507,11 @@ uint8_t menu_main_loop() {
       uart_proto_poll();
 #endif
     }
+#if ESPLINK_ENABLE
+    /* Companion asked to hot-reload the menu (new config.yml / theme / list written over
+       the file API). Surface it as a synthetic command so main.c takes the menu_reload path. */
+    if(!cmd && uart_take_menu_reload()) cmd = SNES_CMD_HOT_RELOAD;
+#endif
     cli_entrycheck();
     if (!cmd) {
       cmd = usbint_handler();

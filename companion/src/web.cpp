@@ -182,6 +182,14 @@ static void h_mv() {
     uint8_t st = 0xFF; lerr_t e = proto_mv(server.arg("from").c_str(), server.arg("to").c_str(), &st);
     reply_status(e, st);
 }
+static void h_apply() {   // WebUI wrote config/theme/lists -> ask the menu to hot-reload (no power-cycle)
+    uint8_t st = 0xFF; lerr_t e = proto_hot_reload(&st);
+    reply_status(e, st);
+}
+static void h_abort() {   // cancel an in-flight transfer -> free the MCU file/dir handle
+    uint8_t st = 0xFF; lerr_t e = proto_abort(&st);
+    reply_status(e, st);
+}
 
 static void h_wifi_scan() {
     ap_rec aps[16]; int n = net_scan(aps, 16);
@@ -229,6 +237,8 @@ void web_init(void) {
     server.on("/api/rm", HTTP_POST, h_rm);
     server.on("/api/mv", HTTP_POST, h_mv);
     server.on("/api/mkdir", HTTP_POST, h_mkdir);
+    server.on("/api/apply", HTTP_POST, h_apply);
+    server.on("/api/abort", HTTP_POST, h_abort);
     server.on("/api/wifi/scan", HTTP_GET, h_wifi_scan);
     server.on("/api/wifi/status", HTTP_GET, h_wifi_status);
     server.on("/api/wifi/connect", HTTP_POST, h_wifi_connect);

@@ -846,6 +846,17 @@ int main(void) {
           cfg_save();
           menu_reload = 1;
           break;
+        case SNES_CMD_HOT_RELOAD:
+          /* Companion (WebUI) rewrote config.yml on the SD. The boot cfg_load() is gated to
+             firstboot, and the menu-reload path only cfg_load_to_menu()+cfg_save()s the
+             IN-MEMORY copy -- so WITHOUT re-reading here, the reload would write the stale
+             in-memory CFG back over the WebUI's file (settings would "not save"). Re-read the
+             file into CFG first, THEN reload so the new values both apply and persist. (This
+             is exactly why RESET_TO_MENU can't be reused: it never re-reads the config file,
+             and forcing a re-read there would clobber unsaved in-menu setting changes.) */
+          cfg_load();
+          menu_reload = 1;
+          break;
         case SNES_CMD_LOAD_CHT:
           /* load cheats from YAML file into PSRAM for the menu to edit.
              Filename is provided by the menu via MCU_PARAM (path) plus
