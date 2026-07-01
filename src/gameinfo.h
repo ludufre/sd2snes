@@ -37,10 +37,13 @@
                                         * The menu pumps CMD_FMV_NEXT to advance (gameinfo_fmv_next) */
 #define GAMEINFO_FLAG_COVER   (0x04)   /* <rom>.gcv paletted 120c cover staged (palette -> $CB0000,
                                         * tiles -> C9). Without it the cover region shows the gradient */
-#define GAMEINFO_FLAG_COVER_OBJ (0x08) /* FALLBACK when no .gcv: the browser <rom>.cov (next to the ROM)
-                                        * staged into C9 (load_cover); the menu floats it as OBJ box-art
-                                        * centered in the SAME 128x128 spot the .gcv cover occupies.
-                                        * Mutually exclusive with GAMEINFO_FLAG_COVER (.gcv wins). */
+#define GAMEINFO_FLAG_COVER_OBJ (0x08) /* DEPRECATED / no longer set. The old no-.gcv fallback floated
+                                        * the browser <rom>.cov as OBJ box-art, but OBJ palettes are
+                                        * hardwired to CGRAM 128..255 and clashed with the screenshot
+                                        * (CGRAM 168..255). The .cov is now transcoded to the paletted
+                                        * BG cover (gi_cov_to_gcv -> GAMEINFO_FLAG_COVER, CGRAM 48..167)
+                                        * so it coexists with the .fmv/.gss. The OBJ render path in
+                                        * snes/gameinfo.a65 (gi_cover_float) is now dead code. */
 
 /* .fmv container (paletted, little-endian). A fixed-size 8bpp box (FMV_BOX_W x FMV_BOX_H tiles) per
  * frame, NO dedup (same slots every frame) so the firmware streams one block per frame and the SNES

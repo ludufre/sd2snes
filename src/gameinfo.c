@@ -118,6 +118,95 @@ static int gi_load_gcv(const char *path) {
   return 1;
 }
 
+/* Transcode a just-staged 4bpp OBJ <rom>.cov (at scratch_base, COVER_OFF_* layout from load_cover)
+ * into the SAME paletted 8bpp BG layout a real .gcv produces, so a cover that only exists as a
+ * browser .cov still shares the band with the .fmv/.gss screenshot. OBJ palettes are hardwired to
+ * CGRAM 128..255 and would clash with the screenshot (CGRAM 168..255); a paletted BG cover lives in
+ * CGRAM 48..167 (the .gcv range), clear of both the text (0..47) and the screenshot (168..255).
+ *
+ * Palette packing fits EXACTLY, no dedup: each 4bpp palette P (0..7) has 15 visible colours (entry
+ * 0 = transparent, skipped) -> 8*15 = 120 = the cover region (CGRAM 48..167). A pixel of 4bpp value
+ * V in a 16x16 block using palette P maps to the 8bpp value 0 (V==0, transparent) or 48+P*15+(V-1).
+ * The (2*w_spr)x(2*h_spr)-tile cover is centred in the 16x16 region; the border cells are blanked.
+ *
+ * Writes the 120-colour palette to SRAM_GAMEINFO_TMAP_ADDR ($CB0000 -> CGRAM 48) and 256 8bpp tiles
+ * to SRAM_COVER_ADDR ($C90000 -> window-0), matching gi_load_gcv. Bounded (fixed 256-cell loop, tiles
+ * read on demand); returns 1 on success. The caller then sets GAMEINFO_FLAG_COVER (the .gcv path). */
+static int gi_cov_to_gcv(uint32_t scratch_base) {
+  /* ~560 B of scratch, in AHB SRAM (IN_AHBRAM) -- NOT plain .bss on the main SRAM.
+     As plain statics these 560 B shrank the tiny LPC1756 main-SRAM budget (which
+     also holds the stack) just enough that the USB command server went silent on
+     real hardware (INFO/PUT returned 0 bytes; menu still worked). AHB SRAM is the
+     right home for main-loop-only scratch (like ptrcache/ips_entries): these are
+     touched ONLY here (gameinfo_load path, SPI PIO), never from an IRQ. All three
+     are fully written before read (covpal/blockmap via sram_readblock, gcvpal via
+     memset), so the NOLOAD/no-zero-init of .ahbram is fine. See IN_AHBRAM (config.h). */
+  static uint8_t covpal[COVER_MAX_PALETTES * 32] IN_AHBRAM;  /* up to 8*16 BGR555 = 256 B */
+  static uint8_t gcvpal[GCV_PAL_BYTES] IN_AHBRAM;            /* 120 colours = 240 B -> CGRAM 48..167 */
+  static uint8_t blockmap[COVER_OBJ_MAX_W * COVER_OBJ_MAX_H] IN_AHBRAM;  /* one palette idx / sprite, <= 64 */
+  uint8_t meta[COVER_META_SIZE];
+
+  sram_readblock(meta, scratch_base + COVER_OFF_STATUS, COVER_META_SIZE);
+  if(meta[0] != COVER_STATUS_OK) return 0;
+  unsigned w_spr = meta[1], h_spr = meta[2], npal = meta[3];
+  if(w_spr == 0 || w_spr > COVER_OBJ_MAX_W || h_spr == 0 || h_spr > COVER_OBJ_MAX_H
+     || npal == 0 || npal > COVER_MAX_PALETTES) return 0;
+
+  /* palette: each OBJ palette's colours 1..15 -> CGRAM 48 + P*15 + (c-1) */
+  memset(gcvpal, 0, sizeof(gcvpal));
+  sram_readblock(covpal, scratch_base + COVER_OFF_PAL, (uint16_t)(npal * 32));
+  for(unsigned p = 0; p < npal; p++) {
+    for(unsigned c = 1; c < 16; c++) {
+      unsigned di = (p * 15 + (c - 1)) * 2;
+      unsigned si = (p * 16 + c) * 2;
+      gcvpal[di]     = covpal[si];
+      gcvpal[di + 1] = covpal[si + 1];
+    }
+  }
+  sram_writeblock(gcvpal, SRAM_GAMEINFO_TMAP_ADDR, GCV_PAL_BYTES);
+
+  sram_readblock(blockmap, scratch_base + COVER_OFF_BLOCKMAP, (uint16_t)(w_spr * h_spr));
+
+  /* tiles: the cover centred in the 16x16 region, border transparent. The .cov tile name grid is
+   * 16 wide, so the cover-local cell (cr,cc) is exactly .cov tile index cr*16+cc. */
+  int start_col = 8 - (int)w_spr;   /* (16 - 2*w_spr)/2 in tiles */
+  int start_row = 8 - (int)h_spr;
+  for(int R = 0; R < 16; R++) {
+    for(int C = 0; C < 16; C++) {
+      uint8_t out[64];
+      memset(out, 0, sizeof(out));
+      int cr = R - start_row, cc = C - start_col;
+      if(cr >= 0 && cr < 2 * (int)h_spr && cc >= 0 && cc < 2 * (int)w_spr) {
+        uint8_t in[32];
+        sram_readblock(in, scratch_base + COVER_OFF_TILES + (uint32_t)(cr * 16 + cc) * 32, 32);
+        unsigned p = blockmap[(cr >> 1) * w_spr + (cc >> 1)];
+        if(p >= npal) p = 0;                         /* defensive: bad blockmap index */
+        unsigned base = 47 + p * 15;                 /* 8bpp value = base + V (V = 1..15) */
+        for(int row = 0; row < 8; row++) {
+          uint8_t p0 = in[2*row], p1 = in[2*row+1], p2 = in[16+2*row], p3 = in[17+2*row];
+          for(int x = 0; x < 8; x++) {
+            uint8_t bit = (uint8_t)(0x80 >> x);
+            unsigned v = ((p0 & bit) ? 1u : 0u) | ((p1 & bit) ? 2u : 0u)
+                       | ((p2 & bit) ? 4u : 0u) | ((p3 & bit) ? 8u : 0u);
+            if(!v) continue;                          /* transparent pixel -> 8bpp 0 */
+            unsigned val = base + v;                  /* 48..167 */
+            if(val & 0x01) out[2*row]    |= bit;
+            if(val & 0x02) out[2*row+1]  |= bit;
+            if(val & 0x04) out[16+2*row] |= bit;
+            if(val & 0x08) out[17+2*row] |= bit;
+            if(val & 0x10) out[32+2*row] |= bit;
+            if(val & 0x20) out[33+2*row] |= bit;
+            if(val & 0x40) out[48+2*row] |= bit;
+            if(val & 0x80) out[49+2*row] |= bit;
+          }
+        }
+      }
+      sram_writeblock(out, SRAM_COVER_ADDR + (uint32_t)(R * 16 + C) * 64, 64);
+    }
+  }
+  return 1;
+}
+
 /* ---- animated screenshot (.fmv) streaming -------------------------------------
  * One .fmv is held open and read SEQUENTIALLY, one fixed-size frame per CMD_FMV_NEXT,
  * looping at EOF. A DEDICATED FIL (not the shared file_handle) so it survives across
@@ -331,26 +420,28 @@ void gameinfo_load(uint8_t *rom_path) {
   gi_dash(meta.genre);
   gi_dash(meta.special_chip);
 
-  /* band: prefer an animated /sd2snes/info/<rom>.fmv (screenshot box plays; the cover is
-   * the sibling <rom>.cov floated as OBJ); else the static composited <rom>.gd; else just
-   * the <rom>.cov box-art. All bounded + fail-safe; if nothing exists the band is gradient.
-   * The .fmv f_open scans the (huge) info dir, so it is gated behind the .yml "fmv:" flag. */
+  /* band: paletted cover (left) + paletted screenshot/animation (.fmv clip / .gss snapshot,
+   * right), each its own file into its own CGRAM range so they coexist (cover = CGRAM 48..167,
+   * screenshot = 168..255, text = 0..47). The cover comes from a real <rom>.gcv, or -- when there
+   * is none -- is transcoded on the fly from the browser <rom>.cov into the SAME paletted BG
+   * layout (gi_cov_to_gcv) so it still shares the band with the screenshot. All bounded +
+   * fail-safe; if nothing exists the band is gradient. The .fmv/.gss f_open scans the (huge) info
+   * dir, so it is gated behind the .yml "fmv:" flag. */
   gi_fmv_close();                            /* drop any prior open .fmv (reentry) */
   gi_fmv_path[0] = 0;                         /* invalidate the saved reopen path */
   menu_music_stop();                         /* and any prior FMV audio clip */
   {
-    /* DECOUPLED paletted band: the cover (.gcv, left) and the screenshot/FMV region (right) are
+    /* DECOUPLED paletted band: the cover (left) and the screenshot/FMV region (right) are
      * SEPARATE files, each into its own CGRAM range. The right region comes from EITHER the animated
      * clip (.fmv) OR the static snapshot (.gss) -- two files, so a future "no preview clip" toggle can
-     * fall back to the snapshot. Either region absent -> gradient. No DirectColor .gd / OBJ .cov. */
+     * fall back to the snapshot. Either region absent -> gradient. */
     gi_join(path, sizeof(path), base, ".gcv");
     if(gi_load_gcv(path)) {
       meta.flags |= GAMEINFO_FLAG_COVER;                       /* cover -> C9 + CGRAM 48..167 */
-    } else {
-      /* FALLBACK: no .gcv -> stage the browser <rom>.cov (next to the ROM) into C9 and let the
-       * menu float it as OBJ box-art in the SAME spot the .gcv cover would occupy. load_cover
-       * derives "<rom>.cov" from rom_path and writes the C9 meta/status itself; bounded + fail-safe. */
-      if(load_cover(rom_path, SRAM_COVER_ADDR)) meta.flags |= GAMEINFO_FLAG_COVER_OBJ;
+    } else if(load_cover(rom_path, SRAM_GAMEINFO_TILES_ADDR)   /* stage the 4bpp .cov to scratch (bank CA,
+                                                               * reused by the FMV AFTER this) */
+              && gi_cov_to_gcv(SRAM_GAMEINFO_TILES_ADDR)) {    /* transcode it into the paletted BG cover */
+      meta.flags |= GAMEINFO_FLAG_COVER;                       /* same CGRAM-48..167 BG path as a real .gcv */
     }
     if(fmv_eligible) {
       int shown = 0;
