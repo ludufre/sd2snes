@@ -51,6 +51,7 @@ memory.c: RAM operations
 #include "savestate.h"
 #include "sgb.h"
 #include "patch.h"
+#include "patch_copier.h"
 
 #include <string.h>
 char* hex = "0123456789ABCDEF";
@@ -63,6 +64,153 @@ uint8_t current_ips_srm_source[256];
    detected from the patched SDRAM image. */
 static uint8_t ips_recore_active = 0;
 static snes_romprops_t ips_recore_props;
+
+/* BPS-via-copier prestep state: set by bps_copier_prep() (CMD_BPS_COPIER), consumed
+   by the next load_rom(), which then boots the already-patched in-place image.
+   (romprops/CFG are extern'd again further down for load_rom; declared here too so
+   this function, which sits above those, can see them.) */
+extern snes_romprops_t romprops;
+extern cfg_t CFG;
+uint8_t  bps_copier_staged = 0;
+uint32_t bps_copier_romsize = 0;
+
+/* Decide if patch <index> (MCU_PARAM+7) on filename is copier-eligible and, if so,
+   stream the pristine ROM to bank 0 and emit the FPGA-copier descriptors (the menu
+   drains them next).  No reset / fpga_pgm / mapper change -- the menu stays alive at
+   bank C0 the whole time, the copier only touches bank 0 (game) and bank CA
+   (descriptors).  Returns target_size and publishes STATUS=1 + the descriptor COUNT
+   on success; 0 (STATUS=0) on ineligible/error so the menu falls back to the
+   byte-by-byte load.  Bounded/fail-safe: a miss only costs a wasted stream. */
+/* DEBUG breadcrumb: phase byte at $FF0724 (free $FF0701..$FF07FF gap) marks where
+   bps_copier_prep returned, so a USB read pinpoints the ineligibility reason. */
+#define BPS_DBG_ADDR 0xFF0724L
+uint32_t bps_copier_prep(uint8_t* filename, uint8_t index) {
+    bps_copier_staged = 0;
+    sram_writebyte(0, SRAM_BPS_COPIER_STATUS);
+    sram_writebyte(0x10, BPS_DBG_ADDR);                 /* entry */
+
+    if (!CFG.enable_bps_copier) { sram_writebyte(0x20, BPS_DBG_ADDR); return 0; }
+
+    if (index < 1 || index > IPS_MAX_PATCHES) { sram_writebyte(0x30, BPS_DBG_ADDR); return 0; }
+
+    /* selected patch must be a .bps.  path[] and post are STATIC (.bss), not stack:
+       a snes_romprops_t + 256 B path on the ~4 KB MCU stack (this is called as deep
+       as load_rom) overflowed and corrupted locals (scratch/target -> the probe read
+       a garbage address -> false chip detection).  load_rom uses static
+       ips_recore_props for the same reason. */
+    static uint8_t path[IPS_PATH_LEN];
+    sram_readstrn(path, SRAM_IPS_LIST_ADDR + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sizeof(path));
+    const char *dot = NULL;
+    for (const char *p = (const char*)path; *p; p++) if (*p == '.') dot = p;
+    if (!dot) { sram_writebyte(0x40, BPS_DBG_ADDR); return 0; }
+    { char e0 = dot[1], e1 = dot[2], e2 = dot[3];
+      if (e0 >= 'a' && e0 <= 'z') e0 -= 32;
+      if (e1 >= 'a' && e1 <= 'z') e1 -= 32;
+      if (e2 >= 'a' && e2 <= 'z') e2 -= 32;
+      if (!(e0 == 'B' && e1 == 'P' && e2 == 'S')) { sram_writebyte(0x41, BPS_DBG_ADDR); return 0; } }
+
+    /* ROM must be a plain LoROM/HiROM (fpga_base, no enhancement core/chip) */
+    file_open(filename, FA_READ);
+    if (file_res) { sram_writebyte(0x50, BPS_DBG_ADDR); return 0; }
+    smc_id(&romprops, 0);
+    uint32_t orig   = romprops.romsize_bytes;
+    uint32_t f_off  = romprops.offset;
+    uint32_t f_load = romprops.load_address;
+    if (romprops.fpga_conf || romprops.has_dspx || romprops.has_cx4 || romprops.has_obc1
+        || romprops.has_gsu || romprops.has_sa1 || romprops.has_sdd1 || romprops.has_spc7110
+        || romprops.has_combo || romprops.mapper_id == 3) {
+        file_close();
+        sram_writebyte(0x60, BPS_DBG_ADDR);             /* pre-patch ineligible (chip/combo/mapper) */
+        return 0;
+    }
+    file_close();
+
+    /* Stream the pristine ROM to bank 0 (DMA, like cover staging; menu stays alive). */
+    set_mcu_addr(SRAM_ROM_ADDR + f_load);
+    file_open(filename, FA_READ);
+    if (file_res) { sram_writebyte(0x51, BPS_DBG_ADDR); return 0; }
+    ff_sd_offload = 1; sd_offload_tgt = 0;
+    f_lseek(&file_handle, f_off);
+    for (;;) {
+        ff_sd_offload = 1; sd_offload_tgt = 0;
+        UINT br = file_read();
+        if (file_res || !br) break;
+    }
+    file_close();
+    sram_writebyte(0x70, BPS_DBG_ADDR);                 /* streamed OK */
+    /* DEBUG: dump the streamed ORIGINAL SNES header titles (LoROM 0x7FC0 +
+       HiROM 0xFFC0) to $FF0730/$FF0750 so a USB read shows whether the stream
+       (menu alive) corrupted the ROM -- a clean stream leaves the ASCII title. */
+    { uint8_t hdr[21];
+      sram_readblock(hdr, SRAM_ROM_ADDR + 0x7FC0, 21); sram_writeblock(hdr, 0xFF0730L, 21);
+      sram_readblock(hdr, SRAM_ROM_ADDR + 0xFFC0, 21); sram_writeblock(hdr, 0xFF0750L, 21);
+    }
+
+    /* Probe the PATCHED header: a chip-converting BPS would need fpga_pgm at boot,
+       which wipes the in-place image -> bail (the byte-by-byte path reloads under the
+       right core).  bps_probe_header also returns target_size. */
+    uint32_t scratch = 0;
+    uint32_t target = bps_probe_header(SRAM_IPS_LIST_ADDR, index, SRAM_ROM_ADDR, orig,
+                                       PATCH_PROBE_HEADER_LIMIT, &scratch);
+    if (!target) { sram_writebyte(0x80, BPS_DBG_ADDR); return 0; }   /* probe failed */
+    if (target + orig > SRAM_MENU_ADDR) { sram_writebyte(0x90, BPS_DBG_ADDR); return 0; } /* doesn't fit */
+    static snes_romprops_t post;   /* .bss, NOT stack (see path[] note above) */
+    smc_id_sdram_window(&post, scratch, target, PATCH_PROBE_HEADER_LIMIT);
+    if (post.fpga_conf || post.has_dspx || post.has_cx4 || post.has_obc1
+        || post.has_gsu || post.has_sa1 || post.has_sdd1 || post.has_spc7110
+        || post.mapper_id == 3) {
+        sram_writebyte(0xA0, BPS_DBG_ADDR);             /* post-patch chip-change */
+        /* dump what 'post' detected so a USB read explains the rejection:
+           $FF0725 = post.mapper_id, $FF0726 = chip flag bitmask, $FF0727 =
+           pre-patch romprops.mapper_id, $FF0728 = target_size>>16 (MB-ish). */
+        sram_writebyte(post.mapper_id, BPS_DBG_ADDR + 1);
+        sram_writebyte((post.fpga_conf  ? 0x80 : 0) | (post.has_dspx ? 0x01 : 0)
+                     | (post.has_sa1    ? 0x02 : 0) | (post.has_cx4  ? 0x04 : 0)
+                     | (post.has_obc1   ? 0x08 : 0) | (post.has_gsu  ? 0x10 : 0)
+                     | (post.has_sdd1   ? 0x20 : 0) | (post.has_spc7110 ? 0x40 : 0),
+                       BPS_DBG_ADDR + 2);
+        sram_writebyte((uint8_t)romprops.mapper_id, BPS_DBG_ADDR + 3);
+        sram_writebyte((uint8_t)(target >> 16),     BPS_DBG_ADDR + 4);
+        /* dump the MATERIALIZED patched header from scratch to tell materialize-bug
+           from smc-misread: $FF0768 = scratch base (4B LE), $FF0770 = scratch+0x7FC0
+           (21B), $FF0790 = scratch+0xFFC0 (21B). */
+        { uint8_t hdr[21];
+          uint8_t sb[4] = { (uint8_t)scratch, (uint8_t)(scratch>>8),
+                            (uint8_t)(scratch>>16), (uint8_t)(scratch>>24) };
+          sram_writeblock(sb, 0xFF0768L, 4);
+          sram_readblock(hdr, scratch + 0x7FC0, 21); sram_writeblock(hdr, 0xFF0770L, 21);
+          sram_readblock(hdr, scratch + 0xFFC0, 21); sram_writeblock(hdr, 0xFF0790L, 21);
+        }
+        return 0;
+    }
+
+    /* Decode the BPS into copier descriptors (source backup + TargetRead literals are
+       written inline; SourceCopy/TargetCopy -> descriptors in bank CA). */
+    uint32_t ts = patch_apply_copier(SRAM_IPS_LIST_ADDR, index, SRAM_ROM_ADDR, orig, 0);
+    if (!ts) {
+        /* decode error / descriptor list full -> byte-by-byte fallback. Publish the
+           descriptor count so a cap overflow (== BPS_DESC_MAX) is visible by USB. */
+        uint32_t nf = patch_copier_count();
+        sram_writebyte((uint8_t)(nf),       SRAM_BPS_COPIER_COUNT);
+        sram_writebyte((uint8_t)(nf >> 8),  SRAM_BPS_COPIER_COUNT + 1);
+        sram_writebyte((uint8_t)(nf >> 16), SRAM_BPS_COPIER_COUNT + 2);
+        sram_writebyte(0xB0, BPS_DBG_ADDR);
+        return 0;
+    }
+
+    uint32_t n = patch_copier_count();
+    sram_writebyte(0xFF, BPS_DBG_ADDR);                 /* success */
+    sram_writebyte((uint8_t)(n),       SRAM_BPS_COPIER_COUNT);
+    sram_writebyte((uint8_t)(n >> 8),  SRAM_BPS_COPIER_COUNT + 1);
+    sram_writebyte((uint8_t)(n >> 16), SRAM_BPS_COPIER_COUNT + 2);
+    sram_writebyte(1, SRAM_BPS_COPIER_STATUS);
+    bps_copier_staged  = 1;
+    bps_copier_romsize = ts;
+    printf("bps_copier_prep: staged target=0x%lx, %lu descriptors\n",
+           (unsigned long)ts, (unsigned long)n);
+    return ts;
+}
 
 extern snes_romprops_t romprops;
 extern uint32_t saveram_crc_old, saveram_crc, saveram_offset;
@@ -285,6 +433,13 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   DWORD filesize;
   UINT count=0;
   uint8_t is_menu = (filename == (uint8_t*)MENU_FILENAME);
+  /* BPS-copier staged boot: the CMD_BPS_COPIER prestep already streamed the ROM and
+     emitted the copier descriptors, and the menu already drained them, so the
+     patched image is in place at bank 0.  Skip the stream + byte-patch and boot it;
+     props come from the patched SDRAM (the file still holds the pre-patch header).
+     Consume the flag immediately so a recursive load_rom never re-triggers. */
+  uint8_t bps_staged = (bps_copier_staged && (flags & LOADROM_WAIT_SNES));
+  bps_copier_staged = 0;
   tick_t ticksstart, ticks_total=0;
   ticksstart=getticks();
 
@@ -341,6 +496,16 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     romprops.offset        = f_offset;
     romprops.load_address  = f_load;
     romprops.romsize_bytes = f_romsize;
+  }
+  if(bps_staged) {
+    /* Re-derive the cartridge from the already-patched image at bank 0 (the open
+       file is the pre-patch original).  Eligibility guaranteed a plain LoROM/HiROM,
+       so no core change -> no fpga_pgm below -> the in-place image survives.  The
+       patched image starts at bank 0 with no copier header. */
+    smc_id_sdram(&romprops, SRAM_ROM_ADDR, bps_copier_romsize);
+    romprops.offset       = 0;
+    romprops.load_address = 0;
+    filesize              = bps_copier_romsize;
   }
   file_close();
 
@@ -436,6 +601,9 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     fpga_set_features(fpga_features_preload);
   }
   if(flags & LOADROM_WAIT_SNES) snes_set_snes_cmd(0x77);
+  /* Staged-copier boot: the patched image is already in bank 0 (streamed + patched
+     by the prestep, drained by the menu) -> skip the re-stream entirely. */
+  if(!bps_staged) {
   set_mcu_addr(base_addr + romprops.load_address);
   file_open(filename, FA_READ);
   ff_sd_offload=1;
@@ -458,6 +626,39 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   }
   uart_putc('\n');
   file_close();
+  }
+
+  /* Single-pass recore (optimization): decide a cartridge-type change RIGHT AFTER
+     the stream, BEFORE the expensive tail (BSX/features/SaveRAM CRC/init 196KB
+     memset).  A chip-converting BPS (e.g. SMW->SA-1) does fpga_pgm under the new
+     core, which WIPES the PSRAM -> all that tail work is thrown away and redone in
+     pass 2.  Probing the patched header here lets us recore + apply the patch ONCE,
+     skipping the whole wasted pass-1 tail.  The post-patch smc re-detect (further
+     down) stays as the safety net, so a probe miss only costs time, never
+     correctness. */
+  if(ips_pending_index > 0 && !ips_recore_active && !bps_staged) {
+    uint32_t probe_scratch = 0;
+    uint32_t probe_tgt = bps_probe_header(SRAM_IPS_LIST_ADDR, ips_pending_index,
+                                          SRAM_ROM_ADDR + romprops.load_address,
+                                          romprops.romsize_bytes,
+                                          PATCH_PROBE_HEADER_LIMIT, &probe_scratch);
+    if(probe_tgt) {
+      smc_id_sdram_window(&ips_recore_props, probe_scratch, probe_tgt,
+                          PATCH_PROBE_HEADER_LIMIT);
+      const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
+      const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
+                                                           : FPGA_BASE;
+      if(core_new != core_now) {
+        printf("IPS: single-pass recore -> reload under correct core (skip wasted tail)\n");
+        ips_recore_active = 1;
+        uint32_t r = load_rom(filename, base_addr,
+                              (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
+        ips_recore_active = 0;
+        if(!r) deassert_reset();
+        return r;
+      }
+    }
+  }
 
   printf("rom header map: %02x; mapper id: %d\n", romprops.header.map, romprops.mapper_id);
   ticks_total=getticks()-ticksstart;
@@ -701,7 +902,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
        calling load_rom().  We consume+clear it here. */
     uint8_t saved_ips_idx = ips_pending_index; /* for recore reload */
     uint8_t patch_ok = 0;                      /* patch_apply succeeded */
-    if(ips_pending_index > 0) {
+    if(ips_pending_index > 0 && !bps_staged) { /* staged image is already patched */
       /* On a recore reload, fpga_pgm() above wiped all of SDRAM, including the
          patch list that ips_find_patches() staged once at SRAM_IPS_LIST_ADDR
          before LOADROM.  The patch's full path survives in MCU RAM as
@@ -715,41 +916,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
                         (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
       }
 
-      /* Load-time optimization (outer pass only): a chip-converting BPS would
-         otherwise be applied TWICE — once under the wrong (pre-patch) core just
-         to discover the new cartridge type, then again under the correct core
-         (~2x the ~9 s patch time for a 4 MB BPS).  Peek at the patched header
-         cheaply (first 64 KB only, into scratch above the image) so we can
-         reconfigure to the correct core FIRST and apply the full patch just
-         once.  bps_probe_header returns 0 for non-BPS / errors, and the
-         post-patch smc re-detection below stays as a safety net — so a probe
-         miss only costs time, never correctness. */
-      if(!ips_recore_active) {
-        uint32_t probe_scratch = 0;
-        uint32_t probe_tgt = bps_probe_header(SRAM_IPS_LIST_ADDR, saved_ips_idx,
-                                              SRAM_ROM_ADDR + romprops.load_address,
-                                              romprops.romsize_bytes,
-                                              PATCH_PROBE_HEADER_LIMIT,
-                                              &probe_scratch);
-        if(probe_tgt) {
-          smc_id_sdram_window(&ips_recore_props, probe_scratch, probe_tgt,
-                              PATCH_PROBE_HEADER_LIMIT);
-          const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
-          const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
-                                                               : FPGA_BASE;
-          if(core_new != core_now) {
-            printf("IPS: probe detected cartridge type change -> reloading under "
-                   "correct core (skipping redundant first patch)\n");
-            ips_recore_active = 1;
-            ips_pending_index = saved_ips_idx;
-            uint32_t r = load_rom(filename, base_addr,
-                                  (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
-            ips_recore_active = 0;
-            if(!r) deassert_reset();
-            return r;
-          }
-        }
-      }
+      /* (The chip-converting-BPS recore decision was MOVED earlier -- right after
+         the stream, before the expensive tail -- so the wasted pass-1 tail is
+         skipped; see "Single-pass recore" above.  The post-patch smc re-detect
+         below stays as the safety net for a probe miss.) */
 
       /* Dispatch to ips_apply or bps_apply based on the patch file extension.
          For IPS: pass the copier-header size so offset correction works when
@@ -758,10 +928,42 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
          off to get just the header size (0 or 0x200).
          BPS encodes exact sizes so no header correction is needed there. */
       uint32_t ips_header_size = romprops.offset & 0xFFFFF;
-      uint32_t ips_end = patch_apply(SRAM_IPS_LIST_ADDR, ips_pending_index,
+      /* Approach B: drive the FPGA copier from the MCU (the SNES is held in reset
+         here) for a BPS when EnableBpsCopier is on AND the currently-loaded core
+         carries the copier (probe).  IPS, the gate off, or a core without the copier
+         fall through to the byte-by-byte apply.  A copier op failure returns 0 and is
+         treated as a patch error (the probe makes a runtime failure unlikely). */
+      uint32_t ips_end;
+      uint8_t  copier_avail = CFG.enable_bps_copier && patch_copier_available();
+      if(copier_avail) {
+        extern uint32_t patch_targetread_bytes;
+        printf("BPS copier path (MCU-driven, SNES in reset)\n");
+        tick_t t_copier = getticks();
+        ips_end = patch_apply_copier(SRAM_IPS_LIST_ADDR, ips_pending_index,
                                      SRAM_ROM_ADDR + romprops.load_address,
-                                     romprops.romsize_bytes,
-                                     ips_header_size);
+                                     romprops.romsize_bytes, ips_header_size);
+        uint32_t patch_ms = (uint32_t)(getticks() - t_copier) * 10u; /* 1 tick = 10ms */
+        /* DEBUG ($FF0724 marker, $FF0721 op count): B1 = copier applied OK,
+           B2 = copier failed mid-apply (timeout). */
+        sram_writebyte(ips_end ? 0xB1 : 0xB2, 0xFF0724L);
+        uint32_t n = patch_copier_count();
+        sram_writebyte((uint8_t)(n),       0xFF0721L);
+        sram_writebyte((uint8_t)(n >> 8),  0xFF0722L);
+        sram_writebyte((uint8_t)(n >> 16), 0xFF0723L);
+        /* DEBUG breakdown: $FF0728 = patch time ms (16b), $FF072A = TargetRead
+           byte-by-byte volume (24b) -> copier-op overhead vs literal volume. */
+        sram_writebyte((uint8_t)(patch_ms),       0xFF0728L);
+        sram_writebyte((uint8_t)(patch_ms >> 8),  0xFF0729L);
+        sram_writebyte((uint8_t)(patch_targetread_bytes),       0xFF072AL);
+        sram_writebyte((uint8_t)(patch_targetread_bytes >> 8),  0xFF072BL);
+        sram_writebyte((uint8_t)(patch_targetread_bytes >> 16), 0xFF072CL);
+      } else {
+        ips_end = patch_apply(SRAM_IPS_LIST_ADDR, ips_pending_index,
+                              SRAM_ROM_ADDR + romprops.load_address,
+                              romprops.romsize_bytes, ips_header_size);
+        /* B3 = gate on but copier not in this core (probe failed); B0 = gate off. */
+        sram_writebyte(CFG.enable_bps_copier ? 0xB3 : 0xB0, 0xFF0724L);
+      }
       ips_pending_index = 0;
       patch_ok = (ips_end > 0); /* 0 => patch error / FPGA stall */
       /* If the IPS patch wrote past the original ROM boundary (ROM expansion

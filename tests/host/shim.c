@@ -12,6 +12,7 @@
 #include "fpga_spi.h"
 #include "cfg.h"
 #include "crc32.h"
+#include "patch_copier.h"
 #include "host.h"
 
 cfg_t CFG = { 0 };
@@ -118,6 +119,58 @@ FRESULT f_lseek(FIL *fp, DWORD ofs) {
 FRESULT f_opendir(DIR *dp, const TCHAR *path) { (void)dp; (void)path; return FR_NO_PATH; }
 FRESULT f_readdir(DIR *dp, FILINFO *fno) { (void)dp; fno->fname[0] = 0; return FR_OK; }
 FRESULT f_closedir(DIR *dp) { (void)dp; return FR_OK; }
+
+/* ---- BPS copier model: collect descriptors, replay like the FPGA copier ----
+ * bps_apply(use_copier=1) calls patch_copier_emit() instead of byte-moving the
+ * SourceCopy/TargetCopy bulk.  The firmware packs these for the live menu to run;
+ * here we record them and host_copier_replay() applies a forward element-by-
+ * element copy over host_sdram -- the exact FPGA copier semantics, so overlapping
+ * src<dst reproduces RLE inflate.  Replaying AFTER bps_apply returns (TargetRead
+ * literals + source backup already written inline) models the firmware ordering:
+ * descriptors read pristine source / already-finalized output. */
+/* Approach B+: patch_copier_emit ACCUMULATES SourceCopy/TargetCopy as descriptors
+   (the firmware batches them into a PSRAM list); patch_copier_finish replays them in
+   order -- a forward element-by-element copy is exactly the FPGA copier (overlapping
+   src<dst reproduces RLE inflate).  The source backup runs immediately via
+   patch_copier_op_now (must read pristine source before run_actions).  Deferred
+   replay is byte-identical because the inline TargetReads are already applied and
+   the copier ops replay in action order.  host_copier_replay() is a no-op (finish
+   already did the work; kept so the CLI/harness call sites stay unchanged). */
+struct hc_op { uint32_t src, dst, len; };
+static struct hc_op *hc_ops;
+static uint32_t hc_n, hc_cap;
+
+void patch_copier_reset(uint32_t list_base) { (void)list_base; hc_n = 0; }
+uint32_t patch_copier_count(void) { return hc_n; }
+
+static void hc_copy(uint32_t src, uint32_t dst, uint32_t len) {
+  for (uint32_t j = 0; j < len; j++)
+    host_sdram[(dst + j) & SDRAM_MASK] = host_sdram[(src + j) & SDRAM_MASK];
+}
+
+int patch_copier_op_now(uint32_t src, uint32_t dst, uint32_t len) {
+  hc_copy(src, dst, len);   /* immediate (source backup) */
+  return 0;
+}
+
+int patch_copier_emit(uint32_t src, uint32_t dst, uint32_t len) {
+  if (hc_n >= hc_cap) {
+    hc_cap = hc_cap ? hc_cap * 2 : 1024;
+    hc_ops = realloc(hc_ops, hc_cap * sizeof(*hc_ops));
+    if (!hc_ops) { fprintf(stderr, "hc_ops realloc failed\n"); exit(99); }
+  }
+  hc_ops[hc_n].src = src; hc_ops[hc_n].dst = dst; hc_ops[hc_n].len = len;
+  hc_n++;
+  return 0;
+}
+
+int patch_copier_finish(void) {
+  for (uint32_t i = 0; i < hc_n; i++)
+    hc_copy(hc_ops[i].src, hc_ops[i].dst, hc_ops[i].len);
+  return 0;
+}
+
+void host_copier_replay(void) { /* no-op: patch_copier_finish already replayed */ }
 
 /* ---- CRC-32 (reflected, poly 0xEDB88320 -- same as BPS/zlib) ------------ */
 uint32_t crc32_init(void) { return 0xFFFFFFFFu; }

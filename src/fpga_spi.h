@@ -92,6 +92,9 @@
 #define FPGA_CMD_SNESCMD_READ    (0xd1)
 #define FPGA_CMD_SNESCMD_WRITE   (0xd2)
 #define FPGA_CMD_CHEAT_WRITE     (0xd3)
+#define FPGA_CMD_DMA_OP          (0xd4) /* MCU-driven copier: 10 param bytes -> dma_r[0..9], dma_r[9]=opcode|trig starts it */
+#define FPGA_CMD_DMA_BUSY        (0xd5) /* read: bit0 = copier still running */
+#define FPGA_CMD_DMA_LIST        (0xd6) /* MCU copier LIST: 6 param bytes -> dma_r[10..15] (base 3B, count 2B, trig) */
 #define FPGA_CMD_MSUSETBITS      (0xe0)
 #define FPGA_CMD_DACPAUSE        (0xe1)
 #define FPGA_CMD_DACPLAY         (0xe2)
@@ -159,6 +162,10 @@ void fpga_set_snescmd_addr(uint16_t addr);
 void fpga_write_snescmd(uint8_t data);
 uint8_t fpga_read_snescmd(void);
 void fpga_write_cheat(uint8_t index, uint32_t code);
+int fpga_copier_op(uint32_t src, uint32_t dst, uint32_t len);
+int fpga_copier_list(uint32_t list_base, uint16_t count);
+void fpga_copier_op_nopoll(uint32_t src, uint32_t dst, uint32_t len);
+uint8_t fpga_copier_wait(void);
 void fpga_set_chipfeat(uint16_t feat);
 uint8_t fpga_read_config(uint8_t group, uint8_t index);
 void fpga_write_config(uint8_t group, uint8_t index, uint8_t value, uint8_t invmask);

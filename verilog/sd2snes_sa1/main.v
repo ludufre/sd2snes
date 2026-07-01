@@ -272,10 +272,13 @@ parameter ST_MCU_WR_ADDR     = 11'b00000001000;
 parameter ST_MCU_WR_END      = 11'b00000010000;
 parameter ST_SA1_ROM_RD_ADDR = 11'b00000100000;
 parameter ST_SA1_ROM_RD_END  = 11'b00001000000;
-parameter ST_SA1_RAM_RD_ADDR = 11'b00010000000;
-parameter ST_SA1_RAM_RD_END  = 11'b00100000000;
-parameter ST_SA1_RAM_WR_ADDR = 11'b01000000000;
-parameter ST_SA1_RAM_WR_END  = 11'b10000000000;
+// Repurposed: the ST_SA1_RAM_* one-hot bits were DEAD in this ROM-side STATE
+// machine (SA-1 RAM uses the separate ST_RAM_* FSM).  Reused for the MCU-driven
+// copier (Approach B), so STATE stays 11-bit.
+parameter ST_DMA_RD_ADDR     = 11'b00010000000;
+parameter ST_DMA_RD_END      = 11'b00100000000;
+parameter ST_DMA_WR_ADDR     = 11'b01000000000;
+parameter ST_DMA_WR_END      = 11'b10000000000;
 
 `ifdef MK2
 parameter SNES_DEAD_TIMEOUT = 17'd85714; // 1ms
@@ -474,6 +477,35 @@ wire [2:0] cheat_pgm_idx;
 // BS Memory Pack flash-erase request -> exposed in the MCU status word (mcu_cmd)
 wire [1:0] bs_erase_seq;
 wire [3:0] bs_erase_blk;
+
+// ---- MCU-driven copier (Approach B) -------------------------------------------
+// The MCU programs the copier regs (mcu_cmd CMD 0xd4) with the SNES held in reset
+// and polls busy (0xd5).  The copier requests PSRAM via BUS_RRQ/WRQ; the ROM-side
+// STATE machine grants it cycles through the ST_DMA_* states (the dead SA1_RAM
+// bits), exactly like the MCU/SA1 requesters.  No SNES/menu path, no BRA loop.
+wire [3:0]  MCU_DMA_ADDR;
+wire [7:0]  MCU_DMA_DATA;
+wire        MCU_DMA_WE;
+wire        MCU_DMA_ACTIVE;
+wire [1:0] DMA_BUSY;
+wire [23:0] DMA_ADDR;
+wire [15:0] DMA_DOUT;
+wire        DMA_WORD;
+reg  [15:0] DMA_DINr;
+wire        DMA_RRQ;
+wire        DMA_WRQ;
+reg  DMA_RD_PENDr = 0;
+reg  DMA_WR_PENDr = 0;
+reg  [23:0] DMA_ROM_ADDRr;
+reg  [15:0] DMA_ROM_DATAr;
+reg         DMA_ROM_WORDr;
+reg  RQ_DMA_RDYr = 1'b1;
+wire DMA_RDY = RQ_DMA_RDYr;
+wire DMA_WE_HIT = |(STATE & ST_DMA_WR_ADDR);
+wire DMA_WR_HIT = |(STATE & (ST_DMA_WR_ADDR | ST_DMA_WR_END));
+wire DMA_RD_HIT = |(STATE & (ST_DMA_RD_ADDR | ST_DMA_RD_END));
+wire DMA_HIT    = DMA_WR_HIT | DMA_RD_HIT;
+
 mcu_cmd snes_mcu_cmd(
   .clk(CLK2),
   .snes_sysclk(SNES_SYSCLK),
@@ -545,7 +577,36 @@ mcu_cmd snes_mcu_cmd(
   .cheat_pgm_idx_out(cheat_pgm_idx),
   .cheat_pgm_data_out(cheat_pgm_data),
   .cheat_pgm_we_out(cheat_pgm_we),
-  .dsp_feat_out(dsp_feat)
+  .dsp_feat_out(dsp_feat),
+
+  // MCU-driven copier (Approach B)
+  .mcu_dma_addr_out(MCU_DMA_ADDR),
+  .mcu_dma_data_out(MCU_DMA_DATA),
+  .mcu_dma_we_out(MCU_DMA_WE),
+  .mcu_dma_active(MCU_DMA_ACTIVE),
+  .DMA_BUSY(DMA_BUSY)
+);
+
+dma snes_dma (
+  .clkin(CLK2),
+  .reset(SNES_reset_strobe),
+  // MCU-driven only: regs fed by the MCU (CMD 0xd4) while the SNES is held in
+  // reset; no SNES/menu-driven copier here, so no BRA-loop injection.
+  .enable(MCU_DMA_ACTIVE),
+  .reg_addr(MCU_DMA_ADDR),
+  .reg_data_in(MCU_DMA_DATA),
+  .reg_data_out(),
+  .reg_oe_falling(1'b0),
+  .reg_we_rising(MCU_DMA_WE),
+  .loop_enable(),
+  .busy(DMA_BUSY),
+  .BUS_RDY(DMA_RDY),
+  .BUS_RRQ(DMA_RRQ),
+  .BUS_WRQ(DMA_WRQ),
+  .ROM_ADDR(DMA_ADDR),
+  .ROM_DATA_OUT(DMA_DOUT),
+  .ROM_DATA_IN(DMA_DINr),
+  .ROM_WORD_ENABLE(DMA_WORD)
 );
 
 // BS Memory Pack flash slot (writable)
@@ -729,8 +790,8 @@ my_dcm snes_dcm(
   .RST(DCM_RST)
 );
 
-assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
-assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
+assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 
 assign ROM_CE = 1'b0;
 
@@ -759,9 +820,9 @@ pll snes_pll(
 );
 
 wire ROM_ADDR22;
-assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
-assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
-assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[1]    : DMA_HIT ? DMA_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
+assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:2] : DMA_HIT ? DMA_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
+assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 
 assign ROM_ZZ = 1'b1;
 assign ROM_1CE = ROM_ADDR22;
@@ -830,6 +891,26 @@ always @(posedge CLK2) begin
   end
 end
 
+// DMA copier (MCU-driven) r/w request -- latch the requested PSRAM access
+always @(posedge CLK2) begin
+  if(DMA_RRQ) begin
+    DMA_RD_PENDr  <= 1'b1;
+    RQ_DMA_RDYr   <= 1'b0;
+    DMA_ROM_ADDRr <= DMA_ADDR;
+    DMA_ROM_WORDr <= DMA_WORD;
+  end else if(DMA_WRQ) begin
+    DMA_WR_PENDr  <= 1'b1;
+    RQ_DMA_RDYr   <= 1'b0;
+    DMA_ROM_ADDRr <= DMA_ADDR;
+    DMA_ROM_DATAr <= DMA_DOUT;
+    DMA_ROM_WORDr <= DMA_WORD;
+  end else if(STATE & (ST_DMA_RD_END | ST_DMA_WR_END)) begin
+    DMA_RD_PENDr <= 1'b0;
+    DMA_WR_PENDr <= 1'b0;
+    RQ_DMA_RDYr  <= 1'b1;
+  end
+end
+
 always @(posedge CLK2) begin
   if(~SNES_CPU_CLKr[1]) SNES_DEAD_CNTr <= SNES_DEAD_CNTr + 1;
   else SNES_DEAD_CNTr <= 17'h0;
@@ -865,6 +946,14 @@ always @(posedge CLK2) begin
           STATE <= ST_MCU_WR_ADDR;
           ST_MEM_DELAYr <= ROM_CYCLE_LEN;
         end
+        // MCU-driven copier (Approach B): only active at patch time (SNES dead)
+        else if(DMA_RD_PENDr) begin
+          STATE <= ST_DMA_RD_ADDR;
+          ST_MEM_DELAYr <= ROM_CYCLE_LEN;
+        end else if(DMA_WR_PENDr) begin
+          STATE <= ST_DMA_WR_ADDR;
+          ST_MEM_DELAYr <= ROM_CYCLE_LEN;
+        end
       end
     end
     ST_MCU_RD_ADDR: begin
@@ -884,7 +973,18 @@ always @(posedge CLK2) begin
       if(ST_MEM_DELAYr == 0) STATE <= ST_SA1_ROM_RD_END;
       SA1_ROM_DINr <= (ROM_ADDR0_r ? ROM_DATA[15:0] : {ROM_DATA[7:0],ROM_DATA[15:8]});
     end
-    ST_MCU_RD_END, ST_MCU_WR_END, ST_SA1_ROM_RD_END: begin
+    ST_DMA_RD_ADDR: begin
+      STATE <= ST_DMA_RD_ADDR;
+      ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
+      if(ST_MEM_DELAYr == 0) STATE <= ST_DMA_RD_END;
+      DMA_DINr <= (ROM_ADDR0 ? ROM_DATA[15:0] : {ROM_DATA[7:0],ROM_DATA[15:8]});
+    end
+    ST_DMA_WR_ADDR: begin
+      STATE <= ST_DMA_WR_ADDR;
+      ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
+      if(ST_MEM_DELAYr == 0) STATE <= ST_DMA_WR_END;
+    end
+    ST_MCU_RD_END, ST_MCU_WR_END, ST_SA1_ROM_RD_END, ST_DMA_RD_END, ST_DMA_WR_END: begin
       STATE <= ST_IDLE;
     end
   endcase
@@ -961,8 +1061,9 @@ reg MCU_WRITE_1;
 always @(posedge CLK2) MCU_WRITE_1<= MCU_WRITE;
 
 // odd addresses xxx1
-assign ROM_DATA[7:0] = ROM_ADDR0
+assign ROM_DATA[7:0] = (ROM_ADDR0 || (!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr))
                        ?(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
+                                       : DMA_WR_HIT ? DMA_ROM_DATAr[15:8]
                                        : (ROM_HIT
                                          & ~IS_SAVERAM
                                          & ~SNES_WRITE) ? SNES_DATA
@@ -974,6 +1075,7 @@ assign ROM_DATA[7:0] = ROM_ADDR0
 assign ROM_DATA[15:8] = ROM_ADDR0
                         ? 8'bZ
                         :(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
+                                        : DMA_WR_HIT ? DMA_ROM_DATAr[7:0]
                                         : (ROM_HIT
                                           & ~IS_SAVERAM
                                           & ~SNES_WRITE) ? SNES_DATA
@@ -983,15 +1085,16 @@ assign ROM_DATA[15:8] = ROM_ADDR0
 
 assign ROM_WE = SD_DMA_TO_ROM
                 ?MCU_WRITE
+                : DMA_WE_HIT ? 1'b0                       // MCU-driven copier write
                 : (ROM_HIT & (IS_WRITABLE | IS_FLASHWR)  // IS_FLASHWR: BS pack program data-phase
                   & ~IS_SAVERAM
                   & SNES_CPU_CLK) ? SNES_WRITE
                 : MCU_WE_HIT ? 1'b0
                 : 1'b1;
 
-// force word enable for SA1
-assign ROM_BHE =  ROM_ADDR0 && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr);
-assign ROM_BLE = !ROM_ADDR0 && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr);
+// force word enable for SA1 and the MCU-driven copier (word mode)
+assign ROM_BHE =  ROM_ADDR0 && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr) && !(!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr);
+assign ROM_BLE = !ROM_ADDR0 && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr) && !(!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr);
 
 //--------------
 // RAM Pipeline

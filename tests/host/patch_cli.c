@@ -32,6 +32,7 @@
 #include "memory.h"
 #include "host.h"
 #include "patch.h"
+#include "patch_copier.h"
 
 #define CANARY 0xA5
 #define WATCHDOG_SECS 10
@@ -54,15 +55,29 @@ static int region_is_legal(uint32_t a) {
 static int quiet = 0;
 #define LOG(...) do { if (!quiet) fprintf(stderr, __VA_ARGS__); } while (0)
 
+/* (Re)initialize the fake SDRAM for one apply run: fresh 16 MB, ROM image at
+ * SRAM_ROM_ADDR, the patch path staged in IPS slot 1, and the no-touch region
+ * above SRAM_SAVE_ADDR canary-filled.  --copier runs this twice (reference, then
+ * copier) so each run starts from an identical slate. */
+static void setup_sdram(const uint8_t *rombuf, uint32_t romsize, const char *patch) {
+  host_sdram_init();
+  memcpy(host_sdram + SRAM_ROM_ADDR, rombuf, romsize);
+  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + 512, patch, strlen(patch) + 1);
+  for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
+    if (!region_is_legal(a)) host_sdram[a] = CANARY;
+}
+
 int main(int argc, char **argv) {
   long header_override = -1;   /* -1 = auto */
   int  do_probe = 0;
+  int  do_copier = 0;
   const char *rom = NULL, *patch = NULL, *out = NULL;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--header") && i + 1 < argc) header_override = strtol(argv[++i], NULL, 0);
     else if (!strcmp(argv[i], "--no-header")) header_override = 0;
     else if (!strcmp(argv[i], "--probe")) do_probe = 1;
+    else if (!strcmp(argv[i], "--copier")) do_copier = 1;
     else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--quiet")) quiet = 1;
     else if (argv[i][0] == '-') { fprintf(stderr, "unknown option %s\n", argv[i]); return 99; }
     else if (!rom) rom = argv[i];
@@ -70,9 +85,9 @@ int main(int argc, char **argv) {
     else if (!out) out = argv[i];
     else { fprintf(stderr, "too many arguments\n"); return 99; }
   }
-  if (!rom || !patch || (!out && !do_probe)) {
+  if (!rom || !patch || (!out && !do_probe && !do_copier)) {
     fprintf(stderr,
-      "usage: %s [--header N|--no-header] [--probe] [-q] <rom> <patch.ips|.bps> <out>\n", argv[0]);
+      "usage: %s [--header N|--no-header] [--probe] [--copier] [-q] <rom> <patch.ips|.bps> <out>\n", argv[0]);
     return 99;
   }
 
@@ -89,21 +104,16 @@ int main(int argc, char **argv) {
   if (header >= fsz) { fprintf(stderr, "header (%ld) >= ROM size (%ld)\n", header, fsz); fclose(fp); return 99; }
   uint32_t romsize = (uint32_t)(fsz - header);
 
-  host_sdram_init();
+  uint8_t *rombuf = malloc(romsize);
+  if (!rombuf) { fprintf(stderr, "oom\n"); fclose(fp); return 99; }
   fseek(fp, header, SEEK_SET);
-  if (fread(host_sdram + SRAM_ROM_ADDR, 1, romsize, fp) != romsize) {
+  if (fread(rombuf, 1, romsize, fp) != romsize) {
     fprintf(stderr, "short read on ROM\n"); fclose(fp); return 99;
   }
   fclose(fp);
 
-  /* ---- stage the patch path in slot 1, exactly like ips_find_patches ---- */
   size_t plen = strlen(patch) + 1;
   if (plen > IPS_PATH_LEN) { fprintf(stderr, "patch path too long (max %d)\n", IPS_PATH_LEN - 1); return 99; }
-  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + 512, patch, plen);
-
-  /* ---- canary-fill the regions the patcher must never touch ---- */
-  for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
-    if (!region_is_legal(a)) host_sdram[a] = CANARY;
 
   const char *ext = strrchr(patch, '.');
   int is_bps = ext && (ext[1] == 'b' || ext[1] == 'B') && (ext[2] == 'p' || ext[2] == 'P');
@@ -111,6 +121,66 @@ int main(int argc, char **argv) {
   LOG("patch : %s  (%s)\n", patch, is_bps ? "BPS" : "IPS");
 
   signal(SIGALRM, on_alarm);
+
+  /* ---- --copier: apply both ways and prove byte-identical output ---------- */
+  if (do_copier) {
+    /* reference: legacy byte-by-byte apply, fully materialized in SDRAM */
+    setup_sdram(rombuf, romsize, patch);
+    alarm(WATCHDOG_SECS);
+    uint32_t ref = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header);
+    alarm(0);
+    if (!ref) { fprintf(stderr, "reference apply FAILED (returned 0)\n"); return 1; }
+    uint32_t refsz = is_bps ? ref : (ref > romsize ? ref : romsize);
+    uint8_t *refbuf = malloc(refsz);
+    if (!refbuf) { fprintf(stderr, "oom\n"); return 99; }
+    memcpy(refbuf, host_sdram + SRAM_ROM_ADDR, refsz);
+
+    /* copier mode: inline source-backup + TargetRead, descriptors for the rest */
+    setup_sdram(rombuf, romsize, patch);
+    alarm(WATCHDOG_SECS);
+    uint32_t cop = patch_apply_copier(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header);
+    alarm(0);
+    if (!cop) { fprintf(stderr, "copier apply FAILED (returned 0 / list full)\n"); return 1; }
+    host_copier_replay();   /* run the emitted descriptors like the menu copier */
+
+    for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
+      if (!region_is_legal(a) && host_sdram[a] != CANARY) {
+        fprintf(stderr, "OVERFLOW (copier): wrote outside ROM window at 0x%06x\n", a);
+        return 125;
+      }
+
+    uint32_t copsz = is_bps ? cop : (cop > romsize ? cop : romsize);
+    LOG("copier: %u descriptors, target %u bytes\n", patch_copier_count(), copsz);
+    if (copsz != refsz) {
+      fprintf(stderr, "SIZE MISMATCH: reference=%u copier=%u\n", refsz, copsz);
+      return 2;
+    }
+    uint32_t firstdiff = 0xFFFFFFFFu, ndiff = 0;
+    for (uint32_t i = 0; i < refsz; i++)
+      if (host_sdram[SRAM_ROM_ADDR + i] != refbuf[i]) {
+        if (firstdiff == 0xFFFFFFFFu) firstdiff = i;
+        ndiff++;
+      }
+    if (ndiff) {
+      fprintf(stderr,
+        "MISMATCH: %u differing bytes, first at 0x%06x (reference %02x, copier %02x)\n",
+        ndiff, firstdiff, refbuf[firstdiff], host_sdram[SRAM_ROM_ADDR + firstdiff]);
+      return 2;
+    }
+    LOG("OK    : copier output byte-identical to reference (%u bytes)\n", copsz);
+    if (out) {
+      FILE *of = fopen(out, "wb");
+      if (!of) { fprintf(stderr, "cannot open output %s\n", out); return 99; }
+      if (fwrite(host_sdram + SRAM_ROM_ADDR, 1, copsz, of) != copsz) {
+        fprintf(stderr, "short write on output\n"); fclose(of); return 99;
+      }
+      fclose(of);
+    }
+    return 0;
+  }
+
+  setup_sdram(rombuf, romsize, patch);
+
   alarm(WATCHDOG_SECS);
 
   uint32_t ret, scratch = 0;

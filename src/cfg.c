@@ -21,6 +21,7 @@ _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx 
 _Static_assert(offsetof(cfg_t, bgm_name) == 0xBC, "cfg_t.bgm_name must stay at CFG_ADDR+$BC");
 _Static_assert(offsetof(cfg_t, sort_favorites) == 0x13C, "cfg_t.sort_favorites must stay at CFG_ADDR+$13C");
 _Static_assert(offsetof(cfg_t, enable_cheat_overlay) == 0x13D, "cfg_t.enable_cheat_overlay must stay at CFG_ADDR+$13D");
+_Static_assert(offsetof(cfg_t, enable_bps_copier) == 0x13E, "cfg_t.enable_bps_copier must stay at CFG_ADDR+$13E");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -70,7 +71,8 @@ cfg_t CFG_DEFAULT = {
   .enable_menu_sfx = 1,
   .bgm_name = "",
   .sort_favorites = 0,
-  .enable_cheat_overlay = 1
+  .enable_cheat_overlay = 1,
+  .enable_bps_copier = 0
 };
 
 cfg_t CFG;
@@ -188,6 +190,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_SORT_FAVORITES, CFG.sort_favorites ? "true" : "false");
   f_printf(&file_handle, "#  %s: In-game cheat overlay (pause via L+R+Y+Left to toggle cheats). Off on special-chip games.\n", CFG_ENABLE_CHEAT_OVERLAY);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEAT_OVERLAY, CFG.enable_cheat_overlay ? "true" : "false");
+  f_printf(&file_handle, "#  %s: Apply BPS patches via the FPGA copier (fast). LoROM/HiROM without special chips only; others fall back to byte-by-byte.\n", CFG_ENABLE_BPS_COPIER);
+  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_BPS_COPIER, CFG.enable_bps_copier ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
@@ -353,6 +357,9 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_ENABLE_CHEAT_OVERLAY, &tok)) {
       CFG.enable_cheat_overlay = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_ENABLE_BPS_COPIER, &tok)) {
+      CFG.enable_bps_copier = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);

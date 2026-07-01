@@ -539,6 +539,42 @@ clear_vram:
   plp
   rts
 
+; fork: zero the PPU (VRAM 64KB + CGRAM + OAM) right before launching a game, so a
+; romhack that draws its intro WITHOUT initializing VRAM (relying on an emulator's
+; zeroed memory) boots clean instead of showing leftover menu/garbage tiles on real
+; hardware -- the sd2snes leaves the menu's VRAM behind, the emulator zeros it.  The
+; soft-reset that boots the game preserves the cleared PPU.  Caller must have NMI off.
+clear_ppu_on_boot:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$80
+  sta $2100         ; force blank (hide the clear in progress)
+; VRAM: 32768 words = 64 KB
+  sta $2115         ; VMAIN = $80: increment after writing $2119, +1 word
+  ldx #$0000
+  stx $2116         ; VMADD = 0
+  ldy #$0000
+  ldx #$8000
+- sty $2118         ; 16-bit sty writes $2118(lo)+$2119(hi)=word 0; VMAIN auto-incs
+  dex
+  bne -
+; CGRAM: 512 bytes
+  stz $2121         ; CGADD = 0
+  ldx #$0200
+- stz $2122
+  dex
+  bne -
+; OAM: 544 bytes
+  stz $2102
+  stz $2103         ; OAMADD = 0
+  ldx #$0220
+- stz $2104
+  dex
+  bne -
+  plp
+  rts
+
 .byt "fadeloop"
 ; *=$002a10
 ; via $7ef100
@@ -731,6 +767,9 @@ game_handshake:
   bra -
 + stz $4200
   sei
+; jsr clear_ppu_on_boot ; fork (DISABLED -- descomente p/ ligar): zera VRAM/CGRAM/OAM
+                        ; p/ romhacks que pulam o init da PPU bootarem limpos (sem lixo
+                        ; de VRAM); o reset preserva.  Pendente: deixar padrao ou via menu.
   lda #$55
   sta @MCU_CMD
 ; jump to WRAM

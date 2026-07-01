@@ -89,6 +89,14 @@ int main(int argc, char **argv) {
     uint32_t scratch = 0;
     ret = bps_probe_header(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize,
                            PATCH_PROBE_HEADER_LIMIT, &scratch);
+  } else if (strcmp(mode, "copier") == 0) {
+    /* Copier mode: decode emits descriptors for SourceCopy/TargetCopy and only
+       the source backup + TargetRead literals are written inline; replaying the
+       descriptors over the fake SDRAM (like the live menu running the FPGA
+       copier) must finalize a byte-identical image -> the [expected] check below
+       proves the copier decomposition equals the byte-by-byte apply. */
+    ret = patch_apply_copier(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0);
+    if (ret) host_copier_replay();
   } else {
     ret = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0);
   }

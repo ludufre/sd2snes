@@ -42,6 +42,26 @@ extern char current_filename[];
 #define SRAM_DB_ADDR                 (0xC80000L)
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 
+/* BPS-via-copier descriptor staging.  Bank CA sits in the free CA..CF gap between
+   the cover (C9) and the cheat records (D0); it is menu-readable the same way the
+   menu reads cover/cheats (long reads into PSRAM), and is unused during a game
+   load.  The copier path only runs when output+source-backup stay below the menu
+   image (target_size + original_rom_size <= SRAM_MENU_ADDR), so the ROM regions
+   never reach bank CA.  Each descriptor is BPS_DESC_STRIDE bytes laid out exactly
+   as the menu programs the copier registers $2020-$2028 (see patch_copier.c /
+   snes/cheatoverlay-style driver).  Kept in lockstep with snes/memmap.i65. */
+#define SRAM_BPS_DESC_ADDR           (0xCA0000L)
+#define BPS_DESC_STRIDE              (12u)     /* bytes per descriptor */
+#define BPS_DESC_MAX                 (5461u)   /* 5461 * 12 = 65532 < 64 KB: the whole list fits
+                                                  in bank CA so the menu drain indexes it with a
+                                                  single 16-bit X. Bigger patches overflow the list
+                                                  -> patch_copier_emit returns full -> byte-by-byte
+                                                  fallback (correct, just slower). */
+/* BPS-copier prestep mailbox (menu reads): MCU sets STATUS=1 + the descriptor COUNT
+   when a .bps was staged via the copier, 0 when ineligible.  Free $FF0701..$FF07FF gap. */
+#define SRAM_BPS_COPIER_STATUS       (0xFF0720L)  /* 1 byte: 0 ineligible, 1 eligible+staged */
+#define SRAM_BPS_COPIER_COUNT        (0xFF0721L)  /* 3 bytes LE: descriptor count (<= BPS_DESC_MAX) */
+
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay && !special_chip. The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
@@ -123,6 +143,13 @@ void sram_readlongblock(uint32_t* buf, uint32_t addr, uint16_t count);
 uint16_t sram_writeblock(void* buf, uint32_t addr, uint16_t size);
 void save_srm(uint8_t* filename, uint32_t sram_size, uint32_t base_addr);
 extern uint8_t current_ips_srm_source[256];
+/* BPS-via-copier prestep state (see patch_copier.h / bps_copier_prep).  Set when
+   the menu's CMD_BPS_COPIER staged a .bps via the copier; consumed by the next
+   load_rom, which then boots the already-patched image instead of streaming +
+   byte-patching. */
+extern uint8_t  bps_copier_staged;
+extern uint32_t bps_copier_romsize;
+uint32_t bps_copier_prep(uint8_t* filename, uint8_t index);
 void save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr);
 uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc);
 uint16_t calc_sram_sum(uint32_t base_addr, uint32_t size);

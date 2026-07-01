@@ -87,6 +87,8 @@ ips_select_file:
 
 ips_sf_no_patch:
     ; ---- Trigger CMD_LOADROM as usual ----
+    ; (Approach B: the copier is driven by the MCU inside load_rom with the SNES
+    ;  held in reset -- no menu prestep/drain needed.)
     sep #$20 : .as
     lda #CMD_LOADROM
     jsr game_handshake          ; disables NMI, loads ROM, resets SNES

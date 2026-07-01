@@ -319,6 +319,12 @@ int main(void) {
     STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
     led_set_brightness(CFG.led_brightness);
 
+    /* DEBUG: boot-time self-test of the MCU-driven copier in fpga_base (SNES in
+       reset here).  Writes 0x01 to $FF0726 if the copier works, 0x00 if not, for a
+       USB read -- proves the FPGA change independent of any patch / chip core. */
+    { extern int patch_copier_available(void);
+      sram_writebyte(patch_copier_available() ? 0x01 : 0x00, 0xFF0726L); }
+
     /* load menu */
     sram_writelong(0x12345678, SRAM_SCRATCHPAD);
     fpga_dspx_reset(1);

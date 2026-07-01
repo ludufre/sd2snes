@@ -119,6 +119,9 @@
 
 #define NUM_CHEATS                  $FF0700
 #define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
+#define BPS_COPIER_STATUS           $FF0720 /* BPS-copier prestep mailbox (MCU writes, menu reads; lockstep with src/memory.h). 1 byte: 1 = .bps staged via copier (drain + boot already-patched), 0 = ineligible (normal byte-by-byte load) */
+#define BPS_COPIER_COUNT            $FF0721 /* 3 bytes LE: number of copier descriptors to run (<= 5461, fits bank CA) */
+#define BPS_DESC_ADDR               $CA0000 /* copier descriptor list, 12 bytes each: [dstBank,srcBank, srcOff16, dstOff16, lenLo16, lenHi8, 3 rsvd] */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
@@ -176,6 +179,7 @@
 #define CMD_LOAD_AUTOBOOT           $1b /* trigger autoboot at cold boot */
 #define CMD_LOAD_COVER              $1c /* stage sibling .cov for highlighted ROM into bank C9 */
 #define CMD_QUERY_IPS_PATCHES       $1d /* find IPS patches for selected ROM */
+#define CMD_BPS_COPIER              $33 /* prestep before CMD_LOADROM: stage .bps via copier (MCU sets BPS_COPIER_STATUS/COUNT); menu drains descriptors then boots via CMD_LOADROM */
 #define CMD_LOAD_MENU_SPC           $1e /* stage /sd2snes/menu.spc for background menu music */
 #define CMD_LOAD_COVER_RECENT       $1f /* stage downscaled .cov for recent game (index in MCU_PARAM) */
 #define CMD_LOAD_COVER_FAVORITE     $20 /* stage downscaled .cov for favorite game (index in MCU_PARAM) */
@@ -263,6 +267,7 @@
 #define CFG_MENU_MUSIC_FILE             CFG_ADDR+$00BC
 #define CFG_SORT_FAVORITES              CFG_ADDR+$013C
 #define CFG_ENABLE_CHEAT_OVERLAY        CFG_ADDR+$013D
+#define CFG_ENABLE_BPS_COPIER           CFG_ADDR+$013E
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

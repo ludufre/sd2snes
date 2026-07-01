@@ -60,6 +60,9 @@ run_case probe-tiny          1    -      probe  tiny-truncated.bps     rom4k.bin
 run_case ok-small-ips        0    -      apply  ok-small.ips           rom4k.bin  ok-small.ips.target
 run_case ips-oob-offset      1    -      apply  oob-offset.ips         rom4k.bin
 run_case ips-truncated-noeof 1    -      apply  truncated-noeof.ips    rom4k.bin
+# BPS copier mode: descriptors for SourceCopy/TargetCopy must rebuild the exact
+# same image as the byte-by-byte apply (compared against the known-good target).
+run_case copier-ok-bps       0    -      copier ok-small.bps           rom4k.bin  ok-small.bps.target
 
 echo "== summary: $pass pass, $fail fail, $xfail xfail, $xpass xpass =="
 [ "$fail" -eq 0 ] || exit 1

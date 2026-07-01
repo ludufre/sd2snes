@@ -498,6 +498,99 @@ void fpga_write_cheat(uint8_t index, uint32_t code) {
   FPGA_DESELECT();
 }
 
+/* MCU-driven FPGA copier op: copy len bytes src->dst inside the 24-bit PSRAM space,
+   with the SNES held in reset (the arbiter grants the copier full bandwidth, any
+   core that carries the copier).  Programs dma_r[0..9] via CMD 0xd4 (last byte =
+   opcode COPY + trigger), then polls busy (CMD 0xd5).  Returns 0 on success, 1 if
+   busy never cleared within the timeout (core has no copier / wedged) -> caller
+   falls back to the byte-by-byte patch. */
+int fpga_copier_op(uint32_t src, uint32_t dst, uint32_t len) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_DMA_OP);
+  FPGA_TX_BYTE((dst >> 16) & 0xff);  /* dma_r[0] dst bank   */
+  FPGA_TX_BYTE((src >> 16) & 0xff);  /* dma_r[1] src bank   */
+  FPGA_TX_BYTE(src & 0xff);          /* dma_r[2] src[7:0]   */
+  FPGA_TX_BYTE((src >> 8) & 0xff);   /* dma_r[3] src[15:8]  */
+  FPGA_TX_BYTE(dst & 0xff);          /* dma_r[4] dst[7:0]   */
+  FPGA_TX_BYTE((dst >> 8) & 0xff);   /* dma_r[5] dst[15:8]  */
+  FPGA_TX_BYTE(len & 0xff);          /* dma_r[6] len[7:0]   */
+  FPGA_TX_BYTE((len >> 8) & 0xff);   /* dma_r[7] len[15:8]  */
+  FPGA_TX_BYTE((len >> 16) & 0xff);  /* dma_r[8] len[23:16] */
+  FPGA_TX_BYTE(0x01);                /* dma_r[9] opcode COPY(0), loop 0, dir 0, trig 1 */
+  FPGA_DESELECT();
+
+  uint32_t timeout = 60000000u;      /* generous: a 4 MB copy is ~0.3 s of polling */
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_DMA_BUSY);
+  while(FPGA_RX_BYTE() & 0x01) {
+    if(!--timeout) { FPGA_DESELECT(); return 1; }
+  }
+  FPGA_DESELECT();
+  return 0;
+}
+
+/* MCU-driven copier LIST op (Approach B+): the copier reads `count` 10-byte
+   descriptors from PSRAM at `list_base` and runs the whole batch autonomously --
+   ONE SPI trigger + ONE busy-poll for thousands of copies (vs one round-trip per
+   op in fpga_copier_op).  Each descriptor = [dstBank, srcBank, src16, dst16, len24,
+   opcode].  Returns 0 on success, 1 on timeout. */
+int fpga_copier_list(uint32_t list_base, uint16_t count) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_DMA_LIST);
+  FPGA_TX_BYTE(list_base & 0xff);          /* dma_r[10] base[7:0]   */
+  FPGA_TX_BYTE((list_base >> 8) & 0xff);   /* dma_r[11] base[15:8]  */
+  FPGA_TX_BYTE((list_base >> 16) & 0xff);  /* dma_r[12] base[23:16] */
+  FPGA_TX_BYTE(count & 0xff);              /* dma_r[13] count[7:0]  */
+  FPGA_TX_BYTE((count >> 8) & 0xff);       /* dma_r[14] count[15:8] */
+  FPGA_TX_BYTE(0x01);                       /* dma_r[15] list trigger */
+  FPGA_DESELECT();
+
+  uint32_t timeout = 10000000u;            /* DIAGNOSTIC: ~5s -> recover instead of hang */
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_DMA_BUSY);
+  while(FPGA_RX_BYTE() & 0x01) {
+    if(!--timeout) { FPGA_DESELECT(); return 1; }
+  }
+  FPGA_DESELECT();
+  return 0;
+}
+
+/* Fire a copier op WITHOUT polling busy (#3, 1-trigger queue): the FPGA latches a
+   trigger that arrives while it is still copying (op_kick), so small ops stream at
+   SPI speed without the per-op busy-poll round-trip.  Use ONLY for small ops (the
+   FPGA keeps up); a big op must still poll (fpga_copier_op) or the 1-deep queue
+   overruns. */
+void fpga_copier_op_nopoll(uint32_t src, uint32_t dst, uint32_t len) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_DMA_OP);
+  FPGA_TX_BYTE((dst >> 16) & 0xff);
+  FPGA_TX_BYTE((src >> 16) & 0xff);
+  FPGA_TX_BYTE(src & 0xff);
+  FPGA_TX_BYTE((src >> 8) & 0xff);
+  FPGA_TX_BYTE(dst & 0xff);
+  FPGA_TX_BYTE((dst >> 8) & 0xff);
+  FPGA_TX_BYTE(len & 0xff);
+  FPGA_TX_BYTE((len >> 8) & 0xff);
+  FPGA_TX_BYTE((len >> 16) & 0xff);
+  FPGA_TX_BYTE(0x01);
+  FPGA_DESELECT();
+}
+
+/* Poll the copier status (CMD 0xd5) until idle (bit0=0); returns the last status
+   byte -- bit1 = overrun (a queued op was dropped, i.e. the MCU fired faster than
+   the 1-deep queue could absorb).  Bounded timeout. */
+uint8_t fpga_copier_wait(void) {
+  uint32_t timeout = 60000000u;
+  uint8_t st = 0;
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_DMA_BUSY);
+  while(((st = FPGA_RX_BYTE()) & 0x01)) {
+    if(!--timeout) break;
+  }
+  FPGA_DESELECT();
+  return st;
+}
+
 void fpga_set_chipfeat(uint16_t feat) {
   printf("chipfeat <= %d\n", feat);
   FPGA_SELECT();
