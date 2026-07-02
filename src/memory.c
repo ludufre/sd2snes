@@ -400,13 +400,14 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     }
     /* BS-X BIOS + data page (mapper_id 3 = BS-X Flash cart); both are loaded by
        the BS-X path below with their result ignored. */
-    if(romprops.mapper_id == 3) {
+    if(romprops.mapper_id == 3 && !romprops.bsx_baseunit) {
       if(!file_exists("/sd2snes/bsxbios.bin")) {
         return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxbios.bin");
       }
-      if(!file_exists("/sd2snes/bsxpage.bin")) {
-        return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxpage.bin");
-      }
+      /* bsxpage.bin is OPTIONAL: absent -> the broadcast page (0x900000) is left as-is,
+         so an external "satellite" can feed it live before boot (the Town reads the
+         Channel Map from 0x900000 once at boot).  The base-unit path needs no bsxbios.bin
+         (the loaded .sfc IS the BIOS). */
     }
     /* SGB boot ROM (sgbN_boot.bin); the SNES BIOS sgbN_snes.bin was already
        checked by sgb_update_file above. */
@@ -442,6 +443,12 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     fpga_set_features(fpga_features_preload);
   }
   if(flags & LOADROM_WAIT_SNES) snes_set_snes_cmd(0x77);
+  /* BS-X base-unit: the loaded file IS the BIOS -> stream it straight into the cart-ROM
+     window at 0x800000 (where address.v maps $00-$3f/$80-$bf in BS-X mode), not the 0x0
+     ROM-staging area the .bs pack path uses. */
+  if(romprops.mapper_id == 3 && romprops.bsx_baseunit) {
+    base_addr = 0x800000;
+  }
   set_mcu_addr(base_addr + romprops.load_address);
   file_open(filename, FA_READ);
   ff_sd_offload=1;
@@ -470,23 +477,57 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   printf("%u ticks total\n", ticks_total);
   if(romprops.mapper_id==3) {
     printf("BSX Flash cart image\n");
-    printf("attempting to load BSX BIOS /sd2snes/bsxbios.bin...\n");
-    load_sram_offload((uint8_t*)"/sd2snes/bsxbios.bin", 0x800000, LOADRAM_AUTOSKIP_HEADER);
-    printf("attempting to load BS data file /sd2snes/bsxpage.bin...\n");
-    load_sram_offload((uint8_t*)"/sd2snes/bsxpage.bin", 0x900000, 0);
+    if(romprops.bsx_baseunit) {
+      /* PURE CITY: the loaded .sfc IS the BS-X BIOS -- already streamed to 0x800000 above.
+         The Memory Pack is a SEPARATE, PERSISTENT <sfc>.mpk at the writable 0x400000
+         (address.v BS_BASE_PACK, $C0-$DF); absent -> a blank pack the city formats and
+         saves its over-the-air downloads into. */
+      load_bs_baseunit_pack(filename);
+      /* seed the autosave baseline so prepare_reset only writes the .mpk back when the city
+         actually changed the pack (a downloaded save), not on every reset. */
+      bs_pack_crc_old = calc_sram_crc(BS_BASE_PACK_ADDR, BS_BASE_PACK_SIZE, 0);
+      bs_pack_crc = bs_pack_offset = bs_pack_diff = bs_pack_same = 0;
+      bs_pack_didnotsave = bs_pack_save_failed = 0;
+    } else {
+      /* .bs pack game: the BIOS comes from the SD; the loaded .bs is the pack.  The .bs at
+         0x000000 (ROM staging) is READ-ONLY, so the SNES can't save there -- copy it to the
+         WRITABLE 0x400000 (BS_BASE_PACK) too.  load_sram_offload = sd_offload DMA, ZERO MCU
+         buffer (a 1KB staging buffer overflowed the LPC1756 stack and wedged the firmware). */
+      printf("attempting to load BSX BIOS /sd2snes/bsxbios.bin...\n");
+      load_sram_offload((uint8_t*)"/sd2snes/bsxbios.bin", 0x800000, LOADRAM_AUTOSKIP_HEADER);
+      load_sram_offload(filename, 0x400000, LOADRAM_AUTOSKIP_HEADER);
+    }
+    if(file_exists("/sd2snes/bsxpage.bin")) {
+      printf("attempting to load BS data file /sd2snes/bsxpage.bin...\n");
+      load_sram_offload((uint8_t*)"/sd2snes/bsxpage.bin", 0x900000, 0);
+    } else {
+      printf("no bsxpage.bin: leaving 0x900000 for a live satellite feed\n");
+    }
+    /* sync the pack erase seq to the FPGA's current value so a stale seq doesn't trigger a
+       spurious erase of the freshly-loaded 0x400000 pack on the first in-game poll. */
+    bs_pack_erase_seq = (fpga_status() >> 11) & 0x3;
     printf("Type: %02x\n", romprops.header.destcode);
     set_bsx_regs(0xf6, 0x09);
-    uint16_t rombase;
-    if(romprops.header.ramsize & 1) {
-      rombase = romprops.load_address + 0xff00;
-// set_bsx_regs(0x36, 0xc9);
-    } else {
-      rombase = romprops.load_address + 0x7f00;
-// set_bsx_regs(0x34, 0xcb);
+    if(!romprops.bsx_baseunit) {
+      /* .bs game header sanitize (limited-play / date-gate): the BIOS re-walks the block
+         header on boot.  Written to BOTH the 0x0 ROM staging AND the 0x400000 pack copy,
+         since the mapper-3 view unification serves every pack view from 0x400000.  NOT done
+         for a base unit: there the 0x400000 holds a real Memory Pack directory, not a game
+         header -- poking it would corrupt the pack. */
+      uint16_t rombase;
+      if(romprops.header.ramsize & 1) {
+        rombase = romprops.load_address + 0xff00;
+      } else {
+        rombase = romprops.load_address + 0x7f00;
+      }
+      sram_writebyte(0x33, rombase+0xda);
+      sram_writebyte(0x00, rombase+0xd4);
+      sram_writebyte(0x00, rombase+0xd5);
+      uint32_t packfix = 0x400000 + (uint32_t)(rombase - romprops.load_address);
+      sram_writebyte(0x33, packfix+0xda);
+      sram_writebyte(0x00, packfix+0xd4);
+      sram_writebyte(0x00, packfix+0xd5);
     }
-    sram_writebyte(0x33, rombase+0xda);
-    sram_writebyte(0x00, rombase+0xd4);
-    sram_writebyte(0x00, rombase+0xd5);
     if(CFG.bsx_use_usertime) {
       set_fpga_time(srtctime2bcdtime(CFG.bsx_time));
     } else {
@@ -1153,6 +1194,29 @@ void save_srm(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
     save_sram((uint8_t*)srmfile, sram_size, base_addr);
 }
 
+/* stage the base-unit's persistent Memory Pack (<sfc>.mpk) into the WRITABLE PSRAM at
+   0x400000 (address.v BS_BASE_PACK).  Absent -> a blank erased-flash (0xFF) pack the city
+   formats on first use.  Own frame (256B path buffer) to keep load_rom's stack small. */
+void load_bs_baseunit_pack(uint8_t* filename) {
+  uint8_t mpk[256] = SAVE_BASEDIR;
+  append_save_basename((char*)mpk, sizeof(mpk), filename, ".mpk");
+  if(file_exists((const char*)mpk)) {
+    printf("loading Memory Pack %s -> 0x%x...\n", mpk, BS_BASE_PACK_ADDR);
+    load_sram_offload(mpk, BS_BASE_PACK_ADDR, 0);
+  } else {
+    printf("no %s: blank Memory Pack (0xFF) at 0x%x\n", mpk, BS_BASE_PACK_ADDR);
+    sram_memset(BS_BASE_PACK_ADDR, BS_BASE_PACK_SIZE, 0xff);
+  }
+}
+
+/* persist the base-unit's writable Memory Pack (0x400000) back to <sfc>.mpk. */
+void save_bs_baseunit_pack(uint8_t* filename) {
+  char mpk[256] = SAVE_BASEDIR;
+  check_or_create_folder(SAVE_BASEDIR);
+  append_save_basename(mpk, sizeof(mpk), filename, ".mpk");
+  save_sram((uint8_t*)mpk, BS_BASE_PACK_SIZE, BS_BASE_PACK_ADDR);
+}
+
 /* stage <rom>.mpk into PSRAM at BS_PACK_ADDR.  returns 1 if a pack loaded, 0 = empty
    slot (no file -> nothing mapped, game boots standalone).  .mpk not .bs (.bs is a
    bootable BS-X ROM type in the browser). */
@@ -1238,9 +1302,9 @@ uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc) {
 
 /* CRC the 1MB pack -- like calc_sram_crc but no get_snes_reset bail (prepare_reset
    holds the SNES in reset, so the read is stable) */
-uint32_t calc_pack_crc_inreset(void) {
+uint32_t calc_pack_crc_inreset_at(uint32_t base) {
   uint32_t crc = 0;
-  set_mcu_addr(BS_PACK_ADDR);
+  set_mcu_addr(base);
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_READMEM | FPGA_MEM_AUTOINC);
   for(uint32_t i = 0; i < BS_PACK_SIZE; i++) {
@@ -1249,6 +1313,10 @@ uint32_t calc_pack_crc_inreset(void) {
   }
   FPGA_DESELECT();
   return crc;
+}
+
+uint32_t calc_pack_crc_inreset(void) {
+  return calc_pack_crc_inreset_at(BS_PACK_ADDR);
 }
 
 uint8_t sram_reliable() {

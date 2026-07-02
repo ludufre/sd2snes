@@ -133,6 +133,18 @@ void prepare_reset() {
       writeled(0);
     }
   }
+  /* base-unit city (.sfc): persist the WRITABLE Memory Pack at 0x400000 to <sfc>.mpk when the
+     city changed it (a saved over-the-air download), so downloads survive a power cycle. */
+  if(romprops.bsx_baseunit && fpga_test() == FPGA_TEST_TOKEN) {
+    uint32_t crc = calc_pack_crc_inreset_at(BS_BASE_PACK_ADDR);
+    if(crc != bs_pack_crc_old) {
+      writeled(1);
+      save_bs_baseunit_pack(file_lfn);
+      bs_pack_crc_old = crc;
+      bs_pack_diff = 0;
+      writeled(0);
+    }
+  }
   // don't save SGB RTC since we are in reset and it may be undefined
   rdyled(1);
   readled(1);
@@ -308,7 +320,13 @@ uint8_t snes_main_loop() {
   /* save the GB RTC if enabled */
   sgb_gtc_save(file_lfn);
 
-  if(romprops.sramsize_bytes && CFG.enable_autosave) {
+  /* BS-X base-unit (.sfc city): the in-game SRAM autosave (calc_sram_crc / sram_reliable /
+     save_srm below) reads the SAVERAM through the FPGA every loop; during a download
+     RECEPTION that MCU<->FPGA traffic contends with the Town's bus + the flash-write of the
+     save -> the reception corrupts and the city crashes on return.  Gate it OFF here -- the
+     base cart SRAM (name/settings) is persisted on RESET instead (prepare_reset), which is
+     enough since it changes rarely.  EXPERIMENT: tests whether this contention is the crash. */
+  if(romprops.sramsize_bytes && CFG.enable_autosave && !romprops.bsx_baseunit) {
     uint32_t crc_bytes = min(romprops.sramsize_bytes - saveram_offset, SRAM_REGION_SIZE);
     saveram_crc = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase + saveram_offset, crc_bytes, saveram_crc);
     saveram_offset += crc_bytes;
@@ -369,16 +387,29 @@ uint8_t snes_main_loop() {
      does it: fill the block (bits 11..8) -- or the whole pack (bit7) -- with 0xFF.  Runs
      independent of autosave so delete works regardless; the change then rides the
      autosave path below to persist.  bs_pack_erase_toggle is synced at load. */
-  if(romprops.fpga_features & FEAT_BSSLOT) {
+  if(romprops.mapper_id == 3) {   /* BS-X: slotted .mpk pack OR broadcast download pack */
+    /* The slotted .mpk pack lives at BS_PACK_ADDR=0x900000 (FEAT_BSSLOT).  The base-unit
+       BROADCAST (.bs boot) instead saves a DOWNLOADED program to the BSX_IS_PSRAM pack at
+       0x400000 (address.v BS_BASE_PACK) -- 0x900000 there is the broadcast page, so the pack is
+       the separate 0x400000 region.  The flash program write is AND (clear-only), so the target
+       block MUST be erased to 0xFF first; otherwise the AND with stale data corrupts it -> the
+       Town's read-back verify fails -> Error 21 / No Stored Data. */
+    uint32_t pack_base = (romprops.fpga_features & FEAT_BSSLOT) ? BS_PACK_ADDR : 0x400000;
     uint16_t bs_st = fpga_status();
     uint8_t seq = (bs_st >> 11) & 0x3;       /* status bits 12-11 */
     if(seq != bs_pack_erase_seq) {
       bs_pack_erase_seq = seq;
       uint8_t blk = ((bs_st >> 8) & 0x7) | (((bs_st >> 7) & 1) << 3); /* bits 10-8 + bit7 */
-      if(blk == 0xF) {
-        sram_memset(BS_PACK_ADDR, BS_PACK_SIZE, 0xFF);     /* chip erase */
-      } else {
-        sram_memset(BS_PACK_ADDR + ((uint32_t)blk << 16), 0x10000, 0xFF);
+      /* The slotted .mpk pack is erased HERE by the MCU (no bus contention -- it's a game, not a
+         live download).  The base-unit BROADCAST pack is erased SYNCHRONOUSLY BY THE FPGA instead
+         (main.v BS_ERASE_*, on the same erase-seq): the async MCU sram_memset raced the Town's
+         program writes under download contention and wiped the just-written directory -> Error 21. */
+      if(romprops.fpga_features & FEAT_BSSLOT) {
+        if(blk == 0xF) {
+          sram_memset(pack_base, BS_PACK_SIZE, 0xFF);
+        } else {
+          sram_memset(pack_base + ((uint32_t)blk << 16), 0x10000, 0xFF);
+        }
       }
     }
   }

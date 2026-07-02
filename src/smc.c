@@ -121,6 +121,7 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->has_sa1 = 0;
   props->has_sdd1 = 0;
   props->has_combo = 0;
+  props->bsx_baseunit = 0;
   props->srambase = 0;
   props->sramsize_bytes = 0;
   props->fpga_features = 0;
@@ -147,6 +148,30 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
 
   /* restore the chosen one */
   smc_readblock(header, hdr_addr[score_idx], sizeof(snes_header_t), file_offset);
+
+  /* BS-X base-unit BIOS ("Satellaview BS-X"): a plain LoROM by its header, but booting it
+     as such is a dead black screen (it needs the BS-X hardware).  Force mapper 3 + the
+     base-unit flag so memory.c stages the .sfc as the BIOS at 0x800000 with a live
+     satellite-fed broadcast (0x900000) and a persistent, writable <sfc>.mpk pack
+     (0x400000) -- the vanilla city, receiving over the air. */
+  if(!memcmp(header->name, "Satellaview BS-X", 16)) {
+    props->mapper_id = 3;
+    props->bsx_baseunit = 1;
+    props->region = 0;                 /* BS-X only existed in Japan */
+    props->romsize_bytes  = 0x100000;  /* 1MB BIOS -> cart-ROM window */
+    /* the base cart has a 32KB internal SRAM (name/settings) at BS-X banks $10-$17:5000 ->
+       SAVERAM, persisted as <sfc>.srm.  sramsize=0x8000 enables it (SAVERAM_MASK).  Enabling
+       it once CRASHED the city on return-from-reception: the in-game SRAM autosave
+       (calc_sram_crc/sram_reliable/save_srm) contends with the download's flash-write on the
+       FPGA bus.  So the base-unit SAVES THE SRAM ONLY ON RESET (in-game autosave gated off in
+       snes.c) -- the name changes rarely, so reset-save is enough and avoids the contention. */
+    props->ramsize_bytes  = 0x8000;
+    props->sramsize_bytes = props->ramsize_bytes;
+    props->expramsize_bytes = 0;
+    props->load_address = 0;
+    printf("BS-X base-unit BIOS -> live city boot\n");
+    return;
+  }
 
   if(header->name[0x13] == 0x00 || header->name[0x13] == 0xff) {
     if(header->name[0x14] == 0x00) {

@@ -113,13 +113,20 @@ set_clock_uncertainty -fall_from [get_clocks {CLKIN}] -fall_to [get_clocks {CLKI
 # Set Clock Groups
 #**************************************************************
 
+# All crossings (SPI<->CLK2, CLKIN<->CLK2) are handshake or quasi-static; declare async.
+set_clock_groups -asynchronous \
+  -group [get_clocks {snes_pll|altpll_component|auto_generated|pll1|clk[0]}] \
+  -group [get_clocks {CLKIN}] \
+  -group [get_clocks {SPI_SCK}]
+
 
 
 #**************************************************************
 # Set False Path
 #**************************************************************
 
-
+# RTC data bus latched only on pgm_we_rising (2FF-synced), stable well before the latch.
+set_false_path -from [get_registers {mcu_cmd:snes_mcu_cmd|rtc_data_out_buf[*]}] -to [get_registers {rtc:snes_rtc|rtc_data_r[*]}]
 
 #**************************************************************
 # Set Multicycle Path

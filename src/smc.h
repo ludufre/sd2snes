@@ -93,6 +93,7 @@ typedef struct __attribute__ ((__packed__)) _snes_romprops {
   uint16_t fpga_features;     /* feature/peripheral enable bits */
   uint16_t fpga_dspfeat;      /* DSP configuration bits */
   uint8_t region;             /* game region (derived from destination code) */
+  uint8_t bsx_baseunit;       /* loaded file is the BS-X BIOS booted as a live base unit */
   uint32_t load_address;      /* where to load the ROM image */
   uint32_t header_address;    /* location of ROM header in RAM */
   uint8_t error;              /* error text ID */

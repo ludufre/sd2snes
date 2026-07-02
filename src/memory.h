@@ -139,8 +139,15 @@ void sram_memset(uint32_t base_addr, uint32_t len, uint8_t val);
    when FEAT_BSSLOT is set (0x900000 must match BS_PACK_HIT in address.v).  SD: .mpk */
 #define BS_PACK_ADDR  0x900000
 #define BS_PACK_SIZE  0x100000
+/* base-unit (.sfc city) writable Memory Pack: address.v BS_BASE_PACK ($C0-$DF -> here) */
+#define BS_BASE_PACK_ADDR  0x400000
+#define BS_BASE_PACK_SIZE  0x100000
 uint8_t load_bs_pack(uint8_t* filename);  /* returns 1 if a real pack was loaded */
 void save_bs_pack(uint8_t* filename);
+/* base-unit (.sfc city) Memory Pack: persistent <sfc>.mpk at the WRITABLE 0x400000 */
+void load_bs_baseunit_pack(uint8_t* filename);
+void save_bs_baseunit_pack(uint8_t* filename);
 uint32_t calc_pack_crc_inreset(void);     /* reset-tolerant pack CRC for prepare_reset */
+uint32_t calc_pack_crc_inreset_at(uint32_t base);  /* same, at an arbitrary pack base */
 
 #endif

@@ -584,7 +584,6 @@ int usbint_handler_cmd(void) {
     case USBINT_SERVER_OPCODE_TIME: {
         struct tm time;
 
-        // FIXME: figure out where we want to store this data
         time.tm_sec = (uint8_t) cmd_buffer[4+4];
         time.tm_min = (uint8_t) cmd_buffer[5+4];
         time.tm_hour = (uint8_t) cmd_buffer[6+4];
@@ -594,6 +593,19 @@ int usbint_handler_cmd(void) {
         time.tm_wday = (uint8_t) cmd_buffer[11+4];
 
         set_rtc(&time);
+        /* push the new time to the FPGA RTC IMMEDIATELY: the BS-X Time channel (and
+           S-RTC) serve the FPGA clock live -- without this a running game keeps the
+           stale time until the next boot.  (The BS-X Town evaluates every program's
+           broadcast schedule against this clock; a date mismatch reads as "out of the
+           broadcast window" -> St.GIGA "program ended" + the whole city goes offline.)
+           HONOR the same clock policy as memory.c at load time: a user-configured
+           custom BS-X time (date-gated Satellaview content) must not be clobbered. */
+        if(CFG.bsx_use_usertime) {
+          set_fpga_time(srtctime2bcdtime(CFG.bsx_time));
+        } else {
+          set_fpga_time(get_bcdtime());
+        }
+        break;   /* was MISSING: fell through into OPCODE_MV and ran f_rename on garbage */
     }
     case USBINT_SERVER_OPCODE_MV: {
         // copy string name

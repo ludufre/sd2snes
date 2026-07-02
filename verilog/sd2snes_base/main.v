@@ -377,23 +377,25 @@ always @(posedge CLK2) begin
 
 end
 
-parameter ST_IDLE        = 11'b00000000001;
-parameter ST_MCU_RD_ADDR = 11'b00000000010;
-parameter ST_MCU_RD_END  = 11'b00000000100;
-parameter ST_MCU_WR_ADDR = 11'b00000001000;
-parameter ST_MCU_WR_END  = 11'b00000010000;
-parameter ST_CTX_WR_ADDR = 11'b00000100000;
-parameter ST_CTX_WR_END  = 11'b00001000000;
-parameter ST_DMA_RD_ADDR = 11'b00010000000;
-parameter ST_DMA_RD_END  = 11'b00100000000;
-parameter ST_DMA_WR_ADDR = 11'b01000000000;
-parameter ST_DMA_WR_END  = 11'b10000000000;
+parameter ST_IDLE        = 13'b0000000000001;
+parameter ST_MCU_RD_ADDR = 13'b0000000000010;
+parameter ST_MCU_RD_END  = 13'b0000000000100;
+parameter ST_MCU_WR_ADDR = 13'b0000000001000;
+parameter ST_MCU_WR_END  = 13'b0000000010000;
+parameter ST_CTX_WR_ADDR = 13'b0000000100000;
+parameter ST_CTX_WR_END  = 13'b0000001000000;
+parameter ST_DMA_RD_ADDR = 13'b0000010000000;
+parameter ST_DMA_RD_END  = 13'b0000100000000;
+parameter ST_DMA_WR_ADDR = 13'b0001000000000;
+parameter ST_DMA_WR_END  = 13'b0010000000000;
+parameter ST_DLP_RD_ADDR = 13'b0100000000000;  // BS-X download serve-byte PREFETCH read
+parameter ST_DLP_RD_END  = 13'b1000000000000;
 
 parameter SNES_DEAD_TIMEOUT = 17'd96000; // 1ms
 
 parameter ROM_CYCLE_LEN = 4'd7;
 
-reg [10:0] STATE;
+reg [12:0] STATE;
 initial STATE = ST_IDLE;
 
 assign SRTC_SNES_DATA_IN = BUS_DATA[3:0];
@@ -562,6 +564,47 @@ dma snes_dma (
 // BS Memory Pack flash-erase request -> exposed in the MCU status word (mcu_cmd)
 wire [1:0] bs_erase_seq;
 wire [3:0] bs_erase_blk;
+wire [7:0] bs_dl_pard_data;   // LATCHED value for armed $218A/$218D reads (bsx.v)
+wire bs_dl_pard_hit;
+wire [16:0] bs_dl_daddr;
+wire [10:0] bs_dl_pidx;
+wire bs_dl_data_early_hit;    // armed $218C read decode (address.v)
+wire bs_dl_pfx_early_hit;     // armed $218B read decode (address.v)
+wire bs_dl_armed_dbg;         // bsx: download armed on the tuned channel
+wire bs_dl_reload;            // bsx: serve pointers (re)loaded -> invalidate the prefetch
+// armed $218B/$218C serve from prefetched registers: PSRAM must not be read during
+// the B-bus window (other ROM-machine clients interleave and corrupt the sample).
+// Both pointers advance only at the end of the consuming read, next read >=1.4us away,
+// so a dedicated lowest-priority client prefetches the next byte and serves the window.
+reg  [7:0] DL_DATA_BYTEr = 8'h00;   // prefetched next $218C data byte
+reg  [7:0] DL_PFX_BYTEr  = 8'h00;   // prefetched next $218B prefix byte
+reg        DL_DATA_VLDr  = 1'b0;
+reg        DL_PFX_VLDr   = 1'b0;
+reg [16:0] DL_DATA_TAGr  = 17'h0;   // daddr the data byte was fetched for
+reg [10:0] DL_PFX_TAGr   = 11'h0;   // pidx the prefix byte was fetched for
+reg [16:0] DLP_DTAG_CAPr = 17'h0;   // fetch target captured at request time
+reg [10:0] DLP_PTAG_CAPr = 11'h0;
+reg        DLP_RD_PENDr  = 1'b0;
+reg        DLP_SELr      = 1'b0;    // in-flight fetch: 0 = data, 1 = prefix
+reg        DLP_ABORTr    = 1'b0;    // reload hit mid-flight -> discard the result
+reg [23:0] DLP_ROM_ADDRr = 24'h0;
+reg  [7:0] DLP_DINr      = 8'h00;
+reg        DL_RELOAD_dr  = 1'b0;
+// BS-X over-the-air download (satellite receiver): FPGA serves the program stream
+// from the ring at 0x980000; the MCU feeds fragments + polls the drain notify.
+wire bs_dl_enable;          // bsx-internal legacy decode (kept for data_ovr gating; unused here)
+wire [16:0] bs_dl_offset;   // idem
+wire [1:0] bs_dl_seq;       // notify -> mcu_cmd status 0xF5
+// armed by the mcu_cmd 0xe8 descriptor opcode; resets to 0, so the legacy
+// page/RTC/pack/erase path is unchanged until a download arms it.
+wire bs_dl_arm;
+wire [9:0] bs_dl_chan;
+wire bs_dl_stage;
+wire [16:0] bs_dl_base;
+wire [15:0] bs_dl_frames;
+wire [15:0] bs_dl_dbg_q;    // DEBUG probe (TEMPORARY)
+wire [15:0] bs_dl_dbg_sf;
+wire [7:0]  bs_dl_dbg_fl;
 bsx snes_bsx(
   .clkin(CLK2),
   .use_bsx(use_bsx),
@@ -570,6 +613,8 @@ bsx snes_bsx(
 
   .pgm_we(bsx_regs_reset_we),
   .snes_addr_in(SNES_ADDR),
+  .mapped_addr_in(CTX_ROM_ADDRr),  // DEBUG (TEMP): where the CTX write resolved (bs_cap_min probe)
+  .ctx_we_hit_in(CTX_WE_HIT),      // DEBUG (TEMP): the CTX write actually commits to SDRAM this cycle
   .reg_data_in(BSX_SNES_DATA_IN),
   .reg_data_out(BSX_SNES_DATA_OUT),
   .reg_oe_falling(SNES_RD_start),
@@ -586,8 +631,31 @@ bsx snes_bsx(
   .bs_page_offset(bs_page_offset),
   .feat_bs_base_enable(feat_bs_base_enable),
   .bs_erase_seq(bs_erase_seq),
-  .bs_erase_blk(bs_erase_blk)
+  .bs_erase_blk(bs_erase_blk),
+  .bs_erase_act(BS_ERASE_ACTr),
+  .bs_dl_armed_out(bs_dl_armed_dbg),
+  .bs_dl_pard_data(bs_dl_pard_data),
+  .bs_dl_pard_hit(bs_dl_pard_hit),
+  .bs_dl_enable(bs_dl_enable),
+  .bs_dl_offset(bs_dl_offset),
+  .bs_dl_daddr(bs_dl_daddr),
+  .bs_dl_pidx(bs_dl_pidx),
+  .bs_dl_pfx_srv(DL_PFX_BYTEr),
+  .bs_dl_reload(bs_dl_reload),
+  .bs_dl_seq(bs_dl_seq),
+  .bs_dl_arm(bs_dl_arm),
+  .bs_dl_chan(bs_dl_chan),
+  .bs_dl_stage(bs_dl_stage),
+  .bs_dl_base(bs_dl_base),
+  .bs_dl_frames(bs_dl_frames),
+  .bs_dl_dbg_q(bs_dl_dbg_q),     // DEBUG (TEMPORARY)
+  .bs_dl_dbg_sf(bs_dl_dbg_sf),
+  .bs_dl_dbg_fl(bs_dl_dbg_fl),
+  .bs_ctx_target(BS_CTX_TARGET), // base-unit pack target computed in bsx.v from its held snes_addr
+  .bs_ctx_use(BS_CTX_USE)        // 1 = this flash write is a non-slotted (broadcast) write
 );
+wire [23:0] BS_CTX_TARGET;
+wire        BS_CTX_USE;
 
 spi snes_spi(
   .clk(CLK2),
@@ -670,6 +738,15 @@ mcu_cmd snes_mcu_cmd(
   .bsx_regs_set_out(bsx_regs_set_bits),
   .bsx_regs_reset_out(bsx_regs_reset_bits),
   .bsx_regs_reset_we(bsx_regs_reset_we),
+  .bs_dl_arm_out(bs_dl_arm),
+  .bs_dl_chan_out(bs_dl_chan),
+  .bs_dl_base_out(bs_dl_base),
+  .bs_dl_frames_out(bs_dl_frames),
+  .bs_dl_stage_out(bs_dl_stage),
+  .bs_dl_seq_in(bs_dl_seq),
+  .bs_dl_dbg_q_in(bs_dl_dbg_q),     // DEBUG (TEMPORARY)
+  .bs_dl_dbg_sf_in(bs_dl_dbg_sf),
+  .bs_dl_dbg_fl_in(bs_dl_dbg_fl),
   .rtc_data_out(rtc_data_in),
   .rtc_pgm_we(rtc_pgm_we),
   .srtc_reset(srtc_reset),
@@ -720,6 +797,9 @@ address snes_addr(
   .bs_page_offset(bs_page_offset),
   .bs_page(bs_page),
   .bs_page_enable(bs_page_enable),
+  .bs_dl_armed_in(bs_dl_armed_dbg),
+  .bs_dl_data_early_hit(bs_dl_data_early_hit),
+  .bs_dl_pfx_early_hit(bs_dl_pfx_early_hit),
   .bsx_tristate(bsx_tristate),
   //SRTC
   .srtc_enable(srtc_enable),
@@ -825,6 +905,11 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD) ? (r213f_forceread ? 8'bZ : r213f
                                 ? (srtc_enable ? SRTC_SNES_DATA_OUT
                                   :msu_enable ? MSU_SNES_DATA_OUT
                                   :dma_enable ? DMA_SNES_DATA_OUT
+                                  // armed BS-X stream regs: window-stable values ONLY —
+                                  // $218A/$218D latched in bsx.v, $218B/$218C prefetched here
+                                  :bs_dl_pard_hit ? bs_dl_pard_data
+                                  :bs_dl_data_early_hit ? DL_DATA_BYTEr
+                                  :bs_dl_pfx_early_hit ? DL_PFX_BYTEr
                                   :(bsx_data_ovr & ~IS_PATCH) ? BSX_SNES_DATA_OUT
                                   :(cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
                                   // put spinloop below cheat so we don't overwrite jmp target after NMI
@@ -886,6 +971,8 @@ wire DMA_WE_HIT = |(STATE & ST_DMA_WR_ADDR);
 wire DMA_WR_HIT = |(STATE & (ST_DMA_WR_ADDR | ST_DMA_WR_END));
 wire DMA_RD_HIT = |(STATE & (ST_DMA_RD_ADDR | ST_DMA_RD_END));
 wire DMA_HIT = DMA_WR_HIT | DMA_RD_HIT;
+// BS-X download prefetch (read-only client)
+wire DLP_HIT = |(STATE & (ST_DLP_RD_ADDR | ST_DLP_RD_END));
 
 `ifdef MK2
 my_dcm snes_dcm(
@@ -895,8 +982,8 @@ my_dcm snes_dcm(
   .RST(DCM_RST)
 );
 
-assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : CTX_HIT ? CTX_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
-assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : CTX_HIT ? CTX_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : DLP_HIT ? DLP_ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
+assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : DLP_HIT ? DLP_ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 //always @(posedge CLK2) ROM_ADDR_PRE <= (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : CTX_HIT ? CTX_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
 //always @(posedge CLK2) ROM_ADDR0_PRE <= (SD_DMA_TO_ROM) ? MCU_ADDR[0] : CTX_HIT ? CTX_ROM_ADDRr[0] : DMA_HIT ? DMA_ROM_ADDRr[0] : MCU_HIT ? ROM_ADDRr[0] : MAPPED_SNES_ADDR[0];
 
@@ -928,9 +1015,9 @@ pll snes_pll(
 );
 
 wire ROM_ADDR22;
-assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : CTX_HIT ? CTX_ROM_ADDRr[1]    : DMA_HIT ? DMA_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
-assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : CTX_HIT ? CTX_ROM_ADDRr[23:2] : DMA_HIT ? DMA_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
-assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : CTX_HIT ? CTX_ROM_ADDRr[1]    : DMA_HIT ? DMA_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : DLP_HIT ? DLP_ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
+assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : CTX_HIT ? CTX_ROM_ADDRr[23:2] : DMA_HIT ? DMA_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : DLP_HIT ? DLP_ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
+assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : DLP_HIT ? DLP_ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 
 
 assign ROM_ZZ = 1'b1;
@@ -956,26 +1043,115 @@ assign ROM_OE = 1'b0;
 reg[17:0] SNES_DEAD_CNTr;
 initial SNES_DEAD_CNTr = 0;
 
-// context engine request -- also reused for the BS flash program write.
+// BS-X download serve-byte prefetcher. Request when the held byte isn't the next one
+// consumed, commit at the fetch state's end; a reload invalidates both bytes and any
+// in-flight fetch (written last to win a same-edge collision with the commit).
+wire dl_data_need = bs_dl_armed_dbg & (~DL_DATA_VLDr | (DL_DATA_TAGr != bs_dl_daddr));
+wire dl_pfx_need  = bs_dl_armed_dbg & (~DL_PFX_VLDr  | (DL_PFX_TAGr  != bs_dl_pidx));
 always @(posedge CLK2) begin
+  DL_RELOAD_dr <= bs_dl_reload;
+  if (~DLP_RD_PENDr) begin
+    if (dl_data_need) begin
+      DLP_RD_PENDr  <= 1'b1;  DLP_SELr <= 1'b0;
+      DLP_ROM_ADDRr <= 24'h980000 + {7'b0, bs_dl_daddr};
+      DLP_DTAG_CAPr <= bs_dl_daddr;
+    end else if (dl_pfx_need) begin
+      DLP_RD_PENDr  <= 1'b1;  DLP_SELr <= 1'b1;
+      DLP_ROM_ADDRr <= 24'h988100 + {13'b0, bs_dl_pidx};
+      DLP_PTAG_CAPr <= bs_dl_pidx;
+    end
+  end else if (STATE & ST_DLP_RD_END) begin
+    DLP_RD_PENDr <= 1'b0;
+    if (~DLP_ABORTr) begin
+      if (DLP_SELr) begin DL_PFX_BYTEr  <= DLP_DINr; DL_PFX_TAGr  <= DLP_PTAG_CAPr; DL_PFX_VLDr  <= 1'b1; end
+      else          begin DL_DATA_BYTEr <= DLP_DINr; DL_DATA_TAGr <= DLP_DTAG_CAPr; DL_DATA_VLDr <= 1'b1; end
+    end
+    DLP_ABORTr <= 1'b0;
+  end
+  if (bs_dl_reload != DL_RELOAD_dr) begin
+    DL_DATA_VLDr <= 1'b0;
+    DL_PFX_VLDr  <= 1'b0;
+    // ~END guard: DLP_RD_PENDr still reads 1 during a same-edge commit clear; without it
+    // the abort would orphan and discard the next clean fetch.
+    if (DLP_RD_PENDr & ~|(STATE & ST_DLP_RD_END)) DLP_ABORTr <= 1'b1;
+  end
+  // SD->ROM DMA owns the ROM_ADDR mux asynchronously: a DLP fetch overlapping it sampled
+  // the SD stream, not the ring -- discard and refetch.
+  if (DLP_RD_PENDr & SD_DMA_TO_ROM & ~|(STATE & ST_DLP_RD_END)) DLP_ABORTr <= 1'b1;
+end
+
+// FPGA synchronous broadcast-pack erase. On a bsx erase-seq change ($D0 confirm) memset
+// the target block to 0xFF word-by-word via the CTX write engine, within the flash
+// busy-timer window. Base-unit pack only (~feat_bs_slot); slotted .mpk keeps the MCU
+// erase. bs_erase_blk = block (0xF = whole 1MB pack).
+reg [1:0]  bs_erase_seq_d = 2'b0;
+reg        BS_ERASE_ACTr  = 1'b0;
+reg [23:0] BS_ERASE_PTRr  = 24'h0;
+reg [23:0] BS_ERASE_TOPr  = 24'h0;
+reg        CTX_OWNER_ERASEr = 1'b0;  // the in-flight CTX write is the erase's own word
+reg        BS_FLWR_PENDr  = 1'b0;    // flash program byte latched, awaiting the engine
+reg [23:0] BS_FLWR_ADDRr  = 24'h0;
+reg [7:0]  BS_FLWR_DATAr  = 8'h00;
+wire [23:0] bs_erase_blk_base = {4'h4, bs_erase_blk, 16'h0000};   // 0x400000 + blk*0x10000
+
+// context engine request -- also reused for the BS flash program write AND the FPGA pack erase.
+always @(posedge CLK2) begin
+  bs_erase_seq_d <= bs_erase_seq;
   if(CTX_WRQ) begin
     CTX_WR_PENDr <= 1'b1;
     RQ_CTX_RDYr <= 1'b0;
     CTX_ROM_ADDRr <= CTX_ADDR;
     CTX_ROM_DATAr <= CTX_DOUT;
     CTX_ROM_WORDr <= CTX_WORD;
+    CTX_OWNER_ERASEr <= 1'b0;
   end
-  // BS flash program byte: the live SNES byte is valid at WR_end.  Skip $FF (flash AND
-  // makes it a no-op, so it preserves the byte the game wrote earlier, e.g. the name).
-  else if(SNES_WR_end & IS_FLASHWR & (SNES_DATA != 8'hff) & ~CTX_WR_PENDr) begin
+  // FPGA pack-erase: write 0xFFFF word-by-word over the block. RQ_CTX_RDYr drops while
+  // in flight so a ctx-snoop WRQ can't retarget the erase word; RDY reopens one cycle
+  // between words so the snoop interleaves instead of starving.
+  else if(BS_ERASE_ACTr & ~CTX_WR_PENDr & (BS_ERASE_PTRr != BS_ERASE_TOPr)) begin
     CTX_WR_PENDr <= 1'b1;
-    CTX_ROM_ADDRr <= MAPPED_SNES_ADDR;
-    CTX_ROM_DATAr <= {SNES_DATA, SNES_DATA};
+    RQ_CTX_RDYr <= 1'b0;
+    CTX_ROM_ADDRr <= BS_ERASE_PTRr;
+    CTX_ROM_DATAr <= 16'hffff;
+    CTX_ROM_WORDr <= 1'b1; // word write
+    CTX_OWNER_ERASEr <= 1'b1;
+  end
+  // BS flash program byte -- claimed from the private pend latched below (never lost).
+  else if(BS_FLWR_PENDr & ~CTX_WR_PENDr) begin
+    CTX_WR_PENDr <= 1'b1;
+    RQ_CTX_RDYr <= 1'b0;
+    CTX_ROM_ADDRr <= BS_FLWR_ADDRr;
+    CTX_ROM_DATAr <= {BS_FLWR_DATAr, BS_FLWR_DATAr};
     CTX_ROM_WORDr <= 1'b0; // byte write
+    CTX_OWNER_ERASEr <= 1'b0;
+    BS_FLWR_PENDr <= 1'b0;
   end
   else if(STATE & ST_CTX_WR_END) begin
     CTX_WR_PENDr <= 1'b0;
     RQ_CTX_RDYr <= 1'b1;
+    // advance the erase pointer only when the completed write was the erase's own,
+    // else a ctx-snoop completion would skip a word without writing 0xFFFF.
+    if(BS_ERASE_ACTr & CTX_OWNER_ERASEr) begin
+      BS_ERASE_PTRr <= BS_ERASE_PTRr + 24'd2;
+      if((BS_ERASE_PTRr + 24'd2) >= BS_ERASE_TOPr) BS_ERASE_ACTr <= 1'b0;
+    end
+    CTX_OWNER_ERASEr <= 1'b0;
+  end
+  // flash program byte capture: live SNES byte valid at WR_end. Skip $FF (flash AND
+  // makes it a no-op, preserving the earlier byte, e.g. the name). WR_end is a one-cycle
+  // pulse; latch into a private pend (flash bytes >=2.8us apart, single depth suffices).
+  // Placed after the claim chain so a same-edge new byte wins the clear.
+  if(SNES_WR_end & IS_FLASHWR & (SNES_DATA != 8'hff)) begin
+    BS_FLWR_PENDr <= 1'b1;
+    BS_FLWR_ADDRr <= BS_CTX_USE ? BS_CTX_TARGET : MAPPED_SNES_ADDR;  // broadcast: bsx-computed pack target; .mpk: original mapper
+    BS_FLWR_DATAr <= SNES_DATA;
+  end
+  // arm the erase on a fresh erase-seq from bsx (broadcast pack only); placed last so a
+  // new $D0 always restarts a full block memset.
+  if((bs_erase_seq != bs_erase_seq_d) & ~feat_bs_slot) begin
+    BS_ERASE_ACTr <= 1'b1;
+    BS_ERASE_PTRr <= (bs_erase_blk == 4'hf) ? 24'h400000 : bs_erase_blk_base;
+    BS_ERASE_TOPr <= (bs_erase_blk == 4'hf) ? 24'h500000 : (bs_erase_blk_base + 24'h010000);
   end
 end
 
@@ -1044,7 +1220,14 @@ always @(posedge CLK2) begin
     ST_IDLE: begin
       STATE <= ST_IDLE;
       if(free_slot | SNES_DEADr) begin
-        if(CTX_WR_PENDr) begin
+        // DLP first: the download prefetch is the only latency-critical client (deadline
+        // is the next armed B-bus read, ~1.4us away). One 10-cycle fetch per consumed
+        // byte so it can't starve the throughput-class clients, which just slip a grant.
+        if(DLP_RD_PENDr) begin
+          STATE <= ST_DLP_RD_ADDR;
+          ST_MEM_DELAYr <= ROM_CYCLE_LEN;
+        end
+        else if(CTX_WR_PENDr) begin
           STATE <= ST_CTX_WR_ADDR;
           ST_MEM_DELAYr <= ROM_CYCLE_LEN;
         end
@@ -1093,7 +1276,13 @@ always @(posedge CLK2) begin
       ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
       if(ST_MEM_DELAYr == 0) STATE <= ST_DMA_WR_END;
     end
-    ST_MCU_RD_END, ST_MCU_WR_END, ST_CTX_WR_END, ST_DMA_RD_END, ST_DMA_WR_END: begin
+    ST_DLP_RD_ADDR: begin
+      STATE <= ST_DLP_RD_ADDR;
+      ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
+      if(ST_MEM_DELAYr == 0) STATE <= ST_DLP_RD_END;
+      DLP_DINr <= (ROM_ADDR0 ? ROM_DATA[7:0] : ROM_DATA[15:8]);
+    end
+    ST_MCU_RD_END, ST_MCU_WR_END, ST_CTX_WR_END, ST_DMA_RD_END, ST_DMA_WR_END, ST_DLP_RD_END: begin
       STATE <= ST_IDLE;
     end
   endcase
@@ -1194,8 +1383,11 @@ assign ROM_WE = SD_DMA_TO_ROM
                 ? MCU_WRITE
                 : CTX_WE_HIT ? 1'b0
                 : DMA_WE_HIT ? 1'b0
-                // flash program writes (IS_FLASHWR) are done by the CTX path above, not here
-                : (ROM_HIT & ~loop_enable & IS_WRITABLE & SNES_CPU_CLK) ? SNES_WRITE
+                // flash program writes (IS_FLASHWR) go through the CTX path above, not here.
+                // ~IS_FLASHWR guards a base-unit pack address that also satisfies IS_WRITABLE
+                // (BSX_IS_PSRAM) from firing this synchronous write with the stale pre-WR_end
+                // byte and clobbering the decoupled CTX write.
+                : (ROM_HIT & ~loop_enable & IS_WRITABLE & ~IS_FLASHWR & SNES_CPU_CLK) ? SNES_WRITE
                 : MCU_WE_HIT ? 1'b0
                 : 1'b1;
 
@@ -1210,7 +1402,7 @@ assign SNES_DATABUS_OE = (msu_enable & ReadOrWrite_r) ? 1'b0 :
                          (bsx_data_ovr & ~IS_PATCH & ReadOrWrite_r) ? 1'b0 :
                          (srtc_enable & ReadOrWrite_r) ? 1'b0 :
                          (snescmd_enable & ReadOrWrite_r) ? (~(snescmd_unlock | feat_cmd_unlock | (map_snescmd_wr_unlock_r & ~SNES_WRITE) | (map_snescmd_rd_unlock_r & ~SNES_READ))) :
-                         (bs_page_enable & ~SNES_READ) ? 1'b0 :
+                         ((bs_page_enable | bs_dl_data_early_hit | bs_dl_pfx_early_hit | bs_dl_pard_hit) & ~SNES_READ) ? 1'b0 :
                          (r213f_enable & ~SNES_PARD) ? 1'b0 :
                          (r2100_enable & ~SNES_PAWR) ? 1'b0 :
                          (snoop_4200_enable & ~SNES_WRITE) ? 1'b0 :

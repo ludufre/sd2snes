@@ -58,7 +58,11 @@ module address(
   output map_enable,
   input [8:0] bs_page_offset,
   input [9:0] bs_page,
-  input bs_page_enable
+  input bs_page_enable,
+  // armed $218B/$218C reads: decode only, served from prefetch regs (not ROM_HIT)
+  input bs_dl_armed_in,          // bsx: download armed on the tuned channel
+  output bs_dl_data_early_hit,   // armed $218C read this cycle (serve DL_DATA_BYTEr)
+  output bs_dl_pfx_early_hit     // armed $218B read this cycle (serve DL_PFX_BYTEr)
 );
 
 /* feature bits. see src/fpga_spi.c for mapping */
@@ -82,6 +86,9 @@ wire BS_SLOT = featurebits[FEAT_BSSLOT];
 wire [19:0] LOROM_OFF = {SNES_ADDR[20:16], SNES_ADDR[14:0]};
 wire BS_PACK_HIT    = BS_SLOT & (SNES_ADDR[23:21] == 3'b110); // LoROM pack $C0-$DF
 wire BS_PACK_HIT_HI = BS_SLOT & (SNES_ADDR[23:20] == 4'he);   // HiROM pack $E0-$EF
+// base-unit pack flash window $C0-$DF:0000-7FFF (LoROM lower half), maps to writable PSRAM 0x400000
+// no A15 gate: HiROM-linear mode (bsx_regs[2]=1) writes the program body to the upper half too
+wire BS_BASE_PACK   = ~BS_SLOT & (SNES_ADDR[23:21] == 3'b110);
 
 // BS-LOROM (Derby): $80-$9F map to the upper 1MB (file $200000+), not $00-$1F
 wire BSLOROM = featurebits[FEAT_BSLOROM];
@@ -188,10 +195,20 @@ assign bsx_tristate = (MAPPER_DEC[3'b011]) & ~BSX_IS_CARTROM & ~BSX_IS_PSRAM & B
 assign IS_WRITABLE = IS_SAVERAM
                      |IS_PATCH // allow writing of the patch region
                      |((MAPPER_DEC[3'b011]) & BSX_IS_PSRAM);
+                     // BS_BASE_PACK not writable here: its flash save uses the decoupled CTX path, not synchronous ROM_WE
 
 wire [23:0] BSX_ADDR = bsx_regs[2] ? {1'b0, SNES_ADDR[22:0]}
                                    : {2'b00, SNES_ADDR[22:16], SNES_ADDR[14:0]};
 
+
+wire bs_stream_early = bs_dl_armed_in
+                     & ~SNES_ADDR[22]
+                     & (SNES_ADDR[15:8] == 8'h21)
+                     & (SNES_ADDR[7:0] >= 8'h88) & (SNES_ADDR[7:0] <= 8'h9f);
+wire bs_dl_data_early = bs_stream_early & (SNES_ADDR[4:0] == 5'h0c);
+wire bs_dl_pfx_early  = bs_stream_early & (SNES_ADDR[4:0] == 5'h0b);
+assign bs_dl_data_early_hit = bs_dl_data_early;
+assign bs_dl_pfx_early_hit  = bs_dl_pfx_early;
 
 assign SRAM_SNES_ADDR = IS_PATCH
                         ? SNES_ADDR
@@ -229,7 +246,8 @@ assign SRAM_SNES_ADDR = IS_PATCH
                               ? (24'h400000 + (BSX_ADDR & 24'h07FFFF))
                               : bs_page_enable
                               ? (24'h900000 + {bs_page,bs_page_offset})
-                              : (BSX_ADDR & 24'h0fffff)
+                              /* all pack views resolve to the one writable 0x400000 copy */
+                              : (24'h400000 + (BSX_ADDR & 24'h0fffff))
                            )
                            :(MAPPER_DEC[3'b110])
                            ?(IS_SAVERAM
@@ -258,8 +276,7 @@ assign ROM_HIT = IS_ROM | IS_WRITABLE | bs_page_enable;
 
 assign msu_enable = featurebits[FEAT_MSU1] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff8) == 16'h2000));
 assign dma_enable = (featurebits[FEAT_DMA1] | map_unlock | snescmd_unlock) & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff0) == 16'h2020));
-/* bsx.v flash FSM: on for the BS-X base cart (mapper 3) or a slot with a pack
-   (FEAT_BSSLOT, set only when a .mpk exists).  No pack -> off -> empty slot. */
+/* flash FSM on for BS-X base cart (mapper 3) or a slot with a pack (FEAT_BSSLOT) */
 assign use_bsx = (MAPPER_DEC[3'b011]) | featurebits[FEAT_BSSLOT];
 assign srtc_enable = featurebits[FEAT_SRTC] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfffe) == 16'h2800));
 assign exe_enable =                           (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hffff) == 16'h2C00));

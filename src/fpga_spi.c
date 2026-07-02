@@ -245,6 +245,51 @@ uint16_t fpga_status() {
   return result;
 }
 
+/* BS-X over-the-air download bridge (FPGA receiver in bsx.v).
+ * ctl: bit0 = arm (1 keeps the receiver armed on `chan`), bit1 = stage a fragment.
+ * A fragment lives in the ring at PSRAM 0x980000 + base; `frames` = ceil(size/22).
+ * The base/frames are clocked into the FPGA before the stage strobe (byte 9). */
+void fpga_bs_dl_set(uint8_t ctl, uint16_t chan, uint32_t base, uint16_t frames) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_BSXDLSET);       /* 1: opcode */
+  FPGA_TX_BYTE(ctl);                     /* 2: bit0=arm, bit1=stage */
+  FPGA_TX_BYTE(chan & 0xff);             /* 3: channel lo */
+  FPGA_TX_BYTE((chan >> 8) & 0x03);      /* 4: channel hi (2 bits) */
+  FPGA_TX_BYTE(base & 0xff);             /* 5: ring base lo */
+  FPGA_TX_BYTE((base >> 8) & 0xff);      /* 6: ring base mid */
+  FPGA_TX_BYTE((base >> 16) & 0x01);     /* 7: ring base hi (1 bit, <=128KB) */
+  FPGA_TX_BYTE(frames & 0xff);           /* 8: frames lo (16-bit: a 32KB data group = 1490) */
+  FPGA_TX_BYTE((frames >> 8) & 0xff);    /* 9: frames hi */
+  FPGA_TX_BYTE(0x00);                    /* 10: apply arm + stage strobe (rising) */
+  FPGA_TX_BYTE(0x00);                    /* 11: clear the stage strobe */
+  FPGA_DESELECT();
+}
+
+/* Read the drain notify: bumps (mod 4) once each time the Town fully consumes the
+ * staged fragment and needs the next one (edge-compared like bs_erase_seq). */
+uint8_t fpga_bs_dl_seq(void) {
+  uint8_t v;
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_BSXDLSEQ);
+  v = FPGA_RX_BYTE();
+  FPGA_DESELECT();
+  return v & 0x03;
+}
+
+/* DEBUG (TEMPORARY): read the receiver's live state via the 0xf8 multi-byte response.
+   out[0]=seq  out[1..2]=dl_queue(LE)  out[3..4]=staged_frames(LE)  out[5]=flags. */
+void fpga_bs_dl_dbg(uint8_t *out) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_BSXDLSEQ);
+  out[0] = FPGA_RX_BYTE();
+  out[1] = FPGA_RX_BYTE();
+  out[2] = FPGA_RX_BYTE();
+  out[3] = FPGA_RX_BYTE();
+  out[4] = FPGA_RX_BYTE();
+  out[5] = FPGA_RX_BYTE();
+  FPGA_DESELECT();
+}
+
 void fpga_set_sddma_range(uint16_t start, uint16_t end) {
   DBG_SD_OFFLOAD printf("FPGA set partial range %u - %u\n", start, end);
   FPGA_SELECT();
