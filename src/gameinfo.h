@@ -22,6 +22,11 @@
 
 #define GAMEINFO_DIR        "/sd2snes/info/"
 
+/* full (untruncated) description staged by gameinfo_desc_full into
+ * SRAM_GAMEINFO_DESCEXT_ADDR (including the NUL terminator). The struct's
+ * description[256] above is capped by YAML_BUFLEN; this carries the whole text. */
+#define GAMEINFO_DESCEXT_LEN 2048
+
 #define GAMEINFO_MAGIC0     ('G')
 #define GAMEINFO_MAGIC1     ('I')
 
@@ -117,5 +122,12 @@ void gameinfo_fmv_stop(void);
 /* Menu-loop watchdog: stop a lingering FMV if CMD_FMV_NEXT has gone quiet (screen closed
  * without a trailing command, e.g. returning to the Favorites/Recents list). No-op if idle. */
 void gameinfo_fmv_idle_check(void);
+
+/* "Full description" (Y) pump: re-open the last-loaded .yml, find the "description:" line
+   with a streaming reader (outside the YAML parser, which caps values at YAML_BUFLEN) and
+   stage the COMPLETE font-encoded text into SRAM_GAMEINFO_DESCEXT_ADDR. Bounded + fail-safe;
+   on ANY error the region is left invalid (1st byte 0) so the menu keeps the struct's
+   description[256]. */
+void gameinfo_desc_full(void);
 
 #endif

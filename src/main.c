@@ -762,6 +762,13 @@ int main(void) {
           gameinfo_fmv_next();
           cmd=0; /* stay in menu loop */
           break;
+        case SNES_CMD_GI_DESC_FULL:
+          /* "full description" (Y) on the info screen: re-scan the last-loaded .yml and
+             stage the COMPLETE (untruncated) description into $FF7600. Bounded + fail-safe
+             (on any error the region stays invalid -> menu keeps the 256-char copy); no boot. */
+          gameinfo_desc_full();
+          cmd=0; /* stay in menu loop */
+          break;
         case SNES_CMD_SET_THEME:
           /* a .thm was picked in the browser (any visible folder). MCU_PARAM was
              set up like LOADROM (cwd + selected entry) so get_selected_name

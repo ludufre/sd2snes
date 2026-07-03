@@ -58,6 +58,51 @@ static void gi_utf8_to_font(const char *src, char *dst, int dstsize) {
   dst[di] = 0;
 }
 
+/* Map a decoded (>= 0x80) codepoint to its font byte, or '?' if unmapped. Mirrors the
+ * lookup in gi_utf8_to_font. */
+static uint8_t gi_cp_to_font(uint32_t cp) {
+  for(unsigned k = 0; k < sizeof(gi_accents) / sizeof(gi_accents[0]); k++)
+    if(gi_accents[k].cp == cp) return gi_accents[k].code;
+  return '?';
+}
+
+/* Incremental UTF-8 -> font transcoder state, for streaming a value that may split a
+ * multi-byte sequence across f_gets chunks (gameinfo_desc_full). cont = continuation bytes
+ * still expected (0 = between codepoints); cp = the sequence accumulator. */
+typedef struct { uint32_t cp; int cont; } gi_font_state_t;
+
+/* Feed one input byte; write 0..2 font bytes to `out` and return the count. Byte-for-byte
+ * equivalent to gi_utf8_to_font (ASCII verbatim, mapped accents 130..159, else '?'), but
+ * stateful so it survives chunk boundaries. A byte that breaks an in-progress sequence emits
+ * '?' for the truncated codepoint and is then reprocessed as a fresh lead/ASCII byte (so up
+ * to 2 outputs). Call gi_font_flush after the last byte to emit a trailing '?' for a value
+ * that ended mid-sequence. */
+static int gi_font_feed(gi_font_state_t *st, unsigned char c, uint8_t *out) {
+  int n = 0;
+  if(st->cont) {
+    if((c & 0xC0) == 0x80) {                 /* valid continuation byte */
+      st->cp = (st->cp << 6) | (c & 0x3F);
+      if(--st->cont == 0) out[n++] = gi_cp_to_font(st->cp);
+      return n;
+    }
+    out[n++] = '?';                          /* truncated sequence -> '?' ... */
+    st->cont = 0;                            /* ... then reprocess c below */
+  }
+  if(c < 0x80) { out[n++] = (uint8_t)c; return n; }   /* ASCII verbatim */
+  if((c & 0xE0) == 0xC0)      { st->cp = c & 0x1F; st->cont = 1; }
+  else if((c & 0xF0) == 0xE0) { st->cp = c & 0x0F; st->cont = 2; }
+  else if((c & 0xF8) == 0xF0) { st->cp = c & 0x07; st->cont = 3; }
+  else out[n++] = '?';                       /* stray continuation / invalid lead */
+  return n;
+}
+
+/* Emit a trailing '?' if the stream ended mid-sequence (matches gi_utf8_to_font treating the
+ * NUL terminator as a bad continuation byte). Returns the count (0 or 1). */
+static int gi_font_flush(gi_font_state_t *st, uint8_t *out) {
+  if(st->cont) { st->cont = 0; out[0] = '?'; return 1; }
+  return 0;
+}
+
 /* dst = a + b, bounded (no snprintf dependency). */
 static void gi_join(char *dst, int dstsize, const char *a, const char *b) {
   int n = strlen(a);
@@ -221,6 +266,13 @@ static uint16_t gi_fmv_cur;         /* frame index currently staged in $CA0000 (
 static tick_t   gi_fmv_last_tick;   /* getticks() of the last CMD_FMV_NEXT (idle watchdog) */
 static char     gi_fmv_path[300];   /* the open .fmv's path, saved so a transient close can
                                      * reopen it mid-playback (gi_fmv_reopen). "" = none. */
+
+/* The last-loaded .yml path, saved by gameinfo_load so the "full description" (Y) command
+ * (gameinfo_desc_full) can re-open it without a fresh selection round-trip. IN_AHBRAM: the
+ * main LPC175x SRAM is tight and growing .bss can silently corrupt a global; .ahbram is
+ * NOLOAD (not zeroed at boot), which is fine here because gameinfo_load writes this in full
+ * BEFORE any read (the Y command only arrives after a GAME_INFO). "" = none. */
+static char     gi_yml_path[300] IN_AHBRAM;
 
 /* In-place retries before a read error closes the file: a single glitched SD read used to
  * kill the FMV for the whole session (no reopen path), freezing the panel until you left the
@@ -394,6 +446,13 @@ void gameinfo_load(uint8_t *rom_path) {
   /* /sd2snes/info/<stem>.yml -- now OPTIONAL: a missing .yml is no longer a skip,
    * it just leaves every field empty (filled by the fallbacks below). */
   gi_join(path, sizeof(path), base, ".yml");
+  /* save the .yml path for the "full description" (Y) command (gameinfo_desc_full), and
+     invalidate the extended-description region so navigating Up/Down between ROMs never
+     leaves a previous game's full text behind (a 1st byte of 0 = invalid; the menu then
+     uses the struct's description[256]). */
+  strncpy(gi_yml_path, path, sizeof(gi_yml_path) - 1);
+  gi_yml_path[sizeof(gi_yml_path) - 1] = 0;
+  sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
   yaml_file_open(path, FA_READ);
   if(!file_res) {
     gi_field("title",        meta.title,        sizeof(meta.title));
@@ -464,4 +523,94 @@ void gameinfo_load(uint8_t *rom_path) {
   }
 
   sram_writeblock(&meta, SRAM_GAMEINFO_ADDR, sizeof(meta));
+}
+
+/* "Full description" (Y) pump. The YAML parser caps a value at YAML_BUFLEN (256), so the
+ * struct's description[256] is truncated. Here we re-open the last-loaded .yml and scan it
+ * with a STREAMING line reader (outside the YAML parser) to stage the COMPLETE description,
+ * font-encoded, into SRAM_GAMEINFO_DESCEXT_ADDR. Bounded + fail-safe (never hangs the menu
+ * loop): on ANY error the region is left invalid (1st byte 0) so the menu keeps the 256-char
+ * copy. Matches the generator's format -- one physical line per field, the value is either
+ * double-quoted (terminates at the next '"', which is always the closer since inner quotes
+ * were rewritten to ''') or bare (terminates at end-of-line / EOF). */
+void gameinfo_desc_full(void) {
+  /* IN_AHBRAM scratch: off the tight main SRAM (growing .bss can silently corrupt a global).
+     Fully written before read; touched only here (menu-loop, never from an IRQ), so the
+     NOLOAD/no-zero-init of .ahbram is fine. */
+  static char    chunk[256] IN_AHBRAM;   /* one f_gets line-piece */
+  static uint8_t obuf[128]  IN_AHBRAM;   /* font-encoded output, flushed in bursts */
+  gi_font_state_t st = { 0, 0 };
+  uint32_t out_addr = SRAM_GAMEINFO_DESCEXT_ADDR;
+  uint32_t scanned  = 0;
+  unsigned out_total = 0;                /* font bytes staged (excl. NUL); cap LEN-1 */
+  unsigned ob = 0;                       /* bytes buffered in obuf */
+  int at_line_start = 1;                 /* the next chunk begins a physical line */
+  int in_value = 0;                      /* streaming the description value */
+  int quoted   = 0;                      /* value opened with '"' */
+  int done     = 0;
+
+  /* 1) invalidate first: if we find nothing, the menu falls back to description[256]. */
+  sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
+  if(!gi_yml_path[0]) return;
+
+  /* 2) open the last-loaded .yml with the shared handle (free during the info screen; the
+   *    FMV has its own gi_fmv_fil). Any error -> return (region stays invalid). */
+  file_open((const uint8_t *)gi_yml_path, FA_READ);
+  if(file_res) return;
+
+  /* 3) scan lines. A chunk begins a physical line only if the previous chunk ended in '\n';
+   *    a value that overflows one f_gets buffer continues in the next chunk, and the key must
+   *    NOT be matched against such a continuation. Bounded by a 32 KB scan cap on top of EOF
+   *    so a pathological file can never spin the loop. */
+  while(!done && scanned < 32u * 1024u
+        && f_gets(chunk, sizeof(chunk), &file_handle)) {
+    int this_start = at_line_start;
+    const char *p = chunk;
+    unsigned len = (unsigned)strlen(chunk);
+    scanned += len;
+    at_line_start = (len && chunk[len - 1] == '\n');   /* else the line continues */
+
+    if(!in_value) {
+      const char *kk = "description:";
+      if(!this_start) continue;                        /* continuation of a long line */
+      while(*p == ' ' || *p == '\t') p++;              /* optional leading indent */
+      while(*kk && *p == *kk) { p++; kk++; }
+      if(*kk) continue;                                /* not the description line */
+      while(*p == ' ' || *p == '\t') p++;              /* skip spaces before the value */
+      in_value = 1;
+      if(*p == '"') { quoted = 1; p++; }               /* quoted -> closes at next '"' */
+    }
+
+    /* stream the value bytes of this chunk (the rest of a matched line, or a whole
+     * continuation chunk). Transcode incrementally so a UTF-8 sequence split across chunks
+     * survives; flush to SRAM in bursts. */
+    for(; *p; p++) {
+      unsigned char c = (unsigned char)*p;
+      if(quoted) {
+        if(c == '"') { done = 1; break; }              /* closing quote */
+        if(c == '\n' || c == '\r') continue;           /* never meaningful inside quotes */
+      } else if(c == '\n' || c == '\r') {
+        done = 1; break;                               /* bare value ends at EOL */
+      }
+      uint8_t fo[2];
+      int nf = gi_font_feed(&st, c, fo);
+      for(int i = 0; i < nf; i++) {
+        if(out_total >= GAMEINFO_DESCEXT_LEN - 1) { done = 1; break; }
+        obuf[ob++] = fo[i];
+        out_total++;
+        if(ob == sizeof(obuf)) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; ob = 0; }
+      }
+      if(done) break;
+    }
+  }
+
+  /* flush a trailing '?' for a value that ended mid-sequence (fidelity with gi_utf8_to_font),
+   * then drain the buffer and terminate. */
+  if(out_total < GAMEINFO_DESCEXT_LEN - 1) {
+    uint8_t fo[1];
+    if(gi_font_flush(&st, fo)) { obuf[ob++] = fo[0]; out_total++; }
+  }
+  if(ob) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; }
+  sram_writebyte(0, out_addr);           /* NUL terminator (re-zeroes byte 0 if empty) */
+  file_close();
 }

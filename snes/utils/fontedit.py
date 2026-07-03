@@ -10,6 +10,7 @@ menu palette.
 Usage:
     python3 fontedit.py show <code>        Render a single char
     python3 fontedit.py addaccents         Insert PT-BR accented chars
+    python3 fontedit.py addscrollbar       Write scrollbar glyphs (codes 16,17)
 
 The PT-BR insertion writes 24 new tiles into empty slots and prints the
 codepoint -> char mapping so const.a65 can reference them.
@@ -195,6 +196,44 @@ def add_accents():
         print(f"  {accented} = {code}")
 
 
+# -- Scrollbar glyphs (Y-mode game-info full description) --------------------
+# Two solid vertical bars used by gi_desc_scrollbar in gameinfo.a65. Both fill
+# all 8 rows so adjacent cells join into a continuous bar. Codes 16/17 are in
+# the 0..31 blank range, so no printable glyph is displaced.
+#   code 16 = track: a thin 2px-wide line, color 1 (discreet).
+#   code 17 = thumb: a 4px-wide bar,       color 3 (same as normal text).
+SCROLLBAR_GLYPHS = {
+    16: ("00011000", 1),
+    17: ("00111100", 3),
+}
+
+
+def _bar_tile(pattern, color):
+    """Build an 8x8 tile: the same horizontal `pattern` on every row, its set
+    pixels painted `color`."""
+    row = [color if ch == "1" else 0 for ch in pattern]
+    return pixels_to_tile([row[:] for _ in range(8)])
+
+
+def add_scrollbar():
+    header, tiles = load_font()
+    new_tiles = dict(enumerate(tiles))  # code -> tile
+    for code, (pattern, color) in SCROLLBAR_GLYPHS.items():
+        new_tiles[code] = _bar_tile(pattern, color)
+
+    out_lines = list(header)
+    total = max(len(tiles), max(new_tiles) + 1)
+    for code in range(total):
+        tile = new_tiles.get(code, [0] * 16)
+        label = "font" if code == 0 else None
+        out_lines.extend(encode_tile_lines(tile, label=label))
+    FONT.write_text("\n".join(out_lines) + "\n")
+    print(f"Updated {FONT}")
+    for code in SCROLLBAR_GLYPHS:
+        print(f"  scrollbar glyph {code}:")
+        print(render_ascii(tile_to_pixels(new_tiles[code])))
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__); sys.exit(1)
@@ -203,6 +242,8 @@ def main():
         show(int(sys.argv[2]))
     elif cmd == "addaccents":
         add_accents()
+    elif cmd == "addscrollbar":
+        add_scrollbar()
     else:
         print(__doc__); sys.exit(1)
 

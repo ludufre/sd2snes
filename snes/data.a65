@@ -389,4 +389,11 @@ gi_desc_rl       .byt 0     ; desc draw: active last text row (GIB_NORM_DESC_RL 
 ; data segment, well inside the backup_wram window ($7E:0000-$1FFF).
 gh_cmd_bak             .byt 0    ; the launch command byte, kept across the warm reset
 mcuparam_bak           .byt 0,0,0,0,0,0,0,0,0,0,0,0 ; MCU_PARAM (12B) across the warm reset
+
+gi_desc_ext_on  .byt 0     ; 1 = GI_DESC_EXT holds the full description (set on Y after CMD_GI_DESC_FULL); cleared on screen entry/reload
+gi_sb_thumb     .word 0    ; Y-mode scrollbar: thumb height in cells (1..GIB_FULL_ROWS)
+gi_sb_pos       .word 0    ; Y-mode scrollbar: thumb top cell (0..H-thumb)
+gi_sb_end       .word 0    ; Y-mode scrollbar: thumb bottom cell, exclusive (pos+thumb)
+gi_sb_max       .word 0    ; Y-mode scrollbar: max scroll = gi_desc_lines - GIB_FULL_ROWS
+gi_sb_i         .byt 0     ; Y-mode scrollbar: current row counter (0..GIB_FULL_ROWS-1)
 _END            .byt 0

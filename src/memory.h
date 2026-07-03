@@ -92,6 +92,14 @@ extern char current_filename[];
    favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
    info panel clobbers the favorites list (lockstep with GAMEINFO in snes/memmap.i65). */
 #define SRAM_GAMEINFO_ADDR           (0xFF7400L)
+/* full (untruncated) info-screen description, char[2048] NUL-terminated, staged on demand
+   by SNES_CMD_GI_DESC_FULL (the "full description" Y mode). The struct's description[256]
+   above is capped by the YAML parser (YAML_BUFLEN); this region carries the complete text,
+   read with a streaming line scanner outside the YAML parser. A 1st byte of 0 = invalid ->
+   the menu falls back to the struct's description[256]. Sits after the struct's end
+   ($FF759D) and before SRAM_SCRATCHPAD ($FFFF00); lockstep with GI_DESC_EXT in
+   snes/memmap.i65. */
+#define SRAM_GAMEINFO_DESCEXT_ADDR   (0xFF7600L)
 #define SRAM_SCRATCHPAD              (0xFFFF00L)
 #define SRAM_DIRID                   (0xFFFFF0L)
 #define SRAM_RELIABILITY_SCORE       (0x100)

@@ -91,6 +91,9 @@
 #define GI_DESCRIPTION              $FF749A    /* char[256] one line; menu word-wraps */
 #define GI_FMV_FPS                  $FF759A    /* FMV playback fps (when GI_FLAG_FMV) */
 #define GI_FMV_FRAMES               $FF759B    /* FMV total frames (uint16; info/debug) */
+#define GI_DESC_EXT                 $FF7600    /* full description char[2048] NUL-term staged by CMD_GI_DESC_FULL;
+                                                  first byte 0 = invalid -> menu falls back to GI_DESCRIPTION;
+                                                  lockstep with SRAM_GAMEINFO_DESCEXT_ADDR in src/memory.h */
 #define GI_STATUS_OK                $01
 #define GI_FLAG_IMAGE               $01        /* legacy DirectColor .gd (RETIRED; band is paletted) */
 #define GI_FLAG_FMV                 $02        /* cover-LESS <rom>.fmv v4 screenshot/animation staged at
@@ -246,6 +249,7 @@
 #define CMD_GAME_INFO_RECENT        $35 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
 #define CMD_GAME_INFO_FAVORITE      $36 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
 #define CMD_FMV_NEXT                $37 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
+#define CMD_GI_DESC_FULL            $38 /* stage the full (untruncated) description into GI_DESC_EXT ($FF7600) NUL-term; non-booting */
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
 /* WiFi status/scan block + connect params, RESERVED for the Companion port.
