@@ -87,6 +87,13 @@ coldboot:       ; Regular, cold-start init
   ; (A is still #$00.)
   sta @menu_desc_on
   sta @menu_desc_shown
+  ; fork: mainmenu_active/egg_shown are set only inside mainmenu: (menu.a65),
+  ; but menu_select/show_menu READ them, and those are reachable via the browser
+  ; context menu (Y) before the main menu ever opens -> left at $55 they trip
+  ; the Language-entry / easter-egg gates with a garbage value. Zero them here
+  ; like the description-box gates. Both are .byt; A is still #$00 in .as.
+  sta @mainmenu_active
+  sta @egg_shown
   jsr waitblank
   jsr snes_init
   jsr setup_gfx
