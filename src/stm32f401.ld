@@ -80,7 +80,7 @@ SECTIONS
   /* Guard: .data's init image is appended after .rodata in flash via AT(), but
      its VMA region is `ram` (not flash), so ld does NOT region-check that LMA.
      Without this, an oversized build links "fine" and silently spills .data past
-     the end of flash -> corrupt initialized globals on boot. See CLAUDE.md. */
+     the end of flash -> corrupt initialized globals on boot. */
   ASSERT(__data_load_end <= ORIGIN(flash) + LENGTH(flash),
          "FIRMWARE TOO LARGE: .data overflows flash - shrink .text/.rodata (or gate features per-config)")
 
