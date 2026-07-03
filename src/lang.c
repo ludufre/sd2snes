@@ -25,8 +25,11 @@ const char *const cicstatefriendly_l[NUM_LANG][4] = {
   /* LANG_ES   */ { "Original o sin CIC", "CIC original (fall\x89)", "SuperCIC ampliado", "SuperCIC detect. sin uso" },
 #ifndef CONFIG_MK2
   /* LANG_DE   */ { "Original/kein CIC", "Original CIC (Fehler)", "SuperCIC erweitert", "SuperCIC erkannt, ungenutzt" },
+  /* LANG_FR   */ { "Original ou sans CIC", "CIC original (echec)", "SuperCIC ameliore", "SuperCIC detecte, non utilise" },
 #else
   /* LANG_DE (mk2: English fallback, see header) */
+  { "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used" },
+  /* LANG_FR (mk2: English fallback, see header) */
   { "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used" },
 #endif
 };
@@ -66,8 +69,25 @@ const char *const fresult_friendly_names_l[NUM_LANG][20] = {
     "Laufwerk Timeout", "Zugriff gesperrt", "Nicht genug Speicher", "Zu viele offene Dateien",
     "Ungueltiger Parameter"
   },
+  /* LANG_FR */ {
+    "Aucune erreur", "Erreur E/S carte", "Erreur interne FS",
+    "Lecteur non pret", "Fichier introuvable", "Dossier introuvable", "Chemin invalide",
+    "Acces refuse", "Refuse (existe deja)", "Objet invalide", "Protege en ecriture",
+    "Lecteur invalide", "Aucune zone travail", "FS non valide", "mkfs() interrompu",
+    "Delai lecteur depasse", "Acces partage bloque", "Memoire insuffisante", "Trop de fichiers ouverts",
+    "Parametre invalide"
+  },
 #else
   /* LANG_DE (mk2: English fallback, see header) */
+  {
+    "No error", "Card I/O error", "Internal FS driver error",
+    "Drive not ready", "File not found", "Directory not found", "Invalid path name",
+    "Access denied", "Access denied (exists)", "Invalid file object", "Write protected",
+    "Invalid drive specified", "No work area", "Not a valid file system", "mkfs() aborted",
+    "Drive access timeout", "Shared access locked", "Not enough memory", "Too many open files",
+    "Invalid parameter"
+  },
+  /* LANG_FR (mk2: English fallback, see header) */
   {
     "No error", "Card I/O error", "Internal FS driver error",
     "Drive not ready", "File not found", "Directory not found", "Invalid path name",
@@ -138,8 +158,37 @@ const char *const sysinfo_msg[NUM_LANG][SI_COUNT] = {
     [SI_SNES_CLK_MEASURING] = "SNES Takt: messe\x7f\x80",
     [SI_SNES_CLK]           = "SNES Takt: %ldHz",
   },
+  /* LANG_FR */ {
+    [SI_BUSY_DISK]          = "Calcul de l'espace disque\x7f\x80           ",
+    [SI_FW_VERSION]         = "    Version firmware: %s",
+    [SI_SD_REMOVED]         = "  *** Carte SD retiree/USB occupe ***   ",
+    [SI_SD_MAKER]           = "Fabricant SD:    0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "Nom du produit: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "Serie SD:        %02x%02x%02x%02x, Fab. %d/%02d",
+    [SI_SD_ACC_TIME]        = "Acces SD:     %ld.%03ld / %ld.%03ld ms moy/max",
+    [SI_SD_ACC_MEASURING]   = "Acces SD:     mesure\x7f\x80",
+    [SI_CARD_USAGE]         = "Usage SD:   %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "Etat CIC: %s",
+    [SI_SNES_CLK_MEASURING] = "Horloge SNES: mesure\x7f\x80",
+    [SI_SNES_CLK]           = "Horloge SNES: %ldHz",
+  },
 #else
   /* LANG_DE (mk2: English fallback, see header) */
+  {
+    [SI_BUSY_DISK]          = "Calculating disk space\x7f\x80                ",
+    [SI_FW_VERSION]         = "    Firmware version: %s",
+    [SI_SD_REMOVED]         = "    *** SD Card removed/USB busy ***    ",
+    [SI_SD_MAKER]           = "SD Maker/OEM:    0x%02x, \"%c%c\"",
+    [SI_SD_PRODUCT]         = "SD Product Name: \"%c%c%c%c%c\", Rev. %d.%d",
+    [SI_SD_SERIAL]          = "SD Serial No.:   %02x%02x%02x%02x, Mfd. %d/%02d",
+    [SI_SD_ACC_TIME]        = "SD acc. time: %ld.%03ld / %ld.%03ld ms avg/max",
+    [SI_SD_ACC_MEASURING]   = "SD acc. time: measuring\x7f\x80  ",
+    [SI_CARD_USAGE]         = "Card usage: %ldMB / %ldMB",
+    [SI_CIC_STATE]          = "CIC state: %s",
+    [SI_SNES_CLK_MEASURING] = "SNES master clock: measuring\x7f\x80",
+    [SI_SNES_CLK]           = "SNES master clock: %ldHz    ",
+  },
+  /* LANG_FR (mk2: English fallback, see header) */
   {
     [SI_BUSY_DISK]          = "Calculating disk space\x7f\x80                ",
     [SI_FW_VERSION]         = "    Firmware version: %s",
@@ -164,8 +213,11 @@ const char *const sgb_state_l[NUM_LANG][SGB_W_COUNT] = {
   /* LANG_ES   */ { "ausente", "err\x89neo", "ok", "leyendo" },
 #ifndef CONFIG_MK2
   /* LANG_DE   */ { "fehlt", "falsch", "ok", "pruefe" },
+  /* LANG_FR   */ { "absent", "different", "ok", "lecture" },
 #else
   /* LANG_DE (mk2: English fallback, see header) */
+  { "missing", "mismatch", "ok", "checking" },
+  /* LANG_FR (mk2: English fallback, see header) */
   { "missing", "mismatch", "ok", "checking" },
 #endif
 };
@@ -176,8 +228,11 @@ const char *const cheatmenu_l[NUM_LANG][CHEATMENU_COUNT] = {
   /* LANG_ES   */ { "Trucos para ", "(sin nombre)" },
 #ifndef CONFIG_MK2
   /* LANG_DE   */ { "Cheats fuer ", "(kein Name)" },
+  /* LANG_FR   */ { "Triches pour ", "(sans nom)" },
 #else
   /* LANG_DE (mk2: English fallback, see header) */
+  { "Cheats for ", "(no name)" },
+  /* LANG_FR (mk2: English fallback, see header) */
   { "Cheats for ", "(no name)" },
 #endif
 };

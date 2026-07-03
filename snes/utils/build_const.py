@@ -42,6 +42,10 @@ ACCENTS = {
     "Í": 148, "Ó": 149, "Ô": 150, "Õ": 151, "Ú": 152, "Ç": 153,
     # Spanish additions:
     "ñ": 154, "Ñ": 155, "ü": 156, "Ü": 157, "¿": 158, "¡": 159,
+    # French additions (codes 160-165 are NOT free -- 161-223 hold other art,
+    # gameinfo reuses 160/161/176/177 for the chip icon OBJ. 224-255 are blank
+    # and unreferenced, so the French block lives there):
+    "è": 224, "ù": 225, "î": 226, "ï": 227, "ë": 228, "û": 229,
 }
 DECODE = {v: k for k, v in ACCENTS.items()}
 

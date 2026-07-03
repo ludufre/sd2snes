@@ -131,7 +131,7 @@ coldboot_autoboot_out:
   ; whole menu draws in the right language from the first frame.
   sep #$20 : .as
   lda @CFG_LANGUAGE
-  cmp #$04
+  cmp #$05
   bcc +
   lda #$00              ; unknown -> English
 + sta @cur_lang

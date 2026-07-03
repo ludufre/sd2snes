@@ -1,17 +1,17 @@
 <h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Vorführung">
-<img src="gfx/langs.gif" width="384" alt="Das Hauptmenü auf Englisch, Brasilianischem Portugiesisch, Spanisch und Deutsch">
+<img src="gfx/langs.gif" width="384" alt="Das Hauptmenü auf Englisch, Brasilianischem Portugiesisch, Spanisch, Deutsch und Französisch">
 
 Ein freundlicheres Firmware-Erlebnis für sd2snes/FXPAK: Sprachen, Spielecover, Menümusik, Patches und ein praktischerer Reset zurück ins Menü.
 
-**🌐 Sprache:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · [Español 🇪🇸](README-ES.md) · Deutsch
+**🌐 Sprache:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · [Español 🇪🇸](README-ES.md) · Deutsch · [Français 🇫🇷](README-FR.md)
 
 **Mehr Informationen:** Die Website [sd2snes.ludufre.com](https://sd2snes.ludufre.com) enthält weitere Details, Anleitungen und visuelle Beispiele zu diesem Fork.
 
 > **Was ist das?**
 >
-> Dies ist ein Fork der [originalen sd2snes-Firmware](https://github.com/mrehkopf/sd2snes) von [@mrehkopf](https://github.com/mrehkopf). Er behält die originale Firmware-Basis bei und ergänzt nutzerfreundliche Verbesserungen: ein Menü auf Brasilianischem Portugiesisch, Englisch, Spanisch und Deutsch, Spielecover, Menümusik, IPS/BPS-Patchauswahl und bessere Optionen für den Reset zurück ins Menü.
+> Dies ist ein Fork der [originalen sd2snes-Firmware](https://github.com/mrehkopf/sd2snes) von [@mrehkopf](https://github.com/mrehkopf). Er behält die originale Firmware-Basis bei und ergänzt nutzerfreundliche Verbesserungen: ein Menü auf Brasilianischem Portugiesisch, Englisch, Spanisch, Deutsch und Französisch, Spielecover, Menümusik, IPS/BPS-Patchauswahl und bessere Optionen für den Reset zurück ins Menü.
 >
 > Nutze dieses Repository für Fragen oder Fehler zur **Übersetzung**, zum **Sprachwähler**, zu **Covern**, zur **Menümusik**, zum **Patchwähler** oder zum **Theme-Editor dieses Forks**. Für Kernprobleme der Firmware, die nichts mit diesen Ergänzungen zu tun haben, nutze bitte das Originalprojekt.
 
@@ -33,7 +33,7 @@ Du brauchst:
 
 ## Was dieser Fork ergänzt
 
-- **Sprachen:** Wähle Brasilianisches Portugiesisch, Englisch, Spanisch oder Deutsch direkt im Menü.
+- **Sprachen:** Wähle Brasilianisches Portugiesisch, Englisch, Spanisch, Deutsch oder Französisch direkt im Menü.
 - **Optionsbeschreibungen:** eine kurze, übersetzte Hilfezeile für die ausgewählte Menüoption, in einem schwebenden Fenster (automatisch über oder unter dem Menü platziert).
 - **Spielecover:** Zeige das Cover jedes Spiels beim Durchsuchen deiner ROM-Liste.
 - **Spielinfo-Bildschirm:** Bevor eine ROM startet, siehst du eine Detailseite mit Cover, Screenshot und Metadaten (Entwickler, Jahr, Spieler, Genre, Spezialchip) plus einer kurzen Beschreibung, gelesen aus `/sd2snes/info/<rom>.yml`. Bei aktivem Bildschirm erscheint er für jede ROM: eine ohne Info-Eintrag bekommt trotzdem den Bildschirm mit dem Dateinamen als Titel und — falls ein `<rom>.cov`-Cover daneben liegt — diese Box-Art an der Stelle, wo das `.gd`-Cover wäre. Für einen **animierten Screenshot** lege eine `<rom>.fmv` (aus einem beliebigen Video mit `utils/gen_fmv.py` erzeugt) neben das Cover — die Screenshot-Box spielt sie als Endlosclip, während das `<rom>.cov`-Cover daneben bleibt. Umschaltbar in den *Browser-Einstellungen* (standardmäßig an), wo zwei Unteroptionen (ausgegraut solange aus) bestimmen, ob der animierte Clip abgespielt wird — sonst ein statisches Standbild — und ob seine Musik läuft.
@@ -76,14 +76,15 @@ So erhältst du eine GitHub-Benachrichtigung, wenn eine neue Firmware-Version ve
 
 ## Sprachen
 
-<img src="gfx/langs.gif" width="512" alt="Das Hauptmenü auf Englisch, Brasilianischem Portugiesisch, Spanisch und Deutsch">
+<img src="gfx/langs.gif" width="512" alt="Das Hauptmenü auf Englisch, Brasilianischem Portugiesisch, Spanisch, Deutsch und Französisch">
 
-Das Menü kann in vier Sprachen laufen:
+Das Menü kann in fünf Sprachen laufen:
 
 - **Português:** Brasilianisch-portugiesische Übersetzung für Menüs, Meldungen und Bildschirme.
 - **English:** die originale und standardmäßige Firmware-Sprache.
 - **Español:** Spanische Übersetzung für Menüs, Meldungen und Bildschirme.
 - **Deutsch:** Deutsche Übersetzung für Menüs, Meldungen und Bildschirme.
+- **Français:** Französische Übersetzung für Menüs, Meldungen und Bildschirme.
 
 Öffne **Sprache** im Hauptmenü, wähle die gewünschte Sprache, und das Menü wechselt sofort. Deine Auswahl wird für den nächsten Konsolenstart gespeichert.
 

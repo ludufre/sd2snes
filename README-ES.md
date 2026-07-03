@@ -1,17 +1,17 @@
 <h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Demostración">
-<img src="gfx/langs.gif" width="384" alt="El menú principal en Inglés, Portugués de Brasil, Español y Alemán">
+<img src="gfx/langs.gif" width="384" alt="El menú principal en Inglés, Portugués de Brasil, Español, Alemán y Francés">
 
 Una experiencia de firmware más amigable para sd2snes/FXPAK: idiomas, carátulas de juegos, música en el menú, parches y un regreso al menú más práctico.
 
-**🌐 Idioma:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · Español · [Deutsch 🇩🇪](README-DE.md)
+**🌐 Idioma:** [English 🇺🇸](README.md) · [Português 🇧🇷](README-BR.md) · Español · [Deutsch 🇩🇪](README-DE.md) · [Français 🇫🇷](README-FR.md)
 
 **Más información:** el sitio [sd2snes.ludufre.com](https://sd2snes.ludufre.com) reúne más detalles, guías y ejemplos visuales sobre este fork.
 
 > **¿Qué es esto?**
 >
-> Este es un fork del [firmware original de sd2snes](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf). Mantiene la base del firmware original y añade mejoras pensadas para quien usa el cartucho: menú en Portugués de Brasil, Inglés, Español y Alemán, carátulas de juegos, música en el menú, selección de parches IPS/BPS y mejores opciones de regreso al menú.
+> Este es un fork del [firmware original de sd2snes](https://github.com/mrehkopf/sd2snes) de [@mrehkopf](https://github.com/mrehkopf). Mantiene la base del firmware original y añade mejoras pensadas para quien usa el cartucho: menú en Portugués de Brasil, Inglés, Español, Alemán y Francés, carátulas de juegos, música en el menú, selección de parches IPS/BPS y mejores opciones de regreso al menú.
 >
 > Usa este repositorio para dudas o errores relacionados con la **traducción**, el **selector de idioma**, las **carátulas**, la **música del menú**, el **selector de parches** o el **editor de temas de este fork**. Para problemas del firmware principal que no estén relacionados con estas funciones, usa el proyecto original.
 
@@ -33,7 +33,7 @@ Necesitas:
 
 ## Qué añade este fork
 
-- **Idiomas:** elige Portugués de Brasil, Inglés, Español o Alemán directamente desde el menú.
+- **Idiomas:** elige Portugués de Brasil, Inglés, Español, Alemán o Francés directamente desde el menú.
 - **Descripciones de opciones:** una breve línea de ayuda traducida para la opción de menú seleccionada, en un cuadro flotante (colocado encima o debajo del menú automáticamente).
 - **Carátulas de juegos:** ve la carátula de cada juego mientras navegas por tu lista de ROMs.
 - **Pantalla de info del juego:** antes de que una ROM arranque, ve una pantalla de detalles con su carátula, una captura y los metadatos (desarrollador, año, jugadores, género, chip especial) más una breve descripción, leídos de `/sd2snes/info/<rom>.yml`. Con la pantalla activada aparece para toda ROM: una sin entrada de info igual obtiene la pantalla con el nombre del archivo como título y — si existe una carátula `<rom>.cov` al lado — esa box art en el lugar donde iría la carátula del `.gd`. Para una **captura animada**, coloca un `<rom>.fmv` (generado desde cualquier vídeo con `utils/gen_fmv.py`) junto a la carátula — la caja de la captura lo reproduce en bucle mientras la carátula `<rom>.cov` permanece al lado. Se activa en *Opciones del Navegador* (activado por defecto), donde dos sub-opciones (en gris cuando está desactivado) eligen si se reproduce el clip animado — si no, se muestra una captura estática — y si suena su música.
@@ -76,14 +76,15 @@ Para recibir una notificación de GitHub cada vez que se publique una nueva vers
 
 ## Idiomas
 
-<img src="gfx/langs.gif" width="512" alt="El menú principal en Inglés, Portugués de Brasil, Español y Alemán">
+<img src="gfx/langs.gif" width="512" alt="El menú principal en Inglés, Portugués de Brasil, Español, Alemán y Francés">
 
-El menú puede funcionar en cuatro idiomas:
+El menú puede funcionar en cinco idiomas:
 
 - **Português:** traducción al Portugués de Brasil para menús, mensajes y pantallas.
 - **English:** idioma original y predeterminado del firmware.
 - **Español:** traducción al Español para menús, mensajes y pantallas.
 - **Deutsch:** traducción al Alemán para menús, mensajes y pantallas.
+- **Français:** traducción al Francés para menús, mensajes y pantallas.
 
 Abre **Idioma** en el menú principal, elige el idioma que quieras y el menú cambia de inmediato. Tu elección queda guardada para la próxima vez que enciendas la consola.
 

@@ -10,10 +10,17 @@ menu palette.
 Usage:
     python3 fontedit.py show <code>        Render a single char
     python3 fontedit.py addaccents         Insert PT-BR accented chars
+    python3 fontedit.py addfrench          Insert French chars (è ù î ï ë û)
     python3 fontedit.py addscrollbar       Write scrollbar glyphs (codes 16,17)
 
 The PT-BR insertion writes 24 new tiles into empty slots and prints the
 codepoint -> char mapping so const.a65 can reference them.
+
+`addfrench` adds the DIAERESIS mark (ë ï) alongside the existing GRAVE/CIRC
+marks and writes ONLY the 6 new slots (224-229), preserving every other tile
+(so the hand-made Spanish glyphs and the art in 161-223 are untouched). At 8x8
+the diaeresis and circumflex collapse to the same two-dot mark, so ë==ê and
+ï==î byte-for-byte (see DIAERESIS below).
 """
 
 import re
@@ -31,6 +38,10 @@ ACCENT_MAP = {
     "Í": 148, "Ó": 149, "Ô": 150, "Õ": 151, "Ú": 152, "Ç": 153,
     # Spanish additions:
     "ñ": 154, "Ñ": 155, "ü": 156, "Ü": 157, "¿": 158, "¡": 159,
+    # French additions (codes 160-165 are NOT free -- 161-223 hold other art,
+    # gameinfo reuses 160/161/176/177 for the chip icon OBJ. 224-255 are blank
+    # and unreferenced, so the French block lives there):
+    "è": 224, "ù": 225, "î": 226, "ï": 227, "ë": 228, "û": 229,
 }
 
 BYTE_RE = re.compile(r"\$([0-9a-fA-F]{2})")
@@ -118,6 +129,12 @@ CIRC = "..#..#.."
 TILDE = ".#####.."
 CEDILLA_TOP = "...##..."
 CEDILLA_BOTTOM = "..####.."
+# Diaeresis / trema (ë ï, and the hand-made ü=156): two dots on the top row.
+# At 8x8 the accent shares the letter's top row, so the diaeresis reduces to the
+# same two-dot mark as the circumflex (cols 2 and 5) -- this matches the existing
+# ü precedent (overlay "..#..#.." on 'u' reproduces tile 156 exactly). Consequence:
+# ë is byte-identical to ê, and ï to î; there is no room to distinguish them.
+DIAERESIS = "..#..#.."
 
 
 def overlay_row(pixels, art_row, row, color=3):
@@ -196,6 +213,39 @@ def add_accents():
         print(f"  {accented} = {code}")
 
 
+# -- French accents (targeted: writes ONLY the 6 new slots) -----------------
+# Unlike add_accents (which regenerates every ACCENT_MAP slot and would clobber
+# the hand-made Spanish glyphs), add_french touches ONLY codes 224-229. The base
+# letter is copied verbatim and a proven mark painted on row 0; every other tile
+# in font.a65 is preserved byte-for-byte.
+FRENCH_BASE = {
+    "è": ("e", GRAVE),  "ù": ("u", GRAVE),
+    "î": ("i", CIRC),   "û": ("u", CIRC),
+    "ï": ("i", DIAERESIS), "ë": ("e", DIAERESIS),
+}
+
+
+def add_french():
+    header, tiles = load_font()
+    new_tiles = dict(enumerate(tiles))  # code -> tile (start from current file)
+    for ch, (base_letter, mark) in FRENCH_BASE.items():
+        code = ACCENT_MAP[ch]
+        new_tiles[code] = pixels_to_tile(with_accent(base_letter, mark, tiles))
+
+    out_lines = list(header)
+    total = max(len(tiles), max(new_tiles) + 1)
+    for code in range(total):
+        tile = new_tiles.get(code, [0] * 16)
+        label = "font" if code == 0 else None
+        out_lines.extend(encode_tile_lines(tile, label=label))
+    FONT.write_text("\n".join(out_lines) + "\n")
+    print(f"Updated {FONT}")
+    for ch, (base_letter, mark) in FRENCH_BASE.items():
+        code = ACCENT_MAP[ch]
+        print(f"  {ch} = {code} (base {base_letter!r})")
+        print(render_ascii(tile_to_pixels(new_tiles[code])))
+
+
 # -- Scrollbar glyphs (Y-mode game-info full description) --------------------
 # Two solid vertical bars used by gi_desc_scrollbar in gameinfo.a65. Both fill
 # all 8 rows so adjacent cells join into a continuous bar. Codes 16/17 are in
@@ -242,6 +292,8 @@ def main():
         show(int(sys.argv[2]))
     elif cmd == "addaccents":
         add_accents()
+    elif cmd == "addfrench":
+        add_french()
     elif cmd == "addscrollbar":
         add_scrollbar()
     else:

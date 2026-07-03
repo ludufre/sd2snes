@@ -120,7 +120,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_autosave;         /* enable automatic saving when SRAM contents change */
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
   uint8_t  show_covers;             /* per-ROM cover preview (Game.cov) in the browser (0: off, 1: large, 2: small) */
-  uint8_t  language;                /* menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German) */
+  uint8_t  language;                /* menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German, 4: French) */
   uint8_t  patch_verify_integrity;  /* CFG @ $B8: re-read+CRC the patched ROM after IPS/BPS (slow) */
   uint8_t  enable_menu_music;       /* CFG @ $B9: play background menu music (bgm_name if it is an absolute path, else /sd2snes/menu.spc) */
   uint8_t  covers_in_lists;         /* CFG @ $BA: also show covers in the Recent/Favorite lists (sub-option of show_covers) */
