@@ -8,7 +8,8 @@
  * it must never hang the menu command loop (that would wedge USB-serial too).
  *
  * The parsed metadata is written as a packed struct to bank-$FF SRAM at
- * SRAM_GAMEINFO_ADDR ($FF6000). The SNES menu reads it by fixed offset (mirror the
+ * SRAM_GAMEINFO_ADDR ($FF7400 -- just after the $FF6000..$FF73FF favorites mirror,
+ * which it must NOT overlap). The SNES menu reads it by fixed offset (mirror the
  * GI_* offsets in snes/memmap.i65 - keep in sync, just like cfg_t/CFG_ADDR). The
  * DirectColor image is staged as: 8bpp tiles -> SRAM_GAMEINFO_TILES_ADDR ($CA0000),
  * 16-bit tilemap -> SRAM_GAMEINFO_TMAP_ADDR ($CB0000). All text fields are already

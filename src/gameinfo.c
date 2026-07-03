@@ -264,8 +264,13 @@ static uint8_t  gi_fmv_fps;         /* playback fps (from the header) -> audio->
 static uint16_t gi_fmv_frames;      /* total frame count */
 static uint16_t gi_fmv_cur;         /* frame index currently staged in $CA0000 (file is at cur+1) */
 static tick_t   gi_fmv_last_tick;   /* getticks() of the last CMD_FMV_NEXT (idle watchdog) */
-static char     gi_fmv_path[300];   /* the open .fmv's path, saved so a transient close can
-                                     * reopen it mid-playback (gi_fmv_reopen). "" = none. */
+static char     gi_fmv_path[300] IN_AHBRAM;  /* the open .fmv's path, saved so a transient close can
+                                     * reopen it mid-playback (gi_fmv_reopen). "" = none. IN_AHBRAM: the
+                                     * main LPC175x SRAM is tight and growing .bss can silently corrupt a
+                                     * global. .ahbram is NOLOAD (not zeroed at boot), which is safe here
+                                     * for the SAME reason as gi_yml_path below: the reader (gi_fmv_reopen,
+                                     * via CMD_FMV_NEXT) only arrives after a GAME_INFO, and gameinfo_load
+                                     * zeroes gi_fmv_path[0] on EVERY load before any FMV pump can arrive. */
 
 /* The last-loaded .yml path, saved by gameinfo_load so the "full description" (Y) command
  * (gameinfo_desc_full) can re-open it without a fresh selection round-trip. IN_AHBRAM: the
@@ -297,9 +302,9 @@ static int gi_fmv_stream(uint32_t addr, uint32_t size) {
   return 1;
 }
 
-/* Stage ONE v3 frame (palette + tiles) from the current file position. On disk a frame is the
- * 256-byte FMV palette THEN the 6912-byte tiles: the palette goes to $CA1B00 (the SNES DMAs it to
- * CGRAM 128..255 each frame) and the tiles to $CA0000 (re-DMA'd to the FMV VRAM set). A glitched
+/* Stage ONE frame (palette + tiles) from the current file position. On disk a frame is the
+ * 176-byte FMV palette (88 colours) THEN the 6912-byte tiles: the palette goes to $CA1B00 (the SNES
+ * DMAs it to CGRAM 168..255 each frame) and the tiles to $CA0000 (re-DMA'd to the FMV VRAM set). A glitched
  * read rewinds to the frame start and retries. Bounded; closes the file on persistent error. */
 static int gi_fmv_read_frame(void) {
   DWORD start = gi_fmv_fil.fptr;
@@ -412,10 +417,14 @@ void gameinfo_fmv_idle_check(void) {
 
 void gameinfo_load(uint8_t *rom_path) {
   /* static (not stack): the menu loop is single-threaded and non-reentrant, so this
-   * keeps a ~1.25 KB frame off the tight LPC stack (see cfg.c note on frame overrun). */
+   * keeps a large frame off the tight LPC stack (see cfg.c note on frame overrun).
+   * base[]/path[] additionally live IN_AHBRAM (main SRAM is tight; growing .bss can
+   * silently corrupt a global). .ahbram is NOLOAD (not zeroed at boot), which is safe:
+   * both are scratch used ONLY inside gameinfo_load and every call's first access is a
+   * write (gi_join builds path, then base from path, before either is read). */
   static gameinfo_meta_t meta;
-  static char base[288];
-  static char path[300];
+  static char base[288] IN_AHBRAM;
+  static char path[300] IN_AHBRAM;
   int fmv_eligible = 1;                 /* only probe <rom>.fmv if the .yml declares "fmv:" (or
                                          * there is no .yml). Skips a full scan of the (huge)
                                          * info dir for the 99% of games that have no video. */

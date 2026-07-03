@@ -60,10 +60,10 @@
    One composited DirectColor (CG-Direct-Select) BG1 image (cover + screenshot,
    utils/gen_dcimage.py) is staged by the MCU (CMD_GAME_INFO): 8bpp tiles -> bank
    $CA, 16-bit tilemap -> bank $CB. The parsed metadata struct lands at GAMEINFO
-   ($FF6000); the menu reads it by fixed offset (mirror src/gameinfo.h). */
+   ($FF7400, just after the favorites mirror); the menu reads it by fixed offset (mirror src/gameinfo.h). */
 #define GI_TILES                    $CA0000    /* 8bpp DirectColor tiles (.gd) / FMV frame tiles (.fmv) */
-#define GI_FMV_PAL                  $CA1B00    /* .fmv v3: FMV frame palette (256B) right after the 6912B frame at GI_TILES; -> CGRAM 128 */
-#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap (.gd) / .fmv v3 cover palette (160B) -> CGRAM 48 */
+#define GI_FMV_PAL                  $CA1B00    /* FMV frame palette (176B, 88 colours) right after the 6912B frame at GI_TILES; -> CGRAM 168 */
+#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap (.gd) / .gcv cover palette (240B, 120 colours) -> CGRAM 48 */
 /* paletted band cover region (left): 16x16 tiles (128x128px) at col 1. Cover tiles DMA to window-0
    ($2000 = char #256); 256 tiles span #256..511 ($2000..$3FFF) -- MUST stay <= 256 tiles or it spills
    into $4000 (the body's BG2 font), corrupting the background (the bottom cover row overwrote BG2

@@ -506,7 +506,7 @@ mdd_have:
   sep #$20 : .as
   lda [desc_menu_ptr],y      ; mdesc bank
   sta @print_bank
-  jsr resolve_str            ; localize (no-op for current mdesc_*)
+  jsr resolve_str            ; localize -- mdesc_* are per-language dispatch tables in $C1; this resolve is load-bearing
   rep #$20 : .al
   lda @print_src
   sta @desc_ptr

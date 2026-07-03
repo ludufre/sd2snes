@@ -1131,7 +1131,7 @@ gfa_dst_ready:
   ; v3 paletted path: ONLY rewrite the box -- the cover region in GI_TMAP_BUF persists between
   ; frames (laid once by gi_fmv_build_tmap_v3). A is 8-bit here (.as).
   jsr gi_fmv_box_tmap
-  ; window 2: new frame's palette -> CGRAM 128..255, second tile half, then flip the tilemap (atomic)
+  ; window 2: new frame's palette -> CGRAM 168..255, second tile half, then flip the tilemap (atomic)
   jsr cover_blank_begin
   lda #168 : sta $2121         ; the MCU staged the new frame's 88-colour palette at GI_FMV_PAL
   DMA7(#$00, #$00b0, #^GI_FMV_PAL, #!GI_FMV_PAL, #$22)   ; -> CGRAM 168..255 (176 B)
