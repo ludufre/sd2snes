@@ -1639,6 +1639,9 @@ gsb_thok:
   ; pos = scroll * (H - thumb) / maxscroll, FLOOR division: rounding-to-nearest made the
   ; thumb bottom out one scroll step early (pos hit H-thumb with a line still hidden);
   ; floor only reaches H-thumb at scroll == maxscroll, i.e. when the text truly ends.
+  ; The mirror artifact is handled below (gsb_pdone): floor maps a whole band of
+  ; near-top scrolls to pos 0 (a 30-line text floors to 0 for scroll 0..3), so the bar
+  ; read "top" with the first lines still hidden -- cell 0 is reserved for scroll == 0.
   lda #GIB_FULL_ROWS
   sec
   sbc gi_sb_thumb                ; A = H - thumb  (>= 1)
@@ -1660,6 +1663,21 @@ gsb_pdiv:
   inx
   bra gsb_pdiv
 gsb_pdone:
+  ; endpoint-exact top: an interior scroll (scroll > 0) that floors to cell 0 is bumped
+  ; to cell 1, so the thumb only touches the top when the text is truly at the start
+  ; (the bottom is already exact -- floor reaches H-thumb only at scroll == maxscroll).
+  ; Skipped when H - thumb < 2: there is no interior cell to bump into.
+  cpx #$0000
+  bne gsb_posok
+  lda gi_desc_scroll
+  beq gsb_posok                  ; truly at the top -> cell 0
+  lda #GIB_FULL_ROWS
+  sec
+  sbc gi_sb_thumb
+  cmp #$0002
+  bcc gsb_posok
+  ldx #$0001
+gsb_posok:
   stx gi_sb_pos
   txa
   clc
