@@ -1796,40 +1796,15 @@ gi_dc_restore:
   stz $2128
   stz $2129
   stz $212a
-  ; --- browser backdrop for the MENU path (Recents/Favorites are a window OVER the browser) -----
-  ; game info tore down the browser base under the menu (setup_gfx cleared the WRAM tile buffers and
-  ; game info also wrote its own body rows). The menu WINDOW is put back by pop_window on the way
-  ; out, but the browser behind it isn't repainted until the whole menu closes -> the menu came back
-  ; floating over a bare gradient (not the file list). Repaint the browser NOW so the menu sits over
-  ; it. The browser START/SELECT path (mainmenu_active = 0) skips this -- there the filesel loop
-  ; repaints via filesel_dirty. window_h is saved/restored because pop_window uses the GLOBAL
-  ; window_h as its BG1 MVN row counter; DB is re-forced to 0 (the filesel routines may leave it set).
-  lda mainmenu_active
-  beq gidr_nobrowser
-    rep #$20 : .al               ; save window_x/y (word) + window_w/h (word) -- contiguous in data.a65
-    lda window_x : pha
-    lda window_w : pha
-    sep #$20 : .as
-    rep #$10 : .xl
-    jsr filesel_statusbar        ; repaint the browser (base layer under the menu) into the tile buffers
-    jsr filesel_redraw
-    jsr filesel_cleanup
-    sep #$20 : .as               ; the filesel routines leave sizes/DB unknown -> normalize
-    rep #$10 : .xl
-    lda #$00 : pha : plb         ; DB=0 for the window-var writes below
-    lda #$02 : sta window_x      ; then re-grey the mainmenu region over the fresh browser, so the
-    lda #$09 : sta window_y      ; menu sits on a DIMMED browser (matches mainmenu's window_greyout)
-    lda #60  : sta window_w
-    lda #18  : sta window_h
-    jsr window_greyout
-    sep #$20 : .as
-    rep #$20 : .al               ; restore window_w/h then window_x/y (LIFO)
-    pla : sta window_w
-    pla : sta window_x
-    sep #$20 : .as
-    rep #$10 : .xl
-    lda #$00 : pha : plb         ; DB=0 (window_greyout's AllocStack restores it, but be safe)
-gidr_nobrowser:
+  ; No browser repaint here, on purpose -- it must NOT be done from this context. redraw_filelist
+  ; reads the directory table via [dirptr_addr],y (DP-indirect), which needs DP=0; but gi_dc_restore
+  ; is reached from the MENU path (Menu > Jogos) with DP at show_menu's AllocStack frame (DP!=0), so
+  ; the read returns garbage -> the top browser rows render as corrupt glyphs (was the old
+  ; mainmenu_active repaint here). The correct place is gi_repaint_browser (filesel.a65), called from
+  ; select_last/favorite_file_play, which force DP=0 first. gi_dc_restore just rebuilds the graphics
+  ; (setup_gfx/video_init/setup_hdma); the list-return path repaints the browser file list behind the
+  ; list window (push_window then saves that backdrop). The browser A-on-ROM game info path is
+  ; unaffected: it returns to the browser loop, which repaints the file list itself via filesel_dirty.
   sep #$20 : .as
   rep #$10 : .xl
   lda @CFG_BRIGHTNESS_LIMIT

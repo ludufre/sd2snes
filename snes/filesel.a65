@@ -2161,6 +2161,28 @@ show_error_msg_wait:
   plp
   rts
 
+; gi_repaint_browser: repaint the file browser (status bar + file list) into the WRAM tile
+; buffers so it shows BEHIND the Recents/Favorites window after game info tore the screen down.
+; Called ONLY on the game-info B-return (select_last/favorite_file_play), where the caller has
+; already forced DP=0 -- redraw_filelist reads the directory table via [dirptr_addr],y
+; (DP-indirect) and would read garbage with DP!=0. Writes only the $7E tile buffers (hiprint
+; forces its own DB); the pending select_*_redraw does push_window (which SAVES this backdrop)
+; then enable_screen_update, and the NMI DMAs both BG halves -> the list sits over the real
+; browser, not a bare gradient. cursor_y is reset to 9 (the file-list top row) the same way
+; fileselupd_out does before every fileselloop redraw. filesel_state=0 forces the file-list view.
+gi_repaint_browser:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$09
+  sta cursor_y
+  stz filesel_state
+  jsr filesel_statusbar
+  jsr filesel_redraw
+  jsr filesel_cleanup
+  plp
+  rts
+
 select_last_file:
   php
   phd                        ; show_menu's FUNC dispatch (rtl) leaves DP at its AllocStack
@@ -2267,10 +2289,20 @@ select_last_file_play:
   ; close the recents window first (the info screen / boot is full-screen); MCU_PARAM still
   ; holds the list index for both the info query and the LOADLAST that follows.
   jsr pop_window
+  jsr hide_cursor                  ; park the selection bar off-screen too -- it's a hardware colour
+                                   ; window drawn by the NMI (bar_xl/yl/wl), NOT part of the popped
+                                   ; window, so it would keep flashing over the gap until game info
+                                   ; sets up. select_last_redraw restores it on the B-return.
   lda @CFG_SHOW_GAME_INFO
   beq slfp_load
-  jsr gameinfo_maybe_show_recent   ; A -> carry clear (boot), B -> carry set (back to browser)
-  bcs select_last_file_out
+  jsr gameinfo_maybe_show_recent   ; A -> carry clear (boot), B -> carry set (back to the list)
+  bcc slfp_load                    ; A: boot the game
+  ; B: game info tore down the screen and popped the list window above. Freeze the screen, repaint
+  ; the browser file list behind (game info cleared it), then redraw the recents list at the saved
+  ; position (listsel_backup) over it and resume navigation, instead of falling out to the main menu.
+  jsr disable_screen_update
+  jsr gi_repaint_browser
+  jmp select_last_redraw
 slfp_load:
   lda #CMD_LOADLAST
   jsr game_handshake               ; boots on success; on failure returns -> exit to browser
@@ -2409,10 +2441,16 @@ select_favorite_file_play
   ; close the favorites window first (the info screen / boot is full-screen); MCU_PARAM still
   ; holds the list index for both the info query and the LOADFAVORITE that follows.
   jsr pop_window
+  jsr hide_cursor                  ; park the selection bar off-screen too (see select_last_file_play)
   lda @CFG_SHOW_GAME_INFO
   beq sffp_load
-  jsr gameinfo_maybe_show_favorite ; A -> carry clear (boot), B -> carry set (back to browser)
-  bcs select_favorite_file_out
+  jsr gameinfo_maybe_show_favorite ; A -> carry clear (boot), B -> carry set (back to the list)
+  bcc sffp_load                    ; A: boot the game
+  ; B: as in select_last_file_play -- freeze, repaint the browser file list behind (game info
+  ; cleared it), then redraw the favorites list at the saved position over it and resume nav.
+  jsr disable_screen_update
+  jsr gi_repaint_browser
+  jmp select_favorite_redraw
 sffp_load:
   lda #CMD_LOADFAVORITE
   jsr game_handshake               ; boots on success; on failure returns -> exit to browser
