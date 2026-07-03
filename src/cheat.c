@@ -191,6 +191,7 @@ void cheat_load_to_menu(int index, cheat_record_t *cheat) {
 void cheat_save_from_menu(int index, cheat_record_t *cheat) {
   uint32_t offset = SRAM_CHEAT_ADDR + 512 * index;
   sram_readblock(cheat, offset, sizeof(cheat_record_t)-4);
+  if(cheat->numpatches > CHEAT_NUM_CODES_PER_CHEAT) cheat->numpatches = CHEAT_NUM_CODES_PER_CHEAT;   /* patches[] is fixed-size */
   sram_readblock(cheat->patches, offset+256, cheat->numpatches*4);
 }
 
