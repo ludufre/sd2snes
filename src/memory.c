@@ -716,7 +716,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
          and silently leave the ROM unpatched. */
       if(ips_recore_active && current_ips_srm_source[0]) {
         sram_writeblock(current_ips_srm_source,
-                        SRAM_IPS_LIST_ADDR + 512
+                        SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
                           + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
                         (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
       }

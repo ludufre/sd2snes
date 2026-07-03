@@ -269,6 +269,11 @@
 #define WIFI_OFF_REQ_SSID           340  /* char[33] - menu writes (CONNECT) */
 #define WIFI_OFF_REQ_PASS           373  /* char[64] - menu writes (CONNECT) */
 
+/* IPS patch list written by MCU. Layout: +0 num_patches, +1 display names
+   (8*IPS_NAME_LEN=512 -> [1,513)), +520 full SD paths (8*256=2048 -> [520,2568)),
+   region $FF5000..$FF5A08, below FAVORITE_GAMES $FF6000. The menu reads only the
+   name region here; the paths are consumed by the MCU (IPS_PATH_BASE in src/patch.h).
+   Lockstep with SRAM_IPS_LIST_ADDR in src/memory.h. */
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */
 #define IPS_MAX_PATCHES             8        /* maximum patches per ROM */

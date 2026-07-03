@@ -192,7 +192,7 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
                         sram_addr + 1 + (uint32_t)i * IPS_NAME_LEN,
                         (uint16_t)(strlen(ips_entries[i].name) + 1));
         sram_writeblock(ips_entries[i].full_path,
-                        sram_addr + 512 + (uint32_t)i * IPS_PATH_LEN,
+                        sram_addr + IPS_PATH_BASE + (uint32_t)i * IPS_PATH_LEN,
                         (uint16_t)(strlen(ips_entries[i].full_path) + 1));
     }
 
@@ -317,7 +317,7 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     /* Read the full IPS file path from SRAM */
     uint8_t ips_path[IPS_PATH_LEN];
     psram_readstrn(ips_path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(ips_path));
 
     printf("Applying IPS: %s\n", ips_path);
@@ -735,7 +735,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
     uint8_t bps_path[IPS_PATH_LEN];
     psram_readstrn(bps_path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(bps_path));
 
     printf("Applying BPS: %s\n", bps_path);
@@ -951,7 +951,7 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
 
     uint8_t bps_path[IPS_PATH_LEN];
     psram_readstrn(bps_path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(bps_path));
     if (patch_io_err) return 0;
 
@@ -1041,7 +1041,7 @@ uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     patch_io_err = 0; /* PR#292 fix #1: clear before the first SDRAM access */
     uint8_t path[IPS_PATH_LEN];
     psram_readstrn(path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(path));
     if (patch_io_err) { /* SDRAM stalled before we could even read the path */
         printf("patch_apply: FPGA MCU_RDY timeout reading patch path\n");

@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
   /* ---- stage the patch path in slot 1, exactly like ips_find_patches ---- */
   size_t plen = strlen(patch) + 1;
   if (plen > IPS_PATH_LEN) { fprintf(stderr, "patch path too long (max %d)\n", IPS_PATH_LEN - 1); return 99; }
-  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + 512, patch, plen);
+  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + IPS_PATH_BASE, patch, plen);
 
   /* ---- canary-fill the regions the patcher must never touch ---- */
   for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)

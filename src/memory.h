@@ -87,6 +87,11 @@ extern char current_filename[];
    TYPE_ROM entry in the folder). Lives in the (now fully) free gap before
    IPS_LIST (0xFF5000); the favorites list was moved off 0xFF4000 to 0xFF6000. */
 #define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
+/* IPS/BPS patch list staged by ips_find_patches(). Layout (see patch.h):
+   +0 num_patches, +1 display names (8*IPS_NAME_LEN=512 -> [1,513)), +IPS_PATH_BASE(520)
+   full SD paths (8*IPS_PATH_LEN=2048 -> [520,2568) = 0xFF5000..0xFF5A08). Ends well below
+   the favorites mirror at 0xFF6000 (0x5F8 = 1528 bytes of slack). Lockstep with IPS_LIST
+   in snes/memmap.i65 (the menu reads only the name region, not the paths). */
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
 /* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Sits AFTER the
    favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
