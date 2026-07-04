@@ -51,6 +51,7 @@ memory.c: RAM operations
 #include "savestate.h"
 #include "sgb.h"
 #include "patch.h"
+#include "patch_copier.h"
 
 #include <string.h>
 char* hex = "0123456789ABCDEF";
@@ -465,6 +466,38 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   uart_putc('\n');
   file_close();
 
+  /* Single-pass recore (optimization): decide a cartridge-type change RIGHT AFTER
+     the stream, BEFORE the expensive tail (BSX/features/SaveRAM CRC/init 196KB
+     memset).  A chip-converting BPS (e.g. SMW->SA-1) does fpga_pgm under the new
+     core, which WIPES the PSRAM -> all that tail work is thrown away and redone in
+     pass 2.  Probing the patched header here lets us recore + apply the patch ONCE,
+     skipping the whole wasted pass-1 tail.  The post-patch smc re-detect (further
+     down) stays as the safety net, so a probe miss only costs time, never
+     correctness. */
+  if(ips_pending_index > 0 && !ips_recore_active) {
+    uint32_t probe_scratch = 0;
+    uint32_t probe_tgt = bps_probe_header(SRAM_IPS_LIST_ADDR, ips_pending_index,
+                                          SRAM_ROM_ADDR + romprops.load_address,
+                                          romprops.romsize_bytes,
+                                          PATCH_PROBE_HEADER_LIMIT, &probe_scratch);
+    if(probe_tgt) {
+      smc_id_sdram_window(&ips_recore_props, probe_scratch, probe_tgt,
+                          PATCH_PROBE_HEADER_LIMIT);
+      const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
+      const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
+                                                           : FPGA_BASE;
+      if(core_new != core_now) {
+        printf("IPS: single-pass recore -> reload under correct core (skip wasted tail)\n");
+        ips_recore_active = 1;
+        uint32_t r = load_rom(filename, base_addr,
+                              (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
+        ips_recore_active = 0;
+        if(!r) deassert_reset();
+        return r;
+      }
+    }
+  }
+
   printf("rom header map: %02x; mapper id: %d\n", romprops.header.map, romprops.mapper_id);
   ticks_total=getticks()-ticksstart;
   printf("%u ticks total\n", ticks_total);
@@ -721,41 +754,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
                         (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
       }
 
-      /* Load-time optimization (outer pass only): a chip-converting BPS would
-         otherwise be applied TWICE — once under the wrong (pre-patch) core just
-         to discover the new cartridge type, then again under the correct core
-         (~2x the ~9 s patch time for a 4 MB BPS).  Peek at the patched header
-         cheaply (first 64 KB only, into scratch above the image) so we can
-         reconfigure to the correct core FIRST and apply the full patch just
-         once.  bps_probe_header returns 0 for non-BPS / errors, and the
-         post-patch smc re-detection below stays as a safety net — so a probe
-         miss only costs time, never correctness. */
-      if(!ips_recore_active) {
-        uint32_t probe_scratch = 0;
-        uint32_t probe_tgt = bps_probe_header(SRAM_IPS_LIST_ADDR, saved_ips_idx,
-                                              SRAM_ROM_ADDR + romprops.load_address,
-                                              romprops.romsize_bytes,
-                                              PATCH_PROBE_HEADER_LIMIT,
-                                              &probe_scratch);
-        if(probe_tgt) {
-          smc_id_sdram_window(&ips_recore_props, probe_scratch, probe_tgt,
-                              PATCH_PROBE_HEADER_LIMIT);
-          const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
-          const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
-                                                               : FPGA_BASE;
-          if(core_new != core_now) {
-            printf("IPS: probe detected cartridge type change -> reloading under "
-                   "correct core (skipping redundant first patch)\n");
-            ips_recore_active = 1;
-            ips_pending_index = saved_ips_idx;
-            uint32_t r = load_rom(filename, base_addr,
-                                  (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
-            ips_recore_active = 0;
-            if(!r) deassert_reset();
-            return r;
-          }
-        }
-      }
+      /* (The chip-converting-BPS recore decision was MOVED earlier -- right after
+         the stream, before the expensive tail -- so the wasted pass-1 tail is
+         skipped; see "Single-pass recore" above.  The post-patch smc re-detect
+         below stays as the safety net for a probe miss.) */
 
       /* Dispatch to ips_apply or bps_apply based on the patch file extension.
          For IPS: pass the copier-header size so offset correction works when
@@ -764,10 +766,42 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
          off to get just the header size (0 or 0x200).
          BPS encodes exact sizes so no header correction is needed there. */
       uint32_t ips_header_size = romprops.offset & 0xFFFFF;
-      uint32_t ips_end = patch_apply(SRAM_IPS_LIST_ADDR, ips_pending_index,
+      /* Approach B: drive the FPGA copier from the MCU (the SNES is held in reset
+         here) for a BPS when EnableBpsCopier is on AND the currently-loaded core
+         carries the copier (probe).  IPS, the gate off, or a core without the copier
+         fall through to the byte-by-byte apply.  A copier op failure returns 0 and is
+         treated as a patch error (the probe makes a runtime failure unlikely). */
+      uint32_t ips_end;
+      uint8_t  copier_avail = CFG.enable_bps_copier && patch_copier_available();
+      if(copier_avail) {
+        extern uint32_t patch_targetread_bytes;
+        printf("BPS copier path (MCU-driven, SNES in reset)\n");
+        tick_t t_copier = getticks();
+        ips_end = patch_apply_copier(SRAM_IPS_LIST_ADDR, ips_pending_index,
                                      SRAM_ROM_ADDR + romprops.load_address,
-                                     romprops.romsize_bytes,
-                                     ips_header_size);
+                                     romprops.romsize_bytes, ips_header_size);
+        uint32_t patch_ms = (uint32_t)(getticks() - t_copier) * 10u; /* 1 tick = 10ms */
+        /* DEBUG ($FF0724 marker, $FF0721 op count): B1 = copier applied OK,
+           B2 = copier failed mid-apply (timeout). */
+        sram_writebyte(ips_end ? 0xB1 : 0xB2, 0xFF0724L);
+        uint32_t n = patch_copier_count();
+        sram_writebyte((uint8_t)(n),       0xFF0721L);
+        sram_writebyte((uint8_t)(n >> 8),  0xFF0722L);
+        sram_writebyte((uint8_t)(n >> 16), 0xFF0723L);
+        /* DEBUG breakdown: $FF0728 = patch time ms (16b), $FF072A = TargetRead
+           byte-by-byte volume (24b) -> copier-op overhead vs literal volume. */
+        sram_writebyte((uint8_t)(patch_ms),       0xFF0728L);
+        sram_writebyte((uint8_t)(patch_ms >> 8),  0xFF0729L);
+        sram_writebyte((uint8_t)(patch_targetread_bytes),       0xFF072AL);
+        sram_writebyte((uint8_t)(patch_targetread_bytes >> 8),  0xFF072BL);
+        sram_writebyte((uint8_t)(patch_targetread_bytes >> 16), 0xFF072CL);
+      } else {
+        ips_end = patch_apply(SRAM_IPS_LIST_ADDR, ips_pending_index,
+                              SRAM_ROM_ADDR + romprops.load_address,
+                              romprops.romsize_bytes, ips_header_size);
+        /* B3 = gate on but copier not in this core (probe failed); B0 = gate off. */
+        sram_writebyte(CFG.enable_bps_copier ? 0xB3 : 0xB0, 0xFF0724L);
+      }
       ips_pending_index = 0;
       patch_ok = (ips_end > 0); /* 0 => patch error / FPGA stall */
       /* If the IPS patch wrote past the original ROM boundary (ROM expansion

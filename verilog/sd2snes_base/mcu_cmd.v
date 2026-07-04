@@ -111,7 +111,16 @@ module mcu_cmd(
   // cheat configuration
   output reg [7:0] cheat_pgm_idx_out,
   output reg [31:0] cheat_pgm_data_out,
-  output reg cheat_pgm_we_out
+  output reg cheat_pgm_we_out,
+
+  // MCU-driven copier (dma): the MCU writes the copier regs $2020-$2029 itself
+  // (CMD 0xd4, 10 param bytes -> dma_r[0..9]) while the SNES is held in reset, then
+  // polls busy (CMD 0xd5).  main.v muxes the dma reg interface on mcu_dma_active.
+  output [3:0] mcu_dma_addr_out,
+  output [7:0] mcu_dma_data_out,
+  output reg   mcu_dma_we_out,
+  output       mcu_dma_active,
+  input  [1:0] DMA_BUSY
 );
 
 initial begin
@@ -175,13 +184,22 @@ reg SD_DMA_STATUSr;
 reg [7:0] MSU_STATUSr;
 reg [1:0] bs_erase_seqr;
 reg [3:0] bs_erase_blkr;
+reg [1:0] DMA_BUSYr;
 always @(posedge clk) begin
   DAC_STATUSr <= DAC_STATUS;
   SD_DMA_STATUSr <= SD_DMA_STATUS;
   MSU_STATUSr <= MSU_STATUS;
   bs_erase_seqr <= bs_erase_seq;
   bs_erase_blkr <= bs_erase_blk;
+  DMA_BUSYr <= DMA_BUSY;
 end
+
+// MCU-driven copier register write (muxed into dma by main.v on mcu_dma_active)
+reg [3:0] mcu_dma_addr_buf;
+reg [7:0] mcu_dma_data_buf;
+assign mcu_dma_addr_out = mcu_dma_addr_buf;
+assign mcu_dma_data_out = mcu_dma_data_buf;
+assign mcu_dma_active   = (cmd_data[7:0] == 8'hd4);
 
 reg SD_DMA_PARTIALr;
 assign SD_DMA_PARTIAL = SD_DMA_PARTIALr;
@@ -216,6 +234,7 @@ end
 always @(posedge clk) begin
   snescmd_we_out <= 1'b0;
   cheat_pgm_we_out <= 1'b0;
+  mcu_dma_we_out <= 1'b0;
   dac_reset_out <= 1'b0;
   MSU_RESET_OUT_BUF <= 1'b0;
 
@@ -306,6 +325,16 @@ always @(posedge clk) begin
             cheat_pgm_we_out <= 1'b1;
           end
         endcase
+      end
+      8'hd4: begin
+        // MCU copier op: 10 param bytes (spi_byte_cnt 2..11) -> dma_r[0..9].
+        // mcu_dma_active muxes these onto the copier reg port in main.v; dma_r[9]
+        // (last, with opcode|trig) starts the engine.  The MCU then polls 0xd5.
+        if (spi_byte_cnt >= 32'h2 && spi_byte_cnt <= 32'hb) begin
+          mcu_dma_addr_buf <= spi_byte_cnt[3:0] - 4'h2;
+          mcu_dma_data_buf <= param_data;
+          mcu_dma_we_out   <= 1'b1;
+        end
       end
       8'he0:
         case (spi_byte_cnt)
@@ -524,6 +553,8 @@ always @(posedge clk) begin
       MCU_DATA_IN_BUF <= param_data;
     else if (cmd_data[7:0] == 8'hD1)
       MCU_DATA_IN_BUF <= snescmd_data_in;
+    else if (cmd_data[7:0] == 8'hd5)   // MCU copier busy poll: bit0 = copier running
+      MCU_DATA_IN_BUF <= {6'b0, DMA_BUSYr};
     else if (cmd_data[7:0] == 8'hF9)
       case (spi_byte_cnt)
         32'h2: begin

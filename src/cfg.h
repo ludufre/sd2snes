@@ -71,6 +71,7 @@
 #define CFG_GAME_INFO_VIDEO              ("GameInfoVideo")
 #define CFG_GAME_INFO_MUSIC             ("GameInfoMusic")
 #define CFG_ENABLE_CHEAT_OVERLAY         ("EnableCheatOverlay")
+#define CFG_ENABLE_BPS_COPIER            ("EnableBpsCopier")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -132,6 +133,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_wifi;             /* CFG @ $13F: RESERVED WiFi companion master switch (0=off). No ESP link in this branch; placed here (NOT $BD: that overlapped bgm_name @ $BC) so the future Companion port has no cfg-offset drift. */
   uint8_t  game_info_video;         /* CFG @ $140: play the animated .fmv clip on the game info screen (off -> static .gss snapshot) */
   uint8_t  game_info_music;         /* CFG @ $141: play the clip's .pcm soundtrack (only while the .fmv clip is shown; requires game_info_video) */
+  uint8_t  enable_bps_copier;       /* CFG @ $142: apply BPS via the FPGA copier (fast) instead of byte-by-byte. Only LoROM/HiROM, no special chip, and output+source-backup fit below the menu; everything else falls back to byte-by-byte. Default ON (hardware-validated; the core probe falls back safely on cores without the copier). */
 } cfg_t;
 
 int cfg_save(void);

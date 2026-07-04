@@ -345,6 +345,7 @@
 #define CFG_ENABLE_WIFI                 CFG_ADDR+$013F /* RESERVED (Companion master switch). Placed at $13F (NOT $BD: that overlapped CFG_MENU_MUSIC_FILE $BC, 128B) so the WiFi port slots in with no cfg-offset drift. Lockstep with src/cfg.h. */
 #define CFG_GAME_INFO_VIDEO             CFG_ADDR+$0140 /* play the .fmv clip on the game info screen (off -> static .gss snapshot) */
 #define CFG_GAME_INFO_MUSIC             CFG_ADDR+$0141 /* play the clip's .pcm soundtrack (requires CFG_GAME_INFO_VIDEO) */
+#define CFG_ENABLE_BPS_COPIER           CFG_ADDR+$0142 /* apply BPS via FPGA copier; lockstep with src/cfg.h */
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

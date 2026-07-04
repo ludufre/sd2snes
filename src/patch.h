@@ -78,9 +78,16 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
  *   Apply a BPS patch at <index> (1-based) from the list stored at sram_addr.
  *   target_size is known from the BPS header so no two-pass scan is needed.
  *   Returns target_size on success, 0 on error.
+ *
+ *   use_copier: 0 = legacy byte-by-byte apply (the whole image is finalized in
+ *   SDRAM when this returns).  1 = copier mode: SourceCopy/TargetCopy are EMITTED
+ *   as FPGA copier descriptors (patch_copier_emit) instead of moved here, and the
+ *   CRC re-read is skipped; the image at rom_base is only PARTIAL on return (the
+ *   live menu must drain the descriptor list to finish it).  The pristine source
+ *   backup and TargetRead literals are still written inline either way.
  */
 uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
-                   uint32_t original_rom_size);
+                   uint32_t original_rom_size, uint8_t use_copier);
 
 /*
  * bps_probe_header  (load-time optimization)
@@ -110,5 +117,17 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
  */
 uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                      uint32_t original_rom_size, uint32_t rom_header_size);
+
+/*
+ * patch_apply_copier
+ *   Like patch_apply but, for a .bps, emits FPGA copier descriptors for the
+ *   SourceCopy/TargetCopy bulk (see bps_apply use_copier=1).  On success the ROM
+ *   at rom_base is only partially materialized: the caller must run the emitted
+ *   descriptors via the live menu copier (patch_copier.h) before booting.  IPS
+ *   patches are applied the legacy way.  Returns target_size / adj_max_end on
+ *   success, 0 on error or descriptor-list-full (caller falls back to patch_apply).
+ */
+uint32_t patch_apply_copier(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
+                            uint32_t original_rom_size, uint32_t rom_header_size);
 
 #endif /* IPS_H */
