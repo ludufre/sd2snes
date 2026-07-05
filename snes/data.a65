@@ -396,4 +396,16 @@ gi_sb_pos       .word 0    ; Y-mode scrollbar: thumb top cell (0..H-thumb)
 gi_sb_end       .word 0    ; Y-mode scrollbar: thumb bottom cell, exclusive (pos+thumb)
 gi_sb_max       .word 0    ; Y-mode scrollbar: max scroll = gi_desc_lines - GIB_FULL_ROWS
 gi_sb_i         .byt 0     ; Y-mode scrollbar: current row counter (0..GIB_FULL_ROWS-1)
+;----------list scrollbar (Recents/Favorites windows: listsel_scrollbar) ----------
+lsb_vis         .byt 0     ; list scrollbar: visible rows (H) -- input
+lsb_top         .byt 0     ; list scrollbar: first visible entry / viewport top -- input
+lsb_col         .byt 0     ; list scrollbar: draw column (window_x + window_w - 2)
+lsb_i           .byt 0     ; list scrollbar: row loop counter (0..H-1)
+lsb_h           .word 0    ; list scrollbar: H (16-bit copy of lsb_vis)
+lsb_n           .word 0    ; list scrollbar: N = listsel_max (total entries, 16-bit)
+lsb_topw        .word 0    ; list scrollbar: top (16-bit copy of lsb_top)
+lsb_thumb       .word 0    ; list scrollbar: thumb height in cells (1..H)
+lsb_pos         .word 0    ; list scrollbar: thumb top cell (0..H-thumb)
+lsb_end         .word 0    ; list scrollbar: thumb bottom cell, exclusive (pos+thumb)
+lsb_max         .word 0    ; list scrollbar: max scroll = N - H
 _END            .byt 0
