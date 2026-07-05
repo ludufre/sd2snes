@@ -763,6 +763,7 @@ cheatmenu_disp_right_skip:
   bra -
 
 cheatmenu_in_b:
+  jsr snd_fx_back            ; leaving the cheat list
   rts
 
 cheatmenu_in_a:
@@ -771,6 +772,7 @@ cheatmenu_in_a:
 ; selected row's state changed, so redraw just that row instead of
 ; the whole list.  This avoids the bottom-row flicker caused by a
 ; full redraw straddling the next VBlank.
+  jsr snd_fx_confirm         ; A = toggle the selected cheat
   jsr cheatmenu_toggle_selected
   jsr waitblank
   jsr cheatmenu_scroll_reset
@@ -780,6 +782,7 @@ cheatmenu_in_a:
 cheatmenu_in_up:
   lda cm_sel
   beq cheatmenu_in_up_scroll
+  jsr snd_fx_cursor          ; cursor moves up one row
 ; redraw the row we are leaving so any partial scroll is cleared
   jsr cheatmenu_scroll_reset
   jsr cheatmenu_redraw_sel
@@ -802,6 +805,7 @@ cheatmenu_in_up_scroll_decrement:
   dec
   sta cm_top
   sep #$20 : .as
+  jsr snd_fx_cursor          ; list scrolled up one row
   jsr cheatmenu_scroll_reset
   jsr cheatmenu_redraw_all
   jmp cheatmenu_input_loop
@@ -826,6 +830,7 @@ cheatmenu_in_down:
 cheatmenu_in_down_advance:
   .al                              ; reached with M=0 from bcc above
   sep #$20 : .as
+  jsr snd_fx_cursor          ; cursor moves down one row
 ; redraw the row we are leaving so any partial scroll is cleared
   jsr cheatmenu_scroll_reset
   jsr cheatmenu_redraw_sel
@@ -852,6 +857,7 @@ cheatmenu_in_down_scroll_ok:
   inc
   sta cm_top
   sep #$20 : .as
+  jsr snd_fx_cursor          ; list scrolled down one row
   jsr cheatmenu_scroll_reset
   jsr cheatmenu_redraw_all
   jmp cheatmenu_input_loop
@@ -868,6 +874,7 @@ cheatmenu_in_down_scroll_ok:
 ; than in cm_tmp, since cm_tmp is also used by redraw_all.
 ; ----------------------------------------------------------------------
 cheatmenu_in_right:
+  jsr snd_fx_cursor          ; page down
   jsr cheatmenu_scroll_reset
 
   rep #$20 : .al
@@ -939,6 +946,7 @@ cheatmenu_in_right_done:
 ; 16-bit cm_top in CheatMenuG.
 ; ----------------------------------------------------------------------
 cheatmenu_in_left:
+  jsr snd_fx_cursor          ; page up
   jsr cheatmenu_scroll_reset
 
   rep #$20 : .al
