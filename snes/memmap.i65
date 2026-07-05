@@ -163,6 +163,7 @@
 
 #define NUM_CHEATS                  $FF0700
 #define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
+#define PPU_CLEAR_GATE             $FF0711 /* pre-boot PPU-clear arm flag, set by firmware in load_rom (= CFG.clear_ppu_on_boot && a patch was applied this load). game_handshake reads it; 1 => jsr clear_ppu_on_boot. Lockstep with SRAM_PPU_CLEAR_GATE_ADDR in src/memory.h; same free gap. */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
@@ -346,6 +347,7 @@
 #define CFG_GAME_INFO_VIDEO             CFG_ADDR+$0140 /* play the .fmv clip on the game info screen (off -> static .gss snapshot) */
 #define CFG_GAME_INFO_MUSIC             CFG_ADDR+$0141 /* play the clip's .pcm soundtrack (requires CFG_GAME_INFO_VIDEO) */
 #define CFG_ENABLE_BPS_COPIER           CFG_ADDR+$0142 /* apply BPS via FPGA copier; lockstep with src/cfg.h */
+#define CFG_CLEAR_PPU_ON_BOOT           CFG_ADDR+$0143 /* clear VRAM/CGRAM/OAM before a patched ROM boots (romhacks that skip PPU init); lockstep with src/cfg.h */
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

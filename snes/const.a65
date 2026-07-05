@@ -225,6 +225,7 @@ mtext_browser_showcov             .byt "Show covers", 0
 mtext_browser_covlists            .byt " ",129,"Favorites/Recents", 0
 mtext_cfg_patch                   .byt "Patch Options", 0
 mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
+mtext_patch_clearppu              .byt "Clear PPU on Boot", 0
 mtext_browser_menumusic           .byt "Menu music", 0
 mtext_browser_menusfx             .byt "Menu sounds", 0
 mtext_browser_sortfav             .byt "Sort favorites", 0
@@ -286,6 +287,7 @@ mdesc_browser_showcov             .byt "Show game covers in the menu", 0
 mdesc_browser_covlists            .byt "Show covers in the Recent and Favorite lists too", 0
 mdesc_cfg_patch                   .byt "Options for IPS/BPS soft-patching", 0
 mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (much slower load)", 0
+mdesc_patch_clearppu              .byt "Clear VRAM/CGRAM/OAM before a patched ROM boots (romhacks that skip PPU init)", 0
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0
 mdesc_browser_menusfx             .byt "Play sound effects when navigating the menu", 0
 mdesc_browser_sortfav             .byt "Sort the favorites list alphabetically", 0

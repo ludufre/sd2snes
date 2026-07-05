@@ -26,6 +26,7 @@ _Static_assert(offsetof(cfg_t, enable_wifi) == 0x13F, "cfg_t.enable_wifi must st
 _Static_assert(offsetof(cfg_t, game_info_video) == 0x140, "cfg_t.game_info_video must stay at CFG_ADDR+$140");
 _Static_assert(offsetof(cfg_t, game_info_music) == 0x141, "cfg_t.game_info_music must stay at CFG_ADDR+$141");
 _Static_assert(offsetof(cfg_t, enable_bps_copier) == 0x142, "cfg_t.enable_bps_copier must stay at CFG_ADDR+$142");
+_Static_assert(offsetof(cfg_t, clear_ppu_on_boot) == 0x143, "cfg_t.clear_ppu_on_boot must stay at CFG_ADDR+$143");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -80,7 +81,8 @@ cfg_t CFG_DEFAULT = {
   .enable_wifi = 0,
   .game_info_video = 1,
   .game_info_music = 1,
-  .enable_bps_copier = 1
+  .enable_bps_copier = 1,
+  .clear_ppu_on_boot = 0
 };
 
 cfg_t CFG;
@@ -200,6 +202,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEAT_OVERLAY, CFG.enable_cheat_overlay ? "true" : "false");
   f_printf(&file_handle, "#  %s: Apply BPS patches via the FPGA copier (fast). LoROM/HiROM without special chips only; others fall back to byte-by-byte.\n", CFG_ENABLE_BPS_COPIER);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_BPS_COPIER, CFG.enable_bps_copier ? "true" : "false");
+  f_printf(&file_handle, "#  %s: Clear VRAM/CGRAM/OAM before booting a patched ROM (for romhacks that skip PPU init). Only when an IPS/BPS patch was applied.\n", CFG_CLEAR_PPU_ON_BOOT);
+  f_printf(&file_handle, "%s: %s\n", CFG_CLEAR_PPU_ON_BOOT, CFG.clear_ppu_on_boot ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
@@ -376,6 +380,9 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_ENABLE_BPS_COPIER, &tok)) {
       CFG.enable_bps_copier = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_CLEAR_PPU_ON_BOOT, &tok)) {
+      CFG.clear_ppu_on_boot = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);

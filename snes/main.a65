@@ -774,9 +774,15 @@ game_handshake:
   bra -
 + stz $4200
   sei
-; jsr clear_ppu_on_boot ; fork (DISABLED -- descomente p/ ligar): zera VRAM/CGRAM/OAM
-                        ; p/ romhacks que pulam o init da PPU bootarem limpos (sem lixo
-                        ; de VRAM); o reset preserva.  Pendente: deixar padrao ou via menu.
+; fork: zero VRAM/CGRAM/OAM so a romhack that skips PPU init boots clean (no leftover
+; VRAM garbage; the reset preserves it).  The firmware armed PPU_CLEAR_GATE=1 in load_rom
+; iff the "Clear PPU on Boot" option is ON *and* an IPS/BPS patch was applied this load
+; (all paths: browser/recents/favorites/autoboot).  A is 8-bit here (.as since line 756)
+; and is overwritten by lda #$55 below, so it may be clobbered.
+  lda @PPU_CLEAR_GATE
+  beq gh_skip_ppuclear
+  jsr clear_ppu_on_boot
+gh_skip_ppuclear:
   lda #$55
   sta @MCU_CMD
 ; jump to WRAM

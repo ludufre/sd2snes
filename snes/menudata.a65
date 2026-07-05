@@ -279,6 +279,20 @@ menu_enttab_patch:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_patch_clearppu
+ .byt  ^mtext_patch_clearppu
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_CLEAR_PPU_ON_BOOT
+ .byt  ^CFG_CLEAR_PPU_ON_BOOT
+ .word !mdesc_patch_clearppu
+ .byt  ^mdesc_patch_clearppu
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt 0
 
 menu_enttab_bsx:
