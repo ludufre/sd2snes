@@ -72,6 +72,7 @@
 #define CFG_GAME_INFO_MUSIC             ("GameInfoMusic")
 #define CFG_ENABLE_CHEAT_OVERLAY         ("EnableCheatOverlay")
 #define CFG_ENABLE_BPS_COPIER            ("EnableBpsCopier")
+#define CFG_CLEAR_PPU_ON_BOOT            ("ClearPpuOnBoot")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -134,6 +135,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  game_info_video;         /* CFG @ $140: play the animated .fmv clip on the game info screen (off -> static .gss snapshot) */
   uint8_t  game_info_music;         /* CFG @ $141: play the clip's .pcm soundtrack (only while the .fmv clip is shown; requires game_info_video) */
   uint8_t  enable_bps_copier;       /* CFG @ $142: apply BPS via the FPGA copier (fast) instead of byte-by-byte. Only LoROM/HiROM, no special chip, and output+source-backup fit below the menu; everything else falls back to byte-by-byte. Default ON (hardware-validated; the core probe falls back safely on cores without the copier). */
+  uint8_t  clear_ppu_on_boot;       /* CFG @ $143: zero VRAM/CGRAM/OAM right before booting a PATCHED ROM, so a romhack that draws its intro without initializing the PPU boots clean (no leftover menu tiles) on real hardware. Only fires when an IPS/BPS patch was applied this load (all launch paths); armed MCU-side via SRAM_PPU_CLEAR_GATE_ADDR. Default OFF. */
 } cfg_t;
 
 int cfg_save(void);

@@ -457,6 +457,15 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     menu_sfx_shutdown();
   }
   if(flags & LOADROM_WAIT_SNES) {
+    /* Arm the pre-boot PPU-clear gate BEFORE releasing the SNES from game_handshake
+       (the $55 below).  ips_pending_index is still the requested patch index here
+       (consumed later, ~line 800), so this fires for every launch path (browser,
+       Recents/Favorites, Autoboot) whenever a patch will be applied AND the option
+       is on.  Rewritten every game load => never stale.  game_handshake reads this
+       byte at boot, before the patch is actually applied, so we gate on "a patch was
+       requested" rather than "patch succeeded" (a failed patch aborts the load). */
+    sram_writebyte((CFG.clear_ppu_on_boot && ips_pending_index > 0) ? 1 : 0,
+                   SRAM_PPU_CLEAR_GATE_ADDR);
     printf("Setting cmd=0x55...");
     snes_set_snes_cmd(0x55);
     printf("OK.\n");
