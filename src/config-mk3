@@ -157,7 +157,10 @@ MCR_FPGACLK_MRxR        = (1<<4) /* MR1R */
 TMR_FPGACLK_MR          = LPC_TIM3->MR1
 TMR_FPGACLK_DIV         = 5
 
-QSORT_MAXELEM           = 2048
+# 1024 (not 2048) so the sort ptrcache (QSORT_MAXELEM*4 B) fits the 16 KB AHB SRAM
+# alongside the ESP-companion + game-info scratch after merging feat-pre-launch-info.
+# Dirs above this fall back to the slower in-place sort (sort.c) -- still correct.
+QSORT_MAXELEM           = 1024
 SORT_STRLEN             = 256
 CLTBL_SIZE              = 100
 

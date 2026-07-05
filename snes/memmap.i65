@@ -60,10 +60,10 @@
    One composited DirectColor (CG-Direct-Select) BG1 image (cover + screenshot,
    utils/gen_dcimage.py) is staged by the MCU (CMD_GAME_INFO): 8bpp tiles -> bank
    $CA, 16-bit tilemap -> bank $CB. The parsed metadata struct lands at GAMEINFO
-   ($FF6000); the menu reads it by fixed offset (mirror src/gameinfo.h). */
+   ($FF7400, just after the favorites mirror); the menu reads it by fixed offset (mirror src/gameinfo.h). */
 #define GI_TILES                    $CA0000    /* 8bpp DirectColor tiles (.gd) / FMV frame tiles (.fmv) */
-#define GI_FMV_PAL                  $CA1B00    /* .fmv v3: FMV frame palette (256B) right after the 6912B frame at GI_TILES; -> CGRAM 128 */
-#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap (.gd) / .fmv v3 cover palette (160B) -> CGRAM 48 */
+#define GI_FMV_PAL                  $CA1B00    /* FMV frame palette (176B, 88 colours) right after the 6912B frame at GI_TILES; -> CGRAM 168 */
+#define GI_TMAP                     $CB0000    /* 16-bit BG tilemap (.gd) / .gcv cover palette (240B, 120 colours) -> CGRAM 48 */
 /* paletted band cover region (left): 16x16 tiles (128x128px) at col 1. Cover tiles DMA to window-0
    ($2000 = char #256); 256 tiles span #256..511 ($2000..$3FFF) -- MUST stay <= 256 tiles or it spills
    into $4000 (the body's BG2 font), corrupting the background (the bottom cover row overwrote BG2
@@ -91,6 +91,9 @@
 #define GI_DESCRIPTION              $FF749A    /* char[256] one line; menu word-wraps */
 #define GI_FMV_FPS                  $FF759A    /* FMV playback fps (when GI_FLAG_FMV) */
 #define GI_FMV_FRAMES               $FF759B    /* FMV total frames (uint16; info/debug) */
+#define GI_DESC_EXT                 $FF7600    /* full description char[2048] NUL-term staged by CMD_GI_DESC_FULL;
+                                                  first byte 0 = invalid -> menu falls back to GI_DESCRIPTION;
+                                                  lockstep with SRAM_GAMEINFO_DESCEXT_ADDR in src/memory.h */
 #define GI_STATUS_OK                $01
 #define GI_FLAG_IMAGE               $01        /* legacy DirectColor .gd (RETIRED; band is paletted) */
 #define GI_FLAG_FMV                 $02        /* cover-LESS <rom>.fmv v4 screenshot/animation staged at
@@ -160,6 +163,7 @@
 
 #define NUM_CHEATS                  $FF0700
 #define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
+#define PPU_CLEAR_GATE             $FF0711 /* pre-boot PPU-clear arm flag, set by firmware in load_rom (= CFG.clear_ppu_on_boot && a patch was applied this load). game_handshake reads it; 1 => jsr clear_ppu_on_boot. Lockstep with SRAM_PPU_CLEAR_GATE_ADDR in src/memory.h; same free gap. */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
@@ -246,6 +250,7 @@
 #define CMD_GAME_INFO_RECENT        $35 /* GAME_INFO for the recent game at MCU_PARAM index (LAST_FILE) */
 #define CMD_GAME_INFO_FAVORITE      $36 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
 #define CMD_FMV_NEXT                $37 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
+#define CMD_GI_DESC_FULL            $38 /* stage the full (untruncated) description into GI_DESC_EXT ($FF7600) NUL-term; non-booting */
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
 /* WiFi status/scan block + connect params, RESERVED for the Companion port.
@@ -265,6 +270,11 @@
 #define WIFI_OFF_REQ_SSID           340  /* char[33] - menu writes (CONNECT) */
 #define WIFI_OFF_REQ_PASS           373  /* char[64] - menu writes (CONNECT) */
 
+/* IPS patch list written by MCU. Layout: +0 num_patches, +1 display names
+   (8*IPS_NAME_LEN=512 -> [1,513)), +520 full SD paths (8*256=2048 -> [520,2568)),
+   region $FF5000..$FF5A08, below FAVORITE_GAMES $FF6000. The menu reads only the
+   name region here; the paths are consumed by the MCU (IPS_PATH_BASE in src/patch.h).
+   Lockstep with SRAM_IPS_LIST_ADDR in src/memory.h. */
 #define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
 #define IPS_NAME_LEN                64       /* bytes per display name entry */
 #define IPS_MAX_PATCHES             8        /* maximum patches per ROM */
@@ -336,6 +346,8 @@
 #define CFG_ENABLE_WIFI                 CFG_ADDR+$013F /* RESERVED (Companion master switch). Placed at $13F (NOT $BD: that overlapped CFG_MENU_MUSIC_FILE $BC, 128B) so the WiFi port slots in with no cfg-offset drift. Lockstep with src/cfg.h. */
 #define CFG_GAME_INFO_VIDEO             CFG_ADDR+$0140 /* play the .fmv clip on the game info screen (off -> static .gss snapshot) */
 #define CFG_GAME_INFO_MUSIC             CFG_ADDR+$0141 /* play the clip's .pcm soundtrack (requires CFG_GAME_INFO_VIDEO) */
+#define CFG_ENABLE_BPS_COPIER           CFG_ADDR+$0142 /* apply BPS via FPGA copier; lockstep with src/cfg.h */
+#define CFG_CLEAR_PPU_ON_BOOT           CFG_ADDR+$0143 /* clear VRAM/CGRAM/OAM before a patched ROM boots (romhacks that skip PPU init); lockstep with src/cfg.h */
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

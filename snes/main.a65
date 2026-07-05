@@ -87,6 +87,13 @@ coldboot:       ; Regular, cold-start init
   ; (A is still #$00.)
   sta @menu_desc_on
   sta @menu_desc_shown
+  ; fork: mainmenu_active/egg_shown are set only inside mainmenu: (menu.a65),
+  ; but menu_select/show_menu READ them, and those are reachable via the browser
+  ; context menu (Y) before the main menu ever opens -> left at $55 they trip
+  ; the Language-entry / easter-egg gates with a garbage value. Zero them here
+  ; like the description-box gates. Both are .byt; A is still #$00 in .as.
+  sta @mainmenu_active
+  sta @egg_shown
   jsr waitblank
   jsr snes_init
   jsr setup_gfx
@@ -124,7 +131,7 @@ coldboot_autoboot_out:
   ; whole menu draws in the right language from the first frame.
   sep #$20 : .as
   lda @CFG_LANGUAGE
-  cmp #$04
+  cmp #$05
   bcc +
   lda #$00              ; unknown -> English
 + sta @cur_lang
@@ -539,6 +546,42 @@ clear_vram:
   plp
   rts
 
+; fork: zero the PPU (VRAM 64KB + CGRAM + OAM) right before launching a game, so a
+; romhack that draws its intro WITHOUT initializing VRAM (relying on an emulator's
+; zeroed memory) boots clean instead of showing leftover menu/garbage tiles on real
+; hardware -- the sd2snes leaves the menu's VRAM behind, the emulator zeros it.  The
+; soft-reset that boots the game preserves the cleared PPU.  Caller must have NMI off.
+clear_ppu_on_boot:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$80
+  sta $2100         ; force blank (hide the clear in progress)
+; VRAM: 32768 words = 64 KB
+  sta $2115         ; VMAIN = $80: increment after writing $2119, +1 word
+  ldx #$0000
+  stx $2116         ; VMADD = 0
+  ldy #$0000
+  ldx #$8000
+- sty $2118         ; 16-bit sty writes $2118(lo)+$2119(hi)=word 0; VMAIN auto-incs
+  dex
+  bne -
+; CGRAM: 512 bytes
+  stz $2121         ; CGADD = 0
+  ldx #$0200
+- stz $2122
+  dex
+  bne -
+; OAM: 544 bytes
+  stz $2102
+  stz $2103         ; OAMADD = 0
+  ldx #$0220
+- stz $2104
+  dex
+  bne -
+  plp
+  rts
+
 .byt "fadeloop"
 ; *=$002a10
 ; via $7ef100
@@ -731,6 +774,15 @@ game_handshake:
   bra -
 + stz $4200
   sei
+; fork: zero VRAM/CGRAM/OAM so a romhack that skips PPU init boots clean (no leftover
+; VRAM garbage; the reset preserves it).  The firmware armed PPU_CLEAR_GATE=1 in load_rom
+; iff the "Clear PPU on Boot" option is ON *and* an IPS/BPS patch was applied this load
+; (all paths: browser/recents/favorites/autoboot).  A is 8-bit here (.as since line 756)
+; and is overwritten by lda #$55 below, so it may be clobbered.
+  lda @PPU_CLEAR_GATE
+  beq gh_skip_ppuclear
+  jsr clear_ppu_on_boot
+gh_skip_ppuclear:
   lda #$55
   sta @MCU_CMD
 ; jump to WRAM

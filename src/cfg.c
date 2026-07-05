@@ -25,6 +25,8 @@ _Static_assert(offsetof(cfg_t, show_game_info) == 0x13E, "cfg_t.show_game_info m
 _Static_assert(offsetof(cfg_t, enable_wifi) == 0x13F, "cfg_t.enable_wifi must stay at CFG_ADDR+$13F (RESERVED for the Companion port; NOT $BD which overlapped bgm_name @ $BC)");
 _Static_assert(offsetof(cfg_t, game_info_video) == 0x140, "cfg_t.game_info_video must stay at CFG_ADDR+$140");
 _Static_assert(offsetof(cfg_t, game_info_music) == 0x141, "cfg_t.game_info_music must stay at CFG_ADDR+$141");
+_Static_assert(offsetof(cfg_t, enable_bps_copier) == 0x142, "cfg_t.enable_bps_copier must stay at CFG_ADDR+$142");
+_Static_assert(offsetof(cfg_t, clear_ppu_on_boot) == 0x143, "cfg_t.clear_ppu_on_boot must stay at CFG_ADDR+$143");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -79,6 +81,8 @@ cfg_t CFG_DEFAULT = {
   .enable_wifi = 0,
   .game_info_video = 1,
   .game_info_music = 1,
+  .enable_bps_copier = 1,
+  .clear_ppu_on_boot = 0
 };
 
 cfg_t CFG;
@@ -184,7 +188,7 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %d\n", CFG_SHOW_COVERS, CFG.show_covers);
   f_printf(&file_handle, "#  %s: Also show covers in the Recent and Favorite lists (requires ShowCovers)\n", CFG_COVERS_IN_LISTS);
   f_printf(&file_handle, "%s: %s\n", CFG_COVERS_IN_LISTS, CFG.covers_in_lists ? "true" : "false");
-  f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German)\n", CFG_LANGUAGE);
+  f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German, 4: French)\n", CFG_LANGUAGE);
   f_printf(&file_handle, "%s: %d\n", CFG_LANGUAGE, CFG.language);
   f_printf(&file_handle, "\n#  %s: Re-read and CRC-check the ROM after applying an IPS/BPS patch (slow; ~23s for a 4MB BPS)\n", CFG_PATCH_VERIFY_INTEGRITY);
   f_printf(&file_handle, "%s: %s\n", CFG_PATCH_VERIFY_INTEGRITY, CFG.patch_verify_integrity ? "true" : "false");
@@ -198,6 +202,10 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_SORT_FAVORITES, CFG.sort_favorites ? "true" : "false");
   f_printf(&file_handle, "#  %s: In-game cheat overlay (pause via L+R+Y+Left to toggle cheats). Off on special-chip games.\n", CFG_ENABLE_CHEAT_OVERLAY);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEAT_OVERLAY, CFG.enable_cheat_overlay ? "true" : "false");
+  f_printf(&file_handle, "#  %s: Apply BPS patches via the FPGA copier (fast). LoROM/HiROM without special chips only; others fall back to byte-by-byte.\n", CFG_ENABLE_BPS_COPIER);
+  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_BPS_COPIER, CFG.enable_bps_copier ? "true" : "false");
+  f_printf(&file_handle, "#  %s: Clear VRAM/CGRAM/OAM before booting a patched ROM (for romhacks that skip PPU init). Only when an IPS/BPS patch was applied.\n", CFG_CLEAR_PPU_ON_BOOT);
+  f_printf(&file_handle, "%s: %s\n", CFG_CLEAR_PPU_ON_BOOT, CFG.clear_ppu_on_boot ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
@@ -355,7 +363,7 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_LANGUAGE, &tok)) {
       CFG.language = tok.longvalue;
-      if(CFG.language > 3) CFG.language = 0;
+      if(CFG.language > 4) CFG.language = 0;
     }
     if(yaml_get_itemvalue(CFG_PATCH_VERIFY_INTEGRITY, &tok)) {
       CFG.patch_verify_integrity = tok.boolvalue ? 1 : 0;
@@ -374,6 +382,12 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_ENABLE_CHEAT_OVERLAY, &tok)) {
       CFG.enable_cheat_overlay = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_ENABLE_BPS_COPIER, &tok)) {
+      CFG.enable_bps_copier = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_CLEAR_PPU_ON_BOOT, &tok)) {
+      CFG.clear_ppu_on_boot = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);

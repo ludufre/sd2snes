@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
   /* stage the patch path in slot 1, like ips_find_patches would */
   size_t plen = strlen(patch) + 1;
   if (plen > IPS_PATH_LEN) { fprintf(stderr, "patch path too long\n"); return 99; }
-  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + 512, patch, plen);
+  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + IPS_PATH_BASE, patch, plen);
 
   /* canary-fill every region the patcher must not touch */
   for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
@@ -89,6 +89,14 @@ int main(int argc, char **argv) {
     uint32_t scratch = 0;
     ret = bps_probe_header(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize,
                            PATCH_PROBE_HEADER_LIMIT, &scratch);
+  } else if (strcmp(mode, "copier") == 0) {
+    /* Copier mode: decode emits descriptors for SourceCopy/TargetCopy and only
+       the source backup + TargetRead literals are written inline; replaying the
+       descriptors over the fake SDRAM (like the live menu running the FPGA
+       copier) must finalize a byte-identical image -> the [expected] check below
+       proves the copier decomposition equals the byte-by-byte apply. */
+    ret = patch_apply_copier(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0);
+    if (ret) host_copier_replay();
   } else {
     ret = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0);
   }

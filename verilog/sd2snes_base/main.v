@@ -535,20 +535,33 @@ wire [15:0] DMA_DOUT;
 
 reg [15:0] DMA_DINr;
 
+// MCU-driven copier reg-interface wires -- declared BEFORE the dma/mcu_cmd instances
+// that use them: XST (mk2/ISE) rejects an implicit net later redeclared as a wire
+// ("Illegal redeclaration"), while Quartus (mk3) tolerates the reversed order.
+wire [3:0] MCU_DMA_ADDR;
+wire [7:0] MCU_DMA_DATA;
+wire       MCU_DMA_WE;
+wire       MCU_DMA_ACTIVE;
+wire [1:0] DMA_BUSY;
+
 dma snes_dma (
   .clkin(CLK2),
   .reset(SNES_reset_strobe),
-  .enable(dma_enable),
+  // MCU-driven copier: when MCU_DMA_ACTIVE, the copier reg interface is fed by the
+  // MCU (mcu_cmd CMD 0xd4) instead of the SNES bus, so the patcher can drive the
+  // copier with the SNES held in reset (full bus bandwidth, any core).
+  .enable(MCU_DMA_ACTIVE | dma_enable),
 
-  .reg_addr(SNES_ADDR[3:0]),
-  .reg_data_in(DMA_SNES_DATA_IN),
+  .reg_addr(MCU_DMA_ACTIVE ? MCU_DMA_ADDR : SNES_ADDR[3:0]),
+  .reg_data_in(MCU_DMA_ACTIVE ? MCU_DMA_DATA : DMA_SNES_DATA_IN),
   .reg_data_out(DMA_SNES_DATA_OUT),
 
   .reg_oe_falling(SNES_RD_start),
-  .reg_we_rising(SNES_WR_end),
-  
+  .reg_we_rising(MCU_DMA_ACTIVE ? MCU_DMA_WE : SNES_WR_end),
+
   .loop_enable(DMA_LOOP_ENABLE),
-  
+  .busy(DMA_BUSY),
+
   .BUS_RDY(DMA_RDY),
   .BUS_RRQ(DMA_RRQ),
   .BUS_WRQ(DMA_WRQ),
@@ -684,8 +697,16 @@ mcu_cmd snes_mcu_cmd(
   .snescmd_data_in(snescmd_data_in_mcu),
   .cheat_pgm_idx_out(cheat_pgm_idx),
   .cheat_pgm_data_out(cheat_pgm_data),
-  .cheat_pgm_we_out(cheat_pgm_we)
+  .cheat_pgm_we_out(cheat_pgm_we),
+  // MCU-driven copier
+  .mcu_dma_addr_out(MCU_DMA_ADDR),
+  .mcu_dma_data_out(MCU_DMA_DATA),
+  .mcu_dma_we_out(MCU_DMA_WE),
+  .mcu_dma_active(MCU_DMA_ACTIVE),
+  .DMA_BUSY(DMA_BUSY)
 );
+// (MCU-driven copier reg wires MCU_DMA_*/DMA_BUSY are declared above the dma instance,
+//  so ISE/XST accepts the declare-before-use order.)
 
 address snes_addr(
   .CLK(CLK2),

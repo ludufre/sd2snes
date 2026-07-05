@@ -306,6 +306,73 @@ menu_enttab_patch:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_patch_clearppu
+ .byt  ^mtext_patch_clearppu
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_CLEAR_PPU_ON_BOOT
+ .byt  ^CFG_CLEAR_PPU_ON_BOOT
+ .word !mdesc_patch_clearppu
+ .byt  ^mdesc_patch_clearppu
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt 0
+
+; ---- Game Info submenu (pre-boot info screen options) ----
+menu_enttab_gameinfo:
+; HEADER
+ .byt  1
+ .word !mtext_browser_gameinfo
+ .byt  ^mtext_browser_gameinfo
+; ENTRIES
+ .byt  MTYPE_VALUE
+ .word !mtext_gameinfo_enable
+ .byt  ^mtext_gameinfo_enable
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_SHOW_GAME_INFO
+ .byt  ^CFG_SHOW_GAME_INFO
+ .word !mdesc_browser_gameinfo
+ .byt  ^mdesc_browser_gameinfo
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_gameinfo_video
+ .byt  ^mtext_browser_gameinfo_video
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GAME_INFO_VIDEO
+ .byt  ^CFG_GAME_INFO_VIDEO
+ .word !mdesc_browser_gameinfo_video
+ .byt  ^mdesc_browser_gameinfo_video
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_gameinfo-1)        ; grey when Game Info is off
+ .byt  ^(mfunc_isenabled_gameinfo-1)
+
+ .byt  MTYPE_VALUE
+ .word !mtext_browser_gameinfo_music
+ .byt  ^mtext_browser_gameinfo_music
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GAME_INFO_MUSIC
+ .byt  ^CFG_GAME_INFO_MUSIC
+ .word !mdesc_browser_gameinfo_music
+ .byt  ^mdesc_browser_gameinfo_music
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_gameinfo_music-1)  ; grey when Game Info OR Show video is off
+ .byt  ^(mfunc_isenabled_gameinfo_music-1)
+
  .byt 0
 
 menu_enttab_bsx:
@@ -464,49 +531,18 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
- .byt  MTYPE_VALUE
+ .byt  MTYPE_SUBMENU
  .word !mtext_browser_gameinfo
  .byt  ^mtext_browser_gameinfo
- .word !kv_onoff
- .byt  ^kv_onoff
- .byt  OPTTYPE_KVBYTE
- .word !CFG_SHOW_GAME_INFO
- .byt  ^CFG_SHOW_GAME_INFO
- .word !mdesc_browser_gameinfo
- .byt  ^mdesc_browser_gameinfo
+ .word !menu_enttab_gameinfo
+ .byt  ^menu_enttab_gameinfo
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_gameinfo
+ .byt  ^mdesc_cfg_gameinfo
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0
-
- .byt  MTYPE_VALUE
- .word !mtext_browser_gameinfo_video
- .byt  ^mtext_browser_gameinfo_video
- .word !kv_onoff
- .byt  ^kv_onoff
- .byt  OPTTYPE_KVBYTE
- .word !CFG_GAME_INFO_VIDEO
- .byt  ^CFG_GAME_INFO_VIDEO
- .word !mdesc_browser_gameinfo_video
- .byt  ^mdesc_browser_gameinfo_video
- .byt  0,0,0
- .byt  0,0,0
- .word !(mfunc_isenabled_gameinfo-1)        ; grey when Game Info is off
- .byt  ^(mfunc_isenabled_gameinfo-1)
-
- .byt  MTYPE_VALUE
- .word !mtext_browser_gameinfo_music
- .byt  ^mtext_browser_gameinfo_music
- .word !kv_onoff
- .byt  ^kv_onoff
- .byt  OPTTYPE_KVBYTE
- .word !CFG_GAME_INFO_MUSIC
- .byt  ^CFG_GAME_INFO_MUSIC
- .word !mdesc_browser_gameinfo_music
- .byt  ^mdesc_browser_gameinfo_music
- .byt  0,0,0
- .byt  0,0,0
- .word !(mfunc_isenabled_gameinfo_music-1)  ; grey when Game Info OR Show video is off
- .byt  ^(mfunc_isenabled_gameinfo_music-1)
 
 ; .byt  MTYPE_VALUE
 ; .word !mtext_browser_screensaver_timeout
@@ -1391,6 +1427,7 @@ kv_language:
 .word $0001, !text_lang_ptbr : .byt ^text_lang_ptbr
 .word $0002, !text_lang_es : .byt ^text_lang_es
 .word $0003, !text_lang_de : .byt ^text_lang_de
+.word $0004, !text_lang_fr : .byt ^text_lang_fr
 .word $ffff
 
 kv_bsx_timesource:

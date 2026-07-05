@@ -1,17 +1,17 @@
 <h1> sd2snes+</h1>
 
 <img src="gfx/showcase.gif" width="512" alt="Showcase">
-<img src="gfx/langs.gif" width="384" alt="The main menu shown in English, Brazilian Portuguese, Spanish and German">
+<img src="gfx/langs.gif" width="384" alt="The main menu shown in English, Brazilian Portuguese, Spanish, German and French">
 
 A friendlier sd2snes/FXPAK firmware experience: languages, game covers, menu music, patches and smarter reset-to-menu behavior.
 
-**🌐 Language:** English · [Português 🇧🇷](README-BR.md) · [Español 🇪🇸](README-ES.md) · [Deutsch 🇩🇪](README-DE.md)
+**🌐 Language:** English · [Português 🇧🇷](README-BR.md) · [Español 🇪🇸](README-ES.md) · [Deutsch 🇩🇪](README-DE.md) · [Français 🇫🇷](README-FR.md)
 
 **More information:** [sd2snes.ludufre.com](https://sd2snes.ludufre.com) has more details, guides and visual examples for this fork.
 
 > **What is this?**
 >
-> This is a fork of the [original sd2snes firmware](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf). It keeps the original firmware base and adds user-facing improvements: a menu in Brazilian Portuguese, English, Spanish and German, game covers, menu music, IPS/BPS patch selection and better reset-to-menu options.
+> This is a fork of the [original sd2snes firmware](https://github.com/mrehkopf/sd2snes) by [@mrehkopf](https://github.com/mrehkopf). It keeps the original firmware base and adds user-facing improvements: a menu in Brazilian Portuguese, English, Spanish, German and French, game covers, menu music, IPS/BPS patch selection and better reset-to-menu options.
 >
 > Use this repository for questions or bugs about the **translation**, **language selector**, **covers**, **menu music**, **patch selector** or **theme editor for this fork**. For core firmware issues unrelated to these additions, please use the original project.
 
@@ -33,7 +33,7 @@ You need:
 
 ## What This Fork Adds
 
-- **Languages:** choose Brazilian Portuguese, English, Spanish or German directly in the menu.
+- **Languages:** choose Brazilian Portuguese, English, Spanish, German or French directly in the menu.
 - **Option descriptions:** a short, translated help line for the selected menu option, shown in a floating box (auto-placed above or below the menu).
 - **Game covers:** show each game's box art while browsing your ROM list.
 - **Game info screen:** before a ROM boots, see a details page with its cover, a screenshot, and metadata (developer, year, players, genre, special chip) plus a short description, read from `/sd2snes/info/<rom>.yml`. With the screen on it shows for every ROM: one without an info entry still gets a screen with its filename as the title and — if a sibling `<rom>.cov` cover exists — that box art shown where the `.gd` cover would be. For an **animated screenshot**, drop a `<rom>.fmv` (built from any video with `utils/gen_fmv.py`) next to the cover — the screenshot box plays it as a looping clip while the `<rom>.cov` cover stays alongside. Toggle in *Browser Settings* (on by default), where two sub-options (greyed out while it is off) choose whether the animated clip plays — otherwise a static snapshot shows — and whether its soundtrack plays.
@@ -76,14 +76,15 @@ To receive a GitHub notification whenever a new firmware version is released:
 
 ## Languages
 
-<img src="gfx/langs.gif" width="512" alt="The main menu shown in English, Brazilian Portuguese, Spanish and German">
+<img src="gfx/langs.gif" width="512" alt="The main menu shown in English, Brazilian Portuguese, Spanish, German and French">
 
-The menu can run in four languages:
+The menu can run in five languages:
 
 - **Português:** Brazilian Portuguese translation for menus, messages and screens.
 - **English:** the original and default firmware language.
 - **Español:** Spanish translation for menus, messages and screens.
 - **Deutsch:** German translation for menus, messages and screens.
+- **Français:** French translation for menus, messages and screens.
 
 Open **Language** in the main menu, choose the language you want, and the menu changes immediately. Your choice is saved for the next time you turn on the console.
 

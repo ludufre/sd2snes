@@ -9,6 +9,7 @@
 #include "memory.h"
 #include "fpga_spi.h"
 #include "patch.h"
+#include "patch_copier.h"
 #include "timer.h"
 #include "crc32.h"
 #include "cfg.h"
@@ -192,7 +193,7 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
                         sram_addr + 1 + (uint32_t)i * IPS_NAME_LEN,
                         (uint16_t)(strlen(ips_entries[i].name) + 1));
         sram_writeblock(ips_entries[i].full_path,
-                        sram_addr + 512 + (uint32_t)i * IPS_PATH_LEN,
+                        sram_addr + IPS_PATH_BASE + (uint32_t)i * IPS_PATH_LEN,
                         (uint16_t)(strlen(ips_entries[i].full_path) + 1));
     }
 
@@ -317,7 +318,7 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     /* Read the full IPS file path from SRAM */
     uint8_t ips_path[IPS_PATH_LEN];
     psram_readstrn(ips_path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(ips_path));
 
     printf("Applying IPS: %s\n", ips_path);
@@ -512,6 +513,7 @@ static uint8_t  bps_sb[256] __attribute__((section(".ahbram")));
 static uint16_t bps_sb_pos;   /* next byte to consume */
 static uint16_t bps_sb_len;   /* valid bytes in buffer */
 static uint8_t  bps_eof;      /* latched at EOF; checked by bps_decode_vli */
+uint32_t patch_targetread_bytes; /* DEBUG: bytes written byte-by-byte by TargetRead */
 
 /* Minimum well-formed BPS: "BPS1" + 3 one-byte header VLIs + 12-byte CRC
    footer.  Anything smaller would underflow `action_end = fsize - 12` and/or
@@ -573,6 +575,12 @@ struct bps_actions {
                                a valid BPS writes exactly target_size bytes);
                                0: clamp the final action to the window and
                                stop (probe prefix semantics) */
+    uint8_t  emit_copier;   /* 1: SourceCopy/TargetCopy emit an FPGA copier
+                               descriptor (patch_copier_emit) instead of moving
+                               bytes over the slow SPI window.  SourceRead stays
+                               the in_place no-op and TargetRead stays inline
+                               (small literals), so the menu only needs to drain
+                               the descriptor list afterwards.  See patch_copier.h. */
     uint32_t output_offset; /* out: bytes produced */
     uint32_t n_actions;     /* out: actions decoded (stats) */
 };
@@ -629,6 +637,7 @@ static int bps_run_actions(struct bps_actions *c, uint32_t action_end) {
             case 1: { /* TargetRead: literal bytes from the patch file.
                        * Drain the read-ahead buffer first, then bulk-read
                        * the remainder directly into file_buf. */
+                patch_targetread_bytes += length; /* DEBUG: measure byte-by-byte literal volume */
                 uint16_t avail = bps_sb_len - bps_sb_pos;
                 /* clamp avail to length WITHOUT truncating length to 16 bits:
                    (uint16_t)length is 0 when length is a multiple of 0x10000,
@@ -668,6 +677,17 @@ static int bps_run_actions(struct bps_actions *c, uint32_t action_end) {
                         || length > c->source_size - source_rel) {
                     err = 1; break;
                 }
+                if (c->emit_copier) {
+                    /* One copier op: pristine source backup -> target. The whole
+                       (possibly multi-MB) relocation moves at PSRAM bandwidth. */
+                    if (patch_copier_emit(c->src_base + source_rel,
+                                          c->out_base + c->output_offset, length)) {
+                        err = 1; break; /* list full -> caller falls back */
+                    }
+                    c->output_offset += length;
+                    source_rel       += length;
+                    break;
+                }
                 while (length > 0) {
                     uint16_t chunk = (length > (uint32_t)sizeof(file_buf))
                                      ? (uint16_t)sizeof(file_buf) : (uint16_t)length;
@@ -699,6 +719,19 @@ static int bps_run_actions(struct bps_actions *c, uint32_t action_end) {
                 /* dist is invariant below: target_rel and output_offset
                    advance in lockstep. */
                 uint32_t dist = c->output_offset - target_rel;
+                if (c->emit_copier) {
+                    /* One copier op with overlapping src<dst: the FPGA copies
+                       element-by-element forward (read then write, both ++), so
+                       any dist (incl. 1) reproduces the RLE inflate natively —
+                       no dist==1 / chunk<=dist special-casing needed. */
+                    if (patch_copier_emit(c->out_base + target_rel,
+                                          c->out_base + c->output_offset, length)) {
+                        err = 1; break; /* list full -> caller falls back */
+                    }
+                    target_rel       += length;
+                    c->output_offset += length;
+                    break;
+                }
                 if (dist == 1) {
                     uint8_t fill;
                     psram_readblock(&fill, c->out_base + target_rel, 1);
@@ -728,14 +761,14 @@ static int bps_run_actions(struct bps_actions *c, uint32_t action_end) {
 }
 
 uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
-                   uint32_t original_rom_size) {
+                   uint32_t original_rom_size, uint8_t use_copier) {
     if (index < 1 || index > IPS_MAX_PATCHES) return 0;
 
     patch_io_err = 0; /* PR#292 fix #1: clear stall latch for this apply */
 
     uint8_t bps_path[IPS_PATH_LEN];
     psram_readstrn(bps_path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(bps_path));
 
     printf("Applying BPS: %s\n", bps_path);
@@ -824,7 +857,22 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         file_close();
         return 0;
     }
-    {
+    /* Copier mode (Approach B): reset the op counters before the source backup. */
+    patch_targetread_bytes = 0;
+    if (use_copier) patch_copier_reset();
+    if (use_copier && source_base_addr >= rom_base_addr + original_rom_size) {
+        /* No overlap (target >= orig: the common chip-converting case, e.g.
+           SMW->4MB SA-1) -> the source backup is ONE forward copier op.  It runs
+           IMMEDIATELY (not deferred into the list) because it must read the
+           pristine source before run_actions overwrites the output. */
+        if (patch_copier_op_now(rom_base_addr, source_base_addr, original_rom_size)) {
+            file_close();
+            return 0;   /* copier failed -> caller falls back */
+        }
+    } else {
+        /* Byte-by-byte: copier OFF, or target < orig so [rom_base,+orig) ->
+           [rom_base+target,...) OVERLAPS with dst>src (a forward copier op would
+           corrupt it; a backward/DIR op is a future optimization). */
         uint32_t bak_off = 0;
         while (bak_off < original_rom_size) {
             if (patch_io_err) break; /* PR#292 fix #1: SDRAM stalled during backup */
@@ -842,7 +890,10 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
     /* Full in-place apply: output goes to rom_base (SourceRead is a no-op),
        SourceCopy reads the pristine backup, and a valid BPS writes exactly
-       target_size bytes (strict window). */
+       target_size bytes (strict window).  Copier mode (Approach B): SourceCopy/
+       TargetCopy fire the FPGA copier synchronously (the SNES is held in reset);
+       TargetRead literals are still byte-by-byte (next optimization candidate). */
+
     struct bps_actions act = {
         .out_base     = rom_base_addr,
         .src_base     = source_base_addr,
@@ -850,9 +901,16 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         .out_limit    = target_size,
         .in_place     = 1,
         .strict_limit = 1,
+        .emit_copier  = use_copier,
     };
     tick_t t_actions = getticks();
     int err = bps_run_actions(&act, action_end);
+
+    /* Copier mode (Approach B+): run_actions only RECORDED the SourceCopy/TargetCopy
+       descriptors into the PSRAM list; now run the whole batch on the copier (one
+       trigger + poll).  The deferred ops replay in order, so a TargetCopy reads the
+       already-finalized output and SourceCopy reads the pristine backup. */
+    if (use_copier && !err && patch_copier_finish()) err = 1;
 
     /* A valid BPS writes exactly target_size bytes.  Coming up short means a
        truncated action stream or a metadata_size that lseek'd past the data
@@ -894,9 +952,12 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     } else {
         printf("bps_apply: done, target_size=0x%lx\n", (unsigned long)target_size);
       if (BPS_VERIFY_CRC) {
-        /* Verify CRC32 of the patched SRAM against the BPS-embedded expected
-         * value.  Re-reads the whole target image byte-by-byte (~8 s for 4 MB) —
-         * gated by the "Verify Integrity" menu option (BPS_VERIFY_CRC). */
+        /* Verify CRC32 of the patched SRAM against the BPS-embedded expected value.
+         * Re-reads the whole target image byte-by-byte (~8 s for 4 MB) — gated by
+         * the "Verify Integrity" menu option (BPS_VERIFY_CRC).  In copier mode the
+         * image is fully patched here (the copier ops are synchronous), so this is
+         * a real end-to-end check of the copier path: on MISMATCH we FAIL the apply
+         * (err=1 -> load aborts with the error popup) rather than boot a bad ROM. */
         uint32_t crc = crc32_init();
         uint32_t remaining = target_size, addr_off = 0;
         while (remaining > 0) {
@@ -913,6 +974,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                (unsigned long)bps_target_crc32,
                (unsigned long)crc,
                crc == bps_target_crc32 ? "OK" : "MISMATCH");
+        if (use_copier && bps_target_crc32 && crc != bps_target_crc32) err = 1;
       }
     }
     return err ? 0 : target_size;
@@ -951,7 +1013,7 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
 
     uint8_t bps_path[IPS_PATH_LEN];
     psram_readstrn(bps_path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(bps_path));
     if (patch_io_err) return 0;
 
@@ -1033,15 +1095,16 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
     return target_size;
 }
 
-uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
-                     uint32_t original_rom_size, uint32_t rom_header_size) {
+static uint32_t patch_apply_impl(uint32_t sram_addr, uint8_t index,
+                                 uint32_t rom_base_addr, uint32_t original_rom_size,
+                                 uint32_t rom_header_size, uint8_t use_copier) {
     if (index < 1 || index > IPS_MAX_PATCHES) return 0;
 
     /* Read the stored SD path to determine the patch format from its extension */
     patch_io_err = 0; /* PR#292 fix #1: clear before the first SDRAM access */
     uint8_t path[IPS_PATH_LEN];
     psram_readstrn(path,
-                  sram_addr + 512 + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(path));
     if (patch_io_err) { /* SDRAM stalled before we could even read the path */
         printf("patch_apply: FPGA MCU_RDY timeout reading patch path\n");
@@ -1058,7 +1121,30 @@ uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         if (e1 >= 'a' && e1 <= 'z') e1 -= 32;
         if (e2 >= 'a' && e2 <= 'z') e2 -= 32;
         if (e0 == 'B' && e1 == 'P' && e2 == 'S')
-            return bps_apply(sram_addr, index, rom_base_addr, original_rom_size);
+            return bps_apply(sram_addr, index, rom_base_addr, original_rom_size,
+                             use_copier);
     }
+    /* IPS is not copier-accelerated (it is already fast vs a big BPS); always the
+       legacy in-place apply regardless of use_copier. */
     return ips_apply(sram_addr, index, rom_base_addr, original_rom_size, rom_header_size);
+}
+
+uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
+                     uint32_t original_rom_size, uint32_t rom_header_size) {
+    return patch_apply_impl(sram_addr, index, rom_base_addr, original_rom_size,
+                            rom_header_size, 0);
+}
+
+/* Copier-accelerated apply: for a .bps, decode the action stream and EMIT copier
+   descriptors (patch_copier_emit) for the SourceCopy/TargetCopy bulk instead of
+   moving the bytes over the SPI window.  The ROM image at rom_base is only PARTIAL
+   when this returns (source backup + TargetRead literals are inline; the
+   SourceCopy/TargetCopy bytes are produced when the live menu drains the
+   descriptor list).  Returns target_size on success (the caller must then run the
+   descriptors via the menu copier before booting), or 0 on error / list-full ->
+   caller should fall back to patch_apply (byte-by-byte). */
+uint32_t patch_apply_copier(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
+                            uint32_t original_rom_size, uint32_t rom_header_size) {
+    return patch_apply_impl(sram_addr, index, rom_base_addr, original_rom_size,
+                            rom_header_size, 1);
 }

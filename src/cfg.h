@@ -71,6 +71,8 @@
 #define CFG_GAME_INFO_VIDEO              ("GameInfoVideo")
 #define CFG_GAME_INFO_MUSIC             ("GameInfoMusic")
 #define CFG_ENABLE_CHEAT_OVERLAY         ("EnableCheatOverlay")
+#define CFG_ENABLE_BPS_COPIER            ("EnableBpsCopier")
+#define CFG_CLEAR_PPU_ON_BOOT            ("ClearPpuOnBoot")
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -120,7 +122,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_autosave;         /* enable automatic saving when SRAM contents change */
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
   uint8_t  show_covers;             /* per-ROM cover preview (Game.cov) in the browser (0: off, 1: large, 2: small) */
-  uint8_t  language;                /* menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German) */
+  uint8_t  language;                /* menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German, 4: French) */
   uint8_t  patch_verify_integrity;  /* CFG @ $B8: re-read+CRC the patched ROM after IPS/BPS (slow) */
   uint8_t  enable_menu_music;       /* CFG @ $B9: play background menu music (bgm_name if it is an absolute path, else /sd2snes/menu.spc) */
   uint8_t  covers_in_lists;         /* CFG @ $BA: also show covers in the Recent/Favorite lists (sub-option of show_covers) */
@@ -132,6 +134,8 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_wifi;             /* CFG @ $13F: RESERVED WiFi companion master switch (0=off). No ESP link in this branch; placed here (NOT $BD: that overlapped bgm_name @ $BC) so the future Companion port has no cfg-offset drift. */
   uint8_t  game_info_video;         /* CFG @ $140: play the animated .fmv clip on the game info screen (off -> static .gss snapshot) */
   uint8_t  game_info_music;         /* CFG @ $141: play the clip's .pcm soundtrack (only while the .fmv clip is shown; requires game_info_video) */
+  uint8_t  enable_bps_copier;       /* CFG @ $142: apply BPS via the FPGA copier (fast) instead of byte-by-byte. Only LoROM/HiROM, no special chip, and output+source-backup fit below the menu; everything else falls back to byte-by-byte. Default ON (hardware-validated; the core probe falls back safely on cores without the copier). */
+  uint8_t  clear_ppu_on_boot;       /* CFG @ $143: zero VRAM/CGRAM/OAM right before booting a PATCHED ROM, so a romhack that draws its intro without initializing the PPU boots clean (no leftover menu tiles) on real hardware. Only fires when an IPS/BPS patch was applied this load (all launch paths); armed MCU-side via SRAM_PPU_CLEAR_GATE_ADDR. Default OFF. */
 } cfg_t;
 
 int cfg_save(void);

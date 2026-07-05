@@ -506,7 +506,7 @@ mdd_have:
   sep #$20 : .as
   lda [desc_menu_ptr],y      ; mdesc bank
   sta @print_bank
-  jsr resolve_str            ; localize (no-op for current mdesc_*)
+  jsr resolve_str            ; localize -- mdesc_* are per-language dispatch tables in $C1; this resolve is load-bearing
   rep #$20 : .al
   lda @print_src
   sta @desc_ptr
@@ -1090,7 +1090,7 @@ show_menu_editvalue:
     ; CFG_LANGUAGE so show_menu_cont's relang check fires only on a real commit.
     sep #$20 : .as
     lda @CFG_LANGUAGE
-    cmp #$04
+    cmp #$05
     bcc +
     lda #$00
 +   sta cur_lang

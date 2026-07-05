@@ -202,6 +202,7 @@ text_lang_en                      .byt "English", 0
 text_lang_ptbr                    .byt "Portugu", 135, "s", 0
 text_lang_es                      .byt "Espa", 154, "ol", 0
 text_lang_de                      .byt "Deutsch", 0
+text_lang_fr                      .byt "Fran", 141, "ais", 0
 mtext_cfg_time                    .byt "Set Clock", 0
 mtext_cfg_bsx                     .byt "BS-X Settings", 0
 mtext_cfg_browser                 .byt "Browser Settings", 0
@@ -224,6 +225,7 @@ mtext_browser_showcov             .byt "Show covers", 0
 mtext_browser_covlists            .byt " ",129,"Favorites/Recents", 0
 mtext_cfg_patch                   .byt "Patch Options", 0
 mtext_patch_verify                .byt "Verify Integrity (~23s)", 0
+mtext_patch_clearppu              .byt "Clear PPU on Boot", 0
 mtext_cfg_wifi_en                 .byt "Enable WiFi", 0
 mdesc_cfg_wifi_en                 .byt "Turn the WiFi companion on/off (off: no access point, no WebUI)", 0
 mtext_cfg_wifi                    .byt "WiFi", 0
@@ -250,6 +252,7 @@ mtext_browser_menumusic           .byt "Menu music", 0
 mtext_browser_menusfx             .byt "Menu sounds", 0
 mtext_browser_sortfav             .byt "Sort favorites", 0
 mtext_browser_gameinfo            .byt "Game Info", 0
+mtext_gameinfo_enable             .byt "Show info screen", 0
 mtext_browser_gameinfo_video      .byt " ", 129, "Show video", 0
 mtext_browser_gameinfo_music      .byt " ", 129, "Play video music", 0
 mtext_browser_restoretheme        .byt "Restore theme", 0
@@ -307,10 +310,12 @@ mdesc_browser_showcov             .byt "Show game covers in the menu", 0
 mdesc_browser_covlists            .byt "Show covers in the Recent and Favorite lists too", 0
 mdesc_cfg_patch                   .byt "Options for IPS/BPS soft-patching", 0
 mdesc_patch_verify                .byt "Re-read the patched ROM to verify it (much slower load)", 0
+mdesc_patch_clearppu              .byt "Clear VRAM/CGRAM/OAM before a patched ROM boots (romhacks that skip PPU init)", 0
 mdesc_browser_menumusic           .byt "Play background music (menu.spc) in the menu", 0
 mdesc_browser_menusfx             .byt "Play sound effects when navigating the menu", 0
 mdesc_browser_sortfav             .byt "Sort the favorites list alphabetically", 0
 mdesc_browser_gameinfo            .byt "Show cover, screenshot and info before booting a ROM that has a /sd2snes/info entry", 0
+mdesc_cfg_gameinfo                .byt "Options for the pre-boot game info screen", 0
 mdesc_browser_gameinfo_video      .byt "Play the animated clip on the game info screen (off shows a static snapshot)", 0
 mdesc_browser_gameinfo_music      .byt "Play the clip's soundtrack while it shows. Requires Show video.", 0
 mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0

@@ -106,7 +106,7 @@ static void stage_patch_from_entry(char *entry) {
   current_ips_srm_source[sizeof(current_ips_srm_source) - 1] = '\0';
   /* Stage the patch path where patch_apply()/bps_probe_header() read it, exactly
      as ips_find_patches() would have for a normal LOADROM (slot index 1). */
-  sram_writeblock(current_ips_srm_source, SRAM_IPS_LIST_ADDR + 512,
+  sram_writeblock(current_ips_srm_source, SRAM_IPS_LIST_ADDR + IPS_PATH_BASE,
                   (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
   ips_pending_index = 1;
 }
@@ -339,6 +339,12 @@ int main(void) {
     STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
     led_set_brightness(CFG.led_brightness);
 
+    /* DEBUG: boot-time self-test of the MCU-driven copier in fpga_base (SNES in
+       reset here).  Writes 0x01 to $FF0726 if the copier works, 0x00 if not, for a
+       USB read -- proves the FPGA change independent of any patch / chip core. */
+    { extern int patch_copier_available(void);
+      sram_writebyte(patch_copier_available() ? 0x01 : 0x00, 0xFF0726L); }
+
     /* load menu */
     sram_writelong(0x12345678, SRAM_SCRATCHPAD);
     fpga_dspx_reset(1);
@@ -456,7 +462,7 @@ int main(void) {
           current_ips_srm_source[0] = '\0';
           if(ips_pending_index > 0 && ips_pending_index <= IPS_MAX_PATCHES) {
             sram_readstrn(current_ips_srm_source,
-                          SRAM_IPS_LIST_ADDR + 512
+                          SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
                           + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
                           sizeof(current_ips_srm_source));
             printf("Patch SRM source: %s\n", current_ips_srm_source);
@@ -808,6 +814,13 @@ int main(void) {
           /* info-screen FMV pump: stream the next <rom>.fmv frame into the band tile
              bank ($CA0000). Bounded + fail-safe (no-op if no .fmv open); does NOT boot. */
           gameinfo_fmv_next();
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_GI_DESC_FULL:
+          /* "full description" (Y) on the info screen: re-scan the last-loaded .yml and
+             stage the COMPLETE (untruncated) description into $FF7600. Bounded + fail-safe
+             (on any error the region stays invalid -> menu keeps the 256-char copy); no boot. */
+          gameinfo_desc_full();
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_SET_THEME:

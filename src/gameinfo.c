@@ -58,6 +58,51 @@ static void gi_utf8_to_font(const char *src, char *dst, int dstsize) {
   dst[di] = 0;
 }
 
+/* Map a decoded (>= 0x80) codepoint to its font byte, or '?' if unmapped. Mirrors the
+ * lookup in gi_utf8_to_font. */
+static uint8_t gi_cp_to_font(uint32_t cp) {
+  for(unsigned k = 0; k < sizeof(gi_accents) / sizeof(gi_accents[0]); k++)
+    if(gi_accents[k].cp == cp) return gi_accents[k].code;
+  return '?';
+}
+
+/* Incremental UTF-8 -> font transcoder state, for streaming a value that may split a
+ * multi-byte sequence across f_gets chunks (gameinfo_desc_full). cont = continuation bytes
+ * still expected (0 = between codepoints); cp = the sequence accumulator. */
+typedef struct { uint32_t cp; int cont; } gi_font_state_t;
+
+/* Feed one input byte; write 0..2 font bytes to `out` and return the count. Byte-for-byte
+ * equivalent to gi_utf8_to_font (ASCII verbatim, mapped accents 130..159, else '?'), but
+ * stateful so it survives chunk boundaries. A byte that breaks an in-progress sequence emits
+ * '?' for the truncated codepoint and is then reprocessed as a fresh lead/ASCII byte (so up
+ * to 2 outputs). Call gi_font_flush after the last byte to emit a trailing '?' for a value
+ * that ended mid-sequence. */
+static int gi_font_feed(gi_font_state_t *st, unsigned char c, uint8_t *out) {
+  int n = 0;
+  if(st->cont) {
+    if((c & 0xC0) == 0x80) {                 /* valid continuation byte */
+      st->cp = (st->cp << 6) | (c & 0x3F);
+      if(--st->cont == 0) out[n++] = gi_cp_to_font(st->cp);
+      return n;
+    }
+    out[n++] = '?';                          /* truncated sequence -> '?' ... */
+    st->cont = 0;                            /* ... then reprocess c below */
+  }
+  if(c < 0x80) { out[n++] = (uint8_t)c; return n; }   /* ASCII verbatim */
+  if((c & 0xE0) == 0xC0)      { st->cp = c & 0x1F; st->cont = 1; }
+  else if((c & 0xF0) == 0xE0) { st->cp = c & 0x0F; st->cont = 2; }
+  else if((c & 0xF8) == 0xF0) { st->cp = c & 0x07; st->cont = 3; }
+  else out[n++] = '?';                       /* stray continuation / invalid lead */
+  return n;
+}
+
+/* Emit a trailing '?' if the stream ended mid-sequence (matches gi_utf8_to_font treating the
+ * NUL terminator as a bad continuation byte). Returns the count (0 or 1). */
+static int gi_font_flush(gi_font_state_t *st, uint8_t *out) {
+  if(st->cont) { st->cont = 0; out[0] = '?'; return 1; }
+  return 0;
+}
+
 /* dst = a + b, bounded (no snprintf dependency). */
 static void gi_join(char *dst, int dstsize, const char *a, const char *b) {
   int n = strlen(a);
@@ -118,6 +163,95 @@ static int gi_load_gcv(const char *path) {
   return 1;
 }
 
+/* Transcode a just-staged 4bpp OBJ <rom>.cov (at scratch_base, COVER_OFF_* layout from load_cover)
+ * into the SAME paletted 8bpp BG layout a real .gcv produces, so a cover that only exists as a
+ * browser .cov still shares the band with the .fmv/.gss screenshot. OBJ palettes are hardwired to
+ * CGRAM 128..255 and would clash with the screenshot (CGRAM 168..255); a paletted BG cover lives in
+ * CGRAM 48..167 (the .gcv range), clear of both the text (0..47) and the screenshot (168..255).
+ *
+ * Palette packing fits EXACTLY, no dedup: each 4bpp palette P (0..7) has 15 visible colours (entry
+ * 0 = transparent, skipped) -> 8*15 = 120 = the cover region (CGRAM 48..167). A pixel of 4bpp value
+ * V in a 16x16 block using palette P maps to the 8bpp value 0 (V==0, transparent) or 48+P*15+(V-1).
+ * The (2*w_spr)x(2*h_spr)-tile cover is centred in the 16x16 region; the border cells are blanked.
+ *
+ * Writes the 120-colour palette to SRAM_GAMEINFO_TMAP_ADDR ($CB0000 -> CGRAM 48) and 256 8bpp tiles
+ * to SRAM_COVER_ADDR ($C90000 -> window-0), matching gi_load_gcv. Bounded (fixed 256-cell loop, tiles
+ * read on demand); returns 1 on success. The caller then sets GAMEINFO_FLAG_COVER (the .gcv path). */
+static int gi_cov_to_gcv(uint32_t scratch_base) {
+  /* ~560 B of scratch, in AHB SRAM (IN_AHBRAM) -- NOT plain .bss on the main SRAM.
+     As plain statics these 560 B shrank the tiny LPC1756 main-SRAM budget (which
+     also holds the stack) just enough that the USB command server went silent on
+     real hardware (INFO/PUT returned 0 bytes; menu still worked). AHB SRAM is the
+     right home for main-loop-only scratch (like ptrcache/ips_entries): these are
+     touched ONLY here (gameinfo_load path, SPI PIO), never from an IRQ. All three
+     are fully written before read (covpal/blockmap via sram_readblock, gcvpal via
+     memset), so the NOLOAD/no-zero-init of .ahbram is fine. See IN_AHBRAM (config.h). */
+  static uint8_t covpal[COVER_MAX_PALETTES * 32] IN_AHBRAM;  /* up to 8*16 BGR555 = 256 B */
+  static uint8_t gcvpal[GCV_PAL_BYTES] IN_AHBRAM;            /* 120 colours = 240 B -> CGRAM 48..167 */
+  static uint8_t blockmap[COVER_OBJ_MAX_W * COVER_OBJ_MAX_H] IN_AHBRAM;  /* one palette idx / sprite, <= 64 */
+  uint8_t meta[COVER_META_SIZE];
+
+  sram_readblock(meta, scratch_base + COVER_OFF_STATUS, COVER_META_SIZE);
+  if(meta[0] != COVER_STATUS_OK) return 0;
+  unsigned w_spr = meta[1], h_spr = meta[2], npal = meta[3];
+  if(w_spr == 0 || w_spr > COVER_OBJ_MAX_W || h_spr == 0 || h_spr > COVER_OBJ_MAX_H
+     || npal == 0 || npal > COVER_MAX_PALETTES) return 0;
+
+  /* palette: each OBJ palette's colours 1..15 -> CGRAM 48 + P*15 + (c-1) */
+  memset(gcvpal, 0, sizeof(gcvpal));
+  sram_readblock(covpal, scratch_base + COVER_OFF_PAL, (uint16_t)(npal * 32));
+  for(unsigned p = 0; p < npal; p++) {
+    for(unsigned c = 1; c < 16; c++) {
+      unsigned di = (p * 15 + (c - 1)) * 2;
+      unsigned si = (p * 16 + c) * 2;
+      gcvpal[di]     = covpal[si];
+      gcvpal[di + 1] = covpal[si + 1];
+    }
+  }
+  sram_writeblock(gcvpal, SRAM_GAMEINFO_TMAP_ADDR, GCV_PAL_BYTES);
+
+  sram_readblock(blockmap, scratch_base + COVER_OFF_BLOCKMAP, (uint16_t)(w_spr * h_spr));
+
+  /* tiles: the cover centred in the 16x16 region, border transparent. The .cov tile name grid is
+   * 16 wide, so the cover-local cell (cr,cc) is exactly .cov tile index cr*16+cc. */
+  int start_col = 8 - (int)w_spr;   /* (16 - 2*w_spr)/2 in tiles */
+  int start_row = 8 - (int)h_spr;
+  for(int R = 0; R < 16; R++) {
+    for(int C = 0; C < 16; C++) {
+      uint8_t out[64];
+      memset(out, 0, sizeof(out));
+      int cr = R - start_row, cc = C - start_col;
+      if(cr >= 0 && cr < 2 * (int)h_spr && cc >= 0 && cc < 2 * (int)w_spr) {
+        uint8_t in[32];
+        sram_readblock(in, scratch_base + COVER_OFF_TILES + (uint32_t)(cr * 16 + cc) * 32, 32);
+        unsigned p = blockmap[(cr >> 1) * w_spr + (cc >> 1)];
+        if(p >= npal) p = 0;                         /* defensive: bad blockmap index */
+        unsigned base = 47 + p * 15;                 /* 8bpp value = base + V (V = 1..15) */
+        for(int row = 0; row < 8; row++) {
+          uint8_t p0 = in[2*row], p1 = in[2*row+1], p2 = in[16+2*row], p3 = in[17+2*row];
+          for(int x = 0; x < 8; x++) {
+            uint8_t bit = (uint8_t)(0x80 >> x);
+            unsigned v = ((p0 & bit) ? 1u : 0u) | ((p1 & bit) ? 2u : 0u)
+                       | ((p2 & bit) ? 4u : 0u) | ((p3 & bit) ? 8u : 0u);
+            if(!v) continue;                          /* transparent pixel -> 8bpp 0 */
+            unsigned val = base + v;                  /* 48..167 */
+            if(val & 0x01) out[2*row]    |= bit;
+            if(val & 0x02) out[2*row+1]  |= bit;
+            if(val & 0x04) out[16+2*row] |= bit;
+            if(val & 0x08) out[17+2*row] |= bit;
+            if(val & 0x10) out[32+2*row] |= bit;
+            if(val & 0x20) out[33+2*row] |= bit;
+            if(val & 0x40) out[48+2*row] |= bit;
+            if(val & 0x80) out[49+2*row] |= bit;
+          }
+        }
+      }
+      sram_writeblock(out, SRAM_COVER_ADDR + (uint32_t)(R * 16 + C) * 64, 64);
+    }
+  }
+  return 1;
+}
+
 /* ---- animated screenshot (.fmv) streaming -------------------------------------
  * One .fmv is held open and read SEQUENTIALLY, one fixed-size frame per CMD_FMV_NEXT,
  * looping at EOF. A DEDICATED FIL (not the shared file_handle) so it survives across
@@ -130,8 +264,20 @@ static uint8_t  gi_fmv_fps;         /* playback fps (from the header) -> audio->
 static uint16_t gi_fmv_frames;      /* total frame count */
 static uint16_t gi_fmv_cur;         /* frame index currently staged in $CA0000 (file is at cur+1) */
 static tick_t   gi_fmv_last_tick;   /* getticks() of the last CMD_FMV_NEXT (idle watchdog) */
-static char     gi_fmv_path[300];   /* the open .fmv's path, saved so a transient close can
-                                     * reopen it mid-playback (gi_fmv_reopen). "" = none. */
+static char     gi_fmv_path[300] IN_AHBRAM;  /* the open .fmv's path, saved so a transient close can
+                                     * reopen it mid-playback (gi_fmv_reopen). "" = none. IN_AHBRAM: the
+                                     * main LPC175x SRAM is tight and growing .bss can silently corrupt a
+                                     * global. .ahbram is NOLOAD (not zeroed at boot), which is safe here
+                                     * for the SAME reason as gi_yml_path below: the reader (gi_fmv_reopen,
+                                     * via CMD_FMV_NEXT) only arrives after a GAME_INFO, and gameinfo_load
+                                     * zeroes gi_fmv_path[0] on EVERY load before any FMV pump can arrive. */
+
+/* The last-loaded .yml path, saved by gameinfo_load so the "full description" (Y) command
+ * (gameinfo_desc_full) can re-open it without a fresh selection round-trip. IN_AHBRAM: the
+ * main LPC175x SRAM is tight and growing .bss can silently corrupt a global; .ahbram is
+ * NOLOAD (not zeroed at boot), which is fine here because gameinfo_load writes this in full
+ * BEFORE any read (the Y command only arrives after a GAME_INFO). "" = none. */
+static char     gi_yml_path[300] IN_AHBRAM;
 
 /* In-place retries before a read error closes the file: a single glitched SD read used to
  * kill the FMV for the whole session (no reopen path), freezing the panel until you left the
@@ -156,9 +302,9 @@ static int gi_fmv_stream(uint32_t addr, uint32_t size) {
   return 1;
 }
 
-/* Stage ONE v3 frame (palette + tiles) from the current file position. On disk a frame is the
- * 256-byte FMV palette THEN the 6912-byte tiles: the palette goes to $CA1B00 (the SNES DMAs it to
- * CGRAM 128..255 each frame) and the tiles to $CA0000 (re-DMA'd to the FMV VRAM set). A glitched
+/* Stage ONE frame (palette + tiles) from the current file position. On disk a frame is the
+ * 176-byte FMV palette (88 colours) THEN the 6912-byte tiles: the palette goes to $CA1B00 (the SNES
+ * DMAs it to CGRAM 168..255 each frame) and the tiles to $CA0000 (re-DMA'd to the FMV VRAM set). A glitched
  * read rewinds to the frame start and retries. Bounded; closes the file on persistent error. */
 static int gi_fmv_read_frame(void) {
   DWORD start = gi_fmv_fil.fptr;
@@ -271,10 +417,14 @@ void gameinfo_fmv_idle_check(void) {
 
 void gameinfo_load(uint8_t *rom_path) {
   /* static (not stack): the menu loop is single-threaded and non-reentrant, so this
-   * keeps a ~1.25 KB frame off the tight LPC stack (see cfg.c note on frame overrun). */
+   * keeps a large frame off the tight LPC stack (see cfg.c note on frame overrun).
+   * base[]/path[] additionally live IN_AHBRAM (main SRAM is tight; growing .bss can
+   * silently corrupt a global). .ahbram is NOLOAD (not zeroed at boot), which is safe:
+   * both are scratch used ONLY inside gameinfo_load and every call's first access is a
+   * write (gi_join builds path, then base from path, before either is read). */
   static gameinfo_meta_t meta;
-  static char base[288];
-  static char path[300];
+  static char base[288] IN_AHBRAM;
+  static char path[300] IN_AHBRAM;
   int fmv_eligible = 1;                 /* only probe <rom>.fmv if the .yml declares "fmv:" (or
                                          * there is no .yml). Skips a full scan of the (huge)
                                          * info dir for the 99% of games that have no video. */
@@ -305,6 +455,13 @@ void gameinfo_load(uint8_t *rom_path) {
   /* /sd2snes/info/<stem>.yml -- now OPTIONAL: a missing .yml is no longer a skip,
    * it just leaves every field empty (filled by the fallbacks below). */
   gi_join(path, sizeof(path), base, ".yml");
+  /* save the .yml path for the "full description" (Y) command (gameinfo_desc_full), and
+     invalidate the extended-description region so navigating Up/Down between ROMs never
+     leaves a previous game's full text behind (a 1st byte of 0 = invalid; the menu then
+     uses the struct's description[256]). */
+  strncpy(gi_yml_path, path, sizeof(gi_yml_path) - 1);
+  gi_yml_path[sizeof(gi_yml_path) - 1] = 0;
+  sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
   yaml_file_open(path, FA_READ);
   if(!file_res) {
     gi_field("title",        meta.title,        sizeof(meta.title));
@@ -331,26 +488,28 @@ void gameinfo_load(uint8_t *rom_path) {
   gi_dash(meta.genre);
   gi_dash(meta.special_chip);
 
-  /* band: prefer an animated /sd2snes/info/<rom>.fmv (screenshot box plays; the cover is
-   * the sibling <rom>.cov floated as OBJ); else the static composited <rom>.gd; else just
-   * the <rom>.cov box-art. All bounded + fail-safe; if nothing exists the band is gradient.
-   * The .fmv f_open scans the (huge) info dir, so it is gated behind the .yml "fmv:" flag. */
+  /* band: paletted cover (left) + paletted screenshot/animation (.fmv clip / .gss snapshot,
+   * right), each its own file into its own CGRAM range so they coexist (cover = CGRAM 48..167,
+   * screenshot = 168..255, text = 0..47). The cover comes from a real <rom>.gcv, or -- when there
+   * is none -- is transcoded on the fly from the browser <rom>.cov into the SAME paletted BG
+   * layout (gi_cov_to_gcv) so it still shares the band with the screenshot. All bounded +
+   * fail-safe; if nothing exists the band is gradient. The .fmv/.gss f_open scans the (huge) info
+   * dir, so it is gated behind the .yml "fmv:" flag. */
   gi_fmv_close();                            /* drop any prior open .fmv (reentry) */
   gi_fmv_path[0] = 0;                         /* invalidate the saved reopen path */
   menu_music_stop();                         /* and any prior FMV audio clip */
   {
-    /* DECOUPLED paletted band: the cover (.gcv, left) and the screenshot/FMV region (right) are
+    /* DECOUPLED paletted band: the cover (left) and the screenshot/FMV region (right) are
      * SEPARATE files, each into its own CGRAM range. The right region comes from EITHER the animated
      * clip (.fmv) OR the static snapshot (.gss) -- two files, so a future "no preview clip" toggle can
-     * fall back to the snapshot. Either region absent -> gradient. No DirectColor .gd / OBJ .cov. */
+     * fall back to the snapshot. Either region absent -> gradient. */
     gi_join(path, sizeof(path), base, ".gcv");
     if(gi_load_gcv(path)) {
       meta.flags |= GAMEINFO_FLAG_COVER;                       /* cover -> C9 + CGRAM 48..167 */
-    } else {
-      /* FALLBACK: no .gcv -> stage the browser <rom>.cov (next to the ROM) into C9 and let the
-       * menu float it as OBJ box-art in the SAME spot the .gcv cover would occupy. load_cover
-       * derives "<rom>.cov" from rom_path and writes the C9 meta/status itself; bounded + fail-safe. */
-      if(load_cover(rom_path, SRAM_COVER_ADDR)) meta.flags |= GAMEINFO_FLAG_COVER_OBJ;
+    } else if(load_cover(rom_path, SRAM_GAMEINFO_TILES_ADDR)   /* stage the 4bpp .cov to scratch (bank CA,
+                                                               * reused by the FMV AFTER this) */
+              && gi_cov_to_gcv(SRAM_GAMEINFO_TILES_ADDR)) {    /* transcode it into the paletted BG cover */
+      meta.flags |= GAMEINFO_FLAG_COVER;                       /* same CGRAM-48..167 BG path as a real .gcv */
     }
     if(fmv_eligible) {
       int shown = 0;
@@ -373,4 +532,94 @@ void gameinfo_load(uint8_t *rom_path) {
   }
 
   sram_writeblock(&meta, SRAM_GAMEINFO_ADDR, sizeof(meta));
+}
+
+/* "Full description" (Y) pump. The YAML parser caps a value at YAML_BUFLEN (256), so the
+ * struct's description[256] is truncated. Here we re-open the last-loaded .yml and scan it
+ * with a STREAMING line reader (outside the YAML parser) to stage the COMPLETE description,
+ * font-encoded, into SRAM_GAMEINFO_DESCEXT_ADDR. Bounded + fail-safe (never hangs the menu
+ * loop): on ANY error the region is left invalid (1st byte 0) so the menu keeps the 256-char
+ * copy. Matches the generator's format -- one physical line per field, the value is either
+ * double-quoted (terminates at the next '"', which is always the closer since inner quotes
+ * were rewritten to ''') or bare (terminates at end-of-line / EOF). */
+void gameinfo_desc_full(void) {
+  /* IN_AHBRAM scratch: off the tight main SRAM (growing .bss can silently corrupt a global).
+     Fully written before read; touched only here (menu-loop, never from an IRQ), so the
+     NOLOAD/no-zero-init of .ahbram is fine. */
+  static char    chunk[256] IN_AHBRAM;   /* one f_gets line-piece */
+  static uint8_t obuf[128]  IN_AHBRAM;   /* font-encoded output, flushed in bursts */
+  gi_font_state_t st = { 0, 0 };
+  uint32_t out_addr = SRAM_GAMEINFO_DESCEXT_ADDR;
+  uint32_t scanned  = 0;
+  unsigned out_total = 0;                /* font bytes staged (excl. NUL); cap LEN-1 */
+  unsigned ob = 0;                       /* bytes buffered in obuf */
+  int at_line_start = 1;                 /* the next chunk begins a physical line */
+  int in_value = 0;                      /* streaming the description value */
+  int quoted   = 0;                      /* value opened with '"' */
+  int done     = 0;
+
+  /* 1) invalidate first: if we find nothing, the menu falls back to description[256]. */
+  sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
+  if(!gi_yml_path[0]) return;
+
+  /* 2) open the last-loaded .yml with the shared handle (free during the info screen; the
+   *    FMV has its own gi_fmv_fil). Any error -> return (region stays invalid). */
+  file_open((const uint8_t *)gi_yml_path, FA_READ);
+  if(file_res) return;
+
+  /* 3) scan lines. A chunk begins a physical line only if the previous chunk ended in '\n';
+   *    a value that overflows one f_gets buffer continues in the next chunk, and the key must
+   *    NOT be matched against such a continuation. Bounded by a 32 KB scan cap on top of EOF
+   *    so a pathological file can never spin the loop. */
+  while(!done && scanned < 32u * 1024u
+        && f_gets(chunk, sizeof(chunk), &file_handle)) {
+    int this_start = at_line_start;
+    const char *p = chunk;
+    unsigned len = (unsigned)strlen(chunk);
+    scanned += len;
+    at_line_start = (len && chunk[len - 1] == '\n');   /* else the line continues */
+
+    if(!in_value) {
+      const char *kk = "description:";
+      if(!this_start) continue;                        /* continuation of a long line */
+      while(*p == ' ' || *p == '\t') p++;              /* optional leading indent */
+      while(*kk && *p == *kk) { p++; kk++; }
+      if(*kk) continue;                                /* not the description line */
+      while(*p == ' ' || *p == '\t') p++;              /* skip spaces before the value */
+      in_value = 1;
+      if(*p == '"') { quoted = 1; p++; }               /* quoted -> closes at next '"' */
+    }
+
+    /* stream the value bytes of this chunk (the rest of a matched line, or a whole
+     * continuation chunk). Transcode incrementally so a UTF-8 sequence split across chunks
+     * survives; flush to SRAM in bursts. */
+    for(; *p; p++) {
+      unsigned char c = (unsigned char)*p;
+      if(quoted) {
+        if(c == '"') { done = 1; break; }              /* closing quote */
+        if(c == '\n' || c == '\r') continue;           /* never meaningful inside quotes */
+      } else if(c == '\n' || c == '\r') {
+        done = 1; break;                               /* bare value ends at EOL */
+      }
+      uint8_t fo[2];
+      int nf = gi_font_feed(&st, c, fo);
+      for(int i = 0; i < nf; i++) {
+        if(out_total >= GAMEINFO_DESCEXT_LEN - 1) { done = 1; break; }
+        obuf[ob++] = fo[i];
+        out_total++;
+        if(ob == sizeof(obuf)) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; ob = 0; }
+      }
+      if(done) break;
+    }
+  }
+
+  /* flush a trailing '?' for a value that ended mid-sequence (fidelity with gi_utf8_to_font),
+   * then drain the buffer and terminate. */
+  if(out_total < GAMEINFO_DESCEXT_LEN - 1) {
+    uint8_t fo[1];
+    if(gi_font_flush(&st, fo)) { obuf[ob++] = fo[0]; out_total++; }
+  }
+  if(ob) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; }
+  sram_writebyte(0, out_addr);           /* NUL terminator (re-zeroes byte 0 if empty) */
+  file_close();
 }

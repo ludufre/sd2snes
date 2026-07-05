@@ -20,8 +20,8 @@ all: $(OUT) $(MAP)
 # Generate the const source from the English base + language dicts. One run
 # emits both files: const_lang.a65 (bank $C0: neutral data) and const_lang_str.a65
 # (bank $C1: the localized string pool + dispatch tables) -> m3nu.bin spans 2 banks.
-const_lang.a65 const_lang_str.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py
-	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py -o const_lang.a65
+const_lang.a65 const_lang_str.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py
+	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py -o const_lang.a65
 
 smc: menu.bin
 	cat menu.bin sd2snes.rom > menu.smc

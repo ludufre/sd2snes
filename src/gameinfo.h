@@ -8,7 +8,8 @@
  * it must never hang the menu command loop (that would wedge USB-serial too).
  *
  * The parsed metadata is written as a packed struct to bank-$FF SRAM at
- * SRAM_GAMEINFO_ADDR ($FF6000). The SNES menu reads it by fixed offset (mirror the
+ * SRAM_GAMEINFO_ADDR ($FF7400 -- just after the $FF6000..$FF73FF favorites mirror,
+ * which it must NOT overlap). The SNES menu reads it by fixed offset (mirror the
  * GI_* offsets in snes/memmap.i65 - keep in sync, just like cfg_t/CFG_ADDR). The
  * DirectColor image is staged as: 8bpp tiles -> SRAM_GAMEINFO_TILES_ADDR ($CA0000),
  * 16-bit tilemap -> SRAM_GAMEINFO_TMAP_ADDR ($CB0000). All text fields are already
@@ -21,6 +22,11 @@
 #include <stdint.h>
 
 #define GAMEINFO_DIR        "/sd2snes/info/"
+
+/* full (untruncated) description staged by gameinfo_desc_full into
+ * SRAM_GAMEINFO_DESCEXT_ADDR (including the NUL terminator). The struct's
+ * description[256] above is capped by YAML_BUFLEN; this carries the whole text. */
+#define GAMEINFO_DESCEXT_LEN 2048
 
 #define GAMEINFO_MAGIC0     ('G')
 #define GAMEINFO_MAGIC1     ('I')
@@ -37,10 +43,13 @@
                                         * The menu pumps CMD_FMV_NEXT to advance (gameinfo_fmv_next) */
 #define GAMEINFO_FLAG_COVER   (0x04)   /* <rom>.gcv paletted 120c cover staged (palette -> $CB0000,
                                         * tiles -> C9). Without it the cover region shows the gradient */
-#define GAMEINFO_FLAG_COVER_OBJ (0x08) /* FALLBACK when no .gcv: the browser <rom>.cov (next to the ROM)
-                                        * staged into C9 (load_cover); the menu floats it as OBJ box-art
-                                        * centered in the SAME 128x128 spot the .gcv cover occupies.
-                                        * Mutually exclusive with GAMEINFO_FLAG_COVER (.gcv wins). */
+#define GAMEINFO_FLAG_COVER_OBJ (0x08) /* DEPRECATED / no longer set. The old no-.gcv fallback floated
+                                        * the browser <rom>.cov as OBJ box-art, but OBJ palettes are
+                                        * hardwired to CGRAM 128..255 and clashed with the screenshot
+                                        * (CGRAM 168..255). The .cov is now transcoded to the paletted
+                                        * BG cover (gi_cov_to_gcv -> GAMEINFO_FLAG_COVER, CGRAM 48..167)
+                                        * so it coexists with the .fmv/.gss. The OBJ render path in
+                                        * snes/gameinfo.a65 (gi_cover_float) is now dead code. */
 
 /* .fmv container (paletted, little-endian). A fixed-size 8bpp box (FMV_BOX_W x FMV_BOX_H tiles) per
  * frame, NO dedup (same slots every frame) so the firmware streams one block per frame and the SNES
@@ -114,5 +123,12 @@ void gameinfo_fmv_stop(void);
 /* Menu-loop watchdog: stop a lingering FMV if CMD_FMV_NEXT has gone quiet (screen closed
  * without a trailing command, e.g. returning to the Favorites/Recents list). No-op if idle. */
 void gameinfo_fmv_idle_check(void);
+
+/* "Full description" (Y) pump: re-open the last-loaded .yml, find the "description:" line
+   with a streaming reader (outside the YAML parser, which caps values at YAML_BUFLEN) and
+   stage the COMPLETE font-encoded text into SRAM_GAMEINFO_DESCEXT_ADDR. Bounded + fail-safe;
+   on ANY error the region is left invalid (1st byte 0) so the menu keeps the struct's
+   description[256]. */
+void gameinfo_desc_full(void);
 
 #endif

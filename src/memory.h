@@ -46,6 +46,7 @@ extern char current_filename[];
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay && !special_chip. The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
+#define SRAM_PPU_CLEAR_GATE_ADDR     (0xFF0711L) /* 1 byte the firmware arms in load_rom (before releasing the SNES) = CFG.clear_ppu_on_boot && ips_pending_index>0. game_handshake (snes/main.a65) reads it before boot; 1 => clear VRAM/CGRAM/OAM for a patched romhack that skips PPU init. Lockstep with PPU_CLEAR_GATE in snes/memmap.i65; same free $FF0701..$FF07FF gap. */
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
 #define SRAM_CHEAT_CODE_STRINGS_ADDR (0xD40000L) /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans D4..D7, leaving D0..D3 free for up to 512 cheat records. */
 
@@ -87,11 +88,24 @@ extern char current_filename[];
    TYPE_ROM entry in the folder). Lives in the (now fully) free gap before
    IPS_LIST (0xFF5000); the favorites list was moved off 0xFF4000 to 0xFF6000. */
 #define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
+/* IPS/BPS patch list staged by ips_find_patches(). Layout (see patch.h):
+   +0 num_patches, +1 display names (8*IPS_NAME_LEN=512 -> [1,513)), +IPS_PATH_BASE(520)
+   full SD paths (8*IPS_PATH_LEN=2048 -> [520,2568) = 0xFF5000..0xFF5A08). Ends well below
+   the favorites mirror at 0xFF6000 (0x5F8 = 1528 bytes of slack). Lockstep with IPS_LIST
+   in snes/memmap.i65 (the menu reads only the name region, not the paths). */
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
 /* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Sits AFTER the
    favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
    info panel clobbers the favorites list (lockstep with GAMEINFO in snes/memmap.i65). */
 #define SRAM_GAMEINFO_ADDR           (0xFF7400L)
+/* full (untruncated) info-screen description, char[2048] NUL-terminated, staged on demand
+   by SNES_CMD_GI_DESC_FULL (the "full description" Y mode). The struct's description[256]
+   above is capped by the YAML parser (YAML_BUFLEN); this region carries the complete text,
+   read with a streaming line scanner outside the YAML parser. A 1st byte of 0 = invalid ->
+   the menu falls back to the struct's description[256]. Sits after the struct's end
+   ($FF759D) and before SRAM_SCRATCHPAD ($FFFF00); lockstep with GI_DESC_EXT in
+   snes/memmap.i65. */
+#define SRAM_GAMEINFO_DESCEXT_ADDR   (0xFF7600L)
 #define SRAM_SCRATCHPAD              (0xFFFF00L)
 #define SRAM_DIRID                   (0xFFFFF0L)
 #define SRAM_RELIABILITY_SCORE       (0x100)
