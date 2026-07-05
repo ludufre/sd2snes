@@ -487,7 +487,11 @@ wire [3:0]  MCU_DMA_ADDR;
 wire [7:0]  MCU_DMA_DATA;
 wire        MCU_DMA_WE;
 wire        MCU_DMA_ACTIVE;
+`ifndef MK2
 wire [1:0] DMA_BUSY;
+`else
+wire [1:0] DMA_BUSY = 2'b00;  // sem copier: 0xd5 sempre reporta idle
+`endif
 wire [23:0] DMA_ADDR;
 wire [15:0] DMA_DOUT;
 wire        DMA_WORD;
@@ -587,6 +591,7 @@ mcu_cmd snes_mcu_cmd(
   .DMA_BUSY(DMA_BUSY)
 );
 
+`ifndef MK2
 dma snes_dma (
   .clkin(CLK2),
   .reset(SNES_reset_strobe),
@@ -608,6 +613,7 @@ dma snes_dma (
   .ROM_DATA_IN(DMA_DINr),
   .ROM_WORD_ENABLE(DMA_WORD)
 );
+`endif
 
 // BS Memory Pack flash slot (writable)
 wire IS_FLASHWR;
@@ -891,6 +897,7 @@ always @(posedge CLK2) begin
   end
 end
 
+`ifndef MK2
 // DMA copier (MCU-driven) r/w request -- latch the requested PSRAM access
 always @(posedge CLK2) begin
   if(DMA_RRQ) begin
@@ -910,6 +917,7 @@ always @(posedge CLK2) begin
     RQ_DMA_RDYr  <= 1'b1;
   end
 end
+`endif
 
 always @(posedge CLK2) begin
   if(~SNES_CPU_CLKr[1]) SNES_DEAD_CNTr <= SNES_DEAD_CNTr + 1;
@@ -946,6 +954,7 @@ always @(posedge CLK2) begin
           STATE <= ST_MCU_WR_ADDR;
           ST_MEM_DELAYr <= ROM_CYCLE_LEN;
         end
+`ifndef MK2
         // MCU-driven copier (Approach B): only active at patch time (SNES dead)
         else if(DMA_RD_PENDr) begin
           STATE <= ST_DMA_RD_ADDR;
@@ -954,6 +963,7 @@ always @(posedge CLK2) begin
           STATE <= ST_DMA_WR_ADDR;
           ST_MEM_DELAYr <= ROM_CYCLE_LEN;
         end
+`endif
       end
     end
     ST_MCU_RD_ADDR: begin
@@ -973,6 +983,7 @@ always @(posedge CLK2) begin
       if(ST_MEM_DELAYr == 0) STATE <= ST_SA1_ROM_RD_END;
       SA1_ROM_DINr <= (ROM_ADDR0_r ? ROM_DATA[15:0] : {ROM_DATA[7:0],ROM_DATA[15:8]});
     end
+`ifndef MK2
     ST_DMA_RD_ADDR: begin
       STATE <= ST_DMA_RD_ADDR;
       ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
@@ -984,6 +995,7 @@ always @(posedge CLK2) begin
       ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
       if(ST_MEM_DELAYr == 0) STATE <= ST_DMA_WR_END;
     end
+`endif
     ST_MCU_RD_END, ST_MCU_WR_END, ST_SA1_ROM_RD_END, ST_DMA_RD_END, ST_DMA_WR_END: begin
       STATE <= ST_IDLE;
     end
