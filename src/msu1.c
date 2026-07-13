@@ -467,7 +467,6 @@ int msu1_loop() {
    ======================================================================= */
 
 static FIL menusfx_fil;
-static DWORD menusfx_cltbl[CLTBL_SIZE] IN_AHBRAM;
 static uint32_t menusfx_loop_point = 0;
 static UINT menusfx_bytes_read = 0;
 static uint16_t menusfx_fpga_prev = 0;
@@ -489,85 +488,134 @@ static void menusfx_close(void) {
   if(menusfx_open) { f_close(&menusfx_fil); menusfx_open = 0; menusfx_open_name = 0; }
 }
 
+/* =======================================================================
+   FPGA-autonomous navigation SFX (sfxdma.v).
+
+   The 2 KB dac_buf that MSU-1 / FMV music stream through holds only ~11.6 ms
+   and must be refilled by the MCU every ~5.8 ms.  In the menu the MCU blocks
+   far longer than that (dir scan, f_open + FAT cluster walk, cover load), which
+   used to leave the DAC re-wrapping the last 2 KB -- the audible "frozen loop".
+   Nav blips now play from the FPGA sfxdma engine: each effect's PCM body is
+   preloaded into PSRAM once, and the FPGA streams it into dac_buf on its own,
+   immune to any MCU stall.  (FMV info-screen MUSIC still uses the MCU-fed path.)
+   ======================================================================= */
+#define MENU_SFX_SLOTS      4
+#define MENU_SFX_SLOT_SIZE  0x10000UL  /* 64 KB/slot, bank-aligned in the free
+                                          0xCC0000..0xCFFFFF PSRAM window */
+typedef struct {
+  const char *name;    /* stable static path pointer; 0 = free slot */
+  uint32_t    base;    /* PSRAM byte address of the PCM body */
+  uint32_t    bytelen; /* body length in bytes (frame_count * 4) */
+  int8_t      ready;   /* 1 = preloaded ok, -1 = missing/bad, 0 = not loaded yet */
+} menusfx_slot_t;
+static menusfx_slot_t menusfx_slots[MENU_SFX_SLOTS];  /* .bss: zero-init = all free */
+static FIL menusfx_pre_fil IN_AHBRAM;                 /* preload handle (off the main .bss) */
+
+/* Stream one effect's PCM body (offset 8..EOF) into its PSRAM slot, once.
+   Bounded + fail-safe (never hangs the MCU): any error marks the slot silent. */
+static void menusfx_preload(menusfx_slot_t *s) {
+  UINT br = 0;
+  uint8_t magic[4];
+  DWORD fsz;
+  s->ready = -1;                                    /* pessimistic until fully streamed */
+  ff_sd_offload = 0; sd_offload = 0;                /* the magic read below is a normal RAM read */
+  if(f_open(&menusfx_pre_fil, (const TCHAR*)s->name, FA_READ) != FR_OK) return;
+  if(f_read(&menusfx_pre_fil, magic, 4, &br) != FR_OK || br != 4 || memcmp(magic, "MSU1", 4)) {
+    f_close(&menusfx_pre_fil); return;              /* not a valid MSU-1 PCM */
+  }
+  fsz = f_size(&menusfx_pre_fil);
+  if(fsz <= MSU_PCM_OFFSET_WAVEDATA
+     || (fsz - MSU_PCM_OFFSET_WAVEDATA) > MENU_SFX_SLOT_SIZE) {
+    f_close(&menusfx_pre_fil); return;              /* empty, or too big for a slot */
+  }
+  /* Stream SD -> PSRAM the SAME way load_cover does (cover.c cover_stream): f_read into
+     file_buf, then sram_writeblock into PSRAM.  NOT sd_offload DMA: sd_offload asserts
+     SD_DMA_TO_ROM, which forces ROM_ADDR=MCU_ADDR for the WHOLE transfer.  A nav SFX is
+     fired fire-and-forget (snes.c) while the SNES is running the menu FROM PSRAM, so an
+     sd_offload preload hijacks the SNES's own opcode fetches -> it reads garbage -> hard
+     freeze on the first blip.  sram_writeblock uses MCU writes that interleave in free
+     slots (never taking ROM_ADDR from the live SNES), exactly like the cover load that
+     already streams to PSRAM on every browse without ever freezing. */
+  f_lseek(&menusfx_pre_fil, MSU_PCM_OFFSET_WAVEDATA);
+  {
+    uint32_t addr = s->base;
+    for(;;) {
+      if(f_read(&menusfx_pre_fil, file_buf, sizeof(file_buf), &br) != FR_OK) {
+        f_close(&menusfx_pre_fil); return;          /* read error -> stay silent */
+      }
+      if(!br) break;                                /* EOF -> whole body streamed */
+      sram_writeblock(file_buf, addr, (uint16_t)br);
+      addr += br;
+    }
+  }
+  f_close(&menusfx_pre_fil);
+  s->bytelen = (uint32_t)(fsz - MSU_PCM_OFFSET_WAVEDATA);
+  s->ready = 1;
+}
+
+/* Resolve (and lazily preload) the PSRAM slot for a nav-SFX path.  Keyed by the
+   stable static string pointer the menu passes, so at most 4 effects are cached. */
+static menusfx_slot_t *menusfx_slot_for(const char *filename) {
+  int i;
+  for(i = 0; i < MENU_SFX_SLOTS; i++)
+    if(menusfx_slots[i].name == filename) return &menusfx_slots[i];
+  for(i = 0; i < MENU_SFX_SLOTS; i++)
+    if(!menusfx_slots[i].name) {                    /* claim a free slot + preload it */
+      menusfx_slots[i].name = filename;
+      menusfx_slots[i].base = SRAM_MENU_SFX_ADDR + (uint32_t)i * MENU_SFX_SLOT_SIZE;
+      menusfx_preload(&menusfx_slots[i]);
+      return &menusfx_slots[i];
+    }
+  return 0;                                         /* >4 distinct effects (shouldn't happen) */
+}
+
+/* Drop the preload cache: the PSRAM slots may be clobbered while a game runs, so
+   re-preload on the next blip after returning to the menu. */
+static void menusfx_forget_all(void) {
+  int i;
+  for(i = 0; i < MENU_SFX_SLOTS; i++) { menusfx_slots[i].name = 0; menusfx_slots[i].ready = 0; }
+}
+
 int menu_sfx_active(void) {
-  return menusfx_active;
+  return menusfx_active;   /* MCU-fed FMV music only; nav SFX are autonomous (sfxdma) */
 }
 
 void menu_sfx_stop(void) {
-  if(!menusfx_active) return;
-  dac_pause();
-  menusfx_active = 0;   /* keep the file open for a fast same-effect retrigger */
+  fpga_sfx_disable();   /* abort the FPGA nav-SFX fetcher if one is running */
+  dac_pause();          /* freeze the DAC read pointer -> silence (no residual loop; stops music too) */
+  menusfx_active = 0;   /* clear the MCU-fed (FMV music) flag */
 }
 
 void menu_sfx_shutdown(void) {
   menu_sfx_stop();
-  menusfx_close();      /* release the cached handle (game load / console reset) */
+  menusfx_close();        /* release the FMV-music handle */
+  menusfx_forget_all();   /* PSRAM slots may be clobbered by the game -> re-preload later */
   if(current_features & FEAT_MSU1)
     fpga_set_features(current_features & ~FEAT_MSU1);
 }
 
 void menu_sfx_play(const char *filename) {
-  UINT br = 0;
-  uint8_t magic[4];
+  /* Resolve the effect's PSRAM slot (lazily preloading its PCM body on first use).
+     Absent / bad / no free slot -> stay silent, menu unaffected. */
+  menusfx_slot_t *s = menusfx_slot_for(filename);
+  if(!s || s->ready != 1) return;
 
-  menusfx_loop_forever = 0;            /* a navigation blip is always one-shot */
-  if(menusfx_active) menu_sfx_stop();
-
-  /* Re-triggering the SAME effect (e.g. a held d-pad blip) reuses the handle
-     left open from last time, skipping the f_open + CREATE_LINKMAP cluster scan
-     - that work per blip is the menu's main responsiveness cost on slow cards.
-     Otherwise (re)open the requested file. */
-  if(!(menusfx_open && menusfx_open_name == filename)) {
-    menusfx_close();
-    if(f_open(&menusfx_fil, (const TCHAR*)filename, FA_READ) != FR_OK) {
-      return;                          /* no effect file -> silent, menu unaffected */
-    }
-    if(f_read(&menusfx_fil, magic, 4, &br) != FR_OK || br != 4
-       || memcmp(magic, "MSU1", 4)) {
-      f_close(&menusfx_fil);           /* not a valid MSU-1 PCM -> silent */
-      return;
-    }
-    /* sd_offload streaming needs a contiguous-cluster linkmap for fast seeks */
-    menusfx_fil.cltbl = menusfx_cltbl;
-    menusfx_cltbl[0] = CLTBL_SIZE;
-    if(f_lseek(&menusfx_fil, CREATE_LINKMAP)) {
-      f_close(&menusfx_fil);           /* too fragmented -> bail, stay silent */
-      return;
-    }
-    /* loop point (in samples) from the PCM header. Validate it: a short read or
-       an out-of-range value (including the *4 multiply overflow) is clamped to
-       EOF, so the loop-region read returns 0 and the one-shot stops cleanly
-       instead of seeking to / DMA'ing arbitrary file bytes to the DAC. */
-    f_lseek(&menusfx_fil, MSU_PCM_OFFSET_LOOPPOINT);
-    f_read(&menusfx_fil, &menusfx_loop_point, sizeof(menusfx_loop_point), &br);
-    {
-      DWORD fsz = f_size(&menusfx_fil);
-      uint32_t max_lp = (fsz > MSU_PCM_OFFSET_WAVEDATA)
-                          ? (uint32_t)((fsz - MSU_PCM_OFFSET_WAVEDATA) / 4) : 0;
-      if(br != sizeof(menusfx_loop_point) || menusfx_loop_point > max_lp)
-        menusfx_loop_point = max_lp;
-    }
-    menusfx_open = 1;
-    menusfx_open_name = filename;
-  }
-
+  /* Keep FEAT_MSU1 enabled so the MSU volume register the menu set stays live on
+     the DAC (the DAC engine + volume path are unchanged; only the dac_buf source
+     moves from the MCU SD stream to the FPGA fetcher). */
   if(!(current_features & FEAT_MSU1))
     fpga_set_features(current_features | FEAT_MSU1);
-  dac_pause();
-  dac_reset(0);
-  set_msu_status(MSU_SNES_STATUS_CLEAR_AUDIO_ERROR | MSU_SNES_STATUS_SET_AUDIO_REPEAT);
-  set_dac_addr(0);
-  ff_sd_offload = 1; sd_offload_tgt = 1;
-  f_lseek(&menusfx_fil, MSU_PCM_OFFSET_WAVEDATA);
-  ff_sd_offload = 1; sd_offload_tgt = 1;
-  f_read(&menusfx_fil, file_buf, MSU_DAC_BUFSIZE, &menusfx_bytes_read);
 
-  menusfx_fpga_prev = fpga_status();
-  menusfx_wraps = 0;
-  menusfx_deadline = getticks() + MENU_SFX_MAX_TICKS;
+  /* Hand the effect to the FPGA: reset the DAC read pointer, arm sfxdma with the
+     PSRAM base+length and kick it (newest wins), then release play.  sfxdma holds
+     play off (prime_hold) until it has primed the whole 2 KB, so no garbage frames.
+     From here the FPGA streams the whole one-shot into the DAC on its own -- it
+     never depends on the MCU again, so a long blocking SD op can't freeze it. */
+  dac_reset(0);
+  fpga_sfx_play(s->base, s->bytelen);
   dac_play();
-  menusfx_active = 1;
-  DBG_MSU1 printf("sfx: %s (feat %04x)\n", filename, current_features);
+  DBG_MSU1 printf("sfx: %s @%06lx len %lu\n", filename,
+                  (unsigned long)s->base, (unsigned long)s->bytelen);
 }
 
 void menu_sfx_pump(void) {

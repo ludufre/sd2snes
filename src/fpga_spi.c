@@ -295,6 +295,30 @@ void dac_reset(uint16_t address) {
   FPGA_DESELECT();
 }
 
+/* Arm the autonomous SFX fetcher (sfxdma.v) with the PSRAM base + body length of a
+   preloaded PCM effect and kick playback.  The FPGA then streams it into dac_buf on
+   its own -- no MCU refill, so it survives any menu-side SD blocking. */
+void fpga_sfx_play(uint32_t base, uint32_t len) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_SFX_PLAY);       /* 0xfb */
+  FPGA_TX_BYTE((base >> 16) & 0xff);
+  FPGA_TX_BYTE((base >> 8) & 0xff);
+  FPGA_TX_BYTE((base) & 0xff);
+  FPGA_TX_BYTE((len >> 16) & 0xff);
+  FPGA_TX_BYTE((len >> 8) & 0xff);
+  FPGA_TX_BYTE((len) & 0xff);            /* last byte -> kick */
+  FPGA_DESELECT();
+}
+
+/* Abort the SFX fetcher and hand the dac_buf write port back to the MCU SD-DMA path
+   (in-game MSU-1 / FMV music).  Called at game load. */
+void fpga_sfx_disable(void) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_SFX_DISABLE);    /* 0xfc */
+  FPGA_TX_BYTE(0x00);                    /* one param byte -> disable strobe */
+  FPGA_DESELECT();
+}
+
 void msu_reset(uint16_t address) {
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_MSUSETPTR);

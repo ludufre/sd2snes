@@ -120,7 +120,17 @@ module mcu_cmd(
   output [7:0] mcu_dma_data_out,
   output reg   mcu_dma_we_out,
   output       mcu_dma_active,
-  input  [1:0] DMA_BUSY
+  input  [1:0] DMA_BUSY,
+
+  // SFX fetcher (autonomous menu-SFX playback from PSRAM, sfxdma.v)
+  //   0xfb = play: 6 param bytes base[23:0]+len[23:0], kick on the last byte
+  //   0xfc = disable (game-load gating); 0xf7 = status read {active,done}
+  output reg [23:0] sfx_base_out = 0,
+  output reg [23:0] sfx_len_out = 0,
+  output reg        sfx_kick_out = 0,
+  output reg        sfx_disable_out = 0,
+  input             sfx_active,
+  input             sfx_done
 );
 
 initial begin
@@ -185,6 +195,8 @@ reg [7:0] MSU_STATUSr;
 reg [1:0] bs_erase_seqr;
 reg [3:0] bs_erase_blkr;
 reg [1:0] DMA_BUSYr;
+reg sfx_activer;
+reg sfx_doner;
 always @(posedge clk) begin
   DAC_STATUSr <= DAC_STATUS;
   SD_DMA_STATUSr <= SD_DMA_STATUS;
@@ -192,6 +204,8 @@ always @(posedge clk) begin
   bs_erase_seqr <= bs_erase_seq;
   bs_erase_blkr <= bs_erase_blk;
   DMA_BUSYr <= DMA_BUSY;
+  sfx_activer <= sfx_active;
+  sfx_doner <= sfx_done;
 end
 
 // MCU-driven copier register write (muxed into dma by main.v on mcu_dma_active)
@@ -237,6 +251,8 @@ always @(posedge clk) begin
   mcu_dma_we_out <= 1'b0;
   dac_reset_out <= 1'b0;
   MSU_RESET_OUT_BUF <= 1'b0;
+  sfx_kick_out <= 1'b0;
+  sfx_disable_out <= 1'b0;
 
   if (cmd_ready) begin
     case (cmd_data[7:4])
@@ -449,6 +465,20 @@ always @(posedge clk) begin
             invmask_out_buf <= 8'hFF;
           end
         endcase
+      8'hfb: // SFX play: PSRAM base[23:0] + body len[23:0]; kick on the last byte
+        case (spi_byte_cnt)
+          32'h2: sfx_base_out[23:16] <= param_data;
+          32'h3: sfx_base_out[15:8]  <= param_data;
+          32'h4: sfx_base_out[7:0]   <= param_data;
+          32'h5: sfx_len_out[23:16]  <= param_data;
+          32'h6: sfx_len_out[15:8]   <= param_data;
+          32'h7: begin
+            sfx_len_out[7:0] <= param_data;
+            sfx_kick_out <= 1'b1;   // base/len fully latched this edge -> start
+          end
+        endcase
+      8'hfc: // SFX disable (abort + release DAC port; game-load gating)
+        sfx_disable_out <= 1'b1;
     endcase
   end
 end
@@ -555,6 +585,8 @@ always @(posedge clk) begin
       MCU_DATA_IN_BUF <= snescmd_data_in;
     else if (cmd_data[7:0] == 8'hd5)   // MCU copier busy poll: bit0 = copier running
       MCU_DATA_IN_BUF <= {6'b0, DMA_BUSYr};
+    else if (cmd_data[7:0] == 8'hf7)   // SFX fetcher status: bit1 = active, bit0 = done
+      MCU_DATA_IN_BUF <= {6'b0, sfx_activer, sfx_doner};
     else if (cmd_data[7:0] == 8'hF9)
       case (spi_byte_cnt)
         32'h2: begin

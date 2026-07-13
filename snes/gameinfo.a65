@@ -155,6 +155,10 @@ gms_common:
   clc
   rts
 gms_cancel:
+  jsr snd_fx_back            ; fire the back blip HERE -- after gi_dc_restore's cover reload
+                            ; has finished -- so the fetcher is not starved and it plays clean.
+                            ; snd_fx_back is self-contained (php/plp, saves A) -> carry is set
+                            ; by the sec below regardless.
   sec
   rts
 gms_noinfo:
@@ -256,7 +260,9 @@ gin_play:
   plp
   rts
 gin_back:
-  jsr snd_fx_back
+  ; NB: the back blip is fired by gms_cancel AFTER gi_dc_restore, not here -- firing it
+  ; now makes it play THROUGH gi_dc_restore's browser cover reload (an sram_writeblock/
+  ; MCU_WR burst), which starves the FPGA SFX fetcher mid-blip -> a click/crackle on exit.
   lda #$01
   sta gi_result
   plp

@@ -116,6 +116,23 @@ wire [10:0] SD_DMA_PARTIAL_END;
 wire [10:0] dac_addr;
 wire [2:0] dac_vol_select_out;
 wire [8:0] dac_ptr_addr;
+
+// SFX fetcher (sfxdma.v): autonomous menu-SFX playback straight from PSRAM.
+wire [23:0] sfx_base_out;   // from mcu_cmd (0xfb)
+wire [23:0] sfx_len_out;
+wire        sfx_kick_out;
+wire        sfx_disable_out;
+wire        sfx_active;     // to mcu_cmd (0xf7 status)
+wire        sfx_done;
+wire [23:0] SFX_ADDR;       // sfxdma -> PSRAM arbiter
+wire        SFX_RRQ;
+wire        SFX_RDY;
+reg  [7:0]  SFX_DINr;       // byte returned to the fetcher
+wire        sfx_dac_active; // sfxdma owns the dac_buf write port
+wire        sfx_prime_hold; // hold DAC play during the initial prime
+wire        sfx_dac_we;     // ACTIVE LOW
+wire [10:0] sfx_dac_addr;
+wire [7:0]  sfx_dac_data;
 //wire [7:0] dac_volume;
 wire [7:0] msu_volumerq_out;
 wire [7:0] msu_status_out;
@@ -377,23 +394,25 @@ always @(posedge CLK2) begin
 
 end
 
-parameter ST_IDLE        = 11'b00000000001;
-parameter ST_MCU_RD_ADDR = 11'b00000000010;
-parameter ST_MCU_RD_END  = 11'b00000000100;
-parameter ST_MCU_WR_ADDR = 11'b00000001000;
-parameter ST_MCU_WR_END  = 11'b00000010000;
-parameter ST_CTX_WR_ADDR = 11'b00000100000;
-parameter ST_CTX_WR_END  = 11'b00001000000;
-parameter ST_DMA_RD_ADDR = 11'b00010000000;
-parameter ST_DMA_RD_END  = 11'b00100000000;
-parameter ST_DMA_WR_ADDR = 11'b01000000000;
-parameter ST_DMA_WR_END  = 11'b10000000000;
+parameter ST_IDLE        = 13'b0000000000001;
+parameter ST_MCU_RD_ADDR = 13'b0000000000010;
+parameter ST_MCU_RD_END  = 13'b0000000000100;
+parameter ST_MCU_WR_ADDR = 13'b0000000001000;
+parameter ST_MCU_WR_END  = 13'b0000000010000;
+parameter ST_CTX_WR_ADDR = 13'b0000000100000;
+parameter ST_CTX_WR_END  = 13'b0000001000000;
+parameter ST_DMA_RD_ADDR = 13'b0000010000000;
+parameter ST_DMA_RD_END  = 13'b0000100000000;
+parameter ST_DMA_WR_ADDR = 13'b0001000000000;
+parameter ST_DMA_WR_END  = 13'b0010000000000;
+parameter ST_SFX_RD_ADDR = 13'b0100000000000; // SFX fetcher PSRAM read (lowest priority)
+parameter ST_SFX_RD_END  = 13'b1000000000000;
 
 parameter SNES_DEAD_TIMEOUT = 17'd96000; // 1ms
 
 parameter ROM_CYCLE_LEN = 4'd7;
 
-reg [10:0] STATE;
+reg [12:0] STATE;
 initial STATE = ST_IDLE;
 
 assign SRTC_SNES_DATA_IN = BUS_DATA[3:0];
@@ -428,17 +447,44 @@ dac snes_dac(
   .mclk_out(DAC_MCLK),
   .lrck_out(DAC_LRCK),
   .sdout(DAC_SDOUT),
-  .we(SD_DMA_TGT==2'b01 ? SD_DMA_SRAM_WE : 1'b1),
-  .pgm_address(dac_addr),
-  .pgm_data(SD_DMA_SRAM_DATA),
+  // dac_buf write port: the SFX fetcher takes it over while playing a menu SFX
+  // (sfx_dac_active); otherwise it is the normal MCU SD-DMA feed (MSU-1 / FMV music).
+  .we(sfx_dac_active ? sfx_dac_we : (SD_DMA_TGT==2'b01 ? SD_DMA_SRAM_WE : 1'b1)),
+  .pgm_address(sfx_dac_active ? sfx_dac_addr : dac_addr),
+  .pgm_data(sfx_dac_active ? sfx_dac_data : SD_DMA_SRAM_DATA),
   .DAC_STATUS(DAC_STATUS),
   .volume(msu_volumerq_out),
   .vol_latch(msu_volume_latch_out),
   .vol_select(dac_vol_select_out),
   .palmode(dac_palmode_out),
-  .play(dac_play),
+  // hold play (read pointer) frozen while the fetcher primes the whole 2 KB
+  .play(dac_play & ~sfx_prime_hold),
   .reset(dac_reset),
   .dac_address_ext(dac_ptr_addr)
+);
+
+// Autonomous SFX fetcher: streams a one-shot PCM SFX from PSRAM into dac_buf so a
+// menu blip survives long MCU-blocking SD transactions (no more "frozen loop").
+sfxdma snes_sfxdma(
+  .clkin(CLK2),
+  .reset(SNES_reset_strobe),
+  .sfx_base(sfx_base_out),
+  .sfx_len(sfx_len_out),
+  .kick(sfx_kick_out),
+  .disable_in(sfx_disable_out),
+  .DAC_STATUS(DAC_STATUS),
+  .sd_dma_active(SD_DMA_TO_ROM), // feed the DAC silence (not a re-wrap buzz) while an SD->PSRAM DMA locks us out
+  .BUS_RDY(SFX_RDY),
+  .BUS_RRQ(SFX_RRQ),
+  .ROM_ADDR(SFX_ADDR),
+  .ROM_DATA_IN(SFX_DINr),
+  .dac_we(sfx_dac_we),
+  .dac_addr(sfx_dac_addr),
+  .dac_data(sfx_dac_data),
+  .dac_active(sfx_dac_active),
+  .prime_hold(sfx_prime_hold),
+  .active(sfx_active),
+  .done(sfx_done)
 );
 
 srtc snes_srtc (
@@ -703,7 +749,14 @@ mcu_cmd snes_mcu_cmd(
   .mcu_dma_data_out(MCU_DMA_DATA),
   .mcu_dma_we_out(MCU_DMA_WE),
   .mcu_dma_active(MCU_DMA_ACTIVE),
-  .DMA_BUSY(DMA_BUSY)
+  .DMA_BUSY(DMA_BUSY),
+  // SFX fetcher control/status
+  .sfx_base_out(sfx_base_out),
+  .sfx_len_out(sfx_len_out),
+  .sfx_kick_out(sfx_kick_out),
+  .sfx_disable_out(sfx_disable_out),
+  .sfx_active(sfx_active),
+  .sfx_done(sfx_done)
 );
 // (MCU-driven copier reg wires MCU_DMA_*/DMA_BUSY are declared above the dma instance,
 //  so ISE/XST accepts the declare-before-use order.)
@@ -882,6 +935,12 @@ initial DMA_ROM_DATAr = 16'h0000;
 reg DMA_ROM_WORDr;
 initial DMA_ROM_WORDr = 1'b0;
 
+// SFX fetcher (read-only PSRAM master)
+reg SFX_RD_PENDr;
+initial SFX_RD_PENDr = 0;
+reg [23:0] SFX_ROM_ADDRr;
+initial SFX_ROM_ADDRr = 24'h0;
+
 reg RQ_MCU_RDYr;
 initial RQ_MCU_RDYr = 1'b1;
 assign MCU_RDY = RQ_MCU_RDYr;
@@ -893,6 +952,10 @@ assign CTX_RDY = RQ_CTX_RDYr;
 reg RQ_DMA_RDYr;
 initial RQ_DMA_RDYr = 1'b1;
 assign DMA_RDY = RQ_DMA_RDYr;
+// SFX fetcher
+reg RQ_SFX_RDYr;
+initial RQ_SFX_RDYr = 1'b1;
+assign SFX_RDY = RQ_SFX_RDYr;
 
 wire MCU_WE_HIT = |(STATE & ST_MCU_WR_ADDR);
 wire MCU_WR_HIT = |(STATE & (ST_MCU_WR_ADDR | ST_MCU_WR_END));
@@ -907,6 +970,9 @@ wire DMA_WE_HIT = |(STATE & ST_DMA_WR_ADDR);
 wire DMA_WR_HIT = |(STATE & (ST_DMA_WR_ADDR | ST_DMA_WR_END));
 wire DMA_RD_HIT = |(STATE & (ST_DMA_RD_ADDR | ST_DMA_RD_END));
 wire DMA_HIT = DMA_WR_HIT | DMA_RD_HIT;
+// SFX fetcher (read-only)
+wire SFX_RD_HIT = |(STATE & (ST_SFX_RD_ADDR | ST_SFX_RD_END));
+wire SFX_HIT = SFX_RD_HIT;
 
 `ifdef MK2
 my_dcm snes_dcm(
@@ -916,8 +982,8 @@ my_dcm snes_dcm(
   .RST(DCM_RST)
 );
 
-assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : CTX_HIT ? CTX_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
-assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : CTX_HIT ? CTX_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : SFX_HIT ? SFX_ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
+assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : SFX_HIT ? SFX_ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 //always @(posedge CLK2) ROM_ADDR_PRE <= (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : CTX_HIT ? CTX_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
 //always @(posedge CLK2) ROM_ADDR0_PRE <= (SD_DMA_TO_ROM) ? MCU_ADDR[0] : CTX_HIT ? CTX_ROM_ADDRr[0] : DMA_HIT ? DMA_ROM_ADDRr[0] : MCU_HIT ? ROM_ADDRr[0] : MAPPED_SNES_ADDR[0];
 
@@ -949,9 +1015,9 @@ pll snes_pll(
 );
 
 wire ROM_ADDR22;
-assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : CTX_HIT ? CTX_ROM_ADDRr[1]    : DMA_HIT ? DMA_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
-assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : CTX_HIT ? CTX_ROM_ADDRr[23:2] : DMA_HIT ? DMA_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
-assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : CTX_HIT ? CTX_ROM_ADDRr[1]    : DMA_HIT ? DMA_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : SFX_HIT ? SFX_ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
+assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : CTX_HIT ? CTX_ROM_ADDRr[23:2] : DMA_HIT ? DMA_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : SFX_HIT ? SFX_ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
+assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : SFX_HIT ? SFX_ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 
 
 assign ROM_ZZ = 1'b1;
@@ -1039,6 +1105,19 @@ always @(posedge CLK2) begin
   end
 end
 
+// SFX fetcher read request (read-only; mirrors the dma read handshake)
+always @(posedge CLK2) begin
+  if(SFX_RRQ) begin
+    SFX_RD_PENDr <= 1'b1;
+    RQ_SFX_RDYr <= 1'b0;
+    SFX_ROM_ADDRr <= SFX_ADDR;
+  end
+  else if(STATE & ST_SFX_RD_END) begin
+    SFX_RD_PENDr <= 1'b0;
+    RQ_SFX_RDYr <= 1'b1;
+  end
+end
+
 always @(posedge CLK2) begin
   if(~SNES_CPU_CLKr[1]) SNES_DEAD_CNTr <= SNES_DEAD_CNTr + 1;
   else SNES_DEAD_CNTr <= 18'h0;
@@ -1084,6 +1163,18 @@ always @(posedge CLK2) begin
           STATE <= ST_DMA_WR_ADDR;
           ST_MEM_DELAYr <= ROM_CYCLE_LEN;
         end
+        // SFX fetcher: LOWEST priority + free_strobe (non-ROM) cycles only.  It must
+        // never out-steal the live SNES's own PSRAM fetches -- promoting it above
+        // MCU/DMA made it grab free_strobe slots aggressively during navigation and
+        // collided with the menu's opcode fetches -> hard freeze.  Lowest priority
+        // keeps the collision rate to the safe/observed level.  When a nav SFX would
+        // overlap a heavy MCU PSRAM burst (e.g. the cover reload on Game-Info exit) and
+        // get starved, that is avoided MENU-SIDE by firing the SFX AFTER the burst
+        // (snes/gameinfo.a65 gms_cancel), NOT by giving the fetcher more bus priority.
+        else if(SFX_RD_PENDr && free_strobe) begin
+          STATE <= ST_SFX_RD_ADDR;
+          ST_MEM_DELAYr <= ROM_CYCLE_LEN;
+        end
       end
     end
     ST_MCU_RD_ADDR: begin
@@ -1114,7 +1205,14 @@ always @(posedge CLK2) begin
       ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
       if(ST_MEM_DELAYr == 0) STATE <= ST_DMA_WR_END;
     end
-    ST_MCU_RD_END, ST_MCU_WR_END, ST_CTX_WR_END, ST_DMA_RD_END, ST_DMA_WR_END: begin
+    ST_SFX_RD_ADDR: begin
+      STATE <= ST_SFX_RD_ADDR;
+      ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
+      if(ST_MEM_DELAYr == 0) STATE <= ST_SFX_RD_END;
+      // byte read, same select convention as the SNES/MCU read path
+      SFX_DINr <= (ROM_ADDR0 ? ROM_DATA[7:0] : ROM_DATA[15:8]);
+    end
+    ST_MCU_RD_END, ST_MCU_WR_END, ST_CTX_WR_END, ST_DMA_RD_END, ST_DMA_WR_END, ST_SFX_RD_END: begin
       STATE <= ST_IDLE;
     end
   endcase

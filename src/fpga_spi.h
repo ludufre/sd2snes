@@ -118,6 +118,9 @@
 #define FPGA_CMD_MSUGETVOLUME    (0xf4)
 #define FPGA_CMD_MSUREAD         (0xf5)
 #define FPGA_CMD_MSUGETSCADDR    (0xf6)
+#define FPGA_CMD_SFX_STATUS      (0xf7) /* read: bit1 = fetcher active, bit0 = done (sfxdma.v) */
+#define FPGA_CMD_SFX_PLAY        (0xfb) /* 6 param bytes base[23:0]+len[23:0]; last byte kicks playback */
+#define FPGA_CMD_SFX_DISABLE     (0xfc) /* abort the SFX fetcher + release the DAC port (game load) */
 #define FPGA_CMD_CONFIG_READ     (0xf9)
 #define FPGA_CMD_CONFIG_WRITE    (0xfa)
 #define FPGA_CMD_GETSYSCLK       (0xfe)
@@ -133,6 +136,8 @@ void set_dac_addr(uint16_t);
 void dac_play(void);
 void dac_pause(void);
 void dac_reset(uint16_t);
+void fpga_sfx_play(uint32_t base, uint32_t len); /* arm + start the FPGA SFX fetcher (sfxdma.v) */
+void fpga_sfx_disable(void);                     /* abort it + release the DAC write port */
 void msu_reset(uint16_t);
 void set_msu_addr(uint16_t);
 void set_msu_status(uint16_t status);
