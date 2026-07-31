@@ -166,19 +166,29 @@ static void delete_listed_game_srm(const uint8_t *listfile, const char *what) {
   char *srmsrc = listed_game_sidecar_source(listfile);
   printf("Delete SRM for %s: %s\n", what, srmsrc);
   for(uint8_t s = 0; s < SRM_SLOT_COUNT; s++) {
-    uint8_t srmfile[256] = SAVE_BASEDIR;
+    uint8_t srmfile[256];
     char ext[8];
     srm_slot_ext(ext, sizeof(ext), s);
-    append_file_basename((char*)srmfile, srmsrc, ext, sizeof(srmfile));
+    /* path_asset DIRECT, not memory.c's append_save_basename: that one re-applies
+       current_ips_srm_source, which survives from the last LOADED game into the menu loop and
+       would make this delete the previous game's patch save instead of the selected entry. */
+    /* A name too long to fit leaves the buffer EMPTY; unlinking that would either fail oddly or,
+       worse on some paths, act on the wrong name. Treat it as "nothing deleted" and NACK slot 0,
+       same as a failed unlink -- the menu already knows how to report that. */
+    if(path_asset((char*)srmfile, sizeof(srmfile), SAVE_BASEDIR, srmsrc, ext) < 0) {
+      printf("SRM path too long for %s\n", srmsrc);
+      if(s == 0) snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+      continue;
+    }
     printf("SRM path: %s\n", srmfile);
     FRESULT r = f_unlink((TCHAR*)srmfile);
     if(s == 0 && r != FR_OK) {
       snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
     }
   }
-  { uint8_t scfile[256] = SAVE_BASEDIR;
-    append_file_basename((char*)scfile, srmsrc, ".slot", sizeof(scfile));
-    f_unlink((TCHAR*)scfile);
+  { uint8_t scfile[256];
+    if(path_asset((char*)scfile, sizeof(scfile), SAVE_BASEDIR, srmsrc, ".slot") >= 0)
+      f_unlink((TCHAR*)scfile);
   }
 }
 
@@ -745,19 +755,25 @@ int main(void) {
              slot UI). Slot 0 (legacy <stem>.srm) drives the NACK exactly as before;
              slots 2-4 and the sidecar are best-effort (FR_NO_FILE = nothing there). */
           for(uint8_t s = 0; s < SRM_SLOT_COUNT; s++) {
-            uint8_t srmfile[256] = SAVE_BASEDIR;
+            uint8_t srmfile[256];
             char ext[8];
             srm_slot_ext(ext, sizeof(ext), s);
-            append_file_basename((char*)srmfile, (char*)file_lfn, ext, sizeof(srmfile));
+            /* path_asset DIRECT -- see the note in delete_listed_game_srm above. Same -1 handling:
+               a name that does not fit deletes nothing and NACKs slot 0. */
+            if(path_asset((char*)srmfile, sizeof(srmfile), SAVE_BASEDIR, (const char*)file_lfn, ext) < 0) {
+              printf("SRM path too long for %s\n", file_lfn);
+              if(s == 0) snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+              continue;
+            }
             printf("SRM path: %s\n", srmfile);
             FRESULT r = f_unlink((TCHAR*)srmfile);
             if(s == 0 && r != FR_OK) {
               snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
             }
           }
-          { uint8_t scfile[256] = SAVE_BASEDIR;
-            append_file_basename((char*)scfile, (char*)file_lfn, ".slot", sizeof(scfile));
-            f_unlink((TCHAR*)scfile);
+          { uint8_t scfile[256];
+            if(path_asset((char*)scfile, sizeof(scfile), SAVE_BASEDIR, (const char*)file_lfn, ".slot") >= 0)
+              f_unlink((TCHAR*)scfile);
           }
           cmd=0;
           break;

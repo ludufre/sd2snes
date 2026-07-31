@@ -1238,10 +1238,10 @@ uint32_t load_sram_offload(uint8_t* filename, uint32_t base_addr, uint8_t flags)
 
 /* forward decl: the slot-aware .srm namer is defined below (near append_save_basename),
    but migrate_and_load_srm (here) is the first user. */
-static void append_srm_name(char *buf, size_t buflen, uint8_t *filename, uint8_t slot);
+static int  append_srm_name(char *buf, size_t buflen, uint8_t *filename, uint8_t slot);
 
 uint32_t migrate_and_load_srm(uint8_t* filename, uint32_t base_addr) {
-  uint8_t srmfile[256] = SAVE_BASEDIR;
+  uint8_t srmfile[256];
   /* Resolve the active slot from the sidecar ONCE per game load; this sets the
      immutable session slot (srm_slot) that every save path below routes through. */
   srm_slot_load(filename);
@@ -1267,8 +1267,8 @@ uint32_t migrate_and_load_srm(uint8_t* filename, uint32_t base_addr) {
     if(!dot) return 0;   /* ROM name has no extension: nothing to migrate (a missing save is fine) */
     strcpy(dot, ".srm");
     printf("%s not found, trying to load and migrate %s...\n", srmfile, filename);
-    /* check if new sram folder exists, create it if it doesn't */
-    check_or_create_folder(SAVE_BASEDIR);
+    /* the bucket must exist before the rename target can be created */
+    path_asset_mkdir((char*)srmfile);
     f_rename((TCHAR*)filename, (TCHAR*)srmfile);
     filesize = load_sram(srmfile, base_addr);
     if(file_res) {
@@ -1343,11 +1343,15 @@ uint32_t load_bootrle(uint32_t base_addr) {
   return (uint32_t)filesize;
 }
 
-/* build the SD save path (SAVE_BASEDIR + basename + ext) into buf, honoring an active
-   IPS/BPS patch source -- shared by the .srm and .mpk paths so they can't drift */
-static void append_save_basename(char *buf, size_t buflen, uint8_t *filename, const char *ext) {
+/* Build the bucketed SD save path "/sd2snes/saves/<BB>/<stem><ext>" into buf, honoring an active
+   IPS/BPS patch source -- shared by the .srm/.slot/.mpk paths so they can't drift.
+   The bucket AND the stem come from the same `src`, so a patched game's saves and savestates
+   always land in the same bucket (path_asset enforces this by taking one string).
+   NOTE the patch pick is only valid DURING A LOAD: current_ips_srm_source survives into the menu
+   loop, so main.c's delete-SRM must NOT come through here (it resolves its own source). */
+static int append_save_basename(char *buf, size_t buflen, uint8_t *filename, const char *ext) {
   const uint8_t *src = current_ips_srm_source[0] ? current_ips_srm_source : filename;
-  append_file_basename(buf, (char*)src, (char*)ext, buflen);
+  return path_asset(buf, (int)buflen, SAVE_BASEDIR, (const char*)src, ext);
 }
 
 /* ---- Multi-slot battery SRAM (CICLO 2) ---------------------------------------
@@ -1376,17 +1380,17 @@ void srm_slot_ext(char *ext, size_t extlen, uint8_t slot) {
 }
 
 /* patch-aware (append_save_basename) SD path for a given slot, into buf (>= 256) */
-static void append_srm_name(char *buf, size_t buflen, uint8_t *filename, uint8_t slot) {
+static int append_srm_name(char *buf, size_t buflen, uint8_t *filename, uint8_t slot) {
   char ext[8];
   srm_slot_ext(ext, sizeof(ext), slot);
-  append_save_basename(buf, buflen, filename, ext);
+  return append_save_basename(buf, buflen, filename, ext);
 }
 
 void srm_slot_load(uint8_t *filename) {
   srm_slot = 0;
   srm_slot_sel = 0;
   if(!CFG.enable_sram_slots) return;   /* OFF -> forced slot 0, no I/O */
-  char sc[256] = SAVE_BASEDIR;
+  char sc[256];
   append_save_basename(sc, sizeof(sc), filename, ".slot");
   file_open((uint8_t*)sc, FA_READ);
   if(!file_res) {
@@ -1404,9 +1408,9 @@ void srm_slot_load(uint8_t *filename) {
 
 void srm_slot_save(uint8_t *filename, uint8_t slot) {
   if(slot >= SRM_SLOT_COUNT) slot = 0;
-  check_or_create_folder(SAVE_BASEDIR);
-  char sc[256] = SAVE_BASEDIR;
-  append_save_basename(sc, sizeof(sc), filename, ".slot");
+  char sc[256];
+  if(append_save_basename(sc, sizeof(sc), filename, ".slot") < 0) return;   /* would truncate */
+  path_asset_mkdir(sc);                       /* create only AFTER the name exists */
   uint8_t b = '1' + slot;
   UINT bw = 0;
   file_open((uint8_t*)sc, FA_CREATE_ALWAYS | FA_WRITE);
@@ -1418,7 +1422,7 @@ void srm_slot_save(uint8_t *filename, uint8_t slot) {
 
 /* is there a <rom>.mpk?  cheap f_stat that gates the ROM scan below */
 static uint8_t bs_pack_exists(uint8_t *filename) {
-  uint8_t bsfile[256] = SAVE_BASEDIR;
+  uint8_t bsfile[256];
   append_save_basename((char*)bsfile, sizeof(bsfile), filename, ".mpk");
   return file_exists((const char*)bsfile);
 }
@@ -1448,12 +1452,12 @@ static uint8_t rom_scan_bs_vendor(uint32_t size) {
 }
 
 void save_srm(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
-    char srmfile[256] = SAVE_BASEDIR;
-    check_or_create_folder(SAVE_BASEDIR);
+    char srmfile[256];
     /* Route through the immutable live session slot -- all five save sites
        (prepare_reset, in-game autosave x2, MSU autosave x2) inherit it for free
        and can never diverge. */
-    append_srm_name(srmfile, sizeof(srmfile), filename, srm_slot);
+    if(append_srm_name(srmfile, sizeof(srmfile), filename, srm_slot) < 0) return;
+    path_asset_mkdir(srmfile);                /* create only AFTER the name exists */
     save_sram((uint8_t*)srmfile, sram_size, base_addr);
 }
 
@@ -1487,7 +1491,7 @@ void saveinfo_stage(uint8_t *filename) {
 
     /* Derive the .srm path EXACTLY like save_srm (patch-aware) for the LIVE slot,
        then f_stat it -- the size/date shown is the slot the session boots/saves. */
-    char srmfile[256] = SAVE_BASEDIR;
+    char srmfile[256];
     FILINFO fno;
     append_srm_name(srmfile, sizeof(srmfile), filename, srm_slot);
     fno.lfname = NULL;
@@ -1508,7 +1512,7 @@ void saveinfo_stage(uint8_t *filename) {
        mirrors the legacy <stem>.srm existence (byte-identical status view). */
     if(CFG.enable_sram_slots) {
       for(uint8_t s = 0; s < SRM_SLOT_COUNT; s++) {
-        char f[256] = SAVE_BASEDIR;
+        char f[256];
         append_srm_name(f, sizeof(f), filename, s);
         if(f_stat((TCHAR *)f, NULL) == FR_OK) slotmask |= (1 << s);
       }
@@ -1529,7 +1533,7 @@ void saveinfo_stage(uint8_t *filename) {
    slot (no file -> nothing mapped, game boots standalone).  .mpk not .bs (.bs is a
    bootable BS-X ROM type in the browser). */
 uint8_t load_bs_pack(uint8_t* filename) {
-  uint8_t bsfile[256] = SAVE_BASEDIR;
+  uint8_t bsfile[256];
   FILINFO fno;
   append_save_basename((char*)bsfile, sizeof(bsfile), filename, ".mpk");
   if(!file_exists((const char*)bsfile)) {
@@ -1549,9 +1553,9 @@ uint8_t load_bs_pack(uint8_t* filename) {
 }
 
 void save_bs_pack(uint8_t* filename) {
-  char bsfile[256] = SAVE_BASEDIR;
-  check_or_create_folder(SAVE_BASEDIR);
-  append_save_basename(bsfile, sizeof(bsfile), filename, ".mpk");
+  char bsfile[256];
+  if(append_save_basename(bsfile, sizeof(bsfile), filename, ".mpk") < 0) return;
+  path_asset_mkdir(bsfile);                   /* create only AFTER the name exists */
   save_sram((uint8_t*)bsfile, BS_PACK_SIZE, BS_PACK_ADDR);
 }
 

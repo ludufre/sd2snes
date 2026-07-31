@@ -63,9 +63,10 @@ void sgb_id(sgb_romprops_t* props, uint8_t *filename) {
   props->error = 0;
   props->error_param = NULL;
 
-  /* check for GB ROM.  match case-insensitive <name>.gb* */
-  char *ext = strrchr((char*)filename, (int)'.');
-  if(!ext || ext[0] != '.' || tolower(ext[1]) != 'g' || tolower(ext[2]) != 'b') return;
+  /* check for GB ROM.  match case-insensitive <name>.gb*
+     path_is_gb() (fileops.c) is THE definition, shared with path_asset() so that the core a game
+     boots on and the directory its save lands in can never disagree. */
+  if(!path_is_gb((const char*)filename)) return;
 
   printf("Loading SGB\n");
   props->has_sgb = 1;
@@ -357,9 +358,10 @@ void sgb_gtc_load(uint8_t* filename) {
     struct gtm gtime_cur;
     struct gtm gtime_ts;
   
-    char gtcfile[256] = SAVE_BASEDIR;
-    check_or_create_folder(SAVE_BASEDIR);
-    append_file_basename(gtcfile, (char*)filename, ".gtc", sizeof(gtcfile));
+    char gtcfile[256];
+    /* .gtc is NOT patch-aware (unlike .srm/.state) -- keep it keyed off the ROM by calling
+       path_asset directly rather than memory.c's patch-aware namer. READ path: no create. */
+    path_asset(gtcfile, sizeof(gtcfile), SAVE_BASEDIR, (const char*)filename, ".gtc");
     file_open((uint8_t *)gtcfile, FA_READ);
   
     /* get current time in gtime format */
@@ -443,9 +445,9 @@ void sgb_gtc_save(uint8_t* filename) {
     /* if it has been written and is not halted then compute a new delta */
     if (((ftime >> 55) & 0x1) && !((ftime >> 38) & 0x1)) {      
       /* update the timestamp file.  gtime_ts = (gtime_cur - gtime_gtc) */
-      char gtcfile[256] = SAVE_BASEDIR;
-      check_or_create_folder(SAVE_BASEDIR);
-      append_file_basename(gtcfile, (char*)filename, ".gtc", sizeof(gtcfile));
+      char gtcfile[256];
+      if(path_asset(gtcfile, sizeof(gtcfile), SAVE_BASEDIR, (const char*)filename, ".gtc") < 0) return;
+      path_asset_mkdir(gtcfile);              /* create only AFTER the name exists */
       file_open((uint8_t *)gtcfile, FA_WRITE);
       if (file_res) {
         uart_putc(0x30+file_res);

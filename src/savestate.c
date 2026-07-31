@@ -32,9 +32,8 @@ void savestate_slot_status_stage(void) {
   cfg_get_listed_game(LAST_FILE, file_lfn, 0);
   char *ssbase = current_ips_srm_source[0] ? (char*)current_ips_srm_source : (char*)file_lfn;
   for(slot = 1; slot <= 4; slot++) {
-    strcpy(line, SS_BASEDIR);
     snprintf(extend, sizeof(extend), "%02d.state", slot);
-    append_file_basename(line, ssbase, extend, sizeof(line));
+    path_asset(line, sizeof(line), SS_BASEDIR, ssbase, extend);
     if(f_stat((const TCHAR*)line, NULL) == FR_OK) {
       mask |= (uint8_t)(1 << (slot - 1));
     }
@@ -399,16 +398,15 @@ void savestate_enable_handler(int enable) {
 void load_backup_state() {
   uint8_t slot = CFG.enable_savestate_slots ? sram_readbyte(SS_SLOTS_ADDR) : 1;
   slot &= 0x7F;
-  char line[256] = SS_BASEDIR;
+  char line[256];
   char extend[10];
-  check_or_create_folder(SS_BASEDIR);
   cfg_get_listed_game(LAST_FILE, file_lfn, 0);
   /* A patched game keys its savestate off the PATCH name (mirrors the .srm path
      chosen via current_ips_srm_source in memory.c) so the .state matches the
      .srm; a plain game keys off the base ROM at recents index 0. */
   char *ssbase = current_ips_srm_source[0] ? (char*)current_ips_srm_source : (char*)file_lfn;
   snprintf(extend, sizeof(extend), "%02d.state", slot);
-  append_file_basename(line, ssbase, extend, sizeof(line));
+  path_asset(line, sizeof(line), SS_BASEDIR, ssbase, extend);
 
   /* Publish which slot's image is resident ONLY when the file is really there. A
      failed load leaves the PREVIOUS slot's image in PSRAM, and claiming it as this
@@ -429,16 +427,16 @@ void load_backup_state() {
 void save_backup_state() {
   uint8_t slot = CFG.enable_savestate_slots ? sram_readbyte(SS_SLOTS_ADDR) : 1;
   slot &= 0x7F;
-  char line[256] = SS_BASEDIR;
+  char line[256];
   char extend[10];
-  check_or_create_folder(SS_BASEDIR);
   cfg_get_listed_game(LAST_FILE, file_lfn, 0);
   /* A patched game keys its savestate off the PATCH name (mirrors the .srm path
      chosen via current_ips_srm_source in memory.c) so the .state matches the
      .srm; a plain game keys off the base ROM at recents index 0. */
   char *ssbase = current_ips_srm_source[0] ? (char*)current_ips_srm_source : (char*)file_lfn;
   snprintf(extend, sizeof(extend), "%02d.state", slot);
-  append_file_basename(line, ssbase, extend, sizeof(line));
+  if(path_asset(line, sizeof(line), SS_BASEDIR, ssbase, extend) < 0) return;
+  path_asset_mkdir(line);                     /* create only AFTER the name exists */
 
   save_sram((uint8_t*) line, 0x50000L, 0xF00000L);
   /* Reflect fresh occupancy for the STATES tab without a re-scan: OR this slot's bit

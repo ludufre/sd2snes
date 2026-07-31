@@ -103,24 +103,13 @@ static int gi_font_flush(gi_font_state_t *st, uint8_t *out) {
   return 0;
 }
 
-/* Build "/sd2snes/info/<C>/<stem>" into `out` (bucketed by the ROM's first char, extension
- * stripped). See gameinfo.h -- shared with the .man viewer (manual.c) so the bucket logic
- * stays single-sourced. The layout is preserved so callers can index the stem at
- * out + (sizeof(GAMEINFO_DIR)-1) + 2 (the "<C>/" bucket folder). Bounded. */
+/* Build "/sd2snes/info/<BB>/<stem>" into `out` (two-letter bucket, extension stripped). Thin
+ * wrapper over path_asset so THE bucket rule lives in exactly one place (fileops.c); the .man
+ * viewer (manual.c) reaches the same layout through this. Callers that need the stem should take
+ * the offset path_asset returns rather than computing it -- see gi_utf8_to_font below. Bounded. */
 void gameinfo_info_base(const uint8_t *rom_path, char *out, int outsize) {
-  const char *leaf = strrchr((const char *)rom_path, '/');
-  leaf = leaf ? leaf + 1 : (const char *)rom_path;
-  unsigned char c = (unsigned char)leaf[0];
-  if(c >= 'a' && c <= 'z') c -= 32;
-  if(!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))) c = '_';
-  int i = 0;
-  const char *pre = GAMEINFO_DIR;
-  while(*pre && i < outsize - 1) out[i++] = *pre++;    /* "/sd2snes/info/" */
-  if(i < outsize - 1) out[i++] = (char)c;              /* bucket char */
-  if(i < outsize - 1) out[i++] = '/';
-  while(*leaf && i < outsize - 1) out[i++] = *leaf++;  /* "<leaf>" */
-  out[i] = 0;
-  { char *dot = strrchr(out, '.'); if(dot) *dot = 0; } /* strip the extension */
+  if(path_asset(out, outsize, GAMEINFO_DIR, (const char *)rom_path, "") < 0)
+    out[0] = 0;
 }
 
 /* dst = a + b, bounded (no snprintf dependency). */
@@ -457,9 +446,10 @@ void gameinfo_load(uint8_t *rom_path) {
    * exists -- the OBJ box-art floated in the band where the .gd cover would be. */
   meta.status   = GAMEINFO_STATUS_OK;
 
-  /* build "/sd2snes/info/<C>/<stem>" (bucketed by first char, extension stripped). Shared with
-   * the .man viewer via gameinfo_info_base so the bucket logic can't drift (utils/reorg_info.py). */
-  gameinfo_info_base(rom_path, base, sizeof(base));
+  /* build "/sd2snes/info/<BB>/<stem>" (two-letter bucket, extension stripped). stem_off is where
+   * <stem> starts -- keep it instead of recomputing the prefix width later. */
+  int stem_off = path_asset(base, sizeof(base), GAMEINFO_DIR, (const char *)rom_path, "");
+  if(stem_off < 0) stem_off = 0;
 
   /* /sd2snes/info/<stem>.yml -- now OPTIONAL: a missing .yml is no longer a skip,
    * it just leaves every field empty (filled by the fallbacks below). */
@@ -486,11 +476,12 @@ void gameinfo_load(uint8_t *rom_path) {
     file_res = 0; /* soft fail: no .yml is fine; fmv_eligible stays 1 (probe .fmv as before) */
   }
 
-  /* title fallback: the ROM stem (no extension; base is ".../<C>/<stem>"); "-" for other
-   * empty fields. Applied unconditionally so the .yml-less screen is filled. The +2 skips
-   * the "<C>/" bucket folder added to GAMEINFO_DIR above. */
+  /* title fallback: the ROM stem (base is ".../<BB>/<stem>"); "-" for other empty fields.
+   * Applied unconditionally so the .yml-less screen is filled. Uses the offset path_asset
+   * returned -- the old code hardcoded sizeof(GAMEINFO_DIR)-1+2 for a ONE-char bucket, which is
+   * exactly the kind of arithmetic that silently shifts when the layout changes. */
   if(!meta.title[0])
-    gi_utf8_to_font(base + (sizeof(GAMEINFO_DIR) - 1) + 2, meta.title, sizeof(meta.title));
+    gi_utf8_to_font(base + stem_off, meta.title, sizeof(meta.title));
   gi_dash(meta.developer);
   gi_dash(meta.year);
   gi_dash(meta.players);

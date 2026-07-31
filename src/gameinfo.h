@@ -108,10 +108,12 @@ typedef struct __attribute__((__packed__)) _gameinfo_meta {
   uint16_t fmv_frames;        /* +411 ($19B) total FMV frames (info/debug; the MCU loops) */
 } gameinfo_meta_t;            /* 413 bytes */
 
-/* Build "/sd2snes/info/<C>/<stem>" into `out` (bucketed by the ROM's first char -- 0-9/A-Z,
- * else '_' -- extension stripped): the shared derivation for every /sd2snes/info asset. The
- * in-game manual viewer (manual.c) reuses this so its bucket logic can NEVER drift from the
- * game-info one (utils/reorg_info.py). Bounded; `out` holds at least outsize chars. */
+/* Build "/sd2snes/info/[sgb/]<BB>/<stem>" into `out`: the shared derivation for every
+ * /sd2snes/info asset. A thin wrapper over path_asset() (fileops.c), which owns the two-letter
+ * bucket rule and the Game Boy sgb/ namespace. The in-game manual viewer (manual.c) reuses this
+ * so its path logic can NEVER drift from the game-info one.
+ * Bounded; `out` holds at least outsize chars. On a path too long to fit, `out` is the EMPTY
+ * STRING -- callers must cope with that rather than assume a usable path. */
 void gameinfo_info_base(const uint8_t *rom_path, char *out, int outsize);
 
 /* Parse /sd2snes/info/<rom>.yml (optional), stage the band image (<rom>.fmv animated,

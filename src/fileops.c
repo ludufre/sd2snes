@@ -117,20 +117,121 @@ uint8_t file_getc() {
   return file_buf[file_block_off++];
 }
 
-void append_file_basename(char *dirbase, char *filename, char *extension, int num) {
-  char *append = strrchr(filename, '/');
-  if(append == NULL) {
-    append = filename;
-  } else {
-    append++;
+/* --- Two-letter bucket layout (firmware 2.15+) -------------------------------------------------
+ * Per-game assets live under a TWO-CHARACTER bucket directory:
+ *   /sd2snes/info/SU/<stem>.yml   /sd2snes/saves/SU/<stem>.srm   etc.
+ * WHY: a FAT lookup is linear and long-name compares are expensive. On a real card
+ * /sd2snes/cheats held 2121 entries and /sd2snes/info/S held 1512, costing ~720ms and ~300ms per
+ * game load (measured). Two characters takes the median directory from ~770 files to ~40.
+ *
+ * THE RULE  bucket(leaf) = f(leaf[0]) + f(leaf[1]),  f(c) = upper(c) if [0-9A-Z] else '_',
+ *           a missing character -> '_'.
+ * Derived from the RAW leaf (before the extension is stripped). That is equivalent to deriving it
+ * from the stem -- the only index-1 difference is a one-character stem, where the raw leaf gives
+ * '.'->'_' and the stem gives the pad '_', the same answer. Said explicitly because the mirrors
+ * could otherwise drift by picking the other order.
+ *
+ * THIS FUNCTION IS THE ONE THE DEVICE RUNS, and the Web Manager is what CREATES these paths --
+ * its core/sd-layout.ts bucketOf() must match this exactly, or the device looks in a different
+ * directory than the Manager wrote to and the user sees saves/cheats/covers "disappear".
+ * tests/host/run_bucket.sh pins this side against the shared case table (and already caught a
+ * read-past-NUL here); the Manager's spec uses the same table.
+ */
+void path_bucket2(const char *path, char *out) {
+  const char *leaf = strrchr(path, '/');
+  int i, end = 0;
+  leaf = leaf ? leaf + 1 : path;
+  for(i = 0; i < 2; i++) {
+    unsigned char c;
+    /* `end` latches at the NUL: without it, a one-character (or empty) leaf reads leaf[1] PAST
+       the terminator. ASan caught exactly that in tests/host/run_bucket.sh. */
+    if(end) { out[i] = '_'; continue; }
+    c = (unsigned char)leaf[i];
+    if(!c) { end = 1; out[i] = '_'; continue; } /* leaf shorter than 2 -> pad */
+    if(c >= 'a' && c <= 'z') c -= 32;
+    out[i] = ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) ? (char)c : '_';
   }
-  strncat(dirbase, append, num-strlen(dirbase)-1);
-  char *dot = strrchr(dirbase, (int)'.');
-  if(dot) {
-    strcpy(dot, extension);
-  } else {
-    strncat(dirbase, extension, num-strlen(dirbase)-1);
+  out[2] = 0;
+}
+
+/* Does the firmware load this ROM through the Super Game Boy core?
+ * THE definition -- sgb_id() (sgb.c) and path_asset() below both call it, so the core that boots
+ * the game and the directory its save lands in can never disagree.
+ * The rule: the extension STARTS WITH "gb", case-insensitive -> .gb, .gbc.
+ * ".sgb" DOES NOT MATCH (it starts with 's'); such a file loads as a plain SNES ROM. That is not
+ * an oversight -- the Web Manager mirrors this exact test in core/sd-layout.ts isGbRom(), even
+ * though its own SYSTEM_BY_EXT calls the .sgb extension's system 'SGB'.
+ * `name` may be a full path or a bare leaf; only the last '.' matters. */
+int path_is_gb(const char *name) {
+  const char *dot = strrchr(name, '.');
+  return dot && (dot[1] | 32) == 'g' && (dot[2] | 32) == 'b';
+}
+
+/* Build "<root>[sgb/]<BB>/<stem><ext>" into buf. `root` MUST end in '/'.
+ * The bucket AND the stem come from the SAME `src` leaf -- never split those across two strings,
+ * or a patched game's .srm and .state land in different buckets (see memory.c/savestate.c, which
+ * pick current_ips_srm_source before naming).
+ * `ext` "" gives the bare stem (the gameinfo/manual shape). src's own extension is stripped.
+ * Unlike the old append_file_basename this confines the '.' search to the LEAF, so a '.' in the
+ * root or in the bucket can never be clobbered.
+ * Returns the offset of <stem> within buf, or -1 if it did not fit. On -1 the buffer is left as
+ * the EMPTY STRING, never a truncated path: callers pass `buf` straight to f_open/f_unlink/f_stat,
+ * and an unterminated or truncated name would either read past the buffer or make two different
+ * games share one save file. Still CHECK THE -1 on write paths -- an empty name fails cleanly, but
+ * only the caller can report it. */
+int path_asset(char *buf, int buflen, const char *root, const char *src, const char *ext) {
+  const char *leaf = strrchr(src, '/');
+  const char *dot;
+  int n = 0, stem_off, leaflen;
+
+  if(buflen > 0) buf[0] = 0;                    /* every -1 below leaves this in place */
+  leaf = leaf ? leaf + 1 : src;
+  dot  = strrchr(leaf, '.');
+  leaflen = dot && dot != leaf ? (int)(dot - leaf) : (int)strlen(leaf);
+
+  while(*root && n < buflen - 1) buf[n++] = *root++;
+
+  /* Game Boy gets a namespace of its own. A sidecar is named from the ROM's stem, so without this
+     "Tetris.gb" and "Tetris.sfc" would share one .srm/.yml/.state.
+     Taken from `src` like the bucket and the stem, so the writer and the menu-side delete-SRM
+     path (main.c) always agree: both start from the same string. sgb_romprops.has_sgb would NOT
+     work here -- sgb_id() only runs inside load_rom, so in the menu it holds the LAST LOADED
+     game and the delete would miss.
+     Known wart: a patched .gb names its save from current_ips_srm_source (a .ips path), so the
+     .srm falls outside sgb/ while sgb.c's .gtc stays in. That configuration is already
+     non-functional -- the patch lands on the SGB SNES BIOS at 0x880000, not on the GB ROM at 0. */
+  if(path_is_gb(leaf)) {
+    if(n > buflen - 9) { buf[0] = 0; return -1; }  /* no room for "sgb/" + "BB/" + NUL */
+    memcpy(buf + n, "sgb/", 4);
+    n += 4;
   }
+
+  if(n > buflen - 5) { buf[0] = 0; return -1; }   /* no room for "BB/" + NUL */
+  path_bucket2(src, buf + n);
+  n += 2;
+  buf[n++] = '/';
+  stem_off = n;
+  if(n + leaflen + (int)strlen(ext) >= buflen) { buf[0] = 0; return -1; }
+  memcpy(buf + n, leaf, (size_t)leaflen);
+  n += leaflen;
+  strcpy(buf + n, ext);
+  return stem_off;
+}
+
+/* mkdir -p of the directory portion of an already-built asset path (up to and including the last
+ * '/'). Terminates in place and restores, so the caller does not need a second 256-byte buffer on
+ * an already-deep frame. ONLY call this on a WRITE path, and only AFTER the name is built --
+ * creating from the bare root would make an empty bucket dir on every read. */
+FRESULT path_asset_mkdir(char *path) {
+  char *slash = strrchr(path, '/');
+  FRESULT res;
+  char save;
+  if(!slash) return FR_OK;
+  save = slash[1];
+  slash[1] = 0;                                 /* check_or_create_folder wants a trailing '/' */
+  res = check_or_create_folder((TCHAR *)path);
+  slash[1] = save;
+  return res;
 }
 
 FRESULT check_or_create_folder(TCHAR *dir) {

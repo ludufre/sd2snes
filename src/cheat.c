@@ -361,7 +361,7 @@ void cheat_wram_present(int enable) {
    into .bss and hung the cheat menu (esp. via the deeper recents/favorites
    path).  Sets the global file_res. */
 static void cheat_yaml_title_and_open(uint8_t* romfilename) {
-  char line[256] = CHEAT_BASEDIR;
+  char line[256];
 
 /* Build "Cheats for <basename without extension>" in PSRAM at
   SRAM_CHEAT_TITLE_ADDR ($D80000) so the SNES menu can use it as the
@@ -402,8 +402,10 @@ static void cheat_yaml_title_and_open(uint8_t* romfilename) {
     sram_writeblock(title, SRAM_CHEAT_TITLE_ADDR, sizeof(title));
   }
 
-  append_file_basename(line, (char*)romfilename, ".yml", sizeof(line));
-  check_or_create_folder(CHEAT_BASEDIR);
+  /* READ path: no directory creation. Under the flat layout this harmlessly re-created
+     /sd2snes/cheats; with buckets it would create an empty <BB>/ on every game load and litter
+     the card with hundreds of empty directories. */
+  path_asset(line, sizeof(line), CHEAT_BASEDIR, (const char*)romfilename, ".yml");
   printf("Cheat YAML file: %s\n", line);
   yaml_file_open(line, FA_READ);
 }
@@ -600,10 +602,10 @@ static void cheat_write_yaml_string(FIL *fp, const char *s) {
 /* save cheats to YAML file from ROM/menu */
 void cheat_yaml_save(uint8_t *romfilename) {
   cheat_record_t cheat;
-  char line[256] = CHEAT_BASEDIR;
+  char line[256];
   int numcheats = sram_readshort(SRAM_NUM_CHEATS);
 
-  append_file_basename(line, (char*)romfilename, ".yml", sizeof(line));
+  if(path_asset(line, sizeof(line), CHEAT_BASEDIR, (const char*)romfilename, ".yml") < 0) return;
   printf("Cheat YAML file: %s\n", line);
 
   /* Mirror what save_sram and save_backup_state do. Any prior FPGA SPI
@@ -612,8 +614,9 @@ void cheat_yaml_save(uint8_t *romfilename) {
      call. Also make sure the directory exists. */
   FPGA_DESELECT();
 
-  /* Make sure the cheat directory exists before writing into it. */
-  check_or_create_folder(CHEAT_BASEDIR);
+  /* Make sure the bucket directory exists before writing into it -- AFTER the name is built,
+     never from the bare root (which would not create the <BB>/ level at all). */
+  path_asset_mkdir(line);
 
   /* Clear any read-only / hidden / system attribute on the existing
      YAML file before unlinking. If the file does not exist this fails

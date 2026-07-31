@@ -55,7 +55,13 @@ UINT file_readblock(void* buf, uint32_t addr, uint16_t size);
 UINT file_writeblock(void* buf, uint32_t addr, uint16_t size);
 
 uint8_t file_getc(void);
-void append_file_basename(char *dirbase, char *filename, char *extension, int num);
+
+/* Two-letter bucket layout (firmware 2.15+). See fileops.c for THE RULE and the two host mirrors
+   that must match it (utils/sd_bucket.py, the Manager's sd-layout.ts). */
+int     path_is_gb(const char *name);                /* THE Game Boy test; .sgb does NOT match */
+void    path_bucket2(const char *path, char *out);   /* writes 3 bytes: "SU\0" */
+int     path_asset(char *buf, int buflen, const char *root, const char *src, const char *ext);
+FRESULT path_asset_mkdir(char *path);
 FRESULT check_or_create_folder(TCHAR *dir);
 
 char *get_fresult_name(FRESULT res);
