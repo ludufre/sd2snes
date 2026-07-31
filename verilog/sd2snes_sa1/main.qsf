@@ -509,6 +509,7 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 set_global_assignment -name VERILOG_FILE spi.v
 set_global_assignment -name VERILOG_FILE sd_dma.v
 set_global_assignment -name VERILOG_FILE dma.v
+set_global_assignment -name VERILOG_FILE ctx.v
 set_global_assignment -name VERILOG_FILE sa1.v
 set_global_assignment -name VERILOG_FILE msu.v
 set_global_assignment -name VERILOG_FILE mcu_cmd.v
@@ -518,6 +519,7 @@ set_global_assignment -name VERILOG_FILE dac.v
 set_global_assignment -name VERILOG_FILE cheat.v
 set_global_assignment -name SDC_FILE main.sdc
 set_global_assignment -name VERILOG_FILE address.v
+set_global_assignment -name VERILOG_FILE regshadow.v
 set_global_assignment -name QIP_FILE sa1_div.qip
 set_global_assignment -name QIP_FILE sa1_mult.qip
 set_global_assignment -name QIP_FILE sa1_iram.qip

@@ -335,6 +335,9 @@ uint8_t snes_main_loop() {
           last_save_failed = save_failed;
           save_failed = file_res ? 1 : 0;
           didnotsave = save_failed ? 25 : 0;
+          /* refresh the in-game SAVES-tab block: FatFs just stamped the .srm with the
+             RTC time, so an f_stat re-read is byte-consistent with load-time staging. */
+          if(!save_failed) saveinfo_stage(file_lfn);
           writeled(0);
         }
         if(didnotsave>50) {
@@ -345,6 +348,7 @@ uint8_t snes_main_loop() {
           last_save_failed = save_failed;
           save_failed = file_res ? 1 : 0;
           didnotsave = save_failed ? 25 : 0;
+          if(!save_failed) saveinfo_stage(file_lfn);
           writeled(!last_save_failed);
         }
         saveram_offset = 0;

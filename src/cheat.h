@@ -34,14 +34,38 @@
 /* Records live in the $D00000 PSRAM bank group D0..D3 (512 * 512 bytes). */
 #define CHEAT_RECORD_MAX (512)
 
-/* In-game cheat overlay: the first CHEAT_NAME_INGAME_MAX cheat descriptions are
- * staged into the SNES-visible BSRAM window (SRAM_CHEAT_NAMES_ADDR, $FF0800) at
- * game load. The canonical PSRAM records at $D00000 hold the full descriptions,
- * but during a game that bank IS the game's own ROM, so the in-game overlay
- * cannot reach them — it reads these BSRAM copies instead. 64*32 = 2 KB, which
- * fills $FF0800..$FF0FFF exactly (up to $FF1000 = SRAM_CMD_ADDR). */
+/* PSRAM-patched ROM cheats (no FPGA comparators): per-record spare tail.
+   Record slot layout is flags(1)+desc(254)+numpatches(1)+patches(40*4)=416
+   bytes; the remaining 96 bytes of the 512-byte slot store, per code, the
+   original ROM byte and an "applied to the image" flag so a cheat can be
+   toggled off by restoring the byte. */
+#define CHEAT_REC_ORIG_OFS    (416)
+#define CHEAT_REC_APPLIED_OFS (456)
+
+/* Apply/restore ROM codes directly into the loaded ROM image in PSRAM.
+   Active only on builds/cores without the FPGA cheat comparators (mk2 SA-1);
+   no-op otherwise. Idempotent; call sites: deassert_reset() (after every
+   image mutation: stream, IPS/BPS, recore) and the in-game reprogram. */
+void cheat_rom_psram_apply(void);
+uint8_t cheat_rom_psram_mode(void);
+
+/* In-game cheat overlay names: a SLIDING WINDOW of CHEAT_NAME_INGAME_MAX descriptions in the
+ * SNES-visible BSRAM window (SRAM_CHEAT_NAMES_ADDR, $FF8000). The canonical PSRAM records at
+ * $D00000 hold the full descriptions, but during a game that bank IS the game's own ROM, so the
+ * in-game overlay cannot reach them — it reads these BSRAM copies. The base-0 window (first 64)
+ * is staged at game load (zero extra cost); when the user scrolls past it the overlay requests a
+ * re-based window via CMD_CHEAT_NAMES_WINDOW and the MCU restages 64 names from the records into
+ * $FF8000. So the overlay lists ALL cheats (up to CHEAT_RECORD_MAX) without growing the game-load
+ * staging. 64*64 = 4 KB at $FF8000..$FF8FFF. LEN is a power of two so the window offset
+ * ((idx - base)*LEN) is a simple shift. */
 #define CHEAT_NAME_INGAME_MAX (64)
-#define CHEAT_NAME_INGAME_LEN (32)
+#define CHEAT_NAME_INGAME_LEN (64)
+
+/* Re-stage the 64-name window for absolute cheat indices [base, base+64) from the canonical
+ * $D00000 records into SRAM_CHEAT_NAMES_ADDR, then publish `base` to SRAM_CHEAT_WIN_BASE_ADDR.
+ * Served on CMD_CHEAT_NAMES_WINDOW while the SNES is frozen in the overlay. Bounded (64 reads,
+ * no SD, no YAML); slots past the cheat count are staged empty. */
+void cheat_stage_names_window(int base);
 
 typedef union _cheat_patch_record {
   struct __attribute__ ((__packed__)) _patch_fields {

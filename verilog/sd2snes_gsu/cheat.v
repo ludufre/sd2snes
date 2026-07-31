@@ -55,6 +55,12 @@ reg irq_enable = 0;
 reg holdoff_enable = 0; // temp disable hooks after reset
 reg buttons_enable = 0;
 reg wram_present = 0;
+// In-game cheat overlay: route the NMI/IRQ hook to the savestate handler
+// (nmi_savestate) so the overlay probe (L+R+Y+Left) can run.  The overlay never
+// loadstates, so savestate_force_entry is a constant 0 (mirrors sd2snes_sa1); the
+// full force-entry latch machinery of the base core is unneeded here.
+reg savestate_enable = 0;
+wire savestate_force_entry = 1'b0;
 wire branch_wram = cheat_enable & wram_present;
 
 reg auto_nmi_enable = 1;
@@ -90,7 +96,7 @@ reg [7:0] return_vector = 8'hea;
 
 reg [7:0] branch1_offset = 8'h00;
 reg [7:0] branch2_offset = 8'h00;
-reg [7:0] branch3_offset = 8'h04;
+reg [7:0] branch3_offset;
 
 reg [15:0] pad_data = 0;
 
@@ -315,12 +321,12 @@ always @(posedge clk) begin
       end else if(pgm_idx == 6) begin // set rom patch enable
         cheat_enable_mask <= pgm_in[5:0];
       end else if(pgm_idx == 7) begin // set/reset global enable / hooks
-      // pgm_in[13:8] are reset bit flags
-      // pgm_in[5:0] are set bit flags
-        {wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
-         <= ({wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
-          & ~pgm_in[13:8])
-          | pgm_in[5:0];
+      // pgm_in[14:8] are reset bit flags
+      // pgm_in[6:0] are set bit flags
+        {savestate_enable, wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
+         <= ({savestate_enable, wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
+          & ~pgm_in[14:8])
+          | pgm_in[6:0];
       end
     end
   end
@@ -344,7 +350,11 @@ always @(posedge clk) begin
   end
 end
 
-always @* begin
+// registered (was comb): the branch-offset byte feeds the SNES_DATA serve path
+// combinationally; the savestate additions (16-bit |pad_data + mux) made that
+// unconstrained I/O path too deep at 85.9 MHz (hook redirect died in HW with
+// timing formally met).  The offsets are stable long before the fetch.
+always @(posedge clk) begin
   case(pad_data)
     16'h3030: nmicmd = 8'h80;
     16'h2070: nmicmd = 8'h81;
@@ -356,7 +366,11 @@ always @* begin
   endcase
 end
 
-always @* begin
+// registered (was comb): the branch-offset byte feeds the SNES_DATA serve path
+// combinationally; the savestate additions (16-bit |pad_data + mux) made that
+// unconstrained I/O path too deep at 85.9 MHz (hook redirect died in HW with
+// timing formally met).  The offsets are stable long before the fetch.
+always @(posedge clk) begin
   if(buttons_enable) begin
     if(snes_ajr) begin
       if(nmicmd) begin
@@ -365,7 +379,11 @@ always @* begin
         if(branch_wram) begin
           branch1_offset = 8'h3a; // nmi_patches
         end else begin
-          branch1_offset = 8'h43; // nmi_exit
+          if(savestate_enable & (savestate_force_entry | |pad_data)) begin
+            branch1_offset = 8'h3f; // nmi_savestate
+          end else begin
+            branch1_offset = 8'h43; // nmi_exit
+          end
         end
       end
     end else begin
@@ -383,18 +401,42 @@ always @* begin
     if(branch_wram) begin
       branch1_offset = 8'h3a;     // nmi_patches
     end else begin
-      branch1_offset = 8'h43;     // nmi_exit
+      if(savestate_enable & |pad_data) begin
+        branch1_offset = 8'h3f;   // nmi_savestate
+      end else begin
+        branch1_offset = 8'h43;   // nmi_exit
+      end
     end
   end
 end
 
-always @* begin
+// registered (was comb): the branch-offset byte feeds the SNES_DATA serve path
+// combinationally; the savestate additions (16-bit |pad_data + mux) made that
+// unconstrained I/O path too deep at 85.9 MHz (hook redirect died in HW with
+// timing formally met).  The offsets are stable long before the fetch.
+always @(posedge clk) begin
   if(nmicmd == 8'h81) begin
     branch2_offset = 8'h14;       // nmi_stop
   end else if(branch_wram) begin
     branch2_offset = 8'h00;       // nmi_patches
   end else begin
-    branch2_offset = 8'h09;       // nmi_exit
+    if(savestate_enable) begin
+      branch2_offset = 8'h05;     // nmi_savestate
+    end else begin
+      branch2_offset = 8'h09;     // nmi_exit
+    end
+  end
+end
+
+// registered (was comb): the branch-offset byte feeds the SNES_DATA serve path
+// combinationally; the savestate additions (16-bit |pad_data + mux) made that
+// unconstrained I/O path too deep at 85.9 MHz (hook redirect died in HW with
+// timing formally met).  The offsets are stable long before the fetch.
+always @(posedge clk) begin
+  if(savestate_enable) begin
+    branch3_offset = 8'h00;       // nmi_savestate
+  end else begin
+    branch3_offset = 8'h04;       // nmi_exit
   end
 end
 

@@ -1,0 +1,1029 @@
+// cheatlist.i65 -- shared in-game cheat-list layout + render/input routines,
+// extracted from cheatoverlay.a65 so BOTH the $C0 single-tab fail-safe overlay
+// AND the $C2 igmenu tab shell can #include the SAME source (SEPARATE links, no
+// cross-bank symbol coupling). This file has NO .link directive -- it inherits the
+// including file's bank ($C0 for cheatoverlay.a65, $C2 for igmenu.a65).
+//
+// EXTRACTION GUARD (durable): every routine here is self-contained -- it addresses
+// $F4 scratch / VRAM / CHEAT_NAMES / CHEAT_FLAGS via @long (bank-agnostic) and only
+// jsr/rts among ITSELF. It must NOT reference any label defined outside this include
+// (ss_overlay, ss_ovl_do_exit, ss_overlay_restore, ss_exit, genfonts): the igmenu
+// separate link would then fail loudly (the snes/Makefile greps link.log for
+// "still undefined"). That failure IS the guard that the boundary stayed clean.
+// --- In-game cheat overlay (Phase 3) layout + scratch ----------------------
+//     The overlay takes over the screen in MODE 5 (512px hi-res, hiprint-style
+//     crisp text), the same look as the browser/menu. Two 32-wide tilemaps are
+//     interleaved to 64 logical columns: EVEN logical column -> BG2 tilemap
+//     ($5000), ODD -> BG1 tilemap ($5800), each at entry (row*32 + col/2). The
+//     glyph font is generated in BOTH mode-5 formats (BG1 4bpp @ VRAM $0000, BG2
+//     2bpp @ $4000) by genfonts, with glyph N at tile 2N, so a tilemap entry is
+//     (glyph<<1)|$2000 (palette 0, priority) -- exactly what hiprint writes. BG1
+//     is H-scrolled $00fc against BG2 = 0 to interleave the columns (menu's hi-res
+//     alignment). Rows are built into a 64-byte PSRAM scratch line (OVL_RB) then
+//     de-interleaved to the two tilemaps (ovl_flush_abs). Row/col are tile units.
+#define OVL_LIST_ROW0   4        // first cheat row (absolute tile row)
+#define OVL_ROWS        20       // visible cheat rows (4..23)
+#define OVL_CURSOR_COL  2        // '>' logical column (even -> BG2)
+#define OVL_NAME_COL    3        // name start logical column
+#define OVL_NAME_MAX    53       // name chars shown (cols 3..55 -- one block further left
+                                 //   since the '>' cursor retired; gap 56-57, flag at 58)
+#define OVL_FLAG_COL    58       // "ON "/"OFF" at logical cols 58..60
+#define OVL_SB_COL      62       // scrollbar cell (even -> BG2 entry 31), right of the flag.
+                                 // Same column ig_draw_window (igmenu.a65) uses for a frame's
+                                 // RIGHT border -- no clash only because the Cheats tab never
+                                 // gets a frame (ig_frame_if_static skips tab 0). Window-2 edge
+                                 // mask clips px 253+, so the thumb glyph loses its last pixel.
+#define OVL_BG2_MAP     $5000    // BG2 tilemap VRAM word base (even columns)
+#define OVL_BG1_MAP     $5800    // BG1 tilemap VRAM word base (odd columns)
+// 64-byte per-row line buffer in PSRAM bank $F4 ($F48200). Built by ovl_build_*
+// (glyph codes, one byte per logical column), flushed to the two tilemaps by
+// ovl_flush_abs. The draw helpers set DBR=$F4 locally so OVL_RB is absolute-
+// addressable (allows an abs,Y store for the name copy -- there is no long,Y)
+// the game's DBR is preserved (restored on exit), so the main flow is untouched.
+#define OVL_RB          $8200    // OVL_RB line buffer, 16-bit abs offset (DBR=$F4)
+// Scratch state in PSRAM bank $F4 (SNES-visible in-game, clear of the savestate
+// buffers at $F2/$F40000/$F41000/$F45000/$F46000). All .word unless noted.
+#define ovl_count    $F48100     // min(NUM_CHEATS, CHEAT_OVL_MAX)
+#define ovl_top      $F48102     // index of first visible cheat (scroll)
+#define ovl_selrow   $F48104     // cursor screen row 0..visible-1
+#define ovl_visible  $F48106     // min(count, OVL_ROWS)
+#define ovl_dirty    $F48108     // byte: 1 if any toggle happened
+#define ovl_pprev    $F4810A     // previous pad word (edge detection)
+#define ovl_cur      $F4810C     // current pad word (scratch)
+#define ovl_edge     $F4810E     // newly-pressed bits (scratch)
+#define ovl_rowoff   $F48110     // VRAM tilemap word offset for a row (row*32, scratch)
+#define ovl_idx      $F48112     // absolute cheat index for a row (scratch)
+#define ovl_rep_cnt  $F48114     // auto-repeat countdown for held Up/Down
+#define ovl_win_tmp  $F48116     // scratch: tentative new base while sliding the name window
+#define ovl_pal      $F48118     // list tilemap palette base: $2000 = FOCUSED (palette 0, normal),
+                                 //   $2400 = GREYED (palette 1) when the tab bar has focus. Also
+                                 //   gates the cursor '>' (drawn only when == $2000). The $C0
+                                 //   fail-safe overlay keeps it $2000 (always focused); the $C2
+                                 //   igmenu shell drives it from the two-level focus state.
+// NOTE: nothing in the overlay may trigger a savestate
+// stage while it is open. load_backup_state reads the .state into $F00000 and it is
+// 0x50000 bytes long, i.e. $F00000..$F4FFFF -- which swallows EVERY overlay backup
+// ($F20000 VRAM, $F40000 CGRAM, $F45000/$F45080 regs, $F48100+ scratch), so the exit
+// restore would push savestate bytes into VRAM/CGRAM/the PPU regs. Slot changes are
+// staged lazily by load_state (snes/savestate.a65) instead, with the overlay closed.
+#define OVL_REP_INIT 16          // frames before held ↑/↓ starts repeating
+#define OVL_REP_RATE 2           // frames between auto-repeat steps (the DMA scroll
+                                 // pipeline flushes a full list in 1 frame, so the
+                                 // repeat can pace this fast without the old redraw stall)
+// Scroll redraw via DMA pipeline: a full CPU tilemap redraw does NOT fit a vblank
+// (~1500 cyc/row, only ~2 rows/vblank -> the 2nd row's flush overran and left the
+// odd screen rows garbled). Instead, on scroll we BUILD all visible rows' tilemap
+// ENTRIES into a PSRAM buffer (OVL_TMBUF) during active display (no vblank limit),
+// then DMA the buffer to VRAM in the NEXT vblank (2 GP-DMAs, fast). Full redraw in
+// one frame, NO overrun, NO flash, scroll paced only by the auto-repeat.
+#define OVL_TMBUF    $9000       // tilemap-entry buffer, 16-bit abs offset (DBR=$F4)
+                                 // [BG2: OVL_ROWS*32 words][BG1: OVL_ROWS*32 words]
+                                 // = $9000..$99FF ($F49000, clear of OVL_RB at $8200)
+#define ovl_flush_dst $F4811A    // 0 = ovl_flush writes VRAM (initial draw), 1 = OVL_TMBUF
+#define ovl_scroll_dirty $F4811C // 1 = list scrolled, rebuild OVL_TMBUF this frame
+#define ovl_dma_pending  $F4811E // 1 = OVL_TMBUF built, DMA it to VRAM next vblank
+// Horizontal name marquee for the SELECTED row (same behaviour as the file browser's
+// long-filename scroll): if the selected cheat name is wider than the display, slide it
+// left one char every OVL_MQ_STEP frames until the tail shows, pause, slide back, repeat.
+// Reuses the DMA rebuild pipeline: a marquee step just bumps ovl_mq_xscroll + marks the
+// list dirty ss_ovl_draw_full_row shifts ONLY the selected row's name by that offset.
+#define ovl_mq_xscroll $F48120   // current horizontal char offset of the selected name
+#define ovl_mq_wait    $F48122   // frames left before the next marquee step
+#define ovl_mq_state   $F48124   // 1 = sliding forward (left), 2 = sliding back (right)
+#define ovl_mq_len     $F48126   // length of the selected cheat name (0..CHEAT_NAME_LEN-1)
+#define OVL_MQ_INIT 40           // frames paused at each end (mirrors the browser's $28)
+#define OVL_MQ_STEP 16           // frames between char steps  (mirrors the browser's $10)
+// Vertical scroll indicator (logical column OVL_SB_COL), the in-game analogue of the
+// browser's listsel_scrollbar: ovl_sb_calc derives the thumb span ONCE per list rebuild
+// and ss_ovl_draw_full_row stamps one cell per row (glyph 16 = track, 17 = thumb) while
+// it is building OVL_RB. Nothing is drawn when the whole list fits (ovl_sb_on = 0) --
+// ovl_row_clear already left that column blank, so a non-scrolling list shows no bar.
+// State block $F482DE..$F482E7: the free gap above the overlay's IGM_THM_* theme hand-off
+// (which ends at $F482D2) and directly BELOW OVL_CUR_OFF ($F482E8) -- memmap.i65 documents
+// that layout ("OVL_CUR_OFF sits past the cheat-list scrollbar scratch"), so keep this block
+// under $F482E8 when adding to it.
+#define ovl_sb_max   $F482DE     // scratch: maxscroll = count - visible (ovl_sb_calc only;
+                                 //   the divide needs its divisor in memory -- no spare reg)
+#define ovl_sb_on    $F482E0     // byte flag: 1 = draw the bar (written/read as a word,
+                                 //   nothing else lives at $F482E1; reads mask the low byte)
+#define ovl_sb_pos   $F482E2     // first thumb cell (screen row, inclusive)
+#define ovl_sb_end   $F482E4     // one past the last thumb cell (= pos + thumb)
+#define ovl_sb_thumb $F482E6     // thumb height in cells (>= 1)
+// OVL_CUR_OFF ($F482E8, 1B) gates the '>' cursor below: 0 = draw it (the $C0 fail-safe path),
+// 1 = the $C2 shell suppresses it because the selection BAR marks the row. It is NOT defined
+// here -- it is a SHARED address, defined once in memmap.i65 (which both includers pull in
+// before this file) and zeroed by the overlay dispatch on every open. Defining it locally too
+// would fork the source of truth for an address another object writes.
+// ---- ovl_row_clear: fill the OVL_RB line buffer (64 bytes) with space ($20).
+//      Assumes DBR=$F4 (OVL_RB is absolute-addressed). ----
+ovl_row_clear:
+	php
+	rep #$30 : .al : .xl
+	lda #$2020
+	ldx #$0000
+ovl_rc_l:
+	sta OVL_RB, x                          // abs,X (DBR=$F4): two space codes
+	inx : inx
+	cpx #$0040
+	bne ovl_rc_l
+	plp
+	rts
+
+// ---- ovl_flush_abs: de-interleave the 64-byte OVL_RB line to the two tilemaps
+//      at absolute tile row X. EVEN logical column -> BG2 tilemap, ODD -> BG1,
+//      each entry = (glyph<<1)|$2000 (glyph N is at tile 2N palette 0, priority
+//      -- exactly what hiprint writes). Assumes DBR=$F4 and $2115=$80. .al/.xl. ----
+ovl_flush_abs:                                 // X = absolute tile row
+	php
+	rep #$30 : .al : .xl
+	txa
+	asl : asl : asl : asl : asl             // row * 32 (tilemap entries per row)
+	sta @ovl_rowoff
+	clc : adc #OVL_BG2_MAP
+	sta @$002116                            // BG2 tilemap + row*32
+	ldx #$0000                              // even byte indices 0,2,..,62
+	ldy #$0020                              // 32 entries
+ovl_fa_ev:
+	lda OVL_RB, x                           // abs,X (DBR=$F4) low byte = glyph
+	and #$00ff
+	asl
+	ora @ovl_pal
+	sta @$002118                            // 16-bit -> $2118/$2119, auto-advance
+	inx : inx
+	dey
+	bne ovl_fa_ev
+	lda @ovl_rowoff
+	clc : adc #OVL_BG1_MAP
+	sta @$002116                            // BG1 tilemap + row*32
+	ldx #$0001                              // odd byte indices 1,3,..,63
+	ldy #$0020
+ovl_fa_od:
+	lda OVL_RB, x
+	and #$00ff
+	asl
+	ora @ovl_pal
+	sta @$002118
+	inx : inx
+	dey
+	bne ovl_fa_od
+	plp
+	rts
+
+// ---- ovl_flush_buf: like ovl_flush_abs, but de-interleave OVL_RB into OVL_TMBUF
+//      (PSRAM) instead of VRAM, for the DMA scroll pipeline. X = absolute tile row.
+//      list_row = X - OVL_LIST_ROW0 BG2 entries -> OVL_TMBUF[list_row*32], BG1 ->
+//      OVL_TMBUF[OVL_ROWS*32 + list_row*32] (both laid out contiguously per BG so the
+//      whole list DMAs in one shot per tilemap). Assumes DBR=$F4. .al/.xl. ----
+ovl_flush_buf:                                 // X = absolute tile row
+	php
+	rep #$30 : .al : .xl
+	txa
+	sec : sbc #OVL_LIST_ROW0                 // list_row (0..visible-1)
+	asl : asl : asl : asl : asl : asl        // list_row * 64 bytes
+	sta @ovl_rowoff                          // BG2 dest byte offset in OVL_TMBUF
+	// BG2 (even cols) -> OVL_TMBUF + list_row*64
+	tay                                      // Y = OVL_TMBUF dest byte offset
+	ldx #$0000                               // X = OVL_RB even byte index
+ovl_fb_ev:
+	lda OVL_RB, x                            // abs,X (DBR=$F4) low byte = glyph
+	and #$00ff
+	asl
+	ora @ovl_pal
+	sta OVL_TMBUF, y                         // abs,Y (DBR=$F4): tilemap entry word
+	inx : inx
+	iny : iny
+	cpx #$0040
+	bne ovl_fb_ev
+	// BG1 (odd cols) -> OVL_TMBUF + OVL_ROWS*64 + list_row*64
+	lda @ovl_rowoff
+	clc : adc #(OVL_ROWS*64)                 // BG1 region base
+	tay
+	ldx #$0001                               // X = OVL_RB odd byte index
+ovl_fb_od:
+	lda OVL_RB, x
+	and #$00ff
+	asl
+	ora @ovl_pal
+	sta OVL_TMBUF, y
+	inx : inx
+	iny : iny
+	cpx #$0041
+	bne ovl_fb_od
+	plp
+	rts
+
+// ---- ovl_dma_list: DMA the built OVL_TMBUF to the VRAM list region (2 GP-DMAs on
+//      ch0: BG2 + BG1). Must run in vblank/forced blank. ch0 is covered by the
+//      overlay's ch0/ch1 snapshot+restore. ----
+ovl_dma_list:
+	php
+	rep #$20 : .al
+	lda @ovl_visible                          // visible==0: size field 0 = 64KB DMA -> guard
+	bne +
+	plp
+	rts
++	sep #$20 : .as
+	rep #$10 : .xl
+	lda #$80 : sta @$002115                   // VRAM inc +1 word (after high byte)
+	// --- BG2: OVL_TMBUF -> VRAM $5000 + OVL_LIST_ROW0*32 ---
+	rep #$20 : .al
+	lda #(OVL_BG2_MAP + OVL_LIST_ROW0*32) : sta @$002116
+	sep #$20 : .as
+	lda #$01 : sta @$004300                    // ch0: 2 regs ($2118/9), A->B, A inc
+	lda #$18 : sta @$004301                    // B = $2118
+	rep #$20 : .al
+	lda #OVL_TMBUF : sta @$004302              // A addr low ($F49000)
+	sep #$20 : .as
+	lda #$f4 : sta @$004304                    // A bank $F4
+	rep #$20 : .al
+	lda @ovl_visible
+	asl : asl : asl : asl : asl : asl          // visible*64 bytes = visible*32 words
+	sta @$004305
+	sep #$20 : .as
+	lda #$01 : sta @$00420b                     // trigger ch0 (BG2)
+	// --- BG1: OVL_TMBUF + OVL_ROWS*64 -> VRAM $5800 + OVL_LIST_ROW0*32 ---
+	rep #$20 : .al
+	lda #(OVL_BG1_MAP + OVL_LIST_ROW0*32) : sta @$002116
+	sep #$20 : .as
+	lda #$01 : sta @$004300
+	lda #$18 : sta @$004301
+	rep #$20 : .al
+	lda #(OVL_TMBUF + OVL_ROWS*64) : sta @$004302
+	sep #$20 : .as
+	lda #$f4 : sta @$004304
+	rep #$20 : .al
+	lda @ovl_visible
+	asl : asl : asl : asl : asl : asl
+	sta @$004305
+	sep #$20 : .as
+	lda #$01 : sta @$00420b                     // trigger ch0 (BG1)
+	plp
+	rts
+
+// ---- ovl_sb_calc: derive the scrollbar thumb span for the CURRENT viewport. Port of the
+//      browser's listsel_scrollbar math (snes/filesel.a65), split so only the arithmetic runs
+//      once per list rebuild while the per-row cell stamping rides ss_ovl_draw_full_row.
+//      Inputs: ovl_visible (H), ovl_count (N, up to CHEAT_LIST_MAX so 16-bit throughout),
+//      ovl_top. Outputs: ovl_sb_on / ovl_sb_pos / ovl_sb_end / ovl_sb_thumb. Pure CPU math on
+//      PSRAM state -- no VRAM/PPU touch, safe in any context (active display or blank).
+//      No HW divide: both integer divides are bounded subtraction loops. Self-contained
+//      (extraction guard: @long targets, own labels only). Clobbers A/X/Y, restores P. ----
+ovl_sb_calc:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq osb_off                            // empty list -> no bar (also the "NO CHEATS" path)
+	lda @ovl_visible
+	beq osb_off                            // H == 0 -> nothing visible (also stops the H-thumb
+	                                       //   subtraction below from wrapping to $FFFF)
+	cmp @ovl_count
+	bcs osb_off                            // H >= N -> the whole list fits, no bar
+	// thumb = (H*H)/N, clamped to >= 1. H <= OVL_ROWS (20) -> H*H <= 400, fits 16-bit.
+	// The square is a repeated add (no HW multiply on the 65816).
+	tay                                    // Y = H (add loop count; LDY has no long form)
+	lda #$0000                             // A = running product H*H
+osb_sq:
+	cpy #$0000
+	beq osb_sqd
+	clc : adc @ovl_visible
+	dey
+	bra osb_sq
+osb_sqd:
+	ldx #$0000                             // X = quotient
+osb_tdiv:
+	cmp @ovl_count
+	bcc osb_tdone
+	sbc @ovl_count                         // carry set by the cmp above (A >= N)
+	inx
+	bra osb_tdiv
+osb_tdone:
+	cpx #$0001
+	bcs osb_thok
+	ldx #$0001                             // clamp the thumb to at least one cell
+osb_thok:
+	txa
+	sta @ovl_sb_thumb                      // stx has no long-addr form -> via A
+	// maxscroll = N - H  (> 0, guaranteed by the gate above)
+	lda @ovl_count
+	sec : sbc @ovl_visible
+	sta @ovl_sb_max
+	// pos = top * (H - thumb) / maxscroll, FLOOR division (as in listsel_scrollbar: floor
+	// keeps the thumb from bottoming out a step early; a near-top band that floors to 0 is
+	// bumped to cell 1 below). Product <= (N-H)*(H-1) <= 492*19 = 9348 -> fits 16-bit.
+	lda @ovl_visible
+	sec : sbc @ovl_sb_thumb                // A = H - thumb (>= 0)
+	tay                                    // Y = add loop count
+	lda #$0000                             // A = running product top*(H-thumb)
+osb_mul:
+	cpy #$0000
+	beq osb_muldone
+	clc : adc @ovl_top
+	dey
+	bra osb_mul
+osb_muldone:
+	ldx #$0000                             // X = quotient (thumb top cell)
+osb_pdiv:
+	cmp @ovl_sb_max
+	bcc osb_pdone
+	sbc @ovl_sb_max                        // carry set by the cmp above
+	inx
+	bra osb_pdiv
+osb_pdone:
+	// endpoint-exact top: an interior scroll (top > 0) that floors to cell 0 is bumped to
+	// cell 1, so the thumb only touches the top when the list is truly at the start.
+	// Skipped when H - thumb < 2 (no interior cell to bump into).
+	cpx #$0000
+	bne osb_posok
+	lda @ovl_top
+	beq osb_posok                          // truly at the top -> cell 0
+	lda @ovl_visible
+	sec : sbc @ovl_sb_thumb
+	cmp #$0002
+	bcc osb_posok
+	ldx #$0001
+osb_posok:
+	txa
+	sta @ovl_sb_pos
+	clc : adc @ovl_sb_thumb
+	sta @ovl_sb_end                        // end = pos + thumb (exclusive)
+	lda #$0001
+	sta @ovl_sb_on
+	plp
+	rts
+osb_off:
+	lda #$0000
+	sta @ovl_sb_on
+	plp
+	rts
+
+// ---- ovl_build_list_to_buf: build ALL visible rows' tilemap entries into OVL_TMBUF
+//      (via draw_full_row with ovl_flush_dst=1). Runs in active display (no vblank
+//      limit). Sets DBR=$F4. ----
+ovl_build_list_to_buf:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb                       // DBR=$F4
+	rep #$30 : .al : .xl
+	jsr ovl_sb_calc                            // refresh the scrollbar span for this viewport
+	lda #$0001 : sta @ovl_flush_dst
+	ldy #$0000
+ovl_blb_loop:
+	tya : cmp @ovl_visible
+	bcs ovl_blb_done
+	jsr ss_ovl_draw_full_row                  // builds OVL_RB + flush (to buf per ovl_flush_dst)
+	iny
+	bra ovl_blb_loop
+ovl_blb_done:
+	lda #$0000 : sta @ovl_flush_dst
+	plb
+	plp
+	rts
+
+// ---- draw all visible cheat rows (caller is in forced blank) ----
+ss_ovl_draw_rows:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb                    // DBR = $F4 (OVL_RB absolute)
+	rep #$30 : .al : .xl
+	jsr ovl_sb_calc                         // refresh the scrollbar span for this viewport
+	ldy #$0000
+ss_ovl_dr_loop:
+	tya : cmp @ovl_visible
+	bcs ss_ovl_dr_done
+	jsr ss_ovl_draw_full_row               // preserves Y
+	iny
+	bra ss_ovl_dr_loop
+ss_ovl_dr_done:
+	plb
+	plp
+	rts
+
+// ---- build one full row into OVL_RB and flush it. Y (16-bit) = list screen row
+//      0..visible-1. Assumes DBR=$F4. Preserves Y. ----
+ss_ovl_draw_full_row:
+	php
+	rep #$30 : .al : .xl
+	phy                                     // save the screen row
+	jsr ovl_row_clear                       // OVL_RB = 64 spaces
+	// cursor '>' if this screen row is the selected one
+	ply : phy                               // peek Y = screen row
+	tya
+	cmp @ovl_selrow
+	bne ss_ovl_dfr_nocur
+	lda @ovl_pal : cmp #$2000               // cursor '>' only when the list is FOCUSED
+	bne ss_ovl_dfr_nocur                    //   (greyed / tab-bar level -> no selection marker)
+	lda @OVL_CUR_OFF : and #$00ff           // ...and only when the '>' is not suppressed
+	bne ss_ovl_dfr_nocur                    //   (the $C2 shell draws its own selection bar)
+	sep #$20 : .as
+	lda #$3e : sta OVL_RB+OVL_CURSOR_COL    // '>'
+	rep #$30 : .al : .xl
+ss_ovl_dfr_nocur:
+	// idx = ovl_top + screen row
+	ply : phy
+	tya
+	cmp @ovl_selrow                         // is this the selected (marquee) row?
+	php                                     // stash the "selected?" flag (Z)
+	clc : adc @ovl_top
+	sta @ovl_idx                            // absolute cheat index (used for CHEAT_FLAGS below)
+	// name: chars from CHEAT_NAMES+(idx-CHEAT_WIN_BASE)*CHEAT_NAME_LEN (long,X) into
+	// OVL_RB+OVL_NAME_COL (abs,Y; there is no long,Y). CHEAT_NAMES is a 64-entry SLIDING window;
+	// ss_ovl_mq_reset->ovl_ensure_window (before this rebuild) keeps idx-CHEAT_WIN_BASE in [0,64).
+	sec : sbc @CHEAT_WIN_BASE               // window-relative slot (flags safe: "selected?" is on stack)
+	asl : asl : asl : asl : asl : asl       // * 64 (CHEAT_NAME_LEN) = name offset within the window
+	plp                                     // restore "selected?" flag
+	bne ss_ovl_dfr_off                      // not the selected row -> no marquee shift
+	clc : adc @ovl_mq_xscroll               // selected row -> slide the name by the marquee offset
+ss_ovl_dfr_off:
+	tax                                     // X = name source byte offset
+	ldy #OVL_NAME_COL                       // Y = OVL_RB dest column
+	sep #$20 : .as
+ss_ovl_dfr_name:
+	lda @CHEAT_NAMES, x
+	beq ss_ovl_dfr_name_done
+	sta OVL_RB, y                           // abs,Y (DBR=$F4)
+	inx
+	iny
+	cpy #(OVL_NAME_COL+OVL_NAME_MAX)
+	bne ss_ovl_dfr_name
+ss_ovl_dfr_name_done:
+	// flag "ON "/"OFF" at OVL_FLAG_COL from the BSRAM mirror
+	rep #$30 : .al : .xl
+	lda @ovl_idx : tax
+	sep #$20 : .as
+	lda @CHEAT_FLAGS, x
+	bmi ss_ovl_dfr_on
+	lda #$4f : sta OVL_RB+OVL_FLAG_COL      // O
+	lda #$46 : sta OVL_RB+OVL_FLAG_COL+1    // F
+	lda #$46 : sta OVL_RB+OVL_FLAG_COL+2    // F
+	bra ss_ovl_dfr_flush
+ss_ovl_dfr_on:
+	lda #$4f : sta OVL_RB+OVL_FLAG_COL      // O
+	lda #$4e : sta OVL_RB+OVL_FLAG_COL+1    // N
+	lda #$20 : sta OVL_RB+OVL_FLAG_COL+2    // (space)
+ss_ovl_dfr_flush:
+	rep #$30 : .al : .xl
+	// scrollbar cell at OVL_SB_COL: glyph 17 (thumb) when pos <= row < end, else 16 (track).
+	// Raw glyph CODE into OVL_RB -- the flush turns it into (glyph<<1)|ovl_pal like any other
+	// column. ovl_sb_calc (run once per rebuild) already gated the whole bar off when the list
+	// fits, in which case the space ovl_row_clear left stands.
+	lda @ovl_sb_on : and #$00ff
+	beq ss_ovl_dfr_nosb
+	ply : phy                               // peek screen row (0..visible-1), still saved
+	tya
+	cmp @ovl_sb_pos
+	bcc ss_ovl_dfr_sbtrack                  // row < pos -> track
+	cmp @ovl_sb_end
+	bcs ss_ovl_dfr_sbtrack                  // row >= end -> track
+	sep #$20 : .as
+	lda #17 : sta OVL_RB+OVL_SB_COL         // thumb
+	rep #$30 : .al : .xl
+	bra ss_ovl_dfr_nosb
+ss_ovl_dfr_sbtrack:
+	sep #$20 : .as
+	lda #16 : sta OVL_RB+OVL_SB_COL         // track
+	rep #$30 : .al : .xl
+ss_ovl_dfr_nosb:
+	ply : phy                               // peek screen row (keep it saved)
+	tya
+	clc : adc #OVL_LIST_ROW0
+	tax                                     // X = absolute tile row
+	lda @ovl_flush_dst                      // 0 = VRAM (initial draw), 1 = OVL_TMBUF (scroll)
+	beq ss_ovl_dfr_vram
+	jsr ovl_flush_buf                       // clobbers X/Y
+	bra ss_ovl_dfr_fdone
+ss_ovl_dfr_vram:
+	jsr ovl_flush_abs                       // clobbers X/Y
+ss_ovl_dfr_fdone:
+	ply                                     // restore screen row -> Y
+	plp
+	rts
+
+// ---- single-cell cursor / flag writes for cheap in-loop updates (a full-row
+//      build+flush is too heavy to spam every frame in mode 5). These write one
+//      tilemap entry each straight to VRAM (long, DBR-agnostic). Entry values are
+//      pre-shifted: glyph G -> (G<<1)|$2000 ('>' $3e->$207c, space $20->$2040,
+//      O $4f->$209e, N $4e->$209c, F $46->$208c). The cursor sits at OVL_CURSOR_COL
+//      (=2, even -> BG2 entry 1) the flag at OVL_FLAG_COL (=58: cols 58,59,60 ->
+//      BG2 entry 29, BG1 entry 29, BG2 entry 30). ----
+ss_ovl_draw_cursor:                            // Y = screen row -> draw '>'
+	php
+	rep #$30 : .al : .xl
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl             // abs row * 32
+	clc : adc #(OVL_BG2_MAP+1)              // cursor cell (col 2 -> BG2 entry 1)
+	sta @$002116
+	lda #$207c : sta @$002118               // '>' entry
+	plp
+	rts
+
+ss_ovl_erase_cursor:                           // Y = screen row -> erase cursor
+	php
+	rep #$30 : .al : .xl
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl
+	clc : adc #(OVL_BG2_MAP+1)
+	sta @$002116
+	lda #$2040 : sta @$002118                // space entry
+	plp
+	rts
+
+ss_ovl_draw_flag:                              // Y = screen row -> redraw ON/OFF
+	php
+	rep #$30 : .al : .xl
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl
+	sta @ovl_rowoff                          // abs row * 32
+	tya
+	clc : adc @ovl_top
+	tax
+	sep #$20 : .as
+	lda @CHEAT_FLAGS, x                      // sign bit set = ON
+	rep #$30 : .al : .xl
+	bmi ss_ovl_dflag_on
+	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+29) : sta @$002116
+	lda #$209e : sta @$002118               // O (col 58 -> BG2 e29)
+	lda @ovl_rowoff : clc : adc #(OVL_BG1_MAP+29) : sta @$002116
+	lda #$208c : sta @$002118               // F (col 59 -> BG1 e29)
+	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+30) : sta @$002116
+	lda #$208c : sta @$002118               // F (col 60 -> BG2 e30)
+	plp
+	rts
+ss_ovl_dflag_on:
+	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+29) : sta @$002116
+	lda #$209e : sta @$002118               // O
+	lda @ovl_rowoff : clc : adc #(OVL_BG1_MAP+29) : sta @$002116
+	lda #$209c : sta @$002118               // N
+	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+30) : sta @$002116
+	lda #$2040 : sta @$002118               // (space)
+	plp
+	rts
+
+// ---- "NO CHEATS" centered on row 13 ----
+ss_ovl_draw_empty:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr ovl_row_clear
+	sep #$20 : .as
+	ldx #27                                 // (64-9)/2 for "NO CHEATS"
+	lda #$4e : sta OVL_RB, x : inx          // N
+	lda #$4f : sta OVL_RB, x : inx          // O
+	lda #$20 : sta OVL_RB, x : inx          // (space)
+	lda #$43 : sta OVL_RB, x : inx          // C
+	lda #$48 : sta OVL_RB, x : inx          // H
+	lda #$45 : sta OVL_RB, x : inx          // E
+	lda #$41 : sta OVL_RB, x : inx          // A
+	lda #$54 : sta OVL_RB, x : inx          // T
+	lda #$53 : sta OVL_RB, x                // S
+	rep #$30 : .al : .xl
+	ldx #$000d                              // absolute tile row 13
+	jsr ovl_flush_abs
+	plb
+	plp
+	rts
+
+// ---- title "CHEATS" centered on row 1 ----
+ss_ovl_draw_title:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr ovl_row_clear
+	sep #$20 : .as
+	ldx #29                                 // (64-6)/2 for "CHEATS"
+	lda #$43 : sta OVL_RB, x : inx          // C
+	lda #$48 : sta OVL_RB, x : inx          // H
+	lda #$45 : sta OVL_RB, x : inx          // E
+	lda #$41 : sta OVL_RB, x : inx          // A
+	lda #$54 : sta OVL_RB, x : inx          // T
+	lda #$53 : sta OVL_RB, x                // S
+	rep #$30 : .al : .xl
+	ldx #$0001                              // absolute tile row 1
+	jsr ovl_flush_abs
+	plb
+	plp
+	rts
+
+// ---- footer hint "A:ON/OFF  B:BACK" centered on row 25 ----
+ss_ovl_draw_footer:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr ovl_row_clear
+	sep #$20 : .as
+	ldx #24                                 // (64-16)/2 for "A:ON/OFF  B:BACK"
+	lda #$41 : sta OVL_RB, x : inx          // A
+	lda #$3a : sta OVL_RB, x : inx          // :
+	lda #$4f : sta OVL_RB, x : inx          // O
+	lda #$4e : sta OVL_RB, x : inx          // N
+	lda #$2f : sta OVL_RB, x : inx          // /
+	lda #$4f : sta OVL_RB, x : inx          // O
+	lda #$46 : sta OVL_RB, x : inx          // F
+	lda #$46 : sta OVL_RB, x : inx          // F
+	lda #$20 : sta OVL_RB, x : inx          // (space)
+	lda #$20 : sta OVL_RB, x : inx          // (space)
+	lda #$42 : sta OVL_RB, x : inx          // B
+	lda #$3a : sta OVL_RB, x : inx          // :
+	lda #$42 : sta OVL_RB, x : inx          // B
+	lda #$41 : sta OVL_RB, x : inx          // A
+	lda #$43 : sta OVL_RB, x : inx          // C
+	lda #$4b : sta OVL_RB, x                // K
+	rep #$30 : .al : .xl
+	ldx #$0019                              // absolute tile row 25
+	jsr ovl_flush_abs
+	plb
+	plp
+	rts
+
+
+// ---- sliding name window: CHEAT_NAMES holds only CHEAT_OVL_MAX (64) names, for the absolute
+//      range [CHEAT_WIN_BASE, +64). If the current visible span leaves that window, ask the MCU
+//      (CMD_CHEAT_NAMES_WINDOW) to restage a re-centred window from the $D00000 records and spin
+//      bounded on the ACK. This is what lets the list show ALL cheats (up to CHEAT_LIST_MAX) while
+//      only 64 names are resident. Called at the TOP of ss_ovl_mq_reset (every selection change).
+//      Zero MCU traffic when the list fits the window (<=64 cheats) -> identical to the old path.
+//      Self-contained (extraction guard: @long targets, only jsr among itself). ----
+#define OVL_WIN_MARGIN     22        // (CHEAT_OVL_MAX-OVL_ROWS)/2 headroom each side; avoids thrash
+#define OVL_WIN_TIMEOUT_HI $0010     // bounded ACK spin (same bound as MN_TIMEOUT_HI); never hangs
+ovl_ensure_window:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq oew_done                          // empty list -> no window request
+	// resident? need base <= ovl_top AND (ovl_top-base)+ovl_visible <= CHEAT_OVL_MAX
+	lda @ovl_top
+	cmp @CHEAT_WIN_BASE
+	bcc oew_restage                       // ovl_top < base -> below the resident window
+	sec : sbc @CHEAT_WIN_BASE             // rel = ovl_top - base (>=0)
+	clc : adc @ovl_visible                // rel + visible
+	cmp #(CHEAT_OVL_MAX+1)                // <= CHEAT_OVL_MAX ?
+	bcc oew_done                          // whole span inside the window -> resident
+oew_restage:
+	// newbase = clamp(ovl_top - OVL_WIN_MARGIN, 0, maxbase)
+	lda @ovl_top
+	sec : sbc #OVL_WIN_MARGIN
+	bcs oew_nb_ok                         // no borrow -> >= 0
+	lda #$0000
+oew_nb_ok:
+	sta @ovl_win_tmp
+	// maxbase = (ovl_count > CHEAT_OVL_MAX) ? ovl_count-CHEAT_OVL_MAX : 0
+	lda @ovl_count
+	cmp #(CHEAT_OVL_MAX+1)
+	bcc oew_maxzero
+	sec : sbc #CHEAT_OVL_MAX
+	bra oew_have_max
+oew_maxzero:
+	lda #$0000
+oew_have_max:
+	cmp @ovl_win_tmp                      // maxbase - newbase; C set if maxbase >= newbase
+	bcs oew_send                          // maxbase >= newbase -> keep newbase
+	sta @ovl_win_tmp                      // else clamp newbase down to maxbase
+oew_send:
+	lda @ovl_win_tmp
+	sta @MCU_PARAM                        // MCU_PARAM low 16 = base (the MCU masks & 0xffff)
+	sep #$20 : .as
+	lda #CMD_CHEAT_NAMES_WINDOW : sta @MCU_CMD   // fire
+	jsr ovl_win_wait_ack                  // bounded ACK spin (MCU clears MCU_CMD + updates base)
+oew_done:
+	plp
+	rts
+
+// ---- bounded spin until the MCU clears MCU_CMD (ACK). Self-contained clone of saves_wait_ack
+//      (the extraction guard forbids calling igmenu's copy). Never hangs: on timeout it returns
+//      (the request already landed and the MCU published CHEAT_WIN_BASE last). .as read. ----
+ovl_win_wait_ack:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	ldx #OVL_WIN_TIMEOUT_HI
+oww_outer:
+	ldy #$0000
+oww_inner:
+	lda @MCU_CMD
+	beq oww_done
+	dey
+	bne oww_inner
+	dex
+	bne oww_outer
+oww_done:
+	plp
+	rts
+
+// ---- marquee reset: recompute the selected cheat's name length and restart the
+//      horizontal scroll from the left. Call on EVERY selection change (cursor move,
+//      scroll, page, home/end, init) so the old row stops shifting and the new one
+//      starts fresh. Leaves xscroll=0 so the pending rebuild draws the row left-aligned.
+//      ovl_ensure_window (first) slides the 64-name window so the selection is resident.
+ss_ovl_mq_reset:
+	php
+	rep #$30 : .al : .xl
+	jsr ovl_ensure_window
+	lda #$0000 : sta @ovl_mq_xscroll
+	lda #$0001 : sta @ovl_mq_state           // slide forward first
+	lda #OVL_MQ_INIT : sta @ovl_mq_wait      // pause before it starts moving
+	lda @ovl_count
+	bne ss_ovl_mqr_hascheats
+	sta @ovl_mq_len                          // empty list -> len 0 -> marquee stays idle
+	plp                                      // (also keeps the rebuild/DMA off: visible==0
+	rts                                      //  would make ovl_dma_list a 0-length = 64KB DMA)
+ss_ovl_mqr_hascheats:
+	// len = strlen(CHEAT_NAMES[((ovl_top+ovl_selrow)-CHEAT_WIN_BASE) * CHEAT_NAME_LEN]) capped
+	//   CHEAT_NAME_LEN-1. ovl_ensure_window (run above) made the selection resident -> slot in [0,64).
+	lda @ovl_top : clc : adc @ovl_selrow
+	sec : sbc @CHEAT_WIN_BASE                 // window-relative slot
+	asl : asl : asl : asl : asl : asl        // * 64
+	tax
+	ldy #$0000
+	sep #$20 : .as
+ss_ovl_mqr_loop:
+	lda @CHEAT_NAMES, x
+	beq ss_ovl_mqr_done
+	inx
+	iny
+	cpy #(CHEAT_NAME_LEN-1)
+	bne ss_ovl_mqr_loop
+ss_ovl_mqr_done:
+	rep #$30 : .al : .xl
+	tya : sta @ovl_mq_len                     // sty has no long-addr form -> via A
+	plp
+	rts
+
+// ---- marquee tick (runs once per frame in the input loop). If the selected name is
+//      wider than the display, pace ovl_mq_wait then advance ovl_mq_xscroll one char
+//      (ping-pong 0..len-NAME_MAX..0) and mark the list dirty so the rebuild redraws
+//      the selected row shifted. No-op (instant) when the name fits. ----
+ss_ovl_marquee:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_mq_len
+	cmp #(OVL_NAME_MAX+1)
+	bcs ss_ovl_mq_active                      // len > NAME_MAX -> marquee runs
+	plp                                       // fits -> nothing to scroll
+	rts
+ss_ovl_mq_active:
+	lda @ovl_mq_wait
+	beq ss_ovl_mq_step
+	dec : sta @ovl_mq_wait                     // still pausing between steps
+	plp
+	rts
+ss_ovl_mq_step:
+	lda @ovl_mq_state
+	cmp #$0002
+	beq ss_ovl_mq_back
+	// forward: reveal more of the tail until the window covers the end
+	lda @ovl_mq_xscroll
+	clc : adc #OVL_NAME_MAX                   // window end = xscroll + NAME_MAX
+	cmp @ovl_mq_len
+	bcs ss_ovl_mq_atend                       // window end >= len -> tail fully shown
+	lda @ovl_mq_xscroll : inc : sta @ovl_mq_xscroll
+	lda #OVL_MQ_STEP : sta @ovl_mq_wait
+	bra ss_ovl_mq_dirty
+ss_ovl_mq_atend:
+	lda #$0002 : sta @ovl_mq_state            // turn around
+	lda #OVL_MQ_INIT : sta @ovl_mq_wait       // pause at the end
+	plp
+	rts
+ss_ovl_mq_back:
+	lda @ovl_mq_xscroll
+	beq ss_ovl_mq_atstart
+	lda @ovl_mq_xscroll : dec : sta @ovl_mq_xscroll
+	lda #OVL_MQ_STEP : sta @ovl_mq_wait
+	bra ss_ovl_mq_dirty
+ss_ovl_mq_atstart:
+	lda #$0001 : sta @ovl_mq_state            // forward again
+	lda #OVL_MQ_INIT : sta @ovl_mq_wait       // pause at the start
+	plp
+	rts
+ss_ovl_mq_dirty:
+	lda #$0001 : sta @ovl_scroll_dirty        // rebuild list (selected row shifted) + DMA
+	plp
+	rts
+
+// ---- Up: move the cursor up one row, or scroll the list up. Both go through the DMA
+//      rebuild pipeline (mq_reset + dirty) so the row the cursor LEAVES is redrawn
+//      left-aligned (undoing any marquee shift) and the new selection starts fresh. ----
+ss_ovl_move_up:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_selrow
+	beq ss_ovl_mu_scroll
+	lda @ovl_selrow : dec : sta @ovl_selrow
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty
+	plp
+	rts
+ss_ovl_mu_scroll:
+	lda @ovl_top
+	beq ss_ovl_mu_done                      // already at the very top
+	lda @ovl_top : dec : sta @ovl_top
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty      // list shifted -> rebuild+DMA (input loop)
+ss_ovl_mu_done:
+	plp
+	rts
+
+// ---- Down: move the cursor down one row, or scroll the list down. ----
+ss_ovl_move_down:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_selrow
+	inc
+	cmp @ovl_visible
+	bcs ss_ovl_md_scroll                    // cursor already on bottom visible row
+	lda @ovl_top
+	clc : adc @ovl_selrow
+	inc
+	cmp @ovl_count
+	bcs ss_ovl_md_done                      // already on the last cheat
+	lda @ovl_selrow : inc : sta @ovl_selrow
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty
+	plp
+	rts
+ss_ovl_md_scroll:
+	lda @ovl_top
+	clc : adc @ovl_visible
+	cmp @ovl_count
+	bcs ss_ovl_md_done                      // bottom of list already shown
+	lda @ovl_top : inc : sta @ovl_top
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty      // list shifted -> rebuild+DMA (input loop)
+ss_ovl_md_done:
+	plp
+	rts
+
+// ---- Left/Right paging, mirroring the file browser: page up / page down (jump a
+//      screenful), through the rebuild pipeline (mq_reset + dirty). ovl_idx is reused
+//      as scratch. (L/R are the tab switch now -- ss_ovl_home/ss_ovl_end were removed.) ----
+ss_ovl_page_up:                                // Left = one page up
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq ss_ovl_pu_empty                     // empty list -> no dirty (visible==0 DMA guard)
+	lda @ovl_top
+	sec : sbc @ovl_visible
+	bcs ss_ovl_pu_store                     // top >= visible -> no underflow
+	lda #$0000                              // clamp to the top
+ss_ovl_pu_store:
+	sta @ovl_top
+	lda @ovl_count
+	cmp #(OVL_ROWS+1)
+	bcs ss_ovl_pu_fin                       // list taller than the window -> keep cursor row
+	lda #$0000 : sta @ovl_selrow            // whole list fits -> park cursor on the first
+ss_ovl_pu_fin:
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty
+ss_ovl_pu_empty:
+	plp
+	rts
+
+ss_ovl_page_down:                              // Right = one page down
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq ss_ovl_pd_empty                     // empty list -> no dirty (visible==0 DMA guard)
+	cmp #(OVL_ROWS+1)
+	bcc ss_ovl_pd_short                     // whole list fits -> jump cursor to the last
+	// count > visible: new top = min(top + visible, count - visible)
+	lda @ovl_count : sec : sbc @ovl_visible
+	sta @ovl_idx                            // ovl_idx = max_top (scratch)
+	lda @ovl_top : clc : adc @ovl_visible
+	cmp @ovl_idx
+	bcc ss_ovl_pd_store                     // candidate < max_top -> use it
+	lda @ovl_idx                            // clamp to the last full page
+ss_ovl_pd_store:
+	sta @ovl_top
+	bra ss_ovl_pd_fin
+ss_ovl_pd_short:
+	lda @ovl_count : dec : sta @ovl_selrow  // cursor to the last cheat
+ss_ovl_pd_fin:
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty
+ss_ovl_pd_empty:
+	plp
+	rts
+
+// ---- L/R (shoulder) at the CONTENT-focus level = jump to first / last cheat (Top/Bottom).
+//      Re-added for the two-level focus model: at the tab bar L/R switch tabs, but once the list
+//      is focused (A) they jump to the ends (like the file browser's L/R). Through the pipeline;
+//      ss_ovl_mq_reset -> ovl_ensure_window also slides the name window for the jumped-to page. ----
+ss_ovl_home:                                   // L = jump to the FIRST cheat
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq ss_ovl_home_empty
+	lda #$0000 : sta @ovl_top
+	lda #$0000 : sta @ovl_selrow
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty
+ss_ovl_home_empty:
+	plp
+	rts
+
+ss_ovl_end:                                    // R = jump to the LAST cheat
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq ss_ovl_end_empty
+	cmp #(OVL_ROWS+1)
+	bcc ss_ovl_end_short                    // whole list fits -> top 0, cursor on the last
+	lda @ovl_count : sec : sbc @ovl_visible // count > visible: top = count - visible
+	sta @ovl_top
+	lda @ovl_visible : dec : sta @ovl_selrow // cursor on the last visible row
+	bra ss_ovl_end_fin
+ss_ovl_end_short:
+	lda #$0000 : sta @ovl_top
+	lda @ovl_count : dec : sta @ovl_selrow  // cursor on the last cheat
+ss_ovl_end_fin:
+	jsr ss_ovl_mq_reset
+	lda #$0001 : sta @ovl_scroll_dirty
+ss_ovl_end_empty:
+	plp
+	rts
+
+// ---- A: toggle the selected cheat (instant BSRAM flip + redraw its row) ----
+ss_ovl_toggle:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	beq ss_ovl_tog_done                     // no cheats
+	lda @ovl_top
+	clc : adc @ovl_selrow
+	cmp @ovl_count
+	bcs ss_ovl_tog_done                     // index out of range
+	tax
+	sep #$20 : .as
+	lda @CHEAT_FLAGS, x
+	eor #$80
+	sta @CHEAT_FLAGS, x
+	lda #$01
+	sta @ovl_dirty
+	rep #$30 : .al : .xl
+	lda @ovl_selrow : tay
+	jsr ss_ovl_draw_flag                     // single-cell ON/OFF update
+ss_ovl_tog_done:
+	plp
+	rts
+
+// ---- Up/Down with auto-repeat. ovl_cur = held pad, ovl_edge = newly pressed.
+//      A held direction moves once on the edge, waits OVL_REP_INIT frames, then
+//      steps every OVL_REP_RATE frames. ovl_rep_cnt is the countdown. ----
+ss_ovl_nav_vert:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_cur
+	bit #$0800                              // Up held?
+	beq ss_ovl_nv_chkdn
+	lda @ovl_edge
+	bit #$0800                              // Up edge?
+	beq ss_ovl_nv_up_held
+	jsr ss_ovl_move_up
+	lda #OVL_REP_INIT : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_up_held:
+	lda @ovl_rep_cnt
+	beq ss_ovl_nv_up_fire
+	dec : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_up_fire:
+	jsr ss_ovl_move_up
+	lda #OVL_REP_RATE : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_chkdn:
+	lda @ovl_cur
+	bit #$0400                              // Down held?
+	beq ss_ovl_nv_none
+	lda @ovl_edge
+	bit #$0400                              // Down edge?
+	beq ss_ovl_nv_dn_held
+	jsr ss_ovl_move_down
+	lda #OVL_REP_INIT : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_dn_held:
+	lda @ovl_rep_cnt
+	beq ss_ovl_nv_dn_fire
+	dec : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_dn_fire:
+	jsr ss_ovl_move_down
+	lda #OVL_REP_RATE : sta @ovl_rep_cnt
+	bra ss_ovl_nv_done
+ss_ovl_nv_none:
+	lda #$0000 : sta @ovl_rep_cnt           // nothing held -> clear repeat
+ss_ovl_nv_done:
+	plp
+	rts
+
+// (ss_ovl_draw_title / ss_ovl_draw_footer are defined above, next to the row
+//  builders, since they use the same OVL_RB build+flush path.)
+

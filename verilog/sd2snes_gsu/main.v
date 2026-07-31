@@ -220,6 +220,7 @@ wire SD_DMA_TO_ROM;
 wire free_slot = (SNES_PULSE_end | free_strobe) & ~SD_DMA_TO_ROM;
 
 wire ROM_HIT;
+wire IS_PATCH;
 
 assign DCM_RST=0;
 
@@ -243,7 +244,7 @@ end
 
 // Provide full bandwidth if snes is not accessing the bus.
 always @(posedge CLK2) begin
-  if(GSU_RONr) free_strobe <= 1;
+  if(GSU_RONr & ~gsu_hook_pause) free_strobe <= 1;  // yield to SNES while the hook runs from PSRAM
   else if (SNES_cycle_start) free_strobe <= ~ROM_HIT | IS_SAVERAM;
   else free_strobe <= 1'b0;
 end
@@ -404,6 +405,7 @@ wire        GSU_RAM_WORD;
 gsu snes_gsu (
   .RST(SNES_reset_strobe),
   .CLK(CLK2),
+  .pause(gsu_hook_pause),
   
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
@@ -551,6 +553,8 @@ address snes_addr(
   .IS_SAVERAM(IS_SAVERAM),
   .IS_ROM(IS_ROM),
   .IS_WRITABLE(IS_WRITABLE),
+  .IS_PATCH(IS_PATCH),
+  .snescmd_unlock(snescmd_unlock),
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
   //MSU-1
@@ -623,6 +627,31 @@ wire r2100_patch = featurebits[6];
 wire r2100_enable = r2100_hit & (r2100_patch | ~(&r2100_limit));
 
 wire snoop_4200_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04200;
+// regshadow write-snoop windows (see SNES_DATABUS_OE/DIR)
+wire snoop_42xx_enable = ~SNES_ADDR[22] & (SNES_ADDR[15:5] == 11'b01000010000);
+wire rs_snoop_pawr_oe  = ~SNES_PAWR & (SNES_PA < 8'h40);
+
+// In-game cheat overlay coprocessor pause ($202C bit0, same protocol as the SA-1/
+// CX4 cores): freezes the GSU execution clock-enable; memory FSMs drain (gsu.v).
+reg snapshot_pause; initial snapshot_pause = 1'b0;
+always @(posedge CLK2) begin
+  if(SNES_reset_strobe)
+    snapshot_pause <= 1'b0;
+  else if(SNES_WR_end & ~SNES_ADDR[22] & (SNES_ADDR[15:0] == 16'h202C))
+    snapshot_pause <= SNES_DATA[0];
+end
+
+// While the in-game hook executes (snescmd_unlock: vector redirect until shortly
+// after hook exit) the CPU fetches the savestate handler from the IS_PATCH window
+// (PSRAM).  With the GSU running under RON the ROM arbiter gives the GSU every
+// slot (free_strobe held 1) so the SNES-side PSRAM fetch is never serviced -> the
+// handler executes garbage and the game hard-freezes (seen in HW when the overlay
+// combo lands on a GSU-heavy scene).  Auto-pause the GSU for the duration of the
+// hook and yield the arbiter back to the SNES.  The stock hook paths never hit
+// this because they run entirely from snescmd BRAM.  RON stays asserted while
+// paused, so vector fetches still serve the RON stub and the game's RON-wait
+// resolves normally once the unlock countdown releases the pause.
+wire gsu_hook_pause = snapshot_pause | snescmd_unlock;
 wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 
 always @(posedge CLK2) begin
@@ -648,6 +677,45 @@ always @(posedge CLK2) begin
   end
 end
 
+// PPU-register capture via the base ctx.v counter scheme (fire at count==4 from the
+// write start).  CLK2 here is 85.9 MHz -- the same frequency where the SA-1 regshadow
+// was hardware-validated (REGSHADOW_TEST) -- so the base-calibrated shift patterns
+// apply.  Requires the snoop OE/DIR terms below: without them the data-bus level
+// shifter stays disabled for B-bus writes to non-cart addresses and every capture
+// design reads bus float (the CX4/OBC1/S-DD1 audit lesson).
+wire rs_pawr_start_early = ((SNES_PAWRr[4:1] | SNES_PAWRr[5:2]) == 4'b1110);
+reg [3:0] rs_pawr_cnt;   initial rs_pawr_cnt   = 0;
+reg       rs_pawr_end;   initial rs_pawr_end   = 0;
+reg       rs_pawr_end_r; initial rs_pawr_end_r = 0;
+reg [7:0] rs_data_r;     initial rs_data_r     = 0;
+always @(posedge CLK2) begin
+  if (rs_pawr_end)               rs_pawr_cnt <= 0;
+  else if (rs_pawr_start_early)  rs_pawr_cnt <= 1;
+  else if (|rs_pawr_cnt)         rs_pawr_cnt <= rs_pawr_cnt + 1'b1;
+  rs_pawr_end   <= (rs_pawr_cnt == 4'd4);
+  rs_pawr_end_r <= rs_pawr_end;      // ctx.v registers the strobe once more...
+  rs_data_r     <= SNES_DATAr[0];    // ...and the data tap with it (2-cyc align)
+end
+wire [7:0] rs_data = rs_pawr_end_r ? rs_data_r : SNES_DATA;
+
+// In-game cheat-overlay register shadow (regshadow.v): $F90500 (PPU, stride-2) /
+// $F90700 (CPU $42xx), read through the hook identity window only.
+wire shadow_ppu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF905) & ~SNES_ADDR[7];
+wire shadow_cpu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:5] == 3'b000);
+wire [7:0] regshadow_dout;
+wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0010, SNES_ADDR[4:0]}
+                                            : {3'b000,  SNES_ADDR[6:1]};
+regshadow snes_regshadow(
+  .clk(CLK2),
+  .pawr_end(rs_pawr_end_r),
+  .wr_end(SNES_WR_end),
+  .snes_addr(SNES_ADDR),
+  .snes_pa(SNES_PA),
+  .snes_data(rs_data),
+  .rd_addr(regshadow_raddr),
+  .rd_data(regshadow_dout)
+);
+
 assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                    :(r2100_enable & ~SNES_PAWR & r2100_forcewrite) ? r2100r
                    :((~SNES_READ ^ (r213f_forceread & r213f_enable & ~SNES_PARD))
@@ -656,8 +724,18 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                                   : gsu_data_enable ? GSU_SNES_DATA_OUT  // GSU MMIO read
                                   : (cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
                                   : ((snescmd_unlock | feat_cmd_unlock) & snescmd_enable) ? snescmd_dout
+                                  // in-game overlay register shadow read-backs (both
+                                  // bytes of a stride-2 entry serve the same value)
+                                  : shadow_ppu_hit ? regshadow_dout
+                                  : shadow_cpu_hit ? regshadow_dout
                                   : (ROM_HIT & IS_SAVERAM) ? RAM_DATA
-                                  : (ROM_HIT & ~IS_SAVERAM & GSU_RONr) ? (SNES_ADDR[0] ? 8'h01 : {4'h0, (SNES_ADDR[3] & SNES_ADDR[1]), (SNES_ADDR[2] & ~^{SNES_ADDR[3],SNES_ADDR[1]}), 1'b0, SNES_ADDR[0]}) // used for interrupt vectors
+                                  // ~IS_PATCH: while the GSU is (frozen) running with
+                                  // RON=1, plain ROM reads serve stub vector values --
+                                  // the hook window must win or the overlay handler's
+                                  // own code fetches and its $F2 restore-DMA reads
+                                  // would all return the stub (GSU flavor of the CX4
+                                  // vector-override gotcha).
+                                  : (ROM_HIT & ~IS_SAVERAM & GSU_RONr & ~IS_PATCH) ? (SNES_ADDR[0] ? 8'h01 : {4'h0, (SNES_ADDR[3] & SNES_ADDR[1]), (SNES_ADDR[2] & ~^{SNES_ADDR[3],SNES_ADDR[1]}), 1'b0, SNES_ADDR[0]}) // used for interrupt vectors
                                   : (ROM_ADDR0 ? ROM_DATA[7:0] : ROM_DATA[15:8])
                                   ) : 8'bZ;
 
@@ -1114,6 +1192,11 @@ assign SNES_DATABUS_OE = msu_enable ? 1'b0 :
                          snescmd_enable & ~(SNES_READ & SNES_WRITE) ? ~(snescmd_unlock | feat_cmd_unlock) :
                          (r213f_enable & !SNES_PARD) ? 1'b0 :
                          (r2100_enable & ~SNES_PAWR) ? 1'b0 :
+                         // regshadow write snoop: enable the shifter (receive) during
+                         // PPU B-bus writes and $42xx A-bus writes, else the snoop
+                         // reads float (base does this via SNES_SNOOPPAWR_DATA_OE).
+                         rs_snoop_pawr_oe ? 1'b0 :
+                         (snoop_42xx_enable & ~SNES_WRITE) ? 1'b0 :
                          snoop_4200_enable ? SNES_WRITE :
                          ( (IS_ROM & SNES_ROMSEL)
                          | (!IS_ROM & !IS_SAVERAM & !IS_WRITABLE)
@@ -1125,7 +1208,13 @@ assign SNES_DATABUS_OE = msu_enable ? 1'b0 :
  *  a) the SNES wants to read
  *  b) we want to force a value on the bus
  */
-assign SNES_DATABUS_DIR = (~SNES_READ | (~SNES_PARD & (r213f_enable)))
+// ~rs_snoop_pawr_oe | ROM_HIT | gsu_data_enable: during a snooped B-bus write the
+// concurrent A-bus read (/RD low on DMA/HDMA) must NOT flip the shifter to drive --
+// unless the DMA source is served by the FPGA itself: ROM/RAM/stub via ROM_HIT
+// (Star Fox streams its GSU-RAM framebuffer to VRAM by DMA every frame!) and the
+// GSU MMIO via gsu_data_enable (CX4 audit lesson: missing a served-source term
+// makes those DMAs read float -> garbled graphics in normal gameplay).
+assign SNES_DATABUS_DIR = ((~SNES_READ & (~rs_snoop_pawr_oe | ROM_HIT | gsu_data_enable)) | (~SNES_PARD & (r213f_enable)))
                            ? (1'b1 ^ (r213f_forceread & r213f_enable & ~SNES_PARD)
                                    ^ (r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE))
                            : ((~SNES_PAWR & r2100_enable) ? r2100_forcewrite

@@ -47,6 +47,8 @@ memory.c: RAM operations
 #include "msu1.h"
 #include "cli.h"
 #include "cheat.h"
+#include "igmenu.h"
+#include "manual.h"
 #include "rtc.h"
 #include "savestate.h"
 #include "sgb.h"
@@ -1028,6 +1030,17 @@ void init(uint8_t *filename) {
   if (CFG.reset_patch) snescmd_writebyte(0, SNESCMD_RESET_HOOK+1);
   cheat_yaml_load(filename);
 // XXX    cheat_yaml_save(filename);
+  /* Stage the in-game TAB menu bin (igmenu.bin) into PSRAM $C2 for real game loads
+     only (not a menu reload -- the $C2 dir buffer is the menu's own scratch there).
+     Bounded + fail-safe: a missing/bad bin just leaves IGMENU_GATE 0 (single-tab). */
+  if (filename != (uint8_t *)MENU_FILENAME) {
+    igmenu_stage();
+    /* Stage the SAVES-tab status block for the in-game menu (game load only). */
+    saveinfo_stage(filename);
+    /* Stage the in-game MANUAL-tab meta (<rom>.man header/index -> MANUAL_META $FF0760).
+       Bounded + fail-safe: absent/bad/CFG-off just leaves the tab "not found". */
+    manual_stage_meta(filename);
+  }
   cheat_program();
   savestate_program();
   fpga_set_features(romprops.fpga_features);
@@ -1038,6 +1051,11 @@ void init(uint8_t *filename) {
 }
 
 void deassert_reset() {
+  /* PSRAM-patched ROM cheats are applied HERE, the single choke point after
+     every image mutation (stream, IPS/BPS patch, recore) and before the SNES
+     runs -- applying earlier (init) would be overwritten by a pending patch.
+     No-op unless the PSRAM-patch cheat mode is active (mk2 SA-1). */
+  cheat_rom_psram_apply();
   snes_reset(0);
   fpga_dspx_reset(0);
   // handle reset loop from hook
@@ -1146,14 +1164,19 @@ uint32_t load_sram_offload(uint8_t* filename, uint32_t base_addr, uint8_t flags)
   return (uint32_t)filesize;
 }
 
+/* forward decl: the slot-aware .srm namer is defined below (near append_save_basename),
+   but migrate_and_load_srm (here) is the first user. */
+static void append_srm_name(char *buf, size_t buflen, uint8_t *filename, uint8_t slot);
+
 uint32_t migrate_and_load_srm(uint8_t* filename, uint32_t base_addr) {
   uint8_t srmfile[256] = SAVE_BASEDIR;
+  /* Resolve the active slot from the sidecar ONCE per game load; this sets the
+     immutable session slot (srm_slot) that every save path below routes through. */
+  srm_slot_load(filename);
   /* When a patched load is active, derive the .srm name from the IPS file
-     path instead of the ROM filename so each patch gets its own save. */
-  const uint8_t *srm_src = current_ips_srm_source[0]
-                            ? current_ips_srm_source
-                            : filename;
-  append_file_basename((char*)srmfile, (char*)srm_src, ".srm", sizeof(srmfile));
+     path instead of the ROM filename so each patch gets its own save.  The
+     slot suffix (".srm" / ".0N.srm") is applied on top by append_srm_name. */
+  append_srm_name((char*)srmfile, sizeof(srmfile), filename, srm_slot);
   printf("SRM file: %s\n", srmfile);
 
   uint32_t filesize;
@@ -1164,6 +1187,9 @@ uint32_t migrate_and_load_srm(uint8_t* filename, uint32_t base_addr) {
       /* No old-style migration for patched ROMs; a missing save is fine. */
       return 0;
     }
+    /* Old-style migration (move <rom>.srm from the ROM folder) only applies to the
+       legacy slot 0 name -- slots 2-4 never existed in the old layout. */
+    if(srm_slot != 0) return 0;
     /* try to move SRM file from old place to new one and to load again */
     char *dot = strrchr((char*)filename, (int)'.');
     if(!dot) return 0;   /* ROM name has no extension: nothing to migrate (a missing save is fine) */
@@ -1252,6 +1278,72 @@ static void append_save_basename(char *buf, size_t buflen, uint8_t *filename, co
   append_file_basename(buf, (char*)src, (char*)ext, buflen);
 }
 
+/* ---- Multi-slot battery SRAM (CICLO 2) ---------------------------------------
+   The LIVE session slot (srm_slot) is set once at game load (srm_slot_load, called
+   from migrate_and_load_srm) and is IMMUTABLE for the session, so all five save
+   paths route through save_srm -> append_srm_name(srm_slot) with a slot that can
+   never change mid-session -> an in-game slot switch (which only rewrites the
+   sidecar, consumed on the NEXT load) can never misroute an autosave.  With
+   CFG.enable_sram_slots OFF everything collapses to the legacy <stem>.srm.        */
+uint8_t srm_slot = 0;      /* live session slot (naming); IMMUTABLE until next game load */
+uint8_t srm_slot_sel = 0;  /* selected/next slot (== sidecar); == srm_slot at load, updated by SET */
+
+/* Slot extension: slot 0 -> ".srm" (legacy, byte-identical); slot 1..3 -> ".0N.srm"
+   (N = slot+1, the UI number 2..4).  Zero-padded to unify with the .man naming.
+   Built by hand (not snprintf) to keep the tiny fixed field clear of the
+   -Wformat-truncation heuristic; valid while SRM_SLOT_COUNT stays single-digit. */
+_Static_assert(SRM_SLOT_COUNT <= 9, "srm_slot_ext ('.0N.srm') assumes a single-digit slot number");
+void srm_slot_ext(char *ext, size_t extlen, uint8_t slot) {
+  if(slot == 0 || extlen < 8) {
+    strncpy(ext, ".srm", extlen);
+  } else {
+    ext[0] = '.'; ext[1] = '0'; ext[2] = (char)('0' + slot + 1);
+    ext[3] = '.'; ext[4] = 's'; ext[5] = 'r'; ext[6] = 'm'; ext[7] = 0;
+  }
+  ext[extlen - 1] = 0;
+}
+
+/* patch-aware (append_save_basename) SD path for a given slot, into buf (>= 256) */
+static void append_srm_name(char *buf, size_t buflen, uint8_t *filename, uint8_t slot) {
+  char ext[8];
+  srm_slot_ext(ext, sizeof(ext), slot);
+  append_save_basename(buf, buflen, filename, ext);
+}
+
+void srm_slot_load(uint8_t *filename) {
+  srm_slot = 0;
+  srm_slot_sel = 0;
+  if(!CFG.enable_sram_slots) return;   /* OFF -> forced slot 0, no I/O */
+  char sc[256] = SAVE_BASEDIR;
+  append_save_basename(sc, sizeof(sc), filename, ".slot");
+  file_open((uint8_t*)sc, FA_READ);
+  if(!file_res) {
+    uint8_t b = 0;
+    UINT br = 0;
+    f_read(&file_handle, &b, 1, &br);
+    if(br == 1 && b >= '1' && b <= '0' + SRM_SLOT_COUNT) {
+      srm_slot = b - '1';
+      srm_slot_sel = srm_slot;
+    }
+  }
+  file_close();
+  file_res = 0;   /* absent/unreadable sidecar is fine -> default slot 0 */
+}
+
+void srm_slot_save(uint8_t *filename, uint8_t slot) {
+  if(slot >= SRM_SLOT_COUNT) slot = 0;
+  check_or_create_folder(SAVE_BASEDIR);
+  char sc[256] = SAVE_BASEDIR;
+  append_save_basename(sc, sizeof(sc), filename, ".slot");
+  uint8_t b = '1' + slot;
+  UINT bw = 0;
+  file_open((uint8_t*)sc, FA_CREATE_ALWAYS | FA_WRITE);
+  if(!file_res) f_write(&file_handle, &b, 1, &bw);
+  file_close();
+  file_res = 0;
+  srm_slot_sel = slot;   /* NEVER touch the live srm_slot -- applies on the next load */
+}
+
 /* is there a <rom>.mpk?  cheap f_stat that gates the ROM scan below */
 static uint8_t bs_pack_exists(uint8_t *filename) {
   uint8_t bsfile[256] = SAVE_BASEDIR;
@@ -1286,8 +1378,79 @@ static uint8_t rom_scan_bs_vendor(uint32_t size) {
 void save_srm(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
     char srmfile[256] = SAVE_BASEDIR;
     check_or_create_folder(SAVE_BASEDIR);
-    append_save_basename(srmfile, sizeof(srmfile), filename, ".srm");
+    /* Route through the immutable live session slot -- all five save sites
+       (prepare_reset, in-game autosave x2, MSU autosave x2) inherit it for free
+       and can never diverge. */
+    append_srm_name(srmfile, sizeof(srmfile), filename, srm_slot);
     save_sram((uint8_t*)srmfile, sram_size, base_addr);
+}
+
+/* Stage the in-game SAVES-tab status block ($FF0730, 48B, SRAM_SAVEINFO_ADDR) that the
+   igmenu overlay reads.  Lives here (not igmenu.c) to reuse the private, patch-aware
+   .srm path derivation (append_save_basename) + romprops, keeping the .srm name in
+   lockstep with save_srm/migrate_and_load_srm.  Layout (memory.h): +0 flags
+   (bit0 game-has-SRAM, bit1 .srm-on-card, bit2 autosave-on), +1 size str (16B ASCII
+   NUL), +17 datetime str (24B ASCII NUL "YYYY-MM-DD HH:MM"), +41..47 reserved.
+   ALWAYS writes the whole 48B block (never leave a previous game's info stale).
+   Bounded + fail-safe: no SRAM -> empty block; any f_stat miss -> bit1=0, empty date. */
+void saveinfo_stage(uint8_t *filename) {
+  uint8_t blk[48];
+  uint8_t flags = 0;
+  uint8_t slotmask = 0;
+  char *sizestr = (char *)&blk[1];    /* 16B field */
+  char *datestr = (char *)&blk[17];   /* 24B field */
+
+  memset(blk, 0, sizeof(blk));
+  if(CFG.enable_autosave) flags |= 0x04;
+
+  /* No battery SRAM -> game has no save; leave strings empty and stop (no f_stat). */
+  if(romprops.sramsize_bytes) {
+    uint32_t ssize = romprops.sramsize_bytes;
+    flags |= 0x01;
+
+    if(ssize >= 1024 && (ssize & 1023) == 0)
+      snprintf(sizestr, 16, "%lu KB", (unsigned long)(ssize >> 10));
+    else
+      snprintf(sizestr, 16, "%lu B", (unsigned long)ssize);
+
+    /* Derive the .srm path EXACTLY like save_srm (patch-aware) for the LIVE slot,
+       then f_stat it -- the size/date shown is the slot the session boots/saves. */
+    char srmfile[256] = SAVE_BASEDIR;
+    FILINFO fno;
+    append_srm_name(srmfile, sizeof(srmfile), filename, srm_slot);
+    fno.lfname = NULL;
+    if(f_stat((TCHAR *)srmfile, &fno) == FR_OK) {
+      flags |= 0x02;
+      /* FAT fdate/ftime: fdate bits[15:9]=year-1980 [8:5]=mon(1..12) [4:0]=day;
+         ftime bits[15:11]=hour [10:5]=min [4:0]=sec/2 (seconds not shown). */
+      snprintf(datestr, 24, "%04u-%02u-%02u %02u:%02u",
+               (unsigned)(1980 + (fno.fdate >> 9)),
+               (unsigned)((fno.fdate >> 5) & 0x0F),
+               (unsigned)(fno.fdate & 0x1F),
+               (unsigned)(fno.ftime >> 11),
+               (unsigned)((fno.ftime >> 5) & 0x3F));
+    }
+
+    /* Slot occupancy bitmask -> SRM_SLOT_STATUS $FF0717 (read by the SAVES tab).
+       Slots ON: f_stat all 4 slot names, bit i = slot i present.  Slots OFF: bit0
+       mirrors the legacy <stem>.srm existence (byte-identical status view). */
+    if(CFG.enable_sram_slots) {
+      for(uint8_t s = 0; s < SRM_SLOT_COUNT; s++) {
+        char f[256] = SAVE_BASEDIR;
+        append_srm_name(f, sizeof(f), filename, s);
+        if(f_stat((TCHAR *)f, NULL) == FR_OK) slotmask |= (1 << s);
+      }
+    } else if(flags & 0x02) {
+      slotmask = 0x01;   /* legacy .srm exists */
+    }
+  }
+
+  blk[0] = flags;
+  /* +42 = selected/next slot (sidecar value); 0 when slots are OFF so the OFF
+     status view stays byte-identical to the legacy single-save block. */
+  blk[42] = CFG.enable_sram_slots ? srm_slot_sel : 0;
+  sram_writeblock(blk, SRAM_SAVEINFO_ADDR, sizeof(blk));
+  sram_writebyte(slotmask, SRAM_SRM_SLOT_STATUS_ADDR);
 }
 
 /* stage <rom>.mpk into PSRAM at BS_PACK_ADDR.  returns 1 if a pack loaded, 0 = empty

@@ -34,6 +34,7 @@ module cheat(
   input branch3_enable,
   input pad_latch,
   input snes_ajr,
+  input overlay_combo,   // FPGA-detected L+R+Y+Left (from ctx JOY1 capture): gate the IRQ hook
   input SNES_cycle_start,
   input [2:0] pgm_idx,
   input pgm_we,
@@ -43,7 +44,14 @@ module cheat(
   output snescmd_unlock
 );
 
-//`define IRQ_HOOK_ENABLE
+// IRQ hook: required for games that run their vblank logic on IRQ with NMI
+// disabled (e.g. Super Mario RPG gameplay) -- without it the in-game hook (and
+// the cheat overlay probe inside it) never fires there. The auto_nmi/auto_irq
+// usage heuristic picks the active vector per scene, same as the base core
+// (where this code is unconditional). Now enabled on mk2 as well: dropping the
+// ROM-cheat comparators (-131 LUTs, ROM cheats are patched into PSRAM by the MCU)
+// and BS-pack support (-69) freed enough of the Spartan-3 for the overlay.
+`define IRQ_HOOK_ENABLE
 
 wire snescmd_wr_strobe = snescmd_enable & SNES_wr_strobe;
 
@@ -54,6 +62,17 @@ reg holdoff_enable = 0; // temp disable hooks after reset
 reg buttons_enable = 0;
 reg wram_present = 0;
 wire branch_wram = cheat_enable & wram_present;
+
+// Savestate/cheat-overlay handler enable (bit 6 of pgm reg 7, set by the MCU's
+// savestate_enable_handler).  When set, the NMI hook's branch offsets route into
+// the nmi_savestate handler (which hosts the in-game cheat-overlay probe); when
+// clear they route to nmi_exit.  The base core has this; it was stripped from the
+// SA-1 core, which is why in-game savestates/overlay never fired here.  SA-1 does
+// not support loadstate, so savestate_force_entry is always 0 (overlay entry is
+// driven purely by |pad_data).  Real reg on both configs now (mk2 runs the
+// overlay too, gated by pgm reg 7 bit 6 from the MCU).
+reg savestate_enable = 0;
+wire savestate_force_entry = 1'b0;
 
 reg auto_nmi_enable = 1;
 reg auto_nmi_enable_sync = 0;
@@ -80,8 +99,12 @@ wire vector_unlock = |vector_unlock_r;
 reg [1:0] reset_unlock_r = 2'b10;
 wire reset_unlock = |reset_unlock_r;
 
+// ROM-cheat comparators: mk3 only.  On mk2 ROM cheats are patched into PSRAM by
+// the MCU, so these 6 comparators (-131 LUTs) are dropped to fit the overlay.
+`ifndef MK2
 reg [23:0] cheat_addr[5:0];
 reg [7:0] cheat_data[5:0];
+`endif
 reg [5:0] cheat_enable_mask;
 
 reg snescmd_unlock_r = 0;
@@ -96,12 +119,17 @@ reg [7:0] branch3_offset = 8'h04;
 
 reg [15:0] pad_data = 0;
 
+`ifndef MK2
 wire [5:0] cheat_match_bits ={(cheat_enable_mask[5] & (SNES_ADDR == cheat_addr[5])),
                               (cheat_enable_mask[4] & (SNES_ADDR == cheat_addr[4])),
                               (cheat_enable_mask[3] & (SNES_ADDR == cheat_addr[3])),
                               (cheat_enable_mask[2] & (SNES_ADDR == cheat_addr[2])),
                               (cheat_enable_mask[1] & (SNES_ADDR == cheat_addr[1])),
                               (cheat_enable_mask[0] & (SNES_ADDR == cheat_addr[0]))};
+`else
+// mk2: no ROM-cheat comparators (MCU patches ROM cheats into PSRAM) -> fold away.
+wire [5:0] cheat_match_bits = 6'h00;
+`endif
 wire cheat_addr_match = |cheat_match_bits;
 
 wire [1:0] nmi_match_bits = {SNES_ADDR == 24'h00FFEA, SNES_ADDR == 24'h00FFEB};
@@ -118,13 +146,17 @@ wire rst_addr_match = |rst_match_bits;
 
 wire hook_enable = ~|hook_enable_count;
 
-assign data_out = cheat_match_bits[0] ? cheat_data[0]
+assign data_out =
+`ifndef MK2
+                  cheat_match_bits[0] ? cheat_data[0]
                 : cheat_match_bits[1] ? cheat_data[1]
                 : cheat_match_bits[2] ? cheat_data[2]
                 : cheat_match_bits[3] ? cheat_data[3]
                 : cheat_match_bits[4] ? cheat_data[4]
                 : cheat_match_bits[5] ? cheat_data[5]
-                : nmi_match_bits[1] ? 8'h10
+                :
+`endif
+                  nmi_match_bits[1] ? 8'h10
 `ifdef IRQ_HOOK_ENABLE
                 : irq_match_bits[1] ? 8'h10
 `endif
@@ -174,6 +206,29 @@ always @(posedge clk) begin
   end
 end
 
+// IRQ hook rate limit: cap IRQ hooking to ~once per frame.  A raster effect
+// (e.g. Super Mario RPG's dialog box) fires an H-IRQ every scanline; the
+// savestate/overlay handler is far longer than the ~63us scanline gap, so
+// hooking every raster IRQ makes the handlers pile up and the game hangs
+// waiting for its own delayed ISR (deterministic freeze with $4200=$01, seen
+// in hardware).  After hooking one IRQ, suppress further IRQ hooks for ~12ms
+// (2^20 CLK2): the raster burst then runs unhooked (the game's own IRQ still
+// vectors at full speed -- we only skip OUR redirect) while the overlay probe
+// still runs about once per frame.  NMI needs no limit (naturally once/frame).
+`ifdef IRQ_HOOK_ENABLE
+reg [19:0] irq_hold = 0;
+wire irq_hold_ok = ~|irq_hold;
+wire irq_arm = auto_irq_enable_sync & irq_enable & irq_match_bits[1] & irq_hold_ok & overlay_combo;
+always @(posedge clk) begin
+  if(SNES_reset_strobe) irq_hold <= 0;
+  else if(SNES_rd_strobe & hook_enable_sync & irq_arm & (cpu_push_cnt == 4))
+    irq_hold <= 20'hfffff;
+  else if(|irq_hold) irq_hold <= irq_hold - 1'b1;
+end
+`else
+wire irq_arm = 1'b0;
+`endif
+
 // make patched vectors visible for last cycles of NMI/IRQ handling only
 always @(posedge clk) begin
   if(SNES_reset_strobe) begin
@@ -182,7 +237,7 @@ always @(posedge clk) begin
     if(hook_enable_sync
       & ((auto_nmi_enable_sync & nmi_enable & nmi_match_bits[1])
 `ifdef IRQ_HOOK_ENABLE
-        |(auto_irq_enable_sync & irq_enable & irq_match_bits[1])
+        | irq_arm
 `endif
         )
       & cpu_push_cnt == 4) begin
@@ -219,7 +274,7 @@ always @(posedge clk) begin
       if(hook_enable_sync
         & ((auto_nmi_enable_sync & nmi_enable & nmi_match_bits[1])
 `ifdef IRQ_HOOK_ENABLE
-          |(auto_irq_enable_sync & irq_enable & irq_match_bits[1])
+          | irq_arm
 `endif
           )
         & cpu_push_cnt == 4) begin
@@ -332,18 +387,21 @@ always @(posedge clk) begin
         snescmd_unlock_disable_strobe <= 1'b1;
       end
     end else if(pgm_we) begin
-      if(pgm_idx < 6) begin
+`ifndef MK2
+      if(pgm_idx < 6) begin // mk3 ROM-cheat comparators (dropped on mk2)
         cheat_addr[pgm_idx] <= pgm_in[31:8];
         cheat_data[pgm_idx] <= pgm_in[7:0];
-      end else if(pgm_idx == 6) begin // set rom patch enable
+      end else
+`endif
+      if(pgm_idx == 6) begin // set rom patch enable
         cheat_enable_mask <= pgm_in[5:0];
       end else if(pgm_idx == 7) begin // set/reset global enable / hooks
-      // pgm_in[13:8] are reset bit flags
-      // pgm_in[5:0] are set bit flags
-        {wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
-         <= ({wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
-          & ~pgm_in[13:8])
-          | pgm_in[5:0];
+      // pgm_in[14:8] are reset bit flags
+      // pgm_in[6:0] are set bit flags
+        {savestate_enable, wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
+         <= ({savestate_enable, wram_present, buttons_enable, holdoff_enable, irq_enable, nmi_enable, cheat_enable}
+          & ~pgm_in[14:8])
+          | pgm_in[6:0];
       end
     end
   end
@@ -388,7 +446,11 @@ always @* begin
         if(branch_wram) begin
           branch1_offset = 8'h3a; // nmi_patches
         end else begin
-          branch1_offset = 8'h43; // nmi_exit
+          if(savestate_enable & (savestate_force_entry | |pad_data)) begin
+            branch1_offset = 8'h3f; // nmi_savestate
+          end else begin
+            branch1_offset = 8'h43; // nmi_exit
+          end
         end
       end
     end else begin
@@ -406,7 +468,11 @@ always @* begin
     if(branch_wram) begin
       branch1_offset = 8'h3a;     // nmi_patches
     end else begin
-      branch1_offset = 8'h43;     // nmi_exit
+      if(savestate_enable & |pad_data) begin
+        branch1_offset = 8'h3f;   // nmi_savestate
+      end else begin
+        branch1_offset = 8'h43;   // nmi_exit
+      end
     end
   end
 end
@@ -417,7 +483,19 @@ always @* begin
   end else if(branch_wram) begin
     branch2_offset = 8'h00;       // nmi_patches
   end else begin
-    branch2_offset = 8'h09;       // nmi_exit
+    if(savestate_enable) begin
+      branch2_offset = 8'h05;     // nmi_savestate
+    end else begin
+      branch2_offset = 8'h09;     // nmi_exit
+    end
+  end
+end
+
+always @* begin
+  if(savestate_enable) begin
+    branch3_offset = 8'h00;       // nmi_savestate
+  end else begin
+    branch3_offset = 8'h04;       // nmi_exit
   end
 end
 

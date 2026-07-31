@@ -140,6 +140,69 @@ def encode_tile_8bpp(px):
     return bytes(t)
 
 
+# ---- 4bpp planar tile <-> 8x8 index array ----
+# A 4bpp tile is 32 bytes: bytes 0..15 = planes 0&1 interleaved by row (2B/row),
+# bytes 16..31 = planes 2&3. Same MSB-first bit order as the 8bpp pair above.
+def decode_tile_4bpp(t):
+    px = np.zeros((8, 8), np.uint8)
+    for y in range(8):
+        for x in range(8):
+            b = 7 - x
+            px[y, x] = (((t[2 * y] >> b) & 1)
+                        | (((t[2 * y + 1] >> b) & 1) << 1)
+                        | (((t[16 + 2 * y] >> b) & 1) << 2)
+                        | (((t[16 + 2 * y + 1] >> b) & 1) << 3))
+    return px
+
+
+def encode_tile_4bpp(px):
+    """px: 8x8 uint8 index array (values 0..15) -> 32 planar bytes."""
+    t = bytearray(32)
+    for y in range(8):
+        for x in range(8):
+            v = int(px[y, x])
+            b = 7 - x
+            if v & 1:
+                t[2 * y] |= (1 << b)
+            if v & 2:
+                t[2 * y + 1] |= (1 << b)
+            if v & 4:
+                t[16 + 2 * y] |= (1 << b)
+            if v & 8:
+                t[16 + 2 * y + 1] |= (1 << b)
+    return bytes(t)
+
+
+# Bulk (vectorised) 4bpp codec. The per-tile pair above is the readable
+# reference and the round-trip oracle; these are what the .man zoom encoder
+# actually calls -- a 512x448 page is 3584 tiles, and the per-pixel Python loop
+# would put a multi-page PDF into minutes.
+def encode_tiles_4bpp(tiles_px):
+    """tiles_px: [N,8,8] uint8 (values 0..15) -> bytes, N*32, planar."""
+    a = np.asarray(tiles_px, dtype=np.uint8)
+    n = a.shape[0]
+    w = (1 << np.arange(7, -1, -1, dtype=np.uint16))          # MSB-first x weights
+    out = np.zeros((n, 32), dtype=np.uint8)
+    for pl in range(4):
+        bits = (a >> pl) & 1                                   # [N,8,8]
+        by = (bits * w).sum(axis=2).astype(np.uint8)           # [N,8] one byte/row
+        base = (pl // 2) * 16 + (pl % 2)                       # 0,1,16,17
+        out[:, base:base + 16:2] = by
+    return out.tobytes()
+
+
+def decode_tiles_4bpp(data, n):
+    """Inverse of encode_tiles_4bpp -> [N,8,8] uint8."""
+    a = np.frombuffer(data, dtype=np.uint8, count=n * 32).reshape(n, 32)
+    sh = np.arange(7, -1, -1, dtype=np.uint8)                  # MSB-first
+    px = np.zeros((n, 8, 8), dtype=np.uint8)
+    for pl in range(4):
+        base = (pl // 2) * 16 + (pl % 2)
+        by = a[:, base:base + 16:2]                            # [N,8]
+        px |= (((by[:, :, None] >> sh) & 1) << pl).astype(np.uint8)
+    return px
+
+
 # ---- decode a linear logo grid (no tilemap) -> RGBA image ----
 def decode_logo(data, off, cols, rows, pal_bytes, cgbase=0, transparent_index=0):
     """Decode `cols`x`rows` 8bpp tiles laid out row-major starting at `off`.

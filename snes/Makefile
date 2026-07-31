@@ -7,6 +7,9 @@ OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
 
 OUT = menu.bin m3nu.bin
+# igmenu.bin: the in-game TAB menu shell, linked SEPARATELY from the menu (org bank $C2,
+# loaded by the MCU to PSRAM $C20000 at game-load). NOT part of m3nu.bin.
+IGMENU = igmenu.bin
 MENU_SIZE = 131072
 
 LOG = $(OBJS:=.log)
@@ -15,13 +18,23 @@ MAP = $(IPS:.ips=.map) $(O65:.o65=.map)
 DEPDIR := .dep
 GENDEPFLAGS = -MM -MP -MF $(DEPDIR)/$(@F).d -MT $(@F)
 
-all: $(OUT) $(MAP)
+all: $(OUT) $(IGMENU) $(MAP)
 
 # Generate the const source from the English base + language dicts. One run
 # emits both files: const_lang.a65 (bank $C0: neutral data) and const_lang_str.a65
 # (bank $C1: the localized string pool + dispatch tables) -> m3nu.bin spans 2 banks.
 const_lang.a65 const_lang_str.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py
 	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py -o const_lang.a65
+
+# igmenu_lang.i65: the in-game HELP tab's font-encoded i18n string tables, generated
+# from the English base (const.a65) + the SAME language dicts as const_lang, by
+# utils/gen_igmenu_lang.py. Included by igmenu.a65 -> linked into igmenu.bin (bank $C2),
+# SEPARATE from m3nu.bin (which can't reach it). Explicit prereq of igmenu.o65 so it
+# exists before cpp scans igmenu.a65's #include for dependencies.
+igmenu_lang.i65: const.a65 utils/gen_igmenu_lang.py utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py
+	python3 utils/gen_igmenu_lang.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py -o igmenu_lang.i65
+
+igmenu.o65: igmenu_lang.i65
 
 smc: menu.bin
 	cat menu.bin sd2snes.rom > menu.smc
@@ -40,6 +53,17 @@ $(OUT): $(OBJS)
 	@if grep -qE "ERROR:|still undefined|still not defined" link.log; then \
 	  echo "*** menu link FAILED — bank overflow or undefined symbol (see snes/link.log)"; exit 1; fi
 	@python3 -c "from pathlib import Path; p=Path('$@'); d=p.read_bytes(); target=$(MENU_SIZE); assert len(d) <= target, f'{p} too large: {len(d)} > {target}'; p.write_bytes(d + b'\xff' * (target - len(d)))"
+
+# igmenu.bin: separate $C2 link -> HiROM smc -> slice from the "IGMN" magic + patch the
+# crc16(body). Same loud guard as the menu (the `| tee` masks sneslink's exit code, so a
+# bank overflow / undefined symbol would otherwise ship a broken bin with a 0 exit; the
+# undefined-symbol case is ALSO the extraction guard for cheatlist.i65 -- if a routine
+# moved into the shared include still referenced a $C0-only label, it fails loudly here).
+$(IGMENU): igmenu.o65
+	sneslink -fsmc -o igmenu_raw.smc $^ 2>&1 | tee igmenu.link.log
+	@if grep -qE "ERROR:|still undefined|still not defined" igmenu.link.log; then \
+	  echo "*** igmenu link FAILED — bank overflow or undefined symbol (see snes/igmenu.link.log)"; exit 1; fi
+	python3 utils/pack_igmenu.py igmenu_raw.smc $(IGMENU)
 
 # in case link.log has been deleted
 link.log: $(OBJS)
@@ -65,7 +89,7 @@ link.log: $(OBJS)
 	  echo "*** snescom FAILED on $< (see $(@:.log=).log)"; rm -f $(@:.log=); exit 1; fi
 
 clean:
-	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 $(OUT) *.o65.log *.ips.log
+	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 igmenu_lang.i65 $(OUT) *.o65.log *.ips.log $(IGMENU) igmenu_raw.smc igmenu.link.log
 
 -include $(info $(DEPDIR)) $(shell mkdir $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*)
 

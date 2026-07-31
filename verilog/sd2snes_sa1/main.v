@@ -91,6 +91,17 @@ module main(
   inout SD_CLK
 );
 
+// In-game cheat-overlay register shadow (regshadow.v).  Active on mk2 (replaces
+// the ctx.v $21xx/$42xx shadow the Spartan-3 cannot fit), and on an mk3 build
+// defining REGSHADOW_TEST for validation (the BRAM shadow then wins over the ctx
+// PSRAM shadow for these reads via mux precedence).  Undefined on a normal mk3
+// build -> bit-identical to today.
+`ifdef MK2
+`define REGSHADOW_ACTIVE
+`elsif REGSHADOW_TEST
+`define REGSHADOW_ACTIVE
+`endif
+
 wire CLK2;
 
 wire dspx_dp_enable;
@@ -141,6 +152,22 @@ wire feat_cmd_unlock = featurebits[5];
 wire [23:0] MAPPED_SNES_ADDR;
 wire ROM_ADDR0;
 
+// SNES-side $2020-$202F copier reg window enable (from address.v).  Declared
+// explicitly (before the dma instance that consumes it) per the XST idiom.
+// On mk2 (no copier) it drives only the $202C pause decode; the rest is trimmed.
+wire dma_enable;
+
+// Hook identity-window flag from address.v.  Declared explicitly before the
+// address instance drives it.  Read only by the overlay register shadow
+// (REGSHADOW_ACTIVE); driven-but-unread otherwise -> trimmed (like dma_enable).
+wire IS_PATCH;
+
+// FPGA-side SA-1 pause for clean savestate/cheat-overlay snapshots.  Declared
+// here (ahead of the sa1 instance that reads it).  Real reg on both configs now:
+// mk2 also runs the overlay and drives the $202C pause write through the
+// dma_enable window (the decode lives next to the copier below).
+reg snapshot_pause; initial snapshot_pause = 0;
+
 wire [13:0] DBG_msu_address;
 wire DBG_msu_reg_oe_rising;
 wire DBG_msu_reg_oe_falling;
@@ -190,12 +217,13 @@ wire SNES_PULSE_IN = SNES_READ_IN & SNES_WRITE_IN & ~SNES_CPU_CLK_IN;
 
 wire SNES_PULSE_end = (SNES_PULSEr[6:1] == 6'b000001);
 wire SNES_PARD_start = (SNES_PARDr[6:1] == 6'b111110);
-// wire SNES_PARD_end = (SNES_PARDr[6:1] == 6'b000001);
+wire SNES_PARD_end = (SNES_PARDr[6:1] == 6'b000001);
 // Sample PAWR data earlier on CPU accesses, later on DMA accesses...
 wire SNES_PAWR_start = (SNES_PAWRr[6:1] == (({SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h02100) ? 6'b111000 : 6'b100000));
 wire SNES_PAWR_end = (SNES_PAWRr[6:1] == 6'b000001);
 wire SNES_RD_start = (SNES_READr[6:1] == 6'b111110);
 wire SNES_RD_end = (SNES_READr[6:1] == 6'b000001);
+wire SNES_WR_start = (SNES_WRITEr[6:1] == 6'b111000);
 wire SNES_WR_end = (SNES_WRITEr[6:1] == 6'b000001);
 wire SNES_cycle_start = (SNES_CPU_CLKr[6:1] == 6'b000001);
 wire SNES_cycle_end = (SNES_CPU_CLKr[6:1] == 6'b111110);
@@ -210,6 +238,104 @@ wire SNES_PARD = SNES_PARDr[2] & SNES_PARDr[1];
 wire SNES_PAWR = SNES_PAWRr[2] & SNES_PAWRr[1];
 
 wire SNES_ROMSEL = (SNES_ROMSELr[0]);
+
+`ifndef MK2
+// ---------------------------------------------------------------------------
+// Snapshot / context (ctx) bus-snoop plumbing -- mk3 only (Cyclone IV).
+// Ported from sd2snes_base: builds a live PPU/VRAM/CGRAM/OAM/$42xx mirror in
+// PSRAM used by the in-game savestate / cheat-overlay snapshot.  Gated
+// `ifndef MK2 because the SA-1 core is ~full on the Spartan-3 (mk2).
+//
+// The base samples the late, glitch-filtered SNES_ADDR/PA (ANDed pipeline
+// taps); this core drives everything else from the early SNES_ADDRr[0], so
+// derive settled taps locally for the ctx feed to reproduce base's snoop
+// timing (the 4-tick end strobes are calibrated against the late address).
+wire [23:0] CTX_SNES_ADDR = (SNES_ADDRr[5] & SNES_ADDRr[4]);
+wire [7:0]  CTX_SNES_PA   = (SNES_PAr[5] & SNES_PAr[4]);
+
+// early snoop-arm strobe (control lines only, address/PA independent)
+wire SNES_PAWR_start_early = ((SNES_PAWRr[4:1] | SNES_PAWRr[5:2]) == 4'b1110);
+
+reg SNES_SNOOPWR_DATA_OE = 0;
+reg SNES_SNOOPPAWR_DATA_OE = 0;
+reg SNES_SNOOPPARD_DATA_OE = 0;
+reg [3:0] SNES_SNOOPWR_count;
+reg [3:0] SNES_SNOOPPAWR_count;
+reg [3:0] SNES_SNOOPPARD_count;
+reg SNES_SNOOPWR_end;
+reg SNES_SNOOPPAWR_end;
+reg SNES_SNOOPPARD_end;
+reg [7:0] CTX_DINr;
+reg       CTX_DIRr;
+wire [15:0] ctx_pad1;          // JOY1 captured by ctx's CPUREG store-sniffing FSM
+wire [7:0] CTX_SNES_DATA_IN = CTX_DIRr ? CTX_DINr : SNES_DATAr[0];
+
+// 4-tick snoop end strobes (fire when a low-strobe counter reaches 4) --
+// faithful to sd2snes_base.  NOTE: on this core the ctx VRAM/CGRAM mirror is
+// NOT the overlay's snapshot source anymore (the overlay reads real VRAM/CGRAM
+// back via $2139/$213B in forced blank); the mirror still feeds the $21xx/$42xx
+// register shadows, which are sparse CPU writes.
+always @(posedge CLK2) begin
+  if (SNES_reset_strobe) begin
+    SNES_SNOOPPARD_end <= 0;
+    SNES_SNOOPPAWR_end <= 0;
+    SNES_SNOOPWR_end <= 0;
+  end
+  else begin
+    SNES_SNOOPPARD_end <= SNES_SNOOPPARD_count == 4;
+    SNES_SNOOPPAWR_end <= SNES_SNOOPPAWR_count == 4;
+    SNES_SNOOPWR_end <= SNES_SNOOPWR_count == 4;
+  end
+end
+
+// snoop low-strobe counters + data-OE (level-shifter enable during capture)
+always @(posedge CLK2) begin
+  // PA write
+  if (SNES_reset_strobe | SNES_SNOOPPAWR_end) begin
+    SNES_SNOOPPAWR_count <= 0;
+    SNES_SNOOPPAWR_DATA_OE <= 0;
+  end
+  else if (SNES_PAWR_start_early) begin
+    SNES_SNOOPPAWR_count <= 1;
+    SNES_SNOOPPAWR_DATA_OE <= 1;
+  end
+  else if (|SNES_SNOOPPAWR_count) begin
+    SNES_SNOOPPAWR_count <= SNES_SNOOPPAWR_count + 1;
+  end
+
+  // PA read -- prioritize writes when there is a DMA from a PPU reg; avoid
+  // r213f (region override) and the external B-bus (>=$2184, e.g. Satellaview)
+  if (SNES_reset_strobe | SNES_SNOOPPARD_end | ~SNES_WRITE) begin
+    SNES_SNOOPPARD_count <= 0;
+    SNES_SNOOPPARD_DATA_OE <= 0;
+  end
+  else if (SNES_PARD_start & ~r213f_enable & (CTX_SNES_PA < 8'h84)) begin
+    SNES_SNOOPPARD_count <= 1;
+    SNES_SNOOPPARD_DATA_OE <= 1;
+  end
+  else if (|SNES_SNOOPPARD_count) begin
+    SNES_SNOOPPARD_count <= SNES_SNOOPPARD_count + 1;
+  end
+
+  // main-bus write
+  if (SNES_reset_strobe | SNES_SNOOPWR_end) begin
+    SNES_SNOOPWR_count <= 0;
+    SNES_SNOOPWR_DATA_OE <= 0;
+  end
+  else if (SNES_WR_start) begin
+    SNES_SNOOPWR_count <= 1;
+    SNES_SNOOPWR_DATA_OE <= 1;
+  end
+  else if (|SNES_SNOOPWR_count) begin
+    SNES_SNOOPWR_count <= SNES_SNOOPWR_count + 1;
+  end
+end
+`else
+// mk2: no ctx snoop.  Stub the two data-OE signals that the always-compiled
+// SNES_DATABUS_DIR references so it degrades to the original mk2 behavior.
+wire SNES_SNOOPPAWR_DATA_OE = 1'b0;
+wire SNES_SNOOPPARD_DATA_OE = 1'b0;
+`endif
 
 reg [7:0] BUS_DATA;
 
@@ -265,20 +391,26 @@ always @(posedge CLK2) begin
   SNES_DATAr[0] <= SNES_DATA;
 end
 
-parameter ST_IDLE            = 11'b00000000001;
-parameter ST_MCU_RD_ADDR     = 11'b00000000010;
-parameter ST_MCU_RD_END      = 11'b00000000100;
-parameter ST_MCU_WR_ADDR     = 11'b00000001000;
-parameter ST_MCU_WR_END      = 11'b00000010000;
-parameter ST_SA1_ROM_RD_ADDR = 11'b00000100000;
-parameter ST_SA1_ROM_RD_END  = 11'b00001000000;
+// One-hot ROM-side arbiter state.  Widened 11 -> 13 bits to add the two CTX
+// write states (top two bits) without disturbing any existing requester: every
+// original bit is in use, so the CTX states are appended, not shared.
+parameter ST_IDLE            = 13'b0000000000001;
+parameter ST_MCU_RD_ADDR     = 13'b0000000000010;
+parameter ST_MCU_RD_END      = 13'b0000000000100;
+parameter ST_MCU_WR_ADDR     = 13'b0000000001000;
+parameter ST_MCU_WR_END      = 13'b0000000010000;
+parameter ST_SA1_ROM_RD_ADDR = 13'b0000000100000;
+parameter ST_SA1_ROM_RD_END  = 13'b0000001000000;
 // Repurposed: the ST_SA1_RAM_* one-hot bits were DEAD in this ROM-side STATE
 // machine (SA-1 RAM uses the separate ST_RAM_* FSM).  Reused for the MCU-driven
-// copier (Approach B), so STATE stays 11-bit.
-parameter ST_DMA_RD_ADDR     = 11'b00010000000;
-parameter ST_DMA_RD_END      = 11'b00100000000;
-parameter ST_DMA_WR_ADDR     = 11'b01000000000;
-parameter ST_DMA_WR_END      = 11'b10000000000;
+// copier (Approach B).
+parameter ST_DMA_RD_ADDR     = 13'b0000010000000;
+parameter ST_DMA_RD_END      = 13'b0000100000000;
+parameter ST_DMA_WR_ADDR     = 13'b0001000000000;
+parameter ST_DMA_WR_END      = 13'b0010000000000;
+// ctx (context/PPU-mirror) write port -- top priority; mk3 only.
+parameter ST_CTX_WR_ADDR     = 13'b0100000000000;
+parameter ST_CTX_WR_END      = 13'b1000000000000;
 
 `ifdef MK2
 parameter SNES_DEAD_TIMEOUT = 17'd85714; // 1ms
@@ -290,7 +422,7 @@ parameter SNES_DEAD_TIMEOUT = 17'd85867; // 1ms
 parameter ROM_CYCLE_LEN = 4'd6;
 `endif
 
-reg [10:0] STATE;
+reg [12:0] STATE;
 initial STATE = ST_IDLE;
 
 assign MSU_SNES_DATA_IN = BUS_DATA;
@@ -395,6 +527,14 @@ wire [23:0] SA1_RAM_ADDR;
 wire [7:0]  SA1_RAM_DOUT;
 wire        SA1_RAM_WORD;
 
+// BS Memory Pack slot enable for the SA-1 core.  Off on mk2 (BS-pack support
+// removed to free LUTs for the overlay) so the SA-1-side pack read path folds away.
+`ifndef MK2
+wire bs_slot_en_w = featurebits[14];
+`else
+wire bs_slot_en_w = 1'b0;
+`endif
+
 // SA1
 sa1 snes_sa1 (
   .RST(SNES_reset_strobe),
@@ -448,7 +588,9 @@ sa1 snes_sa1 (
   .IRQ(SA1_IRQ),
   
   .SPEED(dsp_feat[0]),
-  .bs_slot_en(featurebits[14]),   // BS Memory Pack slot: SA-1-side reads of block>=4 -> pack
+  // transparent FPGA-side halt for savestate/cheat-overlay snapshots (mk3; 0 on mk2)
+  .snapshot_pause(snapshot_pause),
+  .bs_slot_en(bs_slot_en_w),   // BS Memory Pack slot: SA-1-side reads of block>=4 -> pack (0 on mk2)
 
   // State debug read interface
   .PGM_ADDR(SA1_PGM_ADDR), // [11:0]
@@ -465,6 +607,54 @@ sa1 snes_sa1 (
 
   .DBG(DBG_SA1)
 );
+
+`ifndef MK2
+// --------------------------------------------------------------------------
+// ctx (context / PPU-mirror) engine -- mk3 only.  Instantiated exactly as in
+// sd2snes_base, wired to the ported snoop signals + the settled SNES taps.
+// Produces CTX write requests (CTX_WRQ/CTX_ADDR/CTX_DOUT/CTX_WORD) granted by
+// the ROM arbiter, and the ctx_*_enable data-OE terms for the databus logic.
+// --------------------------------------------------------------------------
+wire [23:0] CTX_ADDR;
+wire [15:0] CTX_DOUT;
+wire        CTX_WORD;
+wire        CTX_WRQ;
+wire        CTX_RDY;
+wire        CTX_DBG;
+wire        ctx_wr_enable;
+wire        ctx_pawr_enable;
+wire        ctx_pard_enable;
+
+ctx snes_ctx (
+  .clkin(CLK2),
+  .reset(SNES_reset_strobe),
+
+  .SNES_ADDR(CTX_SNES_ADDR),
+  .SNES_PA(CTX_SNES_PA),
+  .SNES_RD_end_PRE(SNES_RD_end),
+  .SNES_WR_end_PRE(SNES_SNOOPWR_end),
+  .SNES_PARD_end_PRE(SNES_SNOOPPARD_end),
+  .SNES_PAWR_end_PRE(SNES_SNOOPPAWR_end),
+  .SNES_DATA_IN_PRE(CTX_SNES_DATA_IN), // needs to handle PA accesses, too
+
+  //.OE_RD_ENABLE(ctx_rd_enable),
+  .OE_WR_ENABLE(ctx_wr_enable),
+  .OE_PAWR_ENABLE(ctx_pawr_enable),
+  .OE_PARD_ENABLE(ctx_pard_enable),
+
+  .BUS_WRQ(CTX_WRQ),
+  .BUS_RDY(CTX_RDY),
+
+  .snescmd_unlock(snescmd_unlock),
+
+  .ROM_ADDR(CTX_ADDR),
+  .ROM_DATA(CTX_DOUT),
+  .ROM_WORD_ENABLE(CTX_WORD),
+
+  .DBG(CTX_DBG),
+  .PAD1_OUT(ctx_pad1)
+);
+`endif
 
 reg [7:0] MCU_DINr;
 reg [7:0] MCU_ROM_DINr;
@@ -489,6 +679,11 @@ wire        MCU_DMA_WE;
 wire        MCU_DMA_ACTIVE;
 `ifndef MK2
 wire [1:0] DMA_BUSY;
+// SNES-side copier reg interface (mk3): the live SNES drives $2020-$202F, and
+// the copier read-back is muxed onto the SNES bus (mirrors sd2snes_base).
+wire [7:0] DMA_SNES_DATA_IN;
+wire [7:0] DMA_SNES_DATA_OUT;
+assign DMA_SNES_DATA_IN = BUS_DATA;
 `else
 wire [1:0] DMA_BUSY = 2'b00;  // sem copier: 0xd5 sempre reporta idle
 `endif
@@ -595,14 +790,15 @@ mcu_cmd snes_mcu_cmd(
 dma snes_dma (
   .clkin(CLK2),
   .reset(SNES_reset_strobe),
-  // MCU-driven only: regs fed by the MCU (CMD 0xd4) while the SNES is held in
-  // reset; no SNES/menu-driven copier here, so no BRA-loop injection.
-  .enable(MCU_DMA_ACTIVE),
-  .reg_addr(MCU_DMA_ADDR),
-  .reg_data_in(MCU_DMA_DATA),
-  .reg_data_out(),
-  .reg_oe_falling(1'b0),
-  .reg_we_rising(MCU_DMA_WE),
+  // Dual-driven copier: fed by the MCU (CMD 0xd4) while the SNES is held in
+  // reset (patcher), OR by the live SNES bus when it writes/reads $2020-$202F
+  // (dma_enable) -- used by the in-game savestate / cheat-overlay snapshot.
+  .enable(MCU_DMA_ACTIVE | dma_enable),
+  .reg_addr(MCU_DMA_ACTIVE ? MCU_DMA_ADDR : SNES_ADDR[3:0]),
+  .reg_data_in(MCU_DMA_ACTIVE ? MCU_DMA_DATA : DMA_SNES_DATA_IN),
+  .reg_data_out(DMA_SNES_DATA_OUT),
+  .reg_oe_falling(SNES_RD_start),
+  .reg_we_rising(MCU_DMA_ACTIVE ? MCU_DMA_WE : SNES_WR_end),
   .loop_enable(),
   .busy(DMA_BUSY),
   .BUS_RDY(DMA_RDY),
@@ -614,6 +810,19 @@ dma snes_dma (
   .ROM_WORD_ENABLE(DMA_WORD)
 );
 `endif
+
+// FPGA-side SA-1 pause decode for clean snapshots -- unconditional (mk2 runs the
+// overlay too).  $202C (SNES_ADDR[3:0]==C) sits in the same 16-address dma_enable
+// window; bit0 of the write sets/clears the pause.  CCNT_r is untouched
+// (transparent halt); cleared on SNES reset so a reset can never leave the SA-1
+// stuck paused.  Only needs dma_enable + SNES_WR_end + SNES_ADDR + SNES_DATA_IN,
+// all present on mk2 (the dma module itself stays mk3-only above).
+always @(posedge CLK2) begin
+  if (SNES_reset_strobe)
+    snapshot_pause <= 1'b0;
+  else if (dma_enable & SNES_WR_end & (SNES_ADDR[3:0] == 4'hC))
+    snapshot_pause <= SNES_DATA_IN[0];
+end
 
 // BS Memory Pack flash slot (writable)
 wire IS_FLASHWR;
@@ -632,10 +841,14 @@ address snes_addr(
   .IS_SAVERAM(IS_SAVERAM),
   .IS_ROM(IS_ROM),
   .IS_WRITABLE(IS_WRITABLE),
+  .IS_PATCH(IS_PATCH),
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
+  .snescmd_unlock(snescmd_unlock),
   //MSU-1
   .msu_enable(msu_enable),
+  //DMA-1 / SNES-side $2020 copier (mk3 snapshot)
+  .dma_enable(dma_enable),
   // sa1
   .sa1_bmaps_sbm(SA1_BMAPS_SBM),
   .sa1_dma_cc1_en(SA1_DMA_CC1_EN),
@@ -659,6 +872,40 @@ address snes_addr(
   .bs_erase_blk(bs_erase_blk)
 );
 
+`ifdef REGSHADOW_ACTIVE
+// --------------------------------------------------------------------------
+// In-game cheat-overlay register shadow (regshadow.v) -- mk2, or an mk3
+// REGSHADOW_TEST validation build.  The overlay restores the PPU/CPU registers
+// by reading a shadow of the last value written to each, through the hook's
+// identity window: $F90500-$F9057F (PPU regs, stride-2 words; high byte $00) and
+// $F90700-$F9071F (CPU $42xx regs, stride-1 bytes).  On mk3 that shadow is
+// produced by ctx.v ($F90500 + PA*2 / $F90700 + addr[8:0]); ctx is far too large
+// for the Spartan-3, so on mk2 a single RAMB16 shadow replaces just this piece.
+// IS_PATCH gates the reads to the active hook window only.
+//
+// REGSHADOW_TEST: mk3 validation build -- serve the BRAM shadow instead of the
+// ctx PSRAM shadow (mux precedence below makes the BRAM win for these reads).
+wire shadow_ppu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF905) & ~SNES_ADDR[7];        // $F90500-7F
+wire shadow_cpu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:5] == 3'b000); // $F90700-1F
+wire [7:0] regshadow_dout;
+// Live read index: PPU reg = mem[0x00-0x3F] via SNES_ADDR[6:1] (stride-2); CPU
+// reg = mem[0x40-0x5F] via SNES_ADDR[4:0].  The shadow BRAM registers this read
+// (1-cycle latency, exactly like snescmd_buf); the address is stable for the
+// whole ROM cycle so the value settles well before the CPU samples the bus.
+wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0010, SNES_ADDR[4:0]}
+                                            : {3'b000,  SNES_ADDR[6:1]};
+regshadow snes_regshadow(
+  .clk(CLK2),
+  .pawr_end(SNES_PAWR_end),
+  .wr_end(SNES_WR_end),
+  .snes_addr(SNES_ADDR),
+  .snes_pa(SNES_PA),
+  .snes_data(SNES_DATA_IN),
+  .rd_addr(regshadow_raddr),
+  .rd_data(regshadow_dout)
+);
+`endif
+
 reg pad_latch = 0;
 reg [4:0] pad_cnt = 0;
 
@@ -680,6 +927,7 @@ cheat snes_cheat(
   .branch3_enable(branch3_enable),
   .pad_latch(pad_latch),
   .snes_ajr(snes_ajr),
+  .overlay_combo(overlay_combo),
   .SNES_cycle_start(SNES_cycle_start),
   .pgm_idx(cheat_pgm_idx),
   .pgm_we(cheat_pgm_we),
@@ -716,6 +964,21 @@ wire r2100_enable = r2100_hit & (r2100_patch | ~(&r2100_limit));
 wire snoop_4200_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04200;
 wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 
+// Overlay combo detect: reads of $4218/$4219 pulse address+/RD on the cart bus
+// but the DATA of a CPU-internal register read is NOT driven externally, so a
+// plain read snoop captures garbage (verified in hardware). ctx.v's CPUREG FSM
+// solves this the proven way: it watches the instruction stream for the game's
+// LDA $4218(/19) -> STA idiom and captures the value from the STORE (writes ARE
+// bus-visible), with stale-value expiry. r421x[8]/[9] therefore hold live JOY1.
+`ifndef MK2
+wire overlay_combo = ((ctx_pad1 & 16'h4230) == 16'h4230);
+`else
+// mk2 has no ctx: no FPGA-side combo detect; the NMI-scene hook still opens the
+// overlay (battles/menus). IRQ/field opening on mk2 would need a standalone
+// CPUREG mini-FSM (LUT budget pending).
+wire overlay_combo = 1'b0;
+`endif
+
 always @(posedge CLK2) begin
   r2100_forcewrite <= r2100_forcewrite_pre;
 end
@@ -750,9 +1013,25 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                    :((~SNES_READ ^ (r213f_forceread & r213f_enable & ~SNES_PARD))
                                 & ~(r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE & ~sa1_data_enable))
                                 ? ( msu_enable ? MSU_SNES_DATA_OUT
+`ifndef MK2
+                                  : dma_enable ? DMA_SNES_DATA_OUT  // $2020 copier read-back (mk3)
+`endif
                                   : sa1_data_enable ? SA1_SNES_DATA_OUT  // SA1 MMIO read
                                   : (cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
                                   : ((snescmd_unlock | feat_cmd_unlock) & snescmd_enable) ? snescmd_dout
+`ifdef REGSHADOW_ACTIVE
+                                  // in-game overlay register shadow: $F90500 (PPU,
+                                  // stride-2) / $F90700 (CPU) read-backs.  BOTH bytes of a
+                                  // stride-2 PPU entry serve the same shadow value: the
+                                  // restore loop writes every register twice (double-write
+                                  // emulation), so serving $00 as the high byte would zero
+                                  // every single-write register on the second write
+                                  // (BGMODE/TM/INIDISP -> backdrop-only screen, seen in
+                                  // hardware).  Double-write regs (scrolls) restore with
+                                  // high=low for one frame until the game rewrites them.
+                                  : shadow_ppu_hit ? regshadow_dout
+                                  : shadow_cpu_hit ? regshadow_dout
+`endif
                                   : (ROM_HIT & IS_SAVERAM) ? RAM_DATA
                                   : (SA1_SCNT_NVSW & nmi_match) ? (SNES_ADDR[0] ? SA1_SNV[15:8] : SA1_SNV[7:0])
                                   : (SA1_SCNT_IVSW & irq_match) ? (SNES_ADDR[0] ? SA1_SIV[15:8] : SA1_SIV[7:0])
@@ -788,6 +1067,22 @@ assign SA1_ROM_RDY = RQ_SA1_ROM_RDYr;
 wire SA1_ROM_RD_HIT = |(STATE & ST_SA1_ROM_RD_ADDR);
 wire SA1_ROM_HIT    = SA1_ROM_RD_HIT;
 
+// CTX (context/PPU-mirror) write port -- top-priority ROM requester (mk3).
+// The HIT wires + address/data latches are declared unconditionally because
+// the always-compiled ROM muxes reference them; on mk2 CTX_HIT is constant 0
+// (STATE never enters ST_CTX_*), so those mux terms fold away and are trimmed.
+reg [23:0] CTX_ROM_ADDRr; initial CTX_ROM_ADDRr = 24'h0;
+reg [15:0] CTX_ROM_DATAr; initial CTX_ROM_DATAr = 16'h0000;
+reg        CTX_ROM_WORDr; initial CTX_ROM_WORDr = 1'b0;
+wire CTX_WE_HIT = |(STATE & ST_CTX_WR_ADDR);
+wire CTX_WR_HIT = |(STATE & (ST_CTX_WR_ADDR | ST_CTX_WR_END));
+wire CTX_HIT    = CTX_WR_HIT;
+`ifndef MK2
+reg CTX_WR_PENDr; initial CTX_WR_PENDr = 0;
+reg RQ_CTX_RDYr;  initial RQ_CTX_RDYr = 1'b1;
+assign CTX_RDY = RQ_CTX_RDYr;
+`endif
+
 `ifdef MK2
 my_dcm snes_dcm(
   .CLKIN(CLKIN),
@@ -796,8 +1091,8 @@ my_dcm snes_dcm(
   .RST(DCM_RST)
 );
 
-assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
-assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : CTX_HIT ? CTX_ROM_ADDRr[23:1] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:1] : DMA_HIT ? DMA_ROM_ADDRr[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
+assign ROM_ADDR0 = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 
 assign ROM_CE = 1'b0;
 
@@ -826,9 +1121,9 @@ pll snes_pll(
 );
 
 wire ROM_ADDR22;
-assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[1]    : DMA_HIT ? DMA_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
-assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:2] : DMA_HIT ? DMA_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
-assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
+assign ROM_ADDR22 = (SD_DMA_TO_ROM) ? MCU_ADDR[1]    : CTX_HIT ? CTX_ROM_ADDRr[1]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[1]    : DMA_HIT ? DMA_ROM_ADDRr[1]    : MCU_HIT ? ROM_ADDRr[1]    : MAPPED_SNES_ADDR[1];
+assign ROM_ADDR   = (SD_DMA_TO_ROM) ? MCU_ADDR[23:2] : CTX_HIT ? CTX_ROM_ADDRr[23:2] : SA1_ROM_HIT ? SA1_ROM_ADDRr[23:2] : DMA_HIT ? DMA_ROM_ADDRr[23:2] : MCU_HIT ? ROM_ADDRr[23:2] : MAPPED_SNES_ADDR[23:2];
+assign ROM_ADDR0  = (SD_DMA_TO_ROM) ? MCU_ADDR[0]    : CTX_HIT ? CTX_ROM_ADDRr[0]    : SA1_ROM_HIT ? SA1_ROM_ADDRr[0]    : DMA_HIT ? DMA_ROM_ADDRr[0]    : MCU_HIT ? ROM_ADDRr[0]    : MAPPED_SNES_ADDR[0];
 
 assign ROM_ZZ = 1'b1;
 assign ROM_1CE = ROM_ADDR22;
@@ -917,6 +1212,36 @@ always @(posedge CLK2) begin
     RQ_DMA_RDYr  <= 1'b1;
   end
 end
+
+// ctx (context/PPU-mirror) write request -- latch the requested PSRAM write.
+always @(posedge CLK2) begin
+  if(CTX_WRQ) begin
+    CTX_WR_PENDr  <= 1'b1;
+    RQ_CTX_RDYr   <= 1'b0;
+    CTX_ROM_ADDRr <= CTX_ADDR;
+    CTX_ROM_DATAr <= CTX_DOUT;
+    CTX_ROM_WORDr <= CTX_WORD;
+  end
+  else if(STATE & ST_CTX_WR_END) begin
+    CTX_WR_PENDr <= 1'b0;
+    RQ_CTX_RDYr  <= 1'b1;
+  end
+end
+
+// ctx read-back: the byte the FPGA is actually serving on the bus and the
+// current databus direction, combined into CTX_SNES_DATA_IN (handles PA/read
+// snoops).  Unlike base, the SA-1 core serves reads from THREE sources: the
+// SA-1 module (IRAM/MMIO), BW-RAM (RAM_DATA, second RAM chip) and PSRAM
+// (ROM_DATA).  A DMA from SA-1 IRAM or BW-RAM to VRAM is snooped via PAWR with
+// the FPGA driving the bus, so capturing only ROM_DATA left holes in the ctx
+// VRAM mirror exactly for those transfers (dynamic tiles) -> corrupted
+// graphics on cheat-overlay restore.  Mirror the SNES_DATA serve mux instead.
+always @(posedge CLK2) begin
+  CTX_DINr <= sa1_data_enable ? SA1_SNES_DATA_OUT
+            : (ROM_HIT & IS_SAVERAM) ? RAM_DATA
+            : (ROM_ADDR0 ? ROM_DATA[7:0] : ROM_DATA[15:8]);
+  CTX_DIRr <= SNES_DATABUS_DIR;
+end
 `endif
 
 always @(posedge CLK2) begin
@@ -941,6 +1266,15 @@ always @(posedge CLK2) begin
       STATE <= ST_IDLE;
       
       if(free_slot | SNES_DEADr) begin
+`ifndef MK2
+        // ctx (context/PPU-mirror) write -- top priority (mk3 snapshot).  The
+        // trailing `end else` folds cleanly into the SA1 `if` below: on mk3 it
+        // chains as `... end else if(SA1...)`, on mk2 the block vanishes.
+        if (CTX_WR_PENDr) begin
+          STATE <= ST_CTX_WR_ADDR;
+          ST_MEM_DELAYr <= ROM_CYCLE_LEN;
+        end else
+`endif
         // early notify from SA1 to save a clock
         if (SA1_ROM_RD_PENDr | SA1_ROM_RRQ) begin
           STATE <= ST_SA1_ROM_RD_ADDR;
@@ -995,8 +1329,13 @@ always @(posedge CLK2) begin
       ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
       if(ST_MEM_DELAYr == 0) STATE <= ST_DMA_WR_END;
     end
+    ST_CTX_WR_ADDR: begin
+      STATE <= ST_CTX_WR_ADDR;
+      ST_MEM_DELAYr <= ST_MEM_DELAYr - 1;
+      if(ST_MEM_DELAYr == 0) STATE <= ST_CTX_WR_END;
+    end
 `endif
-    ST_MCU_RD_END, ST_MCU_WR_END, ST_SA1_ROM_RD_END, ST_DMA_RD_END, ST_DMA_WR_END: begin
+    ST_MCU_RD_END, ST_MCU_WR_END, ST_SA1_ROM_RD_END, ST_DMA_RD_END, ST_DMA_WR_END, ST_CTX_WR_END: begin
       STATE <= ST_IDLE;
     end
   endcase
@@ -1073,8 +1412,9 @@ reg MCU_WRITE_1;
 always @(posedge CLK2) MCU_WRITE_1<= MCU_WRITE;
 
 // odd addresses xxx1
-assign ROM_DATA[7:0] = (ROM_ADDR0 || (!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr))
+assign ROM_DATA[7:0] = (ROM_ADDR0 || (!SD_DMA_TO_ROM && CTX_HIT && CTX_ROM_WORDr) || (!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr))
                        ?(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
+                                       : CTX_WR_HIT ? CTX_ROM_DATAr[15:8]  // ctx snapshot write (mk3)
                                        : DMA_WR_HIT ? DMA_ROM_DATAr[15:8]
                                        : (ROM_HIT
                                          & ~IS_SAVERAM
@@ -1087,6 +1427,7 @@ assign ROM_DATA[7:0] = (ROM_ADDR0 || (!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr
 assign ROM_DATA[15:8] = ROM_ADDR0
                         ? 8'bZ
                         :(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
+                                        : CTX_WR_HIT ? CTX_ROM_DATAr[7:0]  // ctx snapshot write (mk3)
                                         : DMA_WR_HIT ? DMA_ROM_DATAr[7:0]
                                         : (ROM_HIT
                                           & ~IS_SAVERAM
@@ -1097,6 +1438,7 @@ assign ROM_DATA[15:8] = ROM_ADDR0
 
 assign ROM_WE = SD_DMA_TO_ROM
                 ?MCU_WRITE
+                : CTX_WE_HIT ? 1'b0                       // ctx snapshot write (mk3)
                 : DMA_WE_HIT ? 1'b0                       // MCU-driven copier write
                 : (ROM_HIT & (IS_WRITABLE | IS_FLASHWR)  // IS_FLASHWR: BS pack program data-phase
                   & ~IS_SAVERAM
@@ -1104,9 +1446,9 @@ assign ROM_WE = SD_DMA_TO_ROM
                 : MCU_WE_HIT ? 1'b0
                 : 1'b1;
 
-// force word enable for SA1 and the MCU-driven copier (word mode)
-assign ROM_BHE =  ROM_ADDR0 && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr) && !(!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr);
-assign ROM_BLE = !ROM_ADDR0 && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr) && !(!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr);
+// force word enable for SA1, the MCU-driven copier and ctx (word mode)
+assign ROM_BHE =  ROM_ADDR0 && !(!SD_DMA_TO_ROM && CTX_HIT && CTX_ROM_WORDr) && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr) && !(!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr);
+assign ROM_BLE = !ROM_ADDR0 && !(!SD_DMA_TO_ROM && CTX_HIT && CTX_ROM_WORDr) && !(!SD_DMA_TO_ROM && SA1_ROM_HIT && SA1_ROM_WORDr) && !(!SD_DMA_TO_ROM && DMA_HIT && DMA_ROM_WORDr);
 
 //--------------
 // RAM Pipeline
@@ -1287,6 +1629,14 @@ assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
                          (r213f_enable & ~SNES_PARD) ? 1'b0 :
                          (r2100_enable & ~SNES_PAWR) ? 1'b0 :
                          snoop_4200_enable & ~SNES_WRITE ? 1'b0 :
+`ifndef MK2
+                         // mk3 snapshot: enable the level shifter for the $2020 copier
+                         // (read-back) and while the ctx engine captures a snooped access.
+                         dma_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
+                         (ctx_wr_enable & SNES_SNOOPWR_DATA_OE) ? 1'b0 :
+                         (ctx_pawr_enable & SNES_SNOOPPAWR_DATA_OE) ? 1'b0 :
+                         (ctx_pard_enable & SNES_SNOOPPARD_DATA_OE) ? 1'b0 :
+`endif
                          ( (IS_ROM & SNES_ROMSEL)
                          | (!IS_ROM & !IS_SAVERAM & !IS_WRITABLE)
                          | (SNES_READ_narrow & SNES_WRITE)
@@ -1297,7 +1647,12 @@ assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
  *  a) the SNES wants to read
  *  b) we want to force a value on the bus
  */
-assign SNES_DATABUS_DIR = (~SNES_READ | (~SNES_PARD & (r213f_enable)))
+// Keep the bus SNES -> FPGA (DIR=0) while the ctx engine snoops a PA read/write,
+// so the FPGA captures the byte instead of driving it (else it would fight the
+// PPU/APU on a snooped PARD, e.g. an $2140 APU-port read).  The two SNOOP*_DATA_OE
+// signals are 0 on mk2, collapsing this back to the original (~SNES_READ | ...)
+// condition.  sa1_data_enable is folded in so SA-1 MMIO reads always drive.
+assign SNES_DATABUS_DIR = ((~SNES_READ & ((~SNES_SNOOPPAWR_DATA_OE & ~SNES_SNOOPPARD_DATA_OE) | ROM_HIT | sa1_data_enable)) | (~SNES_PARD & (r213f_enable)))
                            ? (1'b1 ^ (r213f_forceread & r213f_enable & ~SNES_PARD)
                                    ^ (r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE & ~sa1_data_enable))
                            : ((~SNES_PAWR & r2100_enable) ? r2100_forcewrite

@@ -103,6 +103,26 @@ static int gi_font_flush(gi_font_state_t *st, uint8_t *out) {
   return 0;
 }
 
+/* Build "/sd2snes/info/<C>/<stem>" into `out` (bucketed by the ROM's first char, extension
+ * stripped). See gameinfo.h -- shared with the .man viewer (manual.c) so the bucket logic
+ * stays single-sourced. The layout is preserved so callers can index the stem at
+ * out + (sizeof(GAMEINFO_DIR)-1) + 2 (the "<C>/" bucket folder). Bounded. */
+void gameinfo_info_base(const uint8_t *rom_path, char *out, int outsize) {
+  const char *leaf = strrchr((const char *)rom_path, '/');
+  leaf = leaf ? leaf + 1 : (const char *)rom_path;
+  unsigned char c = (unsigned char)leaf[0];
+  if(c >= 'a' && c <= 'z') c -= 32;
+  if(!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))) c = '_';
+  int i = 0;
+  const char *pre = GAMEINFO_DIR;
+  while(*pre && i < outsize - 1) out[i++] = *pre++;    /* "/sd2snes/info/" */
+  if(i < outsize - 1) out[i++] = (char)c;              /* bucket char */
+  if(i < outsize - 1) out[i++] = '/';
+  while(*leaf && i < outsize - 1) out[i++] = *leaf++;  /* "<leaf>" */
+  out[i] = 0;
+  { char *dot = strrchr(out, '.'); if(dot) *dot = 0; } /* strip the extension */
+}
+
 /* dst = a + b, bounded (no snprintf dependency). */
 static void gi_join(char *dst, int dstsize, const char *a, const char *b) {
   int n = strlen(a);
@@ -437,20 +457,9 @@ void gameinfo_load(uint8_t *rom_path) {
    * exists -- the OBJ box-art floated in the band where the .gd cover would be. */
   meta.status   = GAMEINFO_STATUS_OK;
 
-  /* build "/sd2snes/info/<C>/<stem>" (extension stripped). The info files are bucketed by
-   * first character (0-9, A-Z, else '_') into a subfolder so each f_open scans ~one letter's
-   * worth of files, not the whole flat /sd2snes/info (utils/reorg_info.py; bucket logic MUST
-   * match). gi_bucket = the bucket char + '/'. */
-  const char *leaf = strrchr((const char *)rom_path, '/');
-  leaf = leaf ? leaf + 1 : (const char *)rom_path;
-  { unsigned char c = (unsigned char)leaf[0];
-    if(c >= 'a' && c <= 'z') c -= 32;
-    if(!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))) c = '_';
-    char bdir[3]; bdir[0] = (char)c; bdir[1] = '/'; bdir[2] = 0;
-    gi_join(path, sizeof(path), GAMEINFO_DIR, bdir);   /* "/sd2snes/info/D/" */
-    gi_join(base, sizeof(base), path, leaf);           /* "/sd2snes/info/D/<leaf>" */
-  }
-  { char *dot = strrchr(base, '.'); if(dot) *dot = 0; }
+  /* build "/sd2snes/info/<C>/<stem>" (bucketed by first char, extension stripped). Shared with
+   * the .man viewer via gameinfo_info_base so the bucket logic can't drift (utils/reorg_info.py). */
+  gameinfo_info_base(rom_path, base, sizeof(base));
 
   /* /sd2snes/info/<stem>.yml -- now OPTIONAL: a missing .yml is no longer a skip,
    * it just leaves every field empty (filled by the fallbacks below). */

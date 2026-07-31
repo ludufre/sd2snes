@@ -162,15 +162,108 @@
 #define ROOT_DIR                    $C20000
 
 #define NUM_CHEATS                  $FF0700
+#define CHEAT_WIN_BASE              $FF0708 /* absolute base index of the 64-name window RESIDENT in CHEAT_NAMES ($FF8000). MCU-owned (published = 0 at game load and on each CMD_CHEAT_NAMES_WINDOW). The overlay maps an absolute cheat index to its window slot: (idx - CHEAT_WIN_BASE)*CHEAT_NAME_LEN. Free $FF0702..$FF070F gap. Lockstep with SRAM_CHEAT_WIN_BASE_ADDR in src/memory.h. */
 #define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
 #define PPU_CLEAR_GATE             $FF0711 /* pre-boot PPU-clear arm flag, set by firmware in load_rom (= CFG.clear_ppu_on_boot && a patch was applied this load). game_handshake reads it; 1 => jsr clear_ppu_on_boot. Lockstep with SRAM_PPU_CLEAR_GATE_ADDR in src/memory.h; same free gap. */
+#define IGMENU_GATE                 $FF0715 /* in-game TAB menu: igmenu.bin staged+verified flag, armed by firmware igmenu_stage at game load. The $C0 overlay hook reads it; 0 => single-tab fail-safe (proven cheat overlay). Free $FF0701..$FF07FF gap, after SS_GSU_GATE. Lockstep with SRAM_IGMENU_GATE_ADDR in src/memory.h. */
+#define SS_SLOT_STATUS              $FF0716 /* savestate slot occupancy bitmask, bit N-1 = slot N (1..4) has a .state file. Staged by firmware at game load; read by the STATES tab. Lockstep with SRAM_SS_SLOT_STATUS_ADDR in src/memory.h. */
+#define SRM_SLOT_STATUS             $FF0717 /* battery-SRAM slot occupancy bitmask. EnableSramSlots ON: bit i = slot i (0..3: <stem>.srm, <stem>.02/03/04.srm) exists; OFF: bit0 = legacy <stem>.srm exists. Staged by saveinfo_stage at game load, refreshed after autosave; read by the SAVES tab. The selected/next slot is published separately at SAVEINFO+42. Lockstep with SRAM_SRM_SLOT_STATUS_ADDR in src/memory.h. */
+#define SAVEINFO                    $FF0730 /* SAVES tab staging block (48B, clear of the BPS breadcrumbs $FF0720-2E): +0 flags (bit0 game-has-sram, bit1 srm-exists, bit2 autosave-on), +1 size str (16B ASCII NUL), +17 datetime str (24B ASCII NUL), +42 selected/next SRAM slot (0..3; 0 when EnableSramSlots OFF). Slot occupancy bitmask is separate at SRM_SLOT_STATUS $FF0717. Lockstep with SRAM_SAVEINFO_ADDR in src/memory.h. */
+#define MANUAL_META                 $FF0760 /* guides viewer meta (16B, staged at game load): +0 flags (bit0 = >=1 valid guide present, bit1 = transient read-error latch, bit2 = a zoom page is staged and ready in $C5/$C6), +1 npages of guide 0, +2 meta_abi (=MANUAL_META_ABI; shell degrades to "no guides" if != this), +3 staged 1x page, +4 block-in-page, +5 content_rows, +6 zoom nrows, +7..8 zoom pix_h u16 LE, +9 staged zoom page, +10 staged zoom guide. Per-guide metadata lives in MANUAL_GUIDES. Lockstep with SRAM_MANUAL_META_ADDR in src/memory.h. */
+#define MANUAL_META_ABI             $03     /* MANUAL_META+2 sanity value; firmware<->igmenu.bin data-contract. Lockstep with MAN_META_ABI in src/manual.c. (3: title[0] may be a document-type slug) */
+#define MAN_META_F_PRESENT          $01     /* MANUAL_META+0 bit0 */
+#define MAN_META_F_ERROR            $02     /* MANUAL_META+0 bit1: transient read-error latch */
+#define MAN_META_F_ZREADY           $04     /* MANUAL_META+0 bit2: zoom page staged in $C5/$C6 */
+#define MAN_META_ZNROWS             $FF0766 /* u8 tile rows in the staged zoom page (1..MAN_Z_MAX_ROWS) */
+#define MAN_META_ZPIXH              $FF0767 /* u16 LE 2x pixel height; vertical scroll clamps to pix_h-224 so padding never shows */
+#define MAN_META_ZPAGE              $FF0769 /* u8 staged zoom page */
+#define MAN_META_ZGUIDE             $FF076A /* u8 staged zoom guide */
+#define MAN_META_ZENTRYY            $FF076B /* u16 LE: where to start panning when entering zoom from a 1x block (2x pixels into the page) */
+#define MAN_META_ZFIRSTBLK          $FF076D /* u16 LE: first 1x block covering the staged zoom page (after page turns it is not the one we entered from) */
+#define MAN_META_ZNBLK              $FF076F /* u8: how many 1x blocks cover it, so leaving zoom returns to the BAND being read rather than always the first */
+#define MANUAL_S1META               $FF0770 /* scale-1 (1x) page meta, 16B after MANUAL_META: +0 flags (bit0 = staged and ready), +1 nrows, +2..3 pix_h u16 LE, +4 staged page, +5 staged guide, +6..7 page count u16 LE. Lockstep with SRAM_MANUAL_S1META_ADDR in src/memory.h. */
+#define MAN_S1_F_READY              $01
+#define MAN_S1META_NROWS            $FF0771
+#define MAN_S1META_PIXH             $FF0772 /* u16 LE */
+#define MAN_S1META_PAGE             $FF0774
+#define MAN_S1META_NPAGES           $FF0776 /* u16 LE */
+#define CMD_MANUAL_S1PAGE           $46     /* SNES_CMD_MANUAL_S1PAGE: stage one scale-1 (1x) scrollable page into MANUAL_S1TILES/S1TMAP/S1PAL. MCU_PARAM[0] = guide, [1..2] = page u16 LE. Lockstep with src/snes.h. */
+#define CMD_CHEAT_NAMES_WINDOW      $47     /* SNES_CMD_CHEAT_NAMES_WINDOW: stage the sliding 64-name window at MCU_PARAM low16 = absolute base index (from the $D00000 records) into CHEAT_NAMES + publish CHEAT_WIN_BASE. Lets the overlay list ALL cheats. ACK = MCU_CMD cleared. Lockstep with src/snes.h. */
+#define MANUAL_GUIDES               $FF9000 /* guides list (260B, $FF9000..$FF9103, staged at game load; free above CHEAT_NAMES $FF8FFF, below scratchpad $FFFF00): +0 count (0..8), +1 selected (active guide; SNES writes it; default 0), +2..3 rsvd, record[8] of MAN_GD_REC_STRIDE bytes at +MAN_GD_REC0. Lockstep with SRAM_MANUAL_GUIDES_ADDR in src/memory.h. */
+#define MAN_GD_COUNT                $FF9000 /* u8 guide count (0..8) */
+#define MAN_GD_SELECTED             $FF9001 /* u8 active guide the tab writes; default 0 */
+#define MAN_GD_REC0                 $FF9004 /* first record; record k = MAN_GD_REC0 + k*MAN_GD_REC_STRIDE */
+#define MAN_GD_REC_STRIDE           32
+#define MAN_GD_R_PRESENT            0       /* u8: 1 = valid (list compacted -> 0..count-1 present) */
+#define MAN_GD_R_NN                 1       /* u8: physical suffix, 0=".man", 2..8=".0N.man" */
+#define MAN_GD_R_FLAGS              2       /* u8: raw .man header flags -- bit0 = LEGACY quadrant zoom (IGNORE, never produced any more), bit1 = scrollable zoom section present */
+#define MAN_GD_R_NPAGES             3       /* u8 */
+#define MAN_GD_R_NBLOCKS            4       /* u16 LE: 1x blocks */
+#define MAN_GD_R_ZPAGES             6       /* u16 LE: number of scrollable zoom pages (0 = none). A zoom page is a whole PDF page at 2x, so this is normally npages -- NOT nblocks. */
+#define MAN_GD_F_ZOOM2              $02     /* MAN_GD_R_FLAGS bit1 */
+#define MAN_GD_R_TITLE              8       /* title[24] font-encoded NUL-term */
+#define MANUAL_BLOCK                $C30000 /* staged .man block: 512B palette (256x BGR555) + 896 tiles 8bpp tile-order (57344B), DMA-ready. Lockstep with SRAM_MANUAL_BLOCK_ADDR in src/memory.h. */
+#define MANUAL_SHELLSAVE            $C40000 /* viewer's save of the shell mode-5 state: VRAM $0000-$5FFF (24KB, $2139 readback) + CGRAM 512B at +$6000. Lockstep with SRAM_MANUAL_SHELLSAVE_ADDR in src/memory.h. */
+/* --- scrollable 2x zoom page, staged whole into PSRAM by CMD_MANUAL_ZPAGE. Panning costs NO MCU
+   traffic: the viewer just DMAs from here. 512px does not fit one BG layer (10-bit character field
+   = 1024 tiles max), so each tile row is split cols 0-31 -> BG1, cols 32-63 -> BG2, joined by a
+   window at 256-X. Lockstep with the SRAM_MANUAL_Z* defines in src/memory.h. */
+/* --- scale-1 (1x) scrollable page: same machinery as the 2x at 256px wide. 32 tiles/row means a
+   29-row ring is 928 tiles -> ONE layer, no split and no window. Lives in bank C3 (the retired
+   8bpp block's space) so 1x and 2x are both resident and toggling is instant. --- */
+#define MANUAL_S1TILES              $C30000 /* scale-1 tile row r at +r*1024 */
+#define MANUAL_S1TMAP               $C4B000 /* prebuilt tilemap, row r at +r*64 */
+#define MANUAL_S1PAL                $C4C000 /* 8 palettes x 16 BGR555 -> CGRAM 0..127 */
+#define MAN_S1_MAX_ROWS             64      /* 512px at 1x; a page is ~47 rows (A4 46, Legal 53) */
+#define MAN_S1_TILES_W              32      /* tiles across a 256px page */
+#define MAN_S1_ROW_BYTES            1024
+#define MAN_S1_TMAP_STRIDE          64      /* 32 entries x 2B */
+#define MANUAL_ZTILES_A             $C50000 /* BG1 half (cols 0-31) of tile row r at +r*1024; 96 rows -> $C50000-$C67FFF */
+#define MANUAL_ZTILES_B             $C68000 /* BG2 half (cols 32-63) of tile row r at +r*1024; 96 rows -> $C68000-$C7FFFF */
+#define MANUAL_ZTMAP                $C47000 /* prebuilt tilemap entries, row r at +r*128 = 32 words BG1 then 32 words BG2 */
+#define MANUAL_ZPAL                 $C4A000 /* 8 palettes x 16 BGR555 = 256B -> CGRAM 0..127 */
+#define MAN_Z_RING_ROWS             29      /* VRAM ring depth in tile rows: 28 on screen + 1 partial for sub-tile scroll. The MCU bakes slot = r % this into the tilemap words, so it is a LOCKSTEP constant (MAN_Z_RING_ROWS in src/manual.c), not a viewer-local choice. */
+#define MAN_Z_MAX_ROWS              96      /* tile rows in a zoom page (768px of 2x). A zoom page is a WHOLE PDF PAGE, not a 1x band -- panning must be continuous over the entire page. */
+#define MAN_Z_TILE0                 16      /* first image tile index; tiles 0..15 are the OBJ HUD glyphs (OBJ char base is only 16KB-alignable, so both pools start 512B in) */
+#define MAN_Z_TMAP_STRIDE           128     /* bytes per prebuilt tilemap row (64 entries) */
+#define MAN_Z_HALF_BYTES            1024    /* bytes per BG half of one tile row (32 tiles x 32B) */
+#define CMD_MANUAL_BLOCK            $43     /* SNES_CMD_MANUAL_BLOCK: stage a guide block into MANUAL_BLOCK. MCU_PARAM[0..1] = stream block index (LE), [2] = compacted guide (0..7), [3] = mode (bit0 = zoom). Lockstep with src/snes.h. */
+#define CMD_MANUAL_ZPAGE            $45     /* SNES_CMD_MANUAL_ZPAGE: stage one whole 2x zoom page into MANUAL_ZTILES_A/B + ZTMAP + ZPAL. MCU_PARAM[0] = compacted guide (0..7), [1..2] = index u16 LE, [3] = mode: 0 = index is a 1x BLOCK (resolved via the block map; entry Y published in MAN_META_ZENTRYY), 1 = index is a ZOOM PAGE directly (page turns). Re-staging an already-resident page is skipped. Publishes MAN_META_F_ZREADY + ZNROWS/ZPIXH/ZPAGE/ZENTRYY/ZFIRSTBLK. Lockstep with src/snes.h. */
+#define CMD_SET_SRM_SLOT           $44     /* SNES_CMD_SET_SRM_SLOT: persist the selected SRAM slot (MCU_PARAM low byte 0..3) to the <stem>.slot sidecar; refreshes SAVEINFO+42 / SRM_SLOT_STATUS. Applies on next game load (never changes the live slot). Lockstep with src/snes.h. */
+#define CFG_ENABLE_GAME_MANUAL      CFG_ADDR+$0145 /* EnableGameManual toggle (default ON); next free after CFG_BUS_COMPAT $0144. Lockstep with src/cfg.h. */
+#define IGMENU_ABI_VERSION          $03     /* igmenu.bin ABI version. Checked by BOTH the MCU (igmenu_stage: magic+version+crc) AND the overlay ($C20004 vs this). Bump on ANY layout/ABI change so a mismatched bin degrades to the fail-safe. v3 requires the theme block the overlay stages at IGM_THM_* before dispatching the shell. Lockstep with IGMENU_ABI_VERSION in src/memory.h. */
+#define IGM_POS_MAGIC               $5A34   /* in-game menu session-persist magic (bumped on any change to what active_tab indexes / the persisted layout). Written by igmenu_main to IGM_POS_MAGIC_ADDR; tested by BOTH the shell (manual position + tab) and the $C0 overlay init (cheat-list top/selrow keep). MCU clears the ADDR on every game load. */
+#define IGM_POS_MAGIC_ADDR          $F4819E /* = man_pos_magic (igmenu.a65) = IGMENU_PERSIST_MAGIC_ADDR (src/memory.h). Lockstep. */
+#define IGMENU_ENTRY                $C20008 /* igmenu.bin entry (jml igmenu_main); the $C0 hook does jsl here after the gate+version guard. Header: $C20000 "IGMN" magic, $C20004 version, $C20006 crc16(body), $C20008 jml. Loaded to PSRAM SRAM_DIR_ADDR ($C20000, menu dir buffer, dormant in-game) -- reachable in-game only under IS_PATCH (snescmd_unlock). */
+/* ---- in-game TAB menu theme hand-off (staged block in PSRAM $F4) ----
+   igmenu.bin is a SEPARATE link and sees none of the m3nu symbols, but the cheat
+   overlay object ($C1, part of the m3nu link) does -- and in-game those symbols
+   address the menu image RESIDENT in PSRAM, which theme_apply already overwrote
+   with the active theme (the same mechanism that lets the overlay call genfonts).
+   So the overlay copies the themed bytes into this block right before the
+   jsl $c20008, and the shell reads only from here. Written by snes/cheatoverlay.a65
+   (ovl_stage_theme), read by snes/igmenu.a65. Lives in the once-free $F48252..$F48FFF
+   gap -- above the igmenu Slice-2 scratch ($F48240..$F4824F), clear of OVL_RB
+   ($F48200..$F4823F) and OVL_TMBUF ($F49000..$F499FF) -- now occupied up to $F48397:
+   IGM_THM_* $F48260-$F482D2, ovl_sb_* $F482DE-$F482E7 (cheatlist.i65), OVL_CUR_OFF
+   $F482E8, ig_hdma_mask + BAR scratch $F482F0-$F482FF and theme WRAM/DMA-reg saves
+   $F48300-$F483A3 (igmenu.a65); free again from $F483AE (ig_win_x..h $F483A4-A7, tint $F483A8, pos_focus $F483AA, pos_slot $F483AC). */
+#define IGM_THM_MAGIC               $F48260 /* 1B: $A5 = staged block valid, written LAST by the overlay before the jsl $c20008; 0 = invalid (aborted/never staged) and the shell must fall back to its baked colours. */
+#define IGM_THM_GRAD                $F48261 /* 55B: backdrop gradient blob ([count,lo,hi]* terminated by a 0 count), copied from the THEMED hdma_pal_src. Same 55-byte region size main.a65 DMAs into the hdma_pal WRAM buffer. */
+#define IGM_THM_GRAD_A              $8261   /* 16-bit abs alias of IGM_THM_GRAD for abs,Y reads under DBR=$F4 (igt_grad_build walks two cursors and the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with IGM_THM_GRAD above -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65. */
+#define IGM_THM_MATH                $F48298 /* 19B: colour-math table of the selection BAR, copied RAW from hdma_math_src -- so it already carries the NORMAL bar colour in its COLDATA bytes. */
+#define IGM_THM_BARCOL              $F482AB /* 8B: BAR colours from hdma_bar_color_src -- 4B normal then 4B highlight (active editing). The shell applies a group the way set_bar_color (ui.a65) does: byte i overwrites table offset 2+3*i (2, 5, 8, 11) of its WRAM copy of IGM_THM_MATH. The staged table is RAW, so only the highlight group ever NEEDS patching in. */
+#define IGM_THM_PAL                 $F482B3 /* 32B: four 8-byte (4 colours x BGR555) sub-palettes lifted out of the menu's raw 512B `palette` block: +0 pal0 (text, CGRAM 0-3), +8 pal6 (grey, CGRAM 24-27), +16 pal2 (green, CGRAM 8-11), +24 pal3 (frame, CGRAM 12-15). */
+#define OVL_CUR_OFF                 $F482E8 /* 1B: 0 = the cheat list draws its own '>' cursor (the $C0 fail-safe path); 1 = the $C2 shell suppresses it because the BAR marks the selection. Zeroed by the overlay on EVERY open, BEFORE the first list paint (ss_ovl_draw_full_row is the reader) -- PSRAM $F4 is not auto-cleared and survives reopens. The reader does a 16-bit lda + and #$00ff, so $F482E9 is fetched and discarded: keep it unallocated. */
+#define CHEAT_MASTER                $FF071A /* master cheat switch mirror (1 = cheats globally enabled). Published by the firmware in cheat_program (= CFG.enable_cheats) and kept in sync when the L+R+Start+A/B combos are served (main.c). The in-game CHEATS tab reads it to draw the status line and writes it when X toggles the master. The ACTUAL switch is the FPGA's cheat_enable register: writing $82/$83 to MCU_CMD ($002A00) under snescmd_unlock is decoded by cheat.v -- this byte is only the mirror the UI reads back. Free $FF0701..$FF07FF gap, after SS_SDD1_GATE. Lockstep with SRAM_CHEAT_MASTER_ADDR in src/memory.h. */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
 #define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
 #define CHEAT_FLAGS                 $FF0500 /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle, MCU also keeps it in sync. */
-#define CHEAT_NAMES                 $FF0800 /* in-game cheat overlay: first CHEAT_OVL_MAX names, CHEAT_NAME_LEN bytes each, staged by firmware at game load ($D00000 records are game ROM in-game). 64*32=2KB fills $FF0800..$FF0FFF. */
-#define CHEAT_OVL_MAX               64      /* in-game overlay covers the first 64 cheats */
-#define CHEAT_NAME_LEN              32      /* bytes per staged in-game name */
+#define CHEAT_NAMES                 $FF8000 /* in-game cheat overlay: first CHEAT_OVL_MAX names, CHEAT_NAME_LEN bytes each, staged by firmware at game load ($D00000 records are game ROM in-game). 64*64=4KB fills $FF8000..$FF8FFF. Lockstep with SRAM_CHEAT_NAMES_ADDR in src/memory.h. */
+#define CHEAT_OVL_MAX               64      /* size of the RESIDENT in-game name window: CHEAT_NAMES holds 64 names for [CHEAT_WIN_BASE, +64). The list slides the window (CMD_CHEAT_NAMES_WINDOW) to cover all cheats up to CHEAT_LIST_MAX. */
+#define CHEAT_LIST_MAX              512     /* hard cap on listed cheats (= CHEAT_RECORD_MAX in src/cheat.h); the TRUE count comes from NUM_CHEATS. */
+#define CHEAT_NAME_LEN              64      /* bytes per staged in-game name (power of 2 -> (idx-base)*LEN is a shift) */
 
 #define SPC_DATA                    $FD0000
 #define SPC_HEADER                  $FE0000
@@ -348,6 +441,8 @@
 #define CFG_GAME_INFO_MUSIC             CFG_ADDR+$0141 /* play the clip's .pcm soundtrack (requires CFG_GAME_INFO_VIDEO) */
 #define CFG_ENABLE_BPS_COPIER           CFG_ADDR+$0142 /* apply BPS via FPGA copier; lockstep with src/cfg.h */
 #define CFG_CLEAR_PPU_ON_BOOT           CFG_ADDR+$0143 /* clear VRAM/CGRAM/OAM before a patched ROM boots (romhacks that skip PPU init); lockstep with src/cfg.h */
+#define CFG_BUS_COMPAT                  CFG_ADDR+$0144 /* bus-timing compat: narrow databus window (v1.11.0) for timing-sensitive 1-CHIP consoles; drives featurebits[13]; lockstep with src/cfg.h */
+#define CFG_ENABLE_SRAM_SLOTS           CFG_ADDR+$0146 /* multi-slot battery SRAM -- ALWAYS ON since 2.15 (the EnableSramSlots YAML flag + menu toggle were retired; cfg.c forces the byte to 1, kept at $0146 for offset stability). The SAVES tab is the 4-slot selector. Lockstep with src/cfg.h. */
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */

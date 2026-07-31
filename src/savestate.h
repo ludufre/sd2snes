@@ -40,6 +40,7 @@ void savestate_program(void);
 void savestate_set_inputs(void);
 void savestate_set_fixes(void);
 void savestate_enable_handler(int enable);
+void savestate_slot_status_stage(void);
 void load_backup_state(void);
 void save_backup_state(void);
 

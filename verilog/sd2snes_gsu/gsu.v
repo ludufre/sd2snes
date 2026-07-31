@@ -21,6 +21,9 @@
 module gsu(
   input         RST,
   input         CLK,
+  // in-game cheat overlay: freeze the GSU execution (clock enable); the ROM/RAM
+  // fetch FSMs free-run and drain any in-flight access (see ROM_STATE/RAM_STATE).
+  input        pause,
 
   input  [23:0] SAVERAM_MASK,
   input  [23:0] ROM_MASK,
@@ -349,7 +352,10 @@ always @(posedge CLK) begin
   end
   else begin
     gsu_cycle_r  <= gsu_cycle_r + 1;
-    gsu_clock_en <= (gsu_cycle_r == 2'b10);
+    // pause: hold the execution clock-enable low.  The divider keeps counting, so
+    // the GSU resumes in phase; the memory FSMs are NOT gated and drain in-flight
+    // fetches (the CX4 core taught us freezing mid-fill corrupts cached state).
+    gsu_clock_en <= ~pause & (gsu_cycle_r == 2'b10);
   end
 end
 

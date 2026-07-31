@@ -22,6 +22,30 @@ savestate_handler:
 
 ; print "Savestate Bank Starting at: ", pc
 	php : rep #$30 : .al : .xl : pha
+	; Fast-exit on mid-frame IRQs (vblank flag clear): with the IRQ hook active
+	; every IRQ lands here, and games like Super Mario RPG fire timing-critical
+	; H-IRQs mid-frame -- running the full handler inside those delays the game
+	; ISR every frame and can lose an interrupt-reconfig race (seen in hardware
+	; as a hard freeze minutes into gameplay with $4200 stuck at $01). The combo
+	; probe only needs the once-per-frame vblank entry (NMI or vblank IRQ).
+	sep #$20 : .as
+	lda @$004212
+	bmi +                        ; vblank entry -> full probe (unchanged)
+	; Mid-frame entry (IRQ).  Games like Star Ocean run with NMI OFF and a V-IRQ at
+	; V=0 as the frame tick (measured: 58/58 handler entries at V=0, 0% in vblank),
+	; so the vblank gate alone rejects every entry and the overlay can never open.
+	; Cheap pre-check on the pad the nmihook stub just stored to NMI_PAD: only the
+	; physical overlay combo proceeds to the full probe; anything else exits as fast
+	; as before (~20 cycles), preserving the anti-freeze property for raster-H-IRQ
+	; games (the SMRPG class).  SEP only sets P bits, so the CMP's Z flag survives.
+	rep #$20 : .al
+	lda @NMI_PAD
+	and #$4230                   ; L+R+Y+Left
+	cmp #$4230
+	sep #$20 : .as
+	beq +                        ; combo physically held -> proceed to the probe
+	jmp ss_exit
++	rep #$20 : .al
 	; nmihook already handled button input
 	lda @NMI_PAD
 	sta @CS_INPUT_NEXT
@@ -172,7 +196,7 @@ return_wait_irq:
 	
 ; Code to run before returning back to the game
 ss_exit
-  rep #$30 : .al : .xl : pla : plp
+	rep #$30 : .al : .xl : pla : plp
 	rtl ; go back to in-game hook
 
 ; SMC (Self Modifying Code) to init on first pass
@@ -198,6 +222,12 @@ ss_init
 
 	lda #$0000
 	sta @CS_SAVE_REQ
+	; Clear the combo probe's edge state on first handler entry of this game load.
+	; These live in PSRAM and survive menu resets/game reloads; a stale CUR equal to
+	; the overlay-opening combo makes the edge check see "already held" and randomly
+	; swallow the combo (mirrors the same clear on overlay exit in cheatoverlay.a65).
+	sta @CS_INPUT_CUR
+	sta @CS_INPUT_PREV
 	ply
 	plx
 	pla

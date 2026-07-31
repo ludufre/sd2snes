@@ -203,6 +203,91 @@ text_lang_ptbr                    .byt "Portugu", 135, "s", 0
 text_lang_es                      .byt "Espa", 154, "ol", 0
 text_lang_de                      .byt "Deutsch", 0
 text_lang_fr                      .byt "Fran", 141, "ais", 0
+; ---- In-game TAB menu HELP tab (Phase 2). These are the ENGLISH base; the
+;      per-language dicts (utils/lang_*.py) carry the translations. build_const.py
+;      pools them into bank $C1 (the menu never renders them), and the SEPARATE
+;      generator utils/gen_igmenu_lang.py re-reads THESE labels + the same dicts to
+;      emit igmenu_lang.i65 (font-encoded 5-lang tables) linked into igmenu.bin ($C2).
+;      Keep the label set in lockstep with HELP_LABELS in gen_igmenu_lang.py and the
+;      igm_help_rows/igm_help_cols tables in igmenu.a65 (same count + order).
+text_igm_hdr_controls             .byt "IN-GAME CONTROLS", 0
+text_igm_open                     .byt "Open menu:   L+R+Y+Left", 0
+text_igm_save                     .byt "Save state:  Start+R", 0
+text_igm_load                     .byt "Load state:  Start+L", 0
+text_igm_slot                     .byt "Choose slot: Select + D-Pad", 0
+text_igm_reset                    .byt "Reset to menu: L+R+Select+X", 0
+text_igm_hdr_keys                 .byt "MENU KEYS", 0
+text_igm_tab                      .byt "L / R:     switch tab", 0
+text_igm_page                     .byt "Left/Right: change page", 0
+text_igm_nav                      .byt "Up / Down:  move", 0
+text_igm_act                      .byt "A: apply     X: all", 0
+text_igm_close                    .byt "B: close menu", 0
+text_igm_note                     .byt "Some combos set in the Options menu", 0
+; ---- In-game TAB menu STATES tab (Phase 3). ENGLISH base; per-language dicts carry
+;      the translations. build_const.py pools them into $C1 (menu never renders them),
+;      gen_igmenu_lang.py re-reads THESE + the dicts to emit igm_states_tbl in
+;      igmenu_lang.i65 ($C2). Lockstep with STATES_LABELS in gen_igmenu_lang.py and the
+;      IGM_ST_* indices in igmenu.a65 (same count + order). Column layout in igmenu.a65
+;      caps the slot word (text_igm_st_slot) at 8 cols -- guarded in gen_igmenu_lang.py.
+text_igm_st_title                 .byt "SELECT SAVE STATE SLOT", 0
+text_igm_st_slot                  .byt "SLOT", 0
+text_igm_st_full                  .byt "OCCUPIED", 0
+text_igm_st_empty                 .byt "EMPTY", 0
+text_igm_st_hint                  .byt "Start+R save   Start+L load", 0
+text_igm_st_disabled              .byt "Save state slots disabled", 0
+; ---- In-game TAB menu tab-bar labels (i18n). ENGLISH base; per-language dicts carry the
+;      translations. gen_igmenu_lang.py re-reads THESE + the dicts to emit igm_tab_tbl in
+;      igmenu_lang.i65 ($C2), read by igmenu.a65's tab bar. Lockstep with TAB_LABELS in
+;      gen_igmenu_lang.py (same count + order). Capped at 8 encoded cols (IGM_TAB_FIELD in
+;      igmenu.a65) -- guarded in gen_igmenu_lang.py (TAB_LABEL_MAX).
+text_igm_tab_cheats               .byt "CHEATS", 0
+text_igm_tab_states               .byt "STATES", 0
+text_igm_tab_saves                .byt "SAVES", 0
+text_igm_tab_help                 .byt "HELP", 0
+text_igm_tab_manual               .byt "GUIDES", 0
+; ---- In-game TAB menu SAVES tab (Phase 4, status-only). ENGLISH base; per-language dicts
+;      carry the translations. gen_igmenu_lang.py re-reads THESE + the dicts to emit
+;      igm_saves_tbl in igmenu_lang.i65 ($C2), read by igmenu.a65's SAVES tab. Lockstep
+;      with SAVES_LABELS + the IGM_SV_* indices in igmenu.a65 (same count + order). Field
+;      labels (file/size/write/autosave) capped at 14 encoded cols in gen_igmenu_lang.py so
+;      label + value never collide; status tokens capped at 24; centered lines <= overlay.
+text_igm_sv_title                 .byt "GAME SAVE", 0
+text_igm_sv_nosram                .byt "This game has no battery save", 0
+text_igm_sv_file                  .byt ".srm file:", 0
+text_igm_sv_exists                .byt "EXISTS", 0
+text_igm_sv_missing               .byt "MISSING", 0
+text_igm_sv_size                  .byt "Size:", 0
+text_igm_sv_write                 .byt "Last write:", 0
+text_igm_sv_autosave              .byt "Autosave:", 0
+text_igm_sv_on                    .byt "ON", 0
+text_igm_sv_off                   .byt "OFF", 0
+text_igm_sv_hint_on               .byt "Save is written automatically while playing", 0
+text_igm_sv_hint_off              .byt "Autosave off - save from the game menu", 0
+; CICLO 2 SRAM multi-slot selector (SAVES tab when EnableSramSlots on). slot word <=8 cols.
+text_igm_sv_slottitle             .byt "SELECT SRAM SLOT", 0
+text_igm_sv_slot                  .byt "SLOT", 0
+text_igm_sv_slothint              .byt "Applies on the next game boot", 0
+; ---- In-game TAB menu MANUAL tab (Phase 5, image viewer). ENGLISH base; per-language dicts
+;      carry the translations. gen_igmenu_lang.py re-reads THESE + the dicts to emit
+;      igm_manual_tbl in igmenu_lang.i65 ($C2), read by igmenu.a65's MANUAL tab. Lockstep
+;      with MANUAL_LABELS + the IGM_MN_* indices in igmenu.a65 (same count + order).
+text_igm_mn_title                 .byt "GAME MANUAL", 0
+text_igm_mn_read                  .byt "A: Read the manual", 0
+text_igm_mn_pages                 .byt "pages", 0
+text_igm_mn_notfound              .byt "Manual not found", 0
+text_igm_mn_error                 .byt "Error loading manual", 0
+; CICLO 2 multi-guide extras: fallback title word ("GUIDE N") + guide-list header.
+text_igm_mn_guide                 .byt "GUIDE", 0
+text_igm_mn_select                .byt "SELECT A GUIDE", 0
+text_igm_mn_keys1                 .byt "A: zoom 2x   L/R: change page", 0
+text_igm_mn_keys2                 .byt "D-Pad: pan   B: back", 0
+; document-type labels for an official GameDB doc — chosen by the `.man` header slug (title[0]=1..5).
+; Lockstep with IGM_MN_SLUG_* in igmenu.a65 and MANUAL_TYPE_SLUG_ID in the gamedb.
+text_igm_mn_slug_manual           .byt "Manual", 0
+text_igm_mn_slug_guide            .byt "Guide", 0
+text_igm_mn_slug_map              .byt "Map", 0
+text_igm_mn_slug_insert           .byt "Insert", 0
+text_igm_mn_slug_other            .byt "Other", 0
 mtext_cfg_time                    .byt "Set Clock", 0
 mtext_cfg_bsx                     .byt "BS-X Settings", 0
 mtext_cfg_browser                 .byt "Browser Settings", 0
@@ -240,6 +325,8 @@ mtext_ingame_shortreset           .byt "Reset to menu", 0
 mtext_ingame_enable               .byt "In-game hook", 0
 mtext_ingame_buttons              .byt " ",129,"In-game buttons", 0
 mtext_ingame_cheat_overlay        .byt " ",129,"Cheat menu", 0
+mtext_ingame_game_manual          .byt " ",129,"Game manual", 0
+mtext_ingame_sram_slots           .byt " ",129,"SRAM slots", 0
 mtext_ingame_holdoff              .byt " ",129,"Initial holdoff", 0
 mtext_ingame_savestate            .byt "In-game savestates", 0
 mtext_savestate_slots             .byt " ",129,"Savestate slots", 0
@@ -303,6 +390,8 @@ mdesc_ingame_shortreset           .byt "Go back to menu on short reset (Off/On/F
 mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
 mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
 mdesc_ingame_cheat_overlay        .byt "In-game cheat menu (hold L+R+Y+Left) to toggle cheats live. Requires in-game hook. Does not work on special-chip games.", 0
+mdesc_ingame_game_manual          .byt "Show the game manual in the in-game menu (Manual tab). Needs a <rom>.man file in /sd2snes/info (same place as the game-info assets).", 0
+mdesc_ingame_sram_slots           .byt "Multiple battery-save slots. The in-game SAVES tab picks the active slot (applies on the next game boot). Off keeps the single <rom>.srm.", 0
 mdesc_ingame_holdoff              .byt "Wait 10 seconds before enabling hook (helps some games boot with hook enabled)", 0
 mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+R / Load - Start+L", 0
 mdesc_savestate_slots             .byt "Enable savestate slots. Select+Dpad: Each direction is a slot to choose", 0

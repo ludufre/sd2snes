@@ -26,6 +26,10 @@ module cx4(
   input SNES_VECT_EN,
   input reg_we_rising,
   input CLK,
+  input pause,        // in-game cheat overlay: freeze the coprocessor (cache/DMA/CPU
+                      // FSMs) so it neither drifts nor contends the bus while the SNES
+                      // CPU is frozen in the overlay.  Transparent -- state is held,
+                      // resumes exactly on release ($202C, driven from main.v).
   input [7:0] BUS_DI,
   output [23:0] BUS_ADDR,
   output BUS_RRQ,
@@ -314,6 +318,11 @@ reg [9:0] cx4_pgmrom_addr;
 reg [8:0] cache_count;
 initial cache_count = 9'b0;
 
+// NOT pause-gated: the cache-fill pipe must DRAIN an in-flight fill during the
+// overlay pause.  Freezing it mid-fill corrupts the cached program (caches only
+// refill on page switch), and the CX4-built sprite table then comes out garbled
+// on every frame after resume, in every scene (seen in HW).  With the CPU state
+// machine frozen and the SNES frozen, nothing kicks a new fill: it just drains.
 always @(posedge CLK) begin
   case(CACHE_ST)
     ST_CACHE_IDLE: begin
@@ -380,6 +389,7 @@ wire [7:0] cx4_datram_di = cx4_busy[BUSY_DMA] ? BUS_DI : cx4_cpu_datram_di[7:0];
 reg [15:0] dma_count;
 initial dma_count = 16'b0;
 
+// NOT pause-gated: same drain rationale as the cache pipe above.
 always @(posedge CLK) begin
   case(DMA_ST)
     ST_DMA_IDLE: begin
@@ -488,12 +498,12 @@ reg op_jump;
 reg condtrue;
 reg mul_strobe = 0;
 
-always @(posedge CLK) begin
+always @(posedge CLK) if(~pause) begin
   if(cpu_go_en_r) cx4_busy[BUSY_CPU] <= 1'b1;
   else if(op == OP_HLT) cx4_busy[BUSY_CPU] <= 1'b0;
 end
 
-always @(posedge CLK) begin
+always @(posedge CLK) if(~pause) begin
   case(op_sa)
     2'b00: cpu_sa <= cpu_a;
     2'b01: cpu_sa <= cpu_a << 1;
@@ -505,7 +515,7 @@ end
 reg jp_docache;
 initial jp_docache = 1'b0;
 
-always @(posedge CLK) begin
+always @(posedge CLK) if(~pause) begin
   mul_strobe <= 1'b0;
   case(CPU_STATE)
     ST_CPU_IDLE: begin
@@ -838,7 +848,7 @@ initial BUSRD_STATE = ST_BUSRD_IDLE;
 reg cpu_bus_rq2;
 always @(posedge CLK) cpu_bus_rq2 <= cpu_bus_rq;
 
-always @(posedge CLK) begin
+always @(posedge CLK) if(~pause) begin
   if(CPU_STATE == ST_CPU_2
      && (op == OP_ST || op == OP_SWP)
      && op_param == 8'h03)
@@ -863,7 +873,7 @@ always @(posedge CLK) begin
 end
 
 // gpr write, either by CPU or by MMIO
-always @(posedge CLK) begin
+always @(posedge CLK) if(~pause) begin
   if(CPU_STATE == ST_CPU_2
           && (op == OP_ST || op == OP_SWP)
           && (op_param[7:4] == 4'h6)) begin
@@ -875,7 +885,7 @@ always @(posedge CLK) begin
 end
 
 // external multiplier
-always @(posedge CLK) begin
+always @(posedge CLK) if(~pause) begin
   if(mul_strobe) begin
     cpu_mul_a <= cpu_a;
     cpu_mul_b <= cpu_idb;

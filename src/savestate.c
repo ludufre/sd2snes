@@ -16,10 +16,64 @@
 extern cfg_t CFG;
 extern snes_romprops_t romprops;
 
+/* Scan the SD for the 4 possible savestate slot files of the game being loaded and
+   publish an occupancy bitmask (bit N-1 = slot N has <rom>0N.state) to
+   SRAM_SS_SLOT_STATUS_ADDR for the in-game STATES tab.  Names are built EXACTLY as
+   load/save_backup_state build them (same patch-aware ssbase, same SS_BASEDIR, same
+   "%02d.state" format) so the mask matches the real files.  Bounded (4 cheap f_stats,
+   no FILINFO fetched) and runs at game-load, never during a freeze.  ALWAYS writes the
+   byte -- even 0 -- so a previous game's occupancy is never left stale.  The states dir
+   not existing simply yields mask 0 (every f_stat fails); no folder is created here. */
+void savestate_slot_status_stage(void) {
+  char line[256];
+  char extend[10];
+  uint8_t mask = 0;
+  int slot;
+  cfg_get_listed_game(LAST_FILE, file_lfn, 0);
+  char *ssbase = current_ips_srm_source[0] ? (char*)current_ips_srm_source : (char*)file_lfn;
+  for(slot = 1; slot <= 4; slot++) {
+    strcpy(line, SS_BASEDIR);
+    snprintf(extend, sizeof(extend), "%02d.state", slot);
+    append_file_basename(line, ssbase, extend, sizeof(line));
+    if(f_stat((const TCHAR*)line, NULL) == FR_OK) {
+      mask |= (uint8_t)(1 << (slot - 1));
+    }
+  }
+  sram_writebyte(mask, SRAM_SS_SLOT_STATUS_ADDR);
+  file_res = FR_OK;
+}
+
 void savestate_program() {
-  if(romprops.fpga_conf != NULL
-     && romprops.fpga_conf != FPGA_BASE
-     /* && romprops.fpga_conf != FPGA_DSP */) {
+  /* Publish savestate slot occupancy for the STATES tab on EVERY game load, BEFORE the
+     core gate below.  Placing it here (not after the early return) means occupancy stays
+     fresh even on overlay-only / unsupported cores, and it never goes stale because
+     savestate_program runs on every load. */
+  savestate_slot_status_stage();
+  /* The cheat overlay needs, on the FPGA core: the NMI/IRQ savestate hook + the $C0-FF
+     IS_PATCH identity window (so the handler executes from menu PSRAM) + a shadow of the
+     write-only $21xx/$42xx registers read back at $F90500/$F90700.  VRAM/CGRAM it reads
+     back directly via $2139/$213B, so it does NOT need the full ctx.v mirror or the
+     $2020 copier.  BASE/DSP/SA-1 carry that shadow inside ctx.v; the coprocessor cores
+     OBC1, S-DD1, CX4 and GSU instead get a small standalone regshadow.v BRAM (see their
+     verilog/), which is all the overlay needs -- so the overlay runs there too.  On the
+     CX4 core the $FFE0-$FFFF vector override (cx4_active) is suppressed while the hook
+     owns the vectors; on SA-1 the autonomous CPU is halted (snapshot_pause / $202C); on
+     GSU the coprocessor is auto-paused and the ROM arbiter yields to the SNES for the
+     duration of the hook (the handler runs from PSRAM, which the GSU would otherwise
+     starve under RON).
+     Full in-game SAVESTATES still require the base ctx copier (kept base-only below); the
+     coprocessor cores are overlay-only.  Cores still WITHOUT the overlay machinery:
+     SPC7110, SGB.  Key the gate on the core, not the chip flags. (Pointer
+     compare against the FPGA_* path literals -- same idiom as FPGA_BASE.) */
+  int core_has_snapshot = (romprops.fpga_conf == NULL)
+                       || (romprops.fpga_conf == FPGA_BASE)
+                       || (romprops.fpga_conf == FPGA_DSP)
+                       || (romprops.fpga_conf == FPGA_SA1)
+                       || (romprops.fpga_conf == FPGA_OBC1)
+                       || (romprops.fpga_conf == FPGA_SDD1)
+                       || (romprops.fpga_conf == FPGA_CX4)
+                       || (romprops.fpga_conf == FPGA_GSU);
+  if(!core_has_snapshot) {
     savestate_enable_handler(0);
     return;
   }
@@ -29,19 +83,20 @@ void savestate_program() {
  * 2C00 "EXE" hook is now left alone so it doesn't clash with USB hook features
  */
 
-  /* The in-game cheat overlay's combo probe (L+R+Y+Left) lives inside this savestate
-     handler, so the handler must run whenever the overlay is usable -- even with in-game
-     savestates OFF.  Gate the overlay on the in-game hook (matches the menu greying via
-     mfunc_isenabled_hooks) plus its own toggle, minus enhancement-chip games (the savestate
-     machinery the overlay reuses is unsupported there -- same list as cheat.c). */
-  uint8_t special_chip = romprops.has_dspx || romprops.has_cx4 || romprops.has_obc1
-                      || romprops.has_gsu  || romprops.has_sa1 || romprops.has_sdd1
-                      || romprops.has_spc7110;
-  int overlay_only = !CFG.enable_ingame_savestate
-                  && CFG.enable_ingame_hook && CFG.enable_cheat_overlay && !special_chip;
+  /* In-game savestates stay OFF on the DSP and SA-1 cores: a save/load resumes later with
+     the coprocessor's internal state unrestored. The overlay resumes immediately and never
+     restores the coprocessor, so it is fine there. Hence savestates require a plain base
+     core, while the overlay just needs the in-game hook (matches the menu greying via
+     mfunc_isenabled_hooks) plus its own toggle. The overlay probe (L+R+Y+Left) lives inside
+     this handler, so the handler must be installed whenever the overlay is usable -- even
+     with savestates OFF. */
+  int savestate_ok = CFG.enable_ingame_savestate
+                  && (romprops.fpga_conf == NULL || romprops.fpga_conf == FPGA_BASE);
+  int overlay_only = !savestate_ok
+                  && CFG.enable_ingame_hook && CFG.enable_cheat_overlay;
 
-  savestate_enable_handler(CFG.enable_ingame_savestate || overlay_only);
-  if(CFG.enable_ingame_savestate) {
+  savestate_enable_handler(savestate_ok || overlay_only);
+  if(savestate_ok) {
     sram_writeshort(0x0101, SS_REQ_ADDR);
     sram_writebyte(CFG.loadstate_delay, SS_DELAY_ADDR);
     sram_writebyte(CFG.enable_savestate_slots, SS_SLOTS_ADDR);
@@ -291,6 +346,13 @@ void save_backup_state() {
   append_file_basename(line, ssbase, extend, sizeof(line));
 
   save_sram((uint8_t*) line, 0x50000L, 0xF00000L);
+  /* Reflect fresh occupancy for the STATES tab without a re-scan: OR this slot's bit
+     into the published mask. */
+  if(slot >= 1 && slot <= 4) {
+    uint8_t st = sram_readbyte(SRAM_SS_SLOT_STATUS_ADDR);
+    st |= (uint8_t)(1 << (slot - 1));
+    sram_writebyte(st, SRAM_SS_SLOT_STATUS_ADDR);
+  }
   // clear the busy bit in the slot
   sram_writebyte(slot, SS_SLOTS_ADDR);
 }

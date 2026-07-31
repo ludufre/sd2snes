@@ -54,6 +54,7 @@ void save_during_msu_shortreset(void) {
   if(romprops.ramsize_bytes && fpga_test() == FPGA_TEST_TOKEN) {
     writeled(1);
     save_srm(file_lfn, romprops.ramsize_bytes, SRAM_SAVE_ADDR);
+    if(!file_res) saveinfo_stage(file_lfn);  /* keep the in-game SAVES tab block fresh */
     writeled(0);
   }
   snes_reset(0);
@@ -80,6 +81,7 @@ void msu_savecheck(int immediate) {
     if(msu_last_crc != currentcrc) {
       writeled(1);
       save_srm(file_lfn, romprops.ramsize_bytes, SRAM_SAVE_ADDR);
+      if(!file_res) saveinfo_stage(file_lfn);  /* keep the in-game SAVES tab block fresh */
       writeled(0);
       msu_last_crc = currentcrc;
     }

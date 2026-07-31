@@ -108,6 +108,12 @@ typedef struct __attribute__((__packed__)) _gameinfo_meta {
   uint16_t fmv_frames;        /* +411 ($19B) total FMV frames (info/debug; the MCU loops) */
 } gameinfo_meta_t;            /* 413 bytes */
 
+/* Build "/sd2snes/info/<C>/<stem>" into `out` (bucketed by the ROM's first char -- 0-9/A-Z,
+ * else '_' -- extension stripped): the shared derivation for every /sd2snes/info asset. The
+ * in-game manual viewer (manual.c) reuses this so its bucket logic can NEVER drift from the
+ * game-info one (utils/reorg_info.py). Bounded; `out` holds at least outsize chars. */
+void gameinfo_info_base(const uint8_t *rom_path, char *out, int outsize);
+
 /* Parse /sd2snes/info/<rom>.yml (optional), stage the band image (<rom>.fmv animated,
  * else <rom>.gd static, else the sibling <rom>.cov OBJ fallback), write the meta
  * struct. Bounded + fail-safe; never hangs. mk3 always reports status=OK. */

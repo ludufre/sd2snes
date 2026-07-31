@@ -76,6 +76,12 @@ module sa1(
 
   input         SPEED,
 
+  // Transparent FPGA-side halt for clean savestate/cheat-overlay snapshots (mk3).
+  // While high the SA-1 CPU stops advancing but CCNT_r and all registers are
+  // preserved, so it resumes exactly where it paused when the bit clears.  Tied
+  // to 0 on mk2 (no snapshot machinery there), leaving the guards unchanged.
+  input         snapshot_pause,
+
   // BS Memory Pack slot present (FEAT_BSSLOT): redirect SA-1-side ROM reads of
   // MMC block >= 4 to the pack (same as the S-CPU path in address.v).
   input         bs_slot_en,
@@ -2580,7 +2586,7 @@ always @(posedge CLK) begin
           exe_fetch_addr_r <= {8'h00,CRV_r};
         end
 
-        if (~(CCNT_r[`CCNT_SA1_RESB] | CCNT_r[`CCNT_SA1_RDYB]) & sa1_clock_en) begin
+        if (~(CCNT_r[`CCNT_SA1_RESB] | CCNT_r[`CCNT_SA1_RDYB] | snapshot_pause) & sa1_clock_en) begin
           exe_fetch_size_r <= 0;
           exe_mmc_byte_total_r <= 1;
           exe_data_word_r <= 0;
@@ -3240,7 +3246,7 @@ always @(posedge CLK) begin
           // reset internal PCs to help with debugging
           exe_nextpc_r   <= 0;
 
-          EXE_STATE <= (exe_active_r & ~(CCNT_r[`CCNT_SA1_RESB] | CCNT_r[`CCNT_SA1_RDYB])) ? ST_EXE_FETCH : ST_EXE_IDLE;
+          EXE_STATE <= (exe_active_r & ~(CCNT_r[`CCNT_SA1_RESB] | CCNT_r[`CCNT_SA1_RDYB] | snapshot_pause)) ? ST_EXE_FETCH : ST_EXE_IDLE;
         end
       end
     endcase

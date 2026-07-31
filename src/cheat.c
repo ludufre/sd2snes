@@ -2,6 +2,7 @@
 #include "fileops.h"
 #include "uart.h"
 #include "memory.h"
+#include "fpga.h"
 #include "fpga_spi.h"
 #include "snes.h"
 #include "cheat.h"
@@ -135,17 +136,23 @@ void cheat_program() {
   cheat_wram_present(wram_index);
 
   /* Arm the in-game cheat overlay (snes/savestate.a65 probe reads this byte).
-     The overlay reuses the savestate snapshot/restore machinery, which is NOT
-     supported on enhancement-chip games (SA-1, SuperFX/GSU, S-DD1, SPC7110, and
-     the DSP/CX4/OBC1 helpers) — freezing the SNES CPU mid-frame and snapshotting
-     the PPU desyncs the asynchronous coprocessor. So force it off there regardless
-     of the user toggle; on plain LoROM/HiROM it follows CFG.enable_cheat_overlay. */
-  {
-    uint8_t special_chip = romprops.has_dspx || romprops.has_cx4 || romprops.has_obc1
-                        || romprops.has_gsu  || romprops.has_sa1 || romprops.has_sdd1
-                        || romprops.has_spc7110;
-    sram_writebyte((CFG.enable_cheat_overlay && !special_chip) ? 1 : 0, SRAM_CHEAT_OVL_GATE_ADDR);
-  }
+     This byte carries ONLY the user toggle. The chip/core gating lives in
+     savestate.c (savestate_program): it installs the handler that runs this probe
+     only on FPGA cores that actually have the snapshot machinery the overlay reuses
+     (the base and DSP cores -- ctx.v copier + PPU/VRAM/CGRAM mirrors). On the
+     SA-1/GSU/CX4/OBC1/S-DD1/SPC7110/SGB cores the handler is not installed, so this
+     byte is never read there. Unlike an in-game savestate, the overlay never
+     snapshots/restores the coprocessor's internal state -- it only freezes the CPU
+     and saves/restores the PPU it took over -- which is why it is safe on the DSP
+     core (e.g. Super Mario Kart) even though savestates are not. */
+  sram_writebyte(CFG.enable_cheat_overlay ? 1 : 0, SRAM_CHEAT_OVL_GATE_ADDR);
+
+  /* Mirror of the master cheat switch for the in-game CHEATS tab (X). The switch
+     itself lives in the FPGA (cheat_enable, set above); this byte only lets the
+     shell draw the current state and toggle from it. Re-published here so a
+     CMD_CHEAT_REPROGRAM (overlay close) can never leave the UI out of sync with
+     CFG.enable_cheats. */
+  sram_writebyte(CFG.enable_cheats ? 1 : 0, SRAM_CHEAT_MASTER_ADDR);
 
   sgb_cheat_program();
 }
@@ -157,6 +164,9 @@ void cheat_program_single(cheat_patch_record_t *cheat) {
   /* apply cheat to FPGA / NMI hook */
   if(is_wram_cheat) {
     if(wram_index < CHEAT_WRAM_MAX) cheat_program_ram_cheat(wram_index++, cheat);
+  } else if(cheat_rom_psram_mode()) {
+    /* ROM codes are patched straight into the image (no comparator slots);
+       applied at deassert_reset / in-game reprogram via cheat_rom_psram_apply */
   } else if(rom_index < 6) {
     enable_mask |= (1 << rom_index);
     cheat_program_rom_cheat(rom_index++, cheat);
@@ -180,6 +190,88 @@ void cheat_program_ram_cheat(int index, cheat_patch_record_t *cheat) {
   fpga_write_snescmd(cheat->fields.patchbank);
   fpga_write_snescmd(ASM_RTS);
   printf("RAM cheat #%d: %02x%04x %02x\n", index, cheat->fields.patchbank, cheat->fields.patchaddr, cheat->fields.patchvalue);
+}
+
+/* ---- ROM cheats without FPGA comparators: patch the loaded image ---------
+   On the mk2 SA-1 core the six bus comparators were removed to make room for
+   the in-game cheat overlay, so ROM codes are applied by writing the byte
+   straight into the ROM image in PSRAM (original byte stashed in the record's
+   spare tail for restore-on-disable). This is stronger than the comparators
+   on SA-1: it covers address mirrors and is visible to the SA-1 coprocessor's
+   own fetches, which never went through the comparators at all. Trade-off:
+   the bus->offset translation uses the SuperMMC reset-default banking (same
+   mapping code databases assume); a game that rebanks a patched region at
+   runtime diverges from strict bus semantics (rare, documented). */
+
+uint8_t cheat_rom_psram_mode(void) {
+#if defined(CONFIG_MK2)
+  return romprops.fpga_conf == FPGA_SA1;
+#elif defined(CHEAT_PSRAM_FORCE_SA1)
+  /* mk3 validation build: exercise the PSRAM path with the comparators idle */
+  return romprops.fpga_conf == FPGA_SA1;
+#else
+  return 0;
+#endif
+}
+
+/* Translate a ROM-code bus address into an offset inside the loaded image,
+   or -1 when the address is not ROM-backed. Mirrors collapse through the
+   ROM size mask exactly like the FPGA's ROM_MASK. */
+static int32_t cheat_rom_code_offset(uint32_t addr) {
+  uint32_t bank = (addr >> 16) & 0xff;
+  uint32_t ofs  = addr & 0xffff;
+  uint32_t off;
+  uint32_t mask = romprops.romsize_bytes ? (romprops.romsize_bytes - 1) : 0x3fffff;
+  if(romprops.has_sa1) {
+    if(bank >= 0xc0) {
+      /* $C0-$FF:0000-FFFF, SuperMMC defaults xxb={0,1,2,3} = linear 4MB */
+      off = ((bank - 0xc0) << 16) | ofs;
+    } else if(!(bank & 0x40) && (ofs & 0x8000)) {
+      /* $00-3F/$80-BF:8000-FFFF, default block = {A23,A21} */
+      uint32_t blk = ((bank & 0x80) >> 6) | ((bank & 0x20) >> 5);
+      off = (blk << 20) | ((bank & 0x1f) << 15) | (ofs & 0x7fff);
+    } else return -1;
+  } else if(romprops.mapper_id == 1) {          /* HiROM */
+    if(bank >= 0x40 && bank <= 0x7d) off = addr & 0x3fffff;
+    else if(bank >= 0xc0)            off = addr & 0x3fffff;
+    else if(!(bank & 0x40) && (ofs & 0x8000)) off = ((bank & 0x3f) << 16) | ofs;
+    else return -1;
+  } else if(romprops.mapper_id == 0) {          /* LoROM */
+    if(!(ofs & 0x8000)) return -1;
+    off = ((bank & 0x7f) << 15) | (ofs & 0x7fff);
+  } else return -1;                             /* ExHiROM/BSX: unsupported */
+  return (int32_t)(off & mask);
+}
+
+void cheat_rom_psram_apply(void) {
+  if(!cheat_rom_psram_mode()) return;
+  int count = sram_readshort(SRAM_NUM_CHEATS);
+  if(count < 0) count = 0;
+  if(count > CHEAT_RECORD_MAX) count = CHEAT_RECORD_MAX;
+  for(int i = 0; i < count; i++) {
+    uint32_t rec = SRAM_CHEAT_ADDR + 512u * (uint32_t)i;
+    uint8_t flags = sram_readbyte(rec);
+    uint8_t np = sram_readbyte(rec + 255);
+    if(np > CHEAT_NUM_CODES_PER_CHEAT) np = CHEAT_NUM_CODES_PER_CHEAT;
+    uint8_t want = CFG.enable_cheats && (flags & CHEAT_FLAG_ENABLE);
+    for(uint8_t c = 0; c < np; c++) {
+      uint32_t code;
+      sram_readblock(&code, rec + 256 + 4u * c, 4);
+      if(cheat_is_wram_cheat(code)) continue;   /* WRAM codes stay hook-based */
+      int32_t off = cheat_rom_code_offset(code >> 8);
+      if(off < 0) continue;
+      uint32_t tgt = (uint32_t)off;             /* image loads at PSRAM 0 */
+      uint8_t applied = sram_readbyte(rec + CHEAT_REC_APPLIED_OFS + c);
+      if(want && applied != 1) {
+        sram_writebyte(sram_readbyte(tgt), rec + CHEAT_REC_ORIG_OFS + c);
+        sram_writebyte(code & 0xff, tgt);
+        sram_writebyte(1, rec + CHEAT_REC_APPLIED_OFS + c);
+      } else if(!want && applied == 1) {
+        sram_writebyte(sram_readbyte(rec + CHEAT_REC_ORIG_OFS + c), tgt);
+        sram_writebyte(0, rec + CHEAT_REC_APPLIED_OFS + c);
+      }
+    }
+  }
 }
 
 void cheat_load_to_menu(int index, cheat_record_t *cheat) {
@@ -305,6 +397,7 @@ void cheat_yaml_load(uint8_t* romfilename) {
   if(file_res) {
     printf("no cheat list YML found\n");
     sram_writeshort(0, SRAM_NUM_CHEATS);
+    sram_writeshort(0, SRAM_CHEAT_WIN_BASE_ADDR); /* no cheats -> resident window base 0 (never stale) */
     file_res = 0; /* soft fail, suppress LED blink */
     return;
   }
@@ -366,10 +459,12 @@ void cheat_yaml_load(uint8_t* romfilename) {
        trip. The PSRAM record at $D00000+512*idx remains the canonical
        state that save reads. */
     sram_writebyte(cheat.flags, SRAM_CHEAT_FLAGS_ADDR + cheat_idx);
-    /* Stage the first CHEAT_NAME_INGAME_MAX descriptions into the
-       SNES-visible BSRAM window ($FF0800) so the in-game cheat overlay
-       can display names: the canonical PSRAM record at $D00000 is the
-       game's own ROM during gameplay, unreachable from the overlay. */
+    /* Stage the base-0 name window (first CHEAT_NAME_INGAME_MAX descriptions) into the
+       SNES-visible BSRAM window ($FF8000) so the in-game cheat overlay shows the first page
+       instantly: the canonical PSRAM record at $D00000 is the game's own ROM during gameplay,
+       unreachable from the overlay. Scrolling past this window slides it via
+       CMD_CHEAT_NAMES_WINDOW (cheat_stage_names_window) -> this stays base-0 only, so game-load
+       cost is unchanged even though the overlay can list ALL cheats. */
     if(cheat_idx < CHEAT_NAME_INGAME_MAX) {
       char nbuf[CHEAT_NAME_INGAME_LEN];
       memset(nbuf, 0, sizeof(nbuf));
@@ -380,6 +475,18 @@ void cheat_yaml_load(uint8_t* romfilename) {
     cheat_idx++;
   }
   sram_writeshort((uint16_t)cheat_idx, SRAM_NUM_CHEATS);
+  /* The resident in-game name window starts at base 0 (the first-64 stage above) for every game. */
+  sram_writeshort(0, SRAM_CHEAT_WIN_BASE_ADDR);
+  /* PSRAM-patch mode: the image was just streamed fresh, so no code is
+     applied yet -- clear the per-record applied flags the apply engine keys
+     on (the spare tail carries whatever the previous game left there). */
+  if(cheat_rom_psram_mode()) {
+    uint8_t zeros[CHEAT_NUM_CODES_PER_CHEAT];
+    memset(zeros, 0, sizeof(zeros));
+    for(int i = 0; i < cheat_idx; i++)
+      sram_writeblock(zeros, SRAM_CHEAT_ADDR + 512u * (uint32_t)i + CHEAT_REC_APPLIED_OFS,
+                      sizeof(zeros));
+  }
   yaml_file_close();
   file_res = 0; /* soft fail, suppress LED blink */
   printf("Total number of cheats: %d\n", cheat_idx);
@@ -413,6 +520,33 @@ void cheat_reprogram_from_mirror(void) {
     sram_writebyte(flag, rec);
   }
   cheat_program();
+  cheat_rom_psram_apply(); /* PSRAM-patch mode: apply/restore toggled ROM codes */
+}
+
+/* Re-stage the sliding 64-name window for absolute cheat indices [base, base+64) from the
+   canonical $D00000 records into the SNES-visible BSRAM window, so the in-game overlay can list
+   ALL cheats without a bigger game-load stage. Reads the description field straight from PSRAM
+   ($D00000+512*i+1) -- the SAME frozen-SNES $D0 read cheat_reprogram_from_mirror does -- so there
+   is no SD access and no YAML re-parse. Bounded (64 fixed reads). Served on CMD_CHEAT_NAMES_WINDOW
+   while the SNES is frozen in the overlay; slots past the cheat count are staged empty. */
+void cheat_stage_names_window(int base) {
+  int count = sram_readshort(SRAM_NUM_CHEATS);
+  if(count < 0) count = 0;
+  if(count > CHEAT_RECORD_MAX) count = CHEAT_RECORD_MAX;
+  if(base < 0) base = 0;
+  for(int s = 0; s < CHEAT_NAME_INGAME_MAX; s++) {
+    char nbuf[CHEAT_NAME_INGAME_LEN];
+    int i = base + s;
+    memset(nbuf, 0, sizeof(nbuf));
+    if(i < count) {
+      /* record layout: flags(1) + description[254] + ... -> the name is at record offset +1 */
+      sram_readblock(nbuf, SRAM_CHEAT_ADDR + 512u * (uint32_t)i + 1, CHEAT_NAME_INGAME_LEN - 1);
+      nbuf[CHEAT_NAME_INGAME_LEN - 1] = 0;
+    }
+    sram_writeblock(nbuf, SRAM_CHEAT_NAMES_ADDR + (uint32_t)s * CHEAT_NAME_INGAME_LEN,
+                    CHEAT_NAME_INGAME_LEN);
+  }
+  sram_writeshort((uint16_t)base, SRAM_CHEAT_WIN_BASE_ADDR);
 }
 
 /* Inverse of cheat_decode_html_entities. Writes the supplied string to

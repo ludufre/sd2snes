@@ -33,6 +33,7 @@
 #include "patch.h"
 #include "cheat.h"
 #include "theme.h"
+#include "manual.h"
 
 //usb
 #include "usb.h"
@@ -156,16 +157,27 @@ static void delete_listed_game_file(const uint8_t *listfile, const char *what) {
   revalidate_game_lists();
 }
 
-/* DELETE_SRM_{FAV,RECENT}: delete only the .srm for a list entry; the
-   ROM/patch (and the list entry itself) stay in place. */
+/* DELETE_SRM_{FAV,RECENT}: delete the battery-SRAM save(s) for a list entry; the
+   ROM/patch (and the list entry itself) stay in place.  Wipes ALL slots + the
+   .slot sidecar (no slot UI in the list). Slot 0 (legacy <stem>.srm) drives the
+   NACK exactly as before; slots 2-4 and the sidecar are best-effort. */
 static void delete_listed_game_srm(const uint8_t *listfile, const char *what) {
-  uint8_t srmfile[256] = SAVE_BASEDIR;
   char *srmsrc = listed_game_sidecar_source(listfile);
   printf("Delete SRM for %s: %s\n", what, srmsrc);
-  append_file_basename((char*)srmfile, srmsrc, ".srm", sizeof(srmfile));
-  printf("SRM path: %s\n", srmfile);
-  if(f_unlink((TCHAR*)srmfile) != FR_OK) {
-    snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+  for(uint8_t s = 0; s < SRM_SLOT_COUNT; s++) {
+    uint8_t srmfile[256] = SAVE_BASEDIR;
+    char ext[8];
+    srm_slot_ext(ext, sizeof(ext), s);
+    append_file_basename((char*)srmfile, srmsrc, ext, sizeof(srmfile));
+    printf("SRM path: %s\n", srmfile);
+    FRESULT r = f_unlink((TCHAR*)srmfile);
+    if(s == 0 && r != FR_OK) {
+      snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+    }
+  }
+  { uint8_t scfile[256] = SAVE_BASEDIR;
+    append_file_basename((char*)scfile, srmsrc, ".slot", sizeof(scfile));
+    f_unlink((TCHAR*)scfile);
   }
 }
 
@@ -688,13 +700,25 @@ int main(void) {
           cmd=0;
           break;
         case SNES_CMD_DELETE_SRM: {
-          uint8_t srmfile[256] = SAVE_BASEDIR;
           get_selected_name(file_lfn);
           printf("Delete SRM for: %s\n", file_lfn);
-          append_file_basename((char*)srmfile, (char*)file_lfn, ".srm", sizeof(srmfile));
-          printf("SRM path: %s\n", srmfile);
-          if(f_unlink((TCHAR*)srmfile) != FR_OK) {
-            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+          /* Wipe ALL battery-SRAM slots + the .slot sidecar (the browser has no
+             slot UI). Slot 0 (legacy <stem>.srm) drives the NACK exactly as before;
+             slots 2-4 and the sidecar are best-effort (FR_NO_FILE = nothing there). */
+          for(uint8_t s = 0; s < SRM_SLOT_COUNT; s++) {
+            uint8_t srmfile[256] = SAVE_BASEDIR;
+            char ext[8];
+            srm_slot_ext(ext, sizeof(ext), s);
+            append_file_basename((char*)srmfile, (char*)file_lfn, ext, sizeof(srmfile));
+            printf("SRM path: %s\n", srmfile);
+            FRESULT r = f_unlink((TCHAR*)srmfile);
+            if(s == 0 && r != FR_OK) {
+              snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+            }
+          }
+          { uint8_t scfile[256] = SAVE_BASEDIR;
+            append_file_basename((char*)scfile, (char*)file_lfn, ".slot", sizeof(scfile));
+            f_unlink((TCHAR*)scfile);
           }
           cmd=0;
           break;
@@ -948,6 +972,74 @@ int main(void) {
               case SNES_CMD_CHEAT_REPROGRAM:
                 usb_cmd = 0;
                 cheat_reprogram_from_mirror();
+                break;
+              case SNES_CMD_ENABLE_CHEATS:
+              case SNES_CMD_DISABLE_CHEATS:
+                /* Master cheat switch (L+R+Start+A / +B combos, and X on the in-game
+                   CHEATS tab). The FPGA has ALREADY flipped cheat_enable by the time we
+                   get here -- cheat.v decodes the very write to MCU_CMD that delivered
+                   this command -- so nothing here needs to touch the switch to make it
+                   take effect. What we do is keep the MCU's own view consistent:
+                   CFG.enable_cheats is what cheat_program() re-applies, so without this
+                   a later reprogram (e.g. closing the overlay after toggling a cheat)
+                   would silently undo the combo. Runtime only: NOT persisted to
+                   config.yml (writing the SD with the SNES frozen in the overlay is the
+                   documented way to wedge the MCU). */
+                usb_cmd = 0;
+                CFG.enable_cheats = (cmd == SNES_CMD_ENABLE_CHEATS) ? 1 : 0;
+                sram_writebyte(CFG.enable_cheats ? 1 : 0, SRAM_CHEAT_MASTER_ADDR);
+                break;
+              case SNES_CMD_MANUAL_BLOCK:
+                /* in-game guides viewer: stage the requested block into PSRAM for the frozen SNES
+                   to DMA. MCU_PARAM: [0..1] = stream block index (LE), [2] = compacted guide
+                   (0..7), [3] = mode (bit0 = zoom). Bounded + fail-safe; the snes_set_mcu_cmd(0)
+                   below is the ACK the viewer spins on. */
+                usb_cmd = 0;
+                { uint32_t p = snes_get_mcu_param();
+                  manual_stage_block((uint8_t)((p >> 16) & 0xff),   /* guide (compacted) */
+                                     (uint16_t)(p & 0xffff),        /* index within stream */
+                                     (uint8_t)((p >> 24) & 0xff));  /* mode (vestigial) */
+                }
+                break;
+              case SNES_CMD_MANUAL_ZPAGE:
+                /* in-game guides viewer, scrollable 2x zoom: stage ONE WHOLE 2x page (<=119KB)
+                   into PSRAM $C5/$C6. MCU_PARAM: [0] = compacted guide (0..7), [1] = zoom page
+                   (== the 1x block index). After this the viewer pans with pure PSRAM->VRAM DMA
+                   and issues NO further commands until it turns the page, which is exactly why
+                   the pan cannot stall. Bounded + fail-safe; snes_set_mcu_cmd(0) below is the ACK. */
+                usb_cmd = 0;
+                { uint32_t p = snes_get_mcu_param();
+                  manual_stage_zpage((uint8_t)(p & 0xff),              /* guide (compacted) */
+                                     (uint16_t)((p >> 8) & 0xffff),    /* block or zoom page */
+                                     (uint8_t)((p >> 24) & 0xff));     /* mode: bit0 = page */
+                }
+                break;
+              case SNES_CMD_MANUAL_S1PAGE:
+                /* in-game guides viewer, scrollable 1x: stage one whole scale-1 page so the 1x
+                   view pans over the page instead of jumping band to band. Its PSRAM region is
+                   separate from the 2x page, so both stay resident and Y toggles instantly.
+                   MCU_PARAM: [0] = guide, [1..2] = page. Bounded + fail-safe. */
+                usb_cmd = 0;
+                { uint32_t p = snes_get_mcu_param();
+                  manual_stage_s1page((uint8_t)(p & 0xff),
+                                      (uint16_t)((p >> 8) & 0xffff));
+                }
+                break;
+              case SNES_CMD_CHEAT_NAMES_WINDOW:
+                /* in-game cheat overlay: stage the sliding 64-name window at the requested base
+                   (MCU_PARAM low 16 = absolute base index) from the $D00000 records so ALL cheats
+                   can be listed. Bounded (64 reads, no SD); snes_set_mcu_cmd(0) below is the ACK. */
+                usb_cmd = 0;
+                cheat_stage_names_window((int)(snes_get_mcu_param() & 0xffff));
+                break;
+              case SNES_CMD_SET_SRM_SLOT:
+                /* in-game SAVES tab: persist the selected SRAM slot to the sidecar
+                   (consumed on the NEXT game load) + refresh the status block. NEVER
+                   changes the live session slot -> an in-game switch cannot misroute
+                   an autosave. Bounded (1 f_write + f_stat loop); ACK = snes_set_mcu_cmd(0). */
+                usb_cmd = 0;
+                srm_slot_save(file_lfn, (uint8_t)(snes_get_mcu_param() & 0x03));
+                saveinfo_stage(file_lfn);
                 break;
               case SNES_CMD_COMBO_TRANSITION:
                 usb_cmd = 0;

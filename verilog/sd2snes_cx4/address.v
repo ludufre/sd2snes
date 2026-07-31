@@ -29,8 +29,10 @@ module address(
   output IS_SAVERAM,        // address/CS mapped as SRAM?
   output IS_ROM,            // address mapped as ROM?
   output IS_WRITABLE,       // address somehow mapped as writable area?
+  output IS_PATCH,          // hook identity window active ($C0-FF while unlocked)
   input [23:0] SAVERAM_MASK,
   input [23:0] ROM_MASK,
+  input  snescmd_unlock,    // snescmd region unlocked (gates the hook window)
   output msu_enable,
   output cx4_enable,
   output cx4_vect_enable,
@@ -62,7 +64,16 @@ assign IS_ROM = ~SNES_ROMSEL;
 
 assign IS_SAVERAM = |SAVERAM_MASK & (~SNES_ADDR[23] & &SNES_ADDR[22:20] & ~SNES_ADDR[19] & ~SNES_ADDR[15]);
 
-assign SRAM_SNES_ADDR = IS_SAVERAM
+// Hook/patch identity window (mirrors sd2snes_sa1/base): while the NMI hook holds
+// the snescmd region unlocked, identity-map banks $C0-$FF so the savestate/cheat-
+// overlay handler executes from menu PSRAM at $C0xxxx and its scratch/register
+// shadows live in $F2-$FF.  0 outside the hook window -> normal mapping untouched.
+assign IS_PATCH = snescmd_unlock & &SNES_ADDR[23:22];
+
+assign SRAM_SNES_ADDR = IS_PATCH
+                        // hook window: identity-map $C0-$FF (handler code + scratch)
+                        ? SNES_ADDR
+                        : IS_SAVERAM
                         ? (24'hE00000 | ({SNES_ADDR[19:16], SNES_ADDR[14:0]}
                          & SAVERAM_MASK))
                         : ({2'b00, SNES_ADDR[22:16], SNES_ADDR[14:0]}
@@ -70,7 +81,7 @@ assign SRAM_SNES_ADDR = IS_SAVERAM
 
 assign ROM_ADDR = SRAM_SNES_ADDR;
 
-assign IS_WRITABLE = IS_SAVERAM;
+assign IS_WRITABLE = IS_SAVERAM | IS_PATCH;
 
 assign ROM_HIT = IS_ROM | IS_WRITABLE;
 

@@ -29,9 +29,12 @@ module address(
   output IS_SAVERAM,        // address/CS mapped as SRAM?
   output IS_ROM,            // address mapped as ROM?
   output IS_WRITABLE,       // address somehow mapped as writable area?
+  output IS_PATCH,          // hook identity window active ($C0-FF while unlocked)
   input [23:0] SAVERAM_MASK,
   input [23:0] ROM_MASK,
+  input  snescmd_unlock,    // snescmd region unlocked (gates the $2020 copier)
   output msu_enable,
+  output dma_enable,        // SNES-side $2020-$202F copier reg window (mk3 snapshot)
   input [4:0] sa1_bmaps_sbm,
   input  sa1_dma_cc1_en,
   input [11:0] sa1_xxb,
@@ -68,6 +71,9 @@ parameter [2:0]
  ;
 // BS Memory Pack slot bit (>2:0, declared separately).  Mirrors sd2snes_base.
 localparam FEAT_BSSLOT = 14;
+// SNES-side / MCU-driven copier enable bit.  Same index as sd2snes_base
+// (see src/fpga_spi.c feature-bit mapping); >2:0 so declared separately.
+localparam FEAT_DMA1 = 11;
 
 // Static Inputs
 reg [23:0] ROM_MASK_r     = 0;
@@ -111,7 +117,16 @@ assign IS_SAVERAM = SAVERAM_MASK_r[0]
                         )
                       );
 
-assign IS_WRITABLE = IS_SAVERAM;
+// Hook/patch window (mirrors sd2snes_base IS_PATCH): while the NMI hook holds the
+// snescmd region unlocked, the SNES gets identity-mapped access to banks $C0-$FF —
+// the savestate/cheat-overlay handler executes from menu PSRAM at $C0xxxx and its
+// scratch/mirrors live in $F2-$FF.  Outside the hook window this is 0 and the
+// normal SA-1 mapping below is untouched.  Enabled on both configs now (mk2 runs
+// the cheat overlay too); the overlay reads its register shadows through this
+// identity window at $F905xx/$F907xx.
+assign IS_PATCH = snescmd_unlock & &SNES_ADDR[23:22];
+
+assign IS_WRITABLE = IS_SAVERAM | IS_PATCH;
 
 // ROM address before the BS-pack redirect / ROM_MASK.  SA-1 SuperMMC: $C0-$FF use
 // xxb[bank]; $00-3F/$80-BF use the default {A23,A21} block unless xxb_en selects one.
@@ -125,7 +140,13 @@ wire [23:0] ROM_ADDR_pre = (SNES_ADDR[22]
 // to 4MB, then reading the pack appended at the end), redirect those reads to the pack
 // staged at PSRAM 0x900000 (1MB, mirrored across blocks 4-7).  ROM_ADDR_pre[22] = high
 // bit of the 3-bit MMC block = "block >= 4".
+// mk2: BS-pack support removed to free LUTs for the overlay (-69); pack reads
+// fall through to the normal SuperMMC ROM mapping below.
+`ifndef MK2
 wire BS_PACK_HIT = featurebits[FEAT_BSSLOT] & ROM_ADDR_pre[22];
+`else
+wire BS_PACK_HIT = 1'b0;
+`endif
 
 `ifndef MK2
 // --- BS Memory Pack flash command FSM (writable slot) ----------------------
@@ -196,10 +217,11 @@ end
 // program data-phase: enable the PSRAM write for the pack (consumed by main.v ROM_WE).
 // The command byte itself never reaches the array: bs_flash_we_r is still 0 while the
 // $10/$40 is written, and only flips on its trailing SNES_WR_end.
-assign IS_FLASHWR = BS_PACK_HIT & bs_flash_we_r;
+assign IS_FLASHWR = BS_PACK_HIT & bs_flash_we_r & ~IS_PATCH;
 
 // read override: synth "M P" + chip info (vendor) or $80 (ready) in command modes.
-assign BS_FLASH_OVR = BS_PACK_HIT & bs_flash_ovr_r;
+// ~IS_PATCH: never shadow the hook window's identity-mapped $C0-$FF accesses.
+assign BS_FLASH_OVR = BS_PACK_HIT & bs_flash_ovr_r & ~IS_PATCH;
 reg [7:0] bs_flash_dout_r;
 always @(*) begin
   casex(bs_flash_addr)
@@ -228,7 +250,10 @@ assign bs_erase_blk = 4'h0;
 `endif
 
 // TODO: add programmable address map
-assign SRAM_SNES_ADDR = (IS_SAVERAM
+assign SRAM_SNES_ADDR = (IS_PATCH
+                         // hook window: identity map $C0-$FF (handler code + scratch)
+                         ? SNES_ADDR
+                         : IS_SAVERAM
                          // 40-4F:0000-FFFF or 00-3F/80-BF:6000-7FFF (first 8K mirror).  Mask handles mirroring.  60 is sa1-only
                          ? (24'hE00000 + (iram_battery_r ? SNES_ADDR[10:0] : ((SNES_ADDR[22] ? SNES_ADDR[19:0] : {sa1_bmaps_sbm,SNES_ADDR[12:0]}) & SAVERAM_MASK_r)))
                          // BS pack: MMC block >= 4 -> pack at PSRAM 0x900000 (no ROM_MASK)
@@ -243,6 +268,12 @@ assign ROM_ADDR = SRAM_SNES_ADDR;
 assign ROM_HIT = IS_ROM | IS_WRITABLE;
 
 assign msu_enable = featurebits[FEAT_MSU1] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff8) == 16'h2000));
+// SNES-side copier reg window $2020-$202F (mirrors sd2snes_base:260).  The SA-1
+// core has no map_unlock, so gate on the DMA1 feature bit or the snescmd unlock.
+// Real decode on both configs now: mk2 has no copier, but the overlay's SA-1
+// pause write lands at $202C in this window (main.v snapshot_pause); the reads
+// just fall through (nobody reads the window on mk2).
+assign dma_enable = (featurebits[FEAT_DMA1] | snescmd_unlock) & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff0) == 16'h2020));
 assign r213f_enable = featurebits[FEAT_213F] & (SNES_PA == 8'h3f);
 assign r2100_hit = (SNES_PA == 8'h00);
 assign snescmd_enable = ({SNES_ADDR[22], SNES_ADDR[15:9]} == 8'b0_0010101);

@@ -839,6 +839,35 @@ menu_enttab_ingame:
  .byt  ^(mfunc_isenabled_hooks-1)
 
  .byt  MTYPE_VALUE
+ .word !mtext_ingame_game_manual
+ .byt  ^mtext_ingame_game_manual
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_GAME_MANUAL
+ .byt  ^CFG_ENABLE_GAME_MANUAL
+ .word !mdesc_ingame_game_manual
+ .byt  ^mdesc_ingame_game_manual
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_hooks-1)
+ .byt  ^(mfunc_isenabled_hooks-1)
+
+ .byt  MTYPE_VALUE
+ .word !mtext_ingame_sram_slots
+ .byt  ^mtext_ingame_sram_slots
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_SRAM_SLOTS
+ .byt  ^CFG_ENABLE_SRAM_SLOTS
+ .word !mdesc_ingame_sram_slots
+ .byt  ^mdesc_ingame_sram_slots
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
  .word !mtext_ingame_holdoff
  .byt  ^mtext_ingame_holdoff
  .word !kv_onoff

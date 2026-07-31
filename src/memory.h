@@ -27,6 +27,7 @@
 #ifndef MEMORY_H
 #define MEMORY_H
 
+#include <stddef.h>
 #include CONFIG_MCU_H
 #include "smc.h"
 
@@ -45,14 +46,52 @@ extern char current_filename[];
 #define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
-#define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay && !special_chip. The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
+#define SRAM_CHEAT_WIN_BASE_ADDR     (0xFF0708L) /* in-game cheat overlay: absolute base index of the 64-name window RESIDENT in SRAM_CHEAT_NAMES_ADDR ($FF8000). The MCU is the sole writer (base 0 at game load, the requested base on each CMD_CHEAT_NAMES_WINDOW); the overlay reads it to map an absolute cheat index to its window slot ((idx - base)*CHEAT_NAME_LEN). In the free $FF0702..$FF070F gap (before the SS_*_GATE cluster at $FF0710). Lockstep with CHEAT_WIN_BASE in snes/memmap.i65. */
+#define SRAM_CHEAT_OVL_GATE_ADDR     (0xFF0710L) /* 1 byte the firmware arms at game load = CFG.enable_cheat_overlay (user toggle only -- the per-core gate is core_has_snapshot in savestate.c, which decides whether the handler is installed at all). The in-game overlay probe (snes/savestate.a65) reads it; 0 => don't open. Lives in the free $FF0701..$FF07FF gap between NUM_CHEATS and CHEAT_NAMES. */
 #define SRAM_PPU_CLEAR_GATE_ADDR     (0xFF0711L) /* 1 byte the firmware arms in load_rom (before releasing the SNES) = CFG.clear_ppu_on_boot && ips_pending_index>0. game_handshake (snes/main.a65) reads it before boot; 1 => clear VRAM/CGRAM/OAM for a patched romhack that skips PPU init. Lockstep with PPU_CLEAR_GATE in snes/memmap.i65; same free $FF0701..$FF07FF gap. */
+#define SRAM_IGMENU_GATE_ADDR        (0xFF0715L) /* 1 byte the firmware arms in igmenu_stage() at game load when /sd2snes/igmenu.bin is present AND validates (magic "IGMN" + version == IGMENU_ABI_VERSION + crc16). The in-game overlay hook ($C0) reads it; 0 => single-tab fail-safe. Free $FF0701..$FF07FF gap, after SS_GSU_GATE. Lockstep with IGMENU_GATE in snes/memmap.i65. */
+#define SRAM_SS_SLOT_STATUS_ADDR     (0xFF0716L) /* 1 byte: bitmask of existing savestate files, bit N-1 = slot N (1..4) has <rom>0N.state on SD. Staged by the firmware at game load (savestate.c), read by the in-game STATES tab (igmenu.bin). Lockstep with SS_SLOT_STATUS in snes/memmap.i65. */
+#define SRAM_SRM_SLOT_STATUS_ADDR    (0xFF0717L) /* 1 byte: bitmask of existing battery-SRAM slot files. When EnableSramSlots is ON, bit i = slot i (i=0..3: <stem>.srm, <stem>.02/03/04.srm) exists on SD; when OFF, bit0 = the legacy <stem>.srm exists (bits1-3 clear). Staged by saveinfo_stage() at game load and refreshed after autosave; read by the in-game SAVES tab (igmenu.bin). Free $FF0701..$FF07FF gap, after SS_SLOT_STATUS. Lockstep with SRM_SLOT_STATUS in snes/memmap.i65. */
+#define SRAM_SAVEINFO_ADDR           (0xFF0730L) /* in-game SAVES tab (igmenu.bin) staging block, 48 bytes ($FF0730-$FF075F -- ABOVE the BPS/copier breadcrumbs $FF0720-$FF072E, below the free tail of the $FF0701..$FF07FF gap). Layout: +0 flags (bit0 = game has SRAM, bit1 = .srm exists on SD, bit2 = autosave enabled), +1 size string (16B ASCII NUL-term, e.g. "8 KB"), +17 datetime string (24B ASCII NUL-term, e.g. "2026-07-16 11:30"), +42 = selected/next SRAM slot (0..3; sidecar value, 0 when EnableSramSlots OFF), +41/+43..47 reserved. The slot occupancy bitmask lives separately at SRAM_SRM_SLOT_STATUS_ADDR $FF0717. Strings pre-formatted by the MCU (ASCII == font codes for digits/letters). Staged at game load; refreshed after a successful in-game autosave. Lockstep with SAVEINFO in snes/memmap.i65. */
+#define IGMENU_ABI_VERSION           (3)         /* igmenu.bin ABI version, checked by igmenu_stage (MCU) AND the overlay ($C20004). Bump on ANY igmenu.bin layout/ABI change. v3 requires the theme block the $C1 overlay stages into PSRAM $F4 (IGM_THM_* in snes/memmap.i65) before dispatching the shell. Lockstep with IGMENU_ABI_VERSION in snes/memmap.i65. Common to all 3 configs (NOT in config-mk*). */
+/* --- in-game manual viewer, SCROLLABLE 1x page (scale-1 twin of the 2x page). 256px wide = 32
+ * tiles = 1024B per row, so a 29-row ring is 928 tiles and fits ONE BG layer -- no split, no
+ * window, unlike the 2x. A whole page (<=MAN_S1_MAX_ROWS=64 rows = 512px at 1x) fits in bank C3,
+ * which is exactly the space the retired 8bpp block used to occupy; 1024 divides 65536, so no row
+ * ever straddles a bank. 1x and 2x are BOTH resident, so toggling between them is instant. */
+#define SRAM_MANUAL_S1TILES_ADDR     (0xC30000L) /* scale-1 tile row r at +r*1024 */
+#define SRAM_MANUAL_S1TMAP_ADDR      (0xC4B000L) /* prebuilt tilemap, row r at +r*64 (32 entries) */
+#define SRAM_MANUAL_S1PAL_ADDR       (0xC4C000L) /* 8 palettes x 16 BGR555 -> CGRAM 0..127 */
+#define SRAM_MANUAL_BLOCK_ADDR       (0xC30000L) /* LEGACY 8bpp block staging (superseded by the scale-1 scrollable page above, which reuses this bank). Kept for the old path: one .man block (57856B = 512B palette + 896*64B 8bpp tiles, sector-aligned) staged here by manual.c on SNES_CMD_MANUAL_BLOCK. Bank C3 is menu dir-cache territory, dormant in-game (same rationale as igmenu.bin @ C2). Lockstep with MANUAL_BLOCK in snes/memmap.i65. */
+#define SRAM_MANUAL_SHELLSAVE_ADDR   (0xC40000L) /* in-game manual viewer: the $C2 shell saves its mode-5 state here before taking the PPU ($2139/$213B readback: VRAM $0000-$5FFF words + CGRAM 512B) and restores from it on viewer exit. Bank C4, dormant in-game. Lockstep with MANUAL_SHELLSAVE in snes/memmap.i65. */
+/* --- in-game manual viewer, SCROLLABLE 2x zoom page (banks C5/C6, dormant in-game like C2/C3/C4).
+ * ONE whole 2x page (512 x up-to-448, 4bpp, <=56 tile rows) is staged here by manual_stage_zpage on
+ * SNES_CMD_MANUAL_ZPAGE, so panning over it costs the SNES nothing but PSRAM->VRAM DMA -- there is
+ * NO per-row MCU traffic, which is what makes the pan smooth and unable to stall.
+ * The 512px width does not fit one BG layer (a tilemap entry's character field is 10 bits = 1024
+ * tiles max), so each tile row is split: cols 0-31 on BG1, cols 32-63 on BG2, joined by a window.
+ * No DMA ever crosses a bank boundary (the A-bus does not increment the bank). Lockstep with the
+ * MANUAL_Z* defines in snes/memmap.i65. */
+/* A zoom page is a WHOLE PDF PAGE at 2x (up to MAN_Z_MAX_ROWS=96 tile rows = 768px), NOT a 1x
+ * band -- cutting it at band boundaries made the view JUMP half-way down every page. The two
+ * tile halves are sized so they exactly fill $C50000..$C7FFFF, and 1024 divides 65536, so no
+ * row ever straddles a bank (the DMA A-bus does not increment the bank). The tilemap and
+ * palette live in the $C46200..$C4FFFF hole above the shellsave. */
+#define SRAM_MANUAL_ZTILES_A_ADDR    (0xC50000L) /* BG1 half (cols 0-31) of tile row r at +r*1024; 96 rows -> $C50000-$C67FFF (bank break at row 64, exact) */
+#define SRAM_MANUAL_ZTILES_B_ADDR    (0xC68000L) /* BG2 half (cols 32-63) of tile row r at +r*1024; 96 rows -> $C68000-$C7FFFF (bank break at row 32, exact) */
+#define SRAM_MANUAL_ZTMAP_ADDR       (0xC47000L) /* prebuilt tilemap entries, row r at +r*128 = 32 words BG1 then 32 words BG2 (entry = tile | pal<<10, tile = MAN_Z_TILE0 + (r % MAN_Z_RING_ROWS)*32 + col). The MCU bakes these so the SNES never builds map words on the CPU mid-scroll. 96 rows = 12288B. */
+#define SRAM_MANUAL_ZPAL_ADDR        (0xC4A000L) /* 8 palettes x 16 BGR555 = 256B -> CGRAM 0..127 */
+#define SRAM_MANUAL_META_ADDR        (0xFF0760L) /* in-game guides viewer meta block, 16B staged at game load by manual.c (after SAVEINFO $FF0730-5F): +0 flags (bit0 = >=1 valid guide present, bit1 = transient read-error latch read by the viewer, bit2 = a zoom page is staged and ready in $C5/$C6), +1 npages of guide 0, +2 meta_abi (=2, firmware<->igmenu.bin data-contract sanity; the shell degrades to "no guides" if != this), +3 staged 1x page, +4 block-in-page, +5 content_rows, +6 zoom nrows (tile rows in the staged zoom page, 1..56), +7..8 zoom pix_h u16 LE (2x pixel height -- the viewer clamps vertical scroll to pix_h-224 so padding never shows), +9 staged zoom page, +10 staged zoom guide, +11..15 reserved. Per-guide metadata (nblocks/zoom/titles) lives in MANUAL_GUIDES $FF9000. Read by the GUIDES tab. Lockstep with MANUAL_META in snes/memmap.i65. */
+#define SRAM_CHEAT_MASTER_ADDR       (0xFF071AL) /* 1 byte: master cheat switch mirror (1 = cheats globally enabled). Published in cheat_program (= CFG.enable_cheats) and re-published when the L+R+Start+A / L+R+Start+B combos are served (main.c). The in-game CHEATS tab reads it for its status line and writes it when X toggles the master; the ACTUAL switch is the FPGA cheat_enable register, which the SNES flips by writing $82/$83 to MCU_CMD (cheat.v decodes that write directly) -- this byte is only the UI mirror. Free $FF0701..$FF07FF gap, after SS_SDD1_GATE. Lockstep with CHEAT_MASTER in snes/memmap.i65. */
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
 #define SRAM_CHEAT_CODE_STRINGS_ADDR (0xD40000L) /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans D4..D7, leaving D0..D3 free for up to 512 cheat records. */
 
 #define SRAM_CHEAT_TITLE_ADDR        (0xD80000L) /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
 #define SRAM_CHEAT_FLAGS_ADDR        (0xFF0500L) /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle. */
-#define SRAM_CHEAT_NAMES_ADDR        (0xFF0800L) /* in-game cheat overlay: first CHEAT_NAME_INGAME_MAX names, CHEAT_NAME_INGAME_LEN bytes each (31 visible + NUL), staged at game load. 64*32 = 2 KB -> fills FF0800..FF0FFF (up to FF1000=SRAM_CMD_ADDR). */
+#define SRAM_CHEAT_NAMES_ADDR        (0xFF8000L) /* in-game cheat overlay: first CHEAT_NAME_INGAME_MAX names, CHEAT_NAME_INGAME_LEN bytes each (63 visible + NUL), staged at game load. 64*64 = 4 KB -> FF8000..FF8FFF (free area above SRAM_GAMEINFO_DESCEXT $FF7600, below scratchpad $FFFF00). Lockstep with CHEAT_NAMES in snes/memmap.i65. */
+#define SRAM_MANUAL_S1META_ADDR      (0xFF0770L) /* scale-1 (1x) scrollable page meta, 16B right after MANUAL_META: +0 flags (bit0 = a 1x page is staged and ready), +1 nrows, +2..3 pix_h u16 LE (the viewer clamps vertical scroll to pix_h-224), +4 staged page, +5 staged guide, +6..7 scale-1 page count u16 LE. Lockstep with MANUAL_S1META in snes/memmap.i65. */
+#define SRAM_MANUAL_GUIDES_ADDR      (0xFF9000L) /* in-game guides list, 260B ($FF9000..$FF9103) staged at game load by manual.c (free area above CHEAT_NAMES $FF8000-$FF8FFF, below scratchpad $FFFF00). Layout: +0 count (0..8), +1 selected (active guide; SNES writes it; default 0), +2..3 rsvd, then record[8] of 32B each at +4: +0 present (1=valid; the list is compacted so 0..count-1 are present), +1 nn (0=".man", 2..8=".0N.man"), +2 flags (raw .man header flags: bit0 = LEGACY quadrant zoom -- IGNORED, never produced any more; bit1 = scrollable zoom section present), +3 npages, +4 nblocks u16 LE, +6 zoom_pages u16 LE (= nblocks when bit1 is set, else 0; a zoom page IS a 1x block rendered at 2x), +8 title[24] font-encoded NUL-term (copied raw from the .man header). Read by the GUIDES tab. Lockstep with MANUAL_GUIDES in snes/memmap.i65. */
+#define IGMENU_PERSIST_MAGIC_ADDR    (0xF4819EL) /* in-game menu session gate = the SNES-side man_pos_magic (PSRAM bank $F4), which keeps the remembered manual reading position AND the last-open tab across overlay close/reopen. Cleared to 0 here on every game load (manual_stage_meta) so position/tab never LEAK across games -- PSRAM $F4 survives a short power-cycle, so relying on stale-PSRAM alone was not enough. Lockstep with man_pos_magic / MN_POS_MAGIC in snes/igmenu.a65. */
 
 #define SRAM_SKIN_ADDR               (0xF00000L)
 
@@ -130,6 +169,24 @@ void assert_reset(void);
 void init(uint8_t *filename);
 void deassert_reset(void);
 uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header_addr);
+/* Multi-slot battery SRAM (CICLO 2). SRM_SLOT_COUNT slots: internal index 0..3,
+   UI "SLOT 1..4". Slot 0 = the legacy <stem>.srm (byte-identical); slots 1..3 =
+   <stem>.02/03/04.srm. Gated by CFG.enable_sram_slots (OFF -> srm_slot forced 0). */
+#define SRM_SLOT_COUNT 4
+extern uint8_t srm_slot;      /* LIVE session slot used for save/load naming. Set once in
+                                 migrate_and_load_srm (game load), IMMUTABLE for the session so
+                                 an in-game slot switch can never misroute an autosave. */
+extern uint8_t srm_slot_sel;  /* selected/next slot (== sidecar). == srm_slot at load; the in-game
+                                 SET command writes the sidecar + updates this; applies next load. */
+/* Build the slot's file extension (".srm" for slot 0, ".0N.srm" N=slot+1 for 1..3) into ext. */
+void srm_slot_ext(char *ext, size_t extlen, uint8_t slot);
+/* Read the /sd2snes/saves/<stem>.slot sidecar into srm_slot/srm_slot_sel (both 0 when
+   CFG off / absent / invalid). Called at game load. Bounded (one f_read). */
+void srm_slot_load(uint8_t *filename);
+/* Write the sidecar (in-game SET). Updates srm_slot_sel; NEVER touches the live srm_slot.
+   Bounded (one f_write). */
+void srm_slot_save(uint8_t *filename, uint8_t slot);
+
 uint32_t migrate_and_load_srm(uint8_t *filename, uint32_t base_addr);
 uint32_t load_sram(uint8_t* filename, uint32_t base_addr);
 uint32_t load_sram_offload(uint8_t* filename, uint32_t base_addr, uint8_t flags);
@@ -149,6 +206,7 @@ uint16_t sram_writestrn(void* buf, uint32_t addr, uint16_t size);
 void sram_readlongblock(uint32_t* buf, uint32_t addr, uint16_t count);
 uint16_t sram_writeblock(void* buf, uint32_t addr, uint16_t size);
 void save_srm(uint8_t* filename, uint32_t sram_size, uint32_t base_addr);
+void saveinfo_stage(uint8_t *filename);
 extern uint8_t current_ips_srm_source[256];
 void save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr);
 uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc);

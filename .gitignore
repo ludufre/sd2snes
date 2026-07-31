@@ -155,5 +155,7 @@ snes/menu.srm
 # file AND the $C1 localized string-pool/dispatch-table file (2-bank split). Both generated.
 snes/const_lang.a65
 snes/const_lang_str.a65
+# generated in-game HELP tab i18n tables (snes/utils/gen_igmenu_lang.py)
+snes/igmenu_lang.i65
 
 /snes/utils/__pycache__
