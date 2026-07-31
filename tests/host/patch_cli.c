@@ -37,10 +37,6 @@
 #define CANARY 0xA5
 #define WATCHDOG_SECS 10
 
-extern uint32_t patch_apply(uint32_t sram_addr, uint8_t index,
-                            uint32_t rom_base_addr, uint32_t original_rom_size,
-                            uint32_t rom_header_size);
-
 static void on_alarm(int sig) { (void)sig; _exit(124); }
 
 /* legal-to-touch window, identical to the test harness: the ROM image + BPS
@@ -59,10 +55,16 @@ static int quiet = 0;
  * SRAM_ROM_ADDR, the patch path staged in IPS slot 1, and the no-touch region
  * above SRAM_SAVE_ADDR canary-filled.  --copier runs this twice (reference, then
  * copier) so each run starts from an identical slate. */
+/* PATCH_HDR_AUTO / _HEADERED / _HEADERLESS, staged in the patch's flags byte the
+   same way ips_find_patches would (--header-mode). */
+static uint8_t hdr_mode = PATCH_HDR_AUTO;
+
 static void setup_sdram(const uint8_t *rombuf, uint32_t romsize, const char *patch) {
   host_sdram_init();
   memcpy(host_sdram + SRAM_ROM_ADDR, rombuf, romsize);
   memcpy(host_sdram + SRAM_IPS_LIST_ADDR + IPS_PATH_BASE, patch, strlen(patch) + 1);
+  host_sdram[SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE] =
+      (uint8_t)(hdr_mode << PATCH_FLAG_HDR_SHIFT);
   for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
     if (!region_is_legal(a)) host_sdram[a] = CANARY;
 }
@@ -71,11 +73,22 @@ int main(int argc, char **argv) {
   long header_override = -1;   /* -1 = auto */
   int  do_probe = 0;
   int  do_copier = 0;
+  int  do_detect = 0;          /* --detect: exercise ips_apply's header auto-detection */
+  long hdr_addr_override = -1;  /* --hdr-addr: SNES header loc (0x7FB0 LoROM / 0xFFB0 HiROM) */
   const char *rom = NULL, *patch = NULL, *out = NULL;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--header") && i + 1 < argc) header_override = strtol(argv[++i], NULL, 0);
     else if (!strcmp(argv[i], "--no-header")) header_override = 0;
+    else if (!strcmp(argv[i], "--detect")) do_detect = 1;
+    else if (!strcmp(argv[i], "--header-mode") && i + 1 < argc) {
+      const char *m = argv[++i];
+      if (!strcmp(m, "auto")) hdr_mode = PATCH_HDR_AUTO;
+      else if (!strcmp(m, "on") || !strcmp(m, "headered")) hdr_mode = PATCH_HDR_HEADERED;
+      else if (!strcmp(m, "off") || !strcmp(m, "headerless")) hdr_mode = PATCH_HDR_HEADERLESS;
+      else { fprintf(stderr, "--header-mode wants auto|on|off\n"); return 99; }
+    }
+    else if (!strcmp(argv[i], "--hdr-addr") && i + 1 < argc) hdr_addr_override = strtol(argv[++i], NULL, 0);
     else if (!strcmp(argv[i], "--probe")) do_probe = 1;
     else if (!strcmp(argv[i], "--copier")) do_copier = 1;
     else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--quiet")) quiet = 1;
@@ -87,7 +100,8 @@ int main(int argc, char **argv) {
   }
   if (!rom || !patch || (!out && !do_probe && !do_copier)) {
     fprintf(stderr,
-      "usage: %s [--header N|--no-header] [--probe] [--copier] [-q] <rom> <patch.ips|.bps> <out>\n", argv[0]);
+      "usage: %s [--header N|--no-header] [--detect] [--header-mode auto|on|off]\n"
+      "          [--probe] [--copier] [-q] <rom> <patch.ips|.bps> <out>\n", argv[0]);
     return 99;
   }
 
@@ -120,6 +134,16 @@ int main(int argc, char **argv) {
   LOG("ROM   : %s  (%ld bytes, header %ld -> %u in SDRAM)\n", rom, fsz, header, romsize);
   LOG("patch : %s  (%s)\n", patch, is_bps ? "BPS" : "IPS");
 
+  /* Header auto-detection now lives inside ips_apply(); it runs when header_addr
+   * != 0 (0x7FB0 = LoROM, matches SMW) and rom_header_size == 0.  --detect turns
+   * it on; without it we pass 0 to reproduce the plain literal apply. */
+  /* An explicit --header-mode replaces the detection entirely inside ips_apply,
+     so it is meaningful with or without --detect. */
+  LOG("hdrmode: %s\n", hdr_mode == PATCH_HDR_HEADERED ? "headered"
+                     : hdr_mode == PATCH_HDR_HEADERLESS ? "headerless" : "auto");
+  uint32_t hdr_addr_arg = (do_detect && !is_bps)
+      ? (hdr_addr_override >= 0 ? (uint32_t)hdr_addr_override : 0x7FB0u) : 0u;
+
   signal(SIGALRM, on_alarm);
 
   /* ---- --copier: apply both ways and prove byte-identical output ---------- */
@@ -127,7 +151,7 @@ int main(int argc, char **argv) {
     /* reference: legacy byte-by-byte apply, fully materialized in SDRAM */
     setup_sdram(rombuf, romsize, patch);
     alarm(WATCHDOG_SECS);
-    uint32_t ref = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header);
+    uint32_t ref = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header, hdr_addr_arg);
     alarm(0);
     if (!ref) { fprintf(stderr, "reference apply FAILED (returned 0)\n"); return 1; }
     uint32_t refsz = is_bps ? ref : (ref > romsize ? ref : romsize);
@@ -138,7 +162,7 @@ int main(int argc, char **argv) {
     /* copier mode: inline source-backup + TargetRead, descriptors for the rest */
     setup_sdram(rombuf, romsize, patch);
     alarm(WATCHDOG_SECS);
-    uint32_t cop = patch_apply_copier(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header);
+    uint32_t cop = patch_apply_copier(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header, hdr_addr_arg);
     alarm(0);
     if (!cop) { fprintf(stderr, "copier apply FAILED (returned 0 / list full)\n"); return 1; }
     host_copier_replay();   /* run the emitted descriptors like the menu copier */
@@ -193,7 +217,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  ret = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header);
+  ret = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, (uint32_t)header, hdr_addr_arg);
   alarm(0);
 
   /* ---- check the patcher stayed inside the legal window ---- */

@@ -9,7 +9,11 @@
 #include "memory.h"
 #include "fpga_spi.h"
 #include "patch.h"
+#include "patchmeta.h"
 #include "patch_copier.h"
+#include "gameinfo.h"
+#include "cheat.h"
+#include "savestate.h"
 #include "timer.h"
 #include "crc32.h"
 #include "cfg.h"
@@ -27,6 +31,18 @@ extern cfg_t CFG;
 #define BPS_VERIFY_CRC (CFG.patch_verify_integrity)
 
 uint8_t ips_pending_index = 0;
+
+/* The staged list must fit between SRAM_IPS_LIST_ADDR ($FF5000) and the
+   favorites mirror ($FF6000).  These fire at compile time so a bumped
+   IPS_MAX_PATCHES can never silently start clobbering the favorites. */
+_Static_assert(IPS_NAME_BASE + IPS_MAX_PATCHES * IPS_NAME_LEN <= IPS_FLAGS_BASE,
+               "IPS display slots overlap the flags region");
+_Static_assert(IPS_FLAGS_BASE + IPS_MAX_PATCHES <= IPS_PATH_BASE,
+               "IPS flags region overlaps the path slots");
+_Static_assert(IPS_PATH_BASE + IPS_MAX_PATCHES * IPS_PATH_LEN <= 4096,
+               "IPS list overflows $FF5000..$FF5FFF into the favorites mirror");
+_Static_assert(IPS_NAME_BADGE + 4 <= IPS_NAME_LEN,
+               "IPS badge does not fit in the display slot");
 
 /* Case-insensitive prefix check: does str start with the first prefix_len
    characters of prefix?  Returns 1 on match, 0 otherwise. */
@@ -56,18 +72,122 @@ static int istrcmp(const char *a, const char *b) {
 
 /* Scratch storage for up to IPS_MAX_PATCHES entries.  Placed in AHB RAM to avoid
    overflowing the small 16 KB main RAM.  AHB RAM is not zero-initialised;
-   entries are fully written before being read. */
-struct _ips_entry {
-    char name[IPS_NAME_LEN];
-    char full_path[IPS_PATH_LEN];
-};
-static struct _ips_entry ips_entries[IPS_MAX_PATCHES]
-    __attribute__((section(".ahbram")));
+   entries are fully written before being read.
+   Only the BASENAME is kept here, never the full path: the patches always live
+   next to the ROM (cfg_parse_patch_entry already relies on that), so the
+   directory is recomputed once at publish time.  At IPS_MAX_PATCHES=16 an entry
+   array holding full paths would be ~3 KB and blow the AHB region, which has
+   roughly a hundred bytes of slack left (see the manual.c note). */
+patch_entry_t ips_entries[IPS_MAX_PATCHES] __attribute__((section(".ahbram")));
 
-uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
-    /* Zero the count byte up front so callers always see a valid value */
-    sram_writebyte(0, sram_addr);
+/* How many entries the last scan staged; CMD_PATCH_META_SAVE writes the yml
+   back from these without touching the card again. */
+uint8_t ips_scan_count = 0;
 
+int patch_display_name(char *out, int outlen, const char *patch_basename,
+                       unsigned stem_len) {
+    const char *dot = NULL, *p;
+    unsigned len;
+    int n = 0;
+
+    if (outlen <= 0) return 0;
+    out[0] = 0;
+    if (!patch_basename) return 0;
+
+    for (p = patch_basename; *p; p++)
+        if (*p == '.') dot = p;
+    len = dot ? (unsigned)(dot - patch_basename) : (unsigned)strlen(patch_basename);
+
+    /* Everything after the ROM stem is what actually distinguishes this patch.
+       When the patch is exactly "<stem>.ips" there is no suffix, so fall back to
+       the whole (extension-less) basename rather than showing an empty row. */
+    if (stem_len < len) {
+        const char *sfx = patch_basename + stem_len;
+        unsigned slen = len - stem_len;
+        while (slen && (*sfx == '_' || *sfx == '-' || *sfx == '.' ||
+                        *sfx == '(' || *sfx == ' ')) { sfx++; slen--; }
+        if (slen) { patch_basename = sfx; len = slen; }
+    }
+
+    while (n < outlen - 1 && (unsigned)n < len) { out[n] = patch_basename[n]; n++; }
+    out[n] = 0;
+    return n;
+}
+
+/* Classify a filename by its extension: PATCH_TYPE_IPS, PATCH_TYPE_BPS, or -1 when
+   it is neither.  ONE implementation for all three sites that need this (the
+   directory scan, patch_apply_impl's dispatch to bps_apply, and the Recents/
+   Favorites restage in main.c), because they disagreed: the restage tested only
+   `(dot[1] | 32) == 'b'`, which also claims ".bak", ".bin" and ".bmp".
+   Case-insensitive, and the extension must be EXACTLY three characters. */
+int patch_ext_type(const char *name) {
+    const char *dot = NULL;
+    char e[3];
+    int i;
+
+    if (!name) return -1;
+    for (const char *p = name; *p; p++)
+        if (*p == '.') dot = p;
+    if (!dot) return -1;
+
+    for (i = 0; i < 3; i++) {
+        char c = dot[1 + i];
+        if (!c) return -1;                      /* extension shorter than 3 */
+        if (c >= 'a' && c <= 'z') c -= 32;
+        e[i] = c;
+    }
+    if (dot[4]) return -1;                      /* extension longer than 3 */
+
+    if (e[0] == 'I' && e[1] == 'P' && e[2] == 'S') return PATCH_TYPE_IPS;
+    if (e[0] == 'B' && e[1] == 'P' && e[2] == 'S') return PATCH_TYPE_BPS;
+    return -1;
+}
+
+/* Does the patch file `fn` belong to the ROM whose basename is `romfile`, whose stem
+   (everything before its last '.') is `stem_len` characters long?  Returns the
+   PATCH_TYPE_* on a match, -1 otherwise.
+
+   Pure string code, no I/O, so the host tests can cover it -- which matters because
+   the last rule below is subtle enough to get wrong silently (cut at the FIRST dot
+   instead of the last and "Foo.v2.ips" stops being offered).
+
+   In order:
+     1. the extension is exactly "ips"/"bps"                     (patch_ext_type)
+     2. the name starts with the ROM stem, case-insensitively    (istartswith)
+     3. something follows that stem
+     4. the patch's OWN stem is longer than the ROM's.
+
+   Rule 4 is the one that needs explaining.  A patch whose name is the ROM stem plus
+   nothing but an extension is INDISTINGUISHABLE from the patch that produced this ROM:
+   "create patched ROM" writes <patch stem>.sfc, so the .ips that made it ends up
+   sitting next to it under exactly that stem, and it would be offered again on every
+   launch.  Re-applying an IPS over an already-patched image corrupts it -- IPS carries
+   no checksum, source size or target size to defend itself (unlike BPS, whose CRCs are
+   only read when CFG.patch_verify_integrity is on, and it is off by default).
+   The legitimate "Foo.sfc + Foo.ips" convention loses out here; the Web Manager renames
+   those to "Foo - Patch 1.ips" during its 2.15 card migration so nothing is lost.
+
+   The test is EXACT, not a heuristic: patch_ext_type has already guaranteed a last dot
+   with a 3-character extension, so the patch's stem length is strlen(fn)-4, and rule 2
+   has already established that the first stem_len characters match.  Equal prefix plus
+   equal length means the two stems are the same string. */
+int patch_belongs_to_rom(const char *fn, const char *romfile, unsigned stem_len) {
+    size_t len;
+    int ptype = patch_ext_type(fn);
+
+    if (ptype < 0 || !stem_len) return -1;
+    if (!istartswith(fn, romfile, stem_len)) return -1;
+    len = strlen(fn);
+    if (len <= stem_len) return -1;         /* nothing after the stem */
+    if (len - 4 == stem_len) return -1;     /* stem + extension only: see above */
+    return ptype;
+}
+
+/* Scan the ROM's directory for matching patches into ips_entries[].  Kept in its
+   own frame (dirpath[256] + DIR + FILINFO) so it never coexists on the stack
+   with the YAML parser's ~272-byte token -- the LPC175x has ~2.5 KB of stack
+   headroom and that pair has overflowed into .bss before (cheat menu hang). */
+static uint8_t patch_scan_dir(const uint8_t *rom_path) {
     const char *path = (const char *)rom_path;
 
     /* Find last '/' to split directory from filename */
@@ -85,10 +205,13 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
     size_t stem_len = last_dot ? (size_t)(last_dot - filename) : strlen(filename);
     if (stem_len == 0) return 0;
 
-    /* Build directory path string */
+    /* Build directory path string.  dirlen is the length WITHOUT a trailing
+       slash (0 for the card root), matching how patch_publish reassembles
+       "<dirlen bytes>/<basename>" -- keep the two in step. */
     char dirpath[256];
+    size_t dirlen = 0;
     if (last_slash && last_slash != path) {
-        size_t dirlen = (size_t)(last_slash - path);
+        dirlen = (size_t)(last_slash - path);
         if (dirlen >= sizeof(dirpath)) dirlen = sizeof(dirpath) - 1;
         memcpy(dirpath, path, dirlen);
         dirpath[dirlen] = '\0';
@@ -99,13 +222,18 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
 
     DIR dir;
     FILINFO fno;
-    /* Re-use the global LFN buffer (same as scan_dir in filetypes.c) */
+    /* Re-use the global LFN buffer (same as scan_dir in filetypes.c).
+       CAUTION: every f_readdir below OVERWRITES file_lfn, so rom_path must NOT
+       be file_lfn -- `filename`/`stem_len` point into it and would turn to
+       garbage on the first directory entry, matching nothing and reporting zero
+       patches (a silently missing dialog).  The QUERY_IPS_PATCHES handler keeps
+       its own buffer for exactly this reason; don't "optimize" it away. */
     fno.lfsize = 255;
     fno.lfname = (TCHAR *)file_lfn;
 
     FRESULT res = f_opendir(&dir, dirpath);
     if (res != FR_OK) {
-        printf("ips_find_patches: opendir(%s) failed: %d\n", dirpath, res);
+        printf("patch_scan_dir: opendir(%s) failed: %d\n", dirpath, res);
         return 0;
     }
 
@@ -120,83 +248,111 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
         const char *fn = fno.lfname[0] ? fno.lfname : fno.fname;
         if (fn[0] == '.') continue;
 
-        /* Check that the file has a '.' before extending */
-        const char *dot = NULL;
-        for (const char *p = fn; *p; p++) {
-            if (*p == '.') dot = p;
-        }
-        if (!dot) continue;
-
-        /* Check extension == "IPS" or "BPS" (case-insensitive) */
-        const char *ext = dot + 1;
-        char eu[4] = {0, 0, 0, 0};
-        for (int i = 0; i < 3 && ext[i]; i++) {
-            eu[i] = ext[i];
-            if (eu[i] >= 'a' && eu[i] <= 'z') eu[i] -= 32;
-        }
-        int is_ips = (eu[0] == 'I' && eu[1] == 'P' && eu[2] == 'S' && eu[3] == 0);
-        int is_bps = (eu[0] == 'B' && eu[1] == 'P' && eu[2] == 'S' && eu[3] == 0);
-        if (!is_ips && !is_bps) continue;
-
-        /* Filename must start with the ROM stem */
-        if (!istartswith(fn, filename, stem_len)) continue;
-
-        /* Also require total name length > stem_len so "ROM1.ips" (for ROM1.sfc)
-           counts but a bare empty-extra file does not slip through */
-        if (strlen(fn) <= stem_len) continue;
+        /* Extension, ROM-stem prefix, and the same-stem rule -- one pure predicate,
+           so the host tests can exercise it without FatFs (see patch_belongs_to_rom). */
+        int ptype = patch_belongs_to_rom(fn, filename, (unsigned)stem_len);
+        if (ptype < 0) continue;
 
         if (count >= IPS_MAX_PATCHES) break;
 
-        /* Display name: filename without the .ips extension */
-        size_t name_len = (size_t)(dot - fn);
-        if (name_len >= IPS_NAME_LEN) name_len = IPS_NAME_LEN - 1;
-        memcpy(ips_entries[count].name, fn, name_len);
-        ips_entries[count].name[name_len] = '\0';
-
-        /* Full SD path: dirpath + '/' + fn */
-        {
-            int poff = 0;
-            for (const char *d = dirpath; *d && poff < IPS_PATH_LEN - 1; )
-                ips_entries[count].full_path[poff++] = *d++;
-            if (poff > 0 && ips_entries[count].full_path[poff - 1] != '/'
-                    && poff < IPS_PATH_LEN - 1)
-                ips_entries[count].full_path[poff++] = '/';
-            else if (poff == 0 && poff < IPS_PATH_LEN - 1)
-                ips_entries[count].full_path[poff++] = '/';
-            for (const char *f = fn; *f && poff < IPS_PATH_LEN - 1; )
-                ips_entries[count].full_path[poff++] = *f++;
-            ips_entries[count].full_path[poff] = '\0';
+        /* Drop anything that would not survive staging intact.  The old code
+           truncated silently, which aims f_open() at a different (or missing)
+           file; leaving the patch out of the list is the honest failure. */
+        if (strlen(fn) >= PATCH_BASENAME_LEN
+                || dirlen + 1 + strlen(fn) >= IPS_PATH_LEN) {
+            printf("patch_scan_dir: name too long, skipping %s\n", fn);
+            continue;
         }
 
+        strcpy(ips_entries[count].basename, fn);
+        ips_entries[count].flags = (uint8_t)ptype;
         count++;
     }
     f_closedir(&dir);
 
-    if (count == 0) return 0;
-
-    /* Insertion sort by display name, ascending, case-insensitive */
+    /* Insertion sort by basename, ascending, case-insensitive */
     for (uint8_t i = 1; i < count; i++) {
-        struct _ips_entry tmp;
+        patch_entry_t tmp;
         memcpy(&tmp, &ips_entries[i], sizeof(tmp));
         int8_t j = (int8_t)i - 1;
-        while (j >= 0 && istrcmp(ips_entries[j].name, tmp.name) > 0) {
-            memcpy(&ips_entries[j + 1], &ips_entries[j], sizeof(struct _ips_entry));
+        while (j >= 0 && istrcmp(ips_entries[j].basename, tmp.basename) > 0) {
+            memcpy(&ips_entries[j + 1], &ips_entries[j], sizeof(patch_entry_t));
             j--;
         }
         memcpy(&ips_entries[j + 1], &tmp, sizeof(tmp));
     }
 
-    /* Write results to SRAM */
-    sram_writebyte(count, sram_addr);
-    for (uint8_t i = 0; i < count; i++) {
-        sram_writeblock(ips_entries[i].name,
-                        sram_addr + 1 + (uint32_t)i * IPS_NAME_LEN,
-                        (uint16_t)(strlen(ips_entries[i].name) + 1));
-        sram_writeblock(ips_entries[i].full_path,
-                        sram_addr + IPS_PATH_BASE + (uint32_t)i * IPS_PATH_LEN,
-                        (uint16_t)(strlen(ips_entries[i].full_path) + 1));
-    }
+    return count;
+}
 
+/* Stage the scanned entries into the SNES-visible list: display name, badge,
+   flags byte and full path per slot.  The path is assembled straight into the
+   write buffer instead of being cached per entry, which is what keeps
+   ips_entries[] small enough for the AHB region.  noinline is load-bearing: the
+   whole point of the three-frame split is that this 192-byte buffer is NOT live
+   while patch_scan_dir's ~490-byte frame or the YAML token are, and inlining it
+   into ips_find_patches puts it back on the same frame (measured: 776 bytes of
+   peak instead of ~500, on a stack with about 2.4 KB to spare). */
+__attribute__((noinline))
+static void patch_publish(const uint8_t *rom_path, uint32_t sram_addr,
+                          uint8_t count) {
+    const char *path = (const char *)rom_path;
+    const char *last_slash = NULL, *filename, *last_dot = NULL, *p;
+    char buf[IPS_PATH_LEN];
+    unsigned stem_len, dirlen;
+
+    for (p = path; *p; p++) if (*p == '/') last_slash = p;
+    filename = last_slash ? last_slash + 1 : path;
+    for (p = filename; *p; p++) if (*p == '.') last_dot = p;
+    stem_len = last_dot ? (unsigned)(last_dot - filename) : (unsigned)strlen(filename);
+
+    if (last_slash && last_slash != path) {
+        dirlen = (unsigned)(last_slash - path);
+        memcpy(buf, path, dirlen);
+    } else {
+        dirlen = 0;
+    }
+    buf[dirlen] = '/';
+
+    for (uint8_t i = 0; i < count; i++) {
+        uint32_t slot = sram_addr + IPS_NAME_BASE + (uint32_t)i * IPS_NAME_LEN;
+        char name[IPS_NAME_BADGE];
+        char badge[4];
+        int n;
+
+        n = patch_display_name(name, sizeof(name), ips_entries[i].basename, stem_len);
+        sram_writeblock(name, slot, (uint16_t)(n + 1));
+
+        memcpy(badge, (ips_entries[i].flags & PATCH_FLAG_TYPE_MASK) == PATCH_TYPE_BPS
+                          ? "BPS" : "IPS", 4);
+        sram_writeblock(badge, slot + IPS_NAME_BADGE, sizeof(badge));
+        sram_writebyte(ips_entries[i].flags, sram_addr + IPS_FLAGS_BASE + i);
+
+        /* dirlen + 1 + strlen(basename) < IPS_PATH_LEN was checked by the scan */
+        strcpy(buf + dirlen + 1, ips_entries[i].basename);
+        sram_writeblock(buf, sram_addr + IPS_PATH_BASE + (uint32_t)i * IPS_PATH_LEN,
+                        (uint16_t)(strlen(buf) + 1));
+    }
+}
+
+uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
+    uint8_t count;
+
+    /* Zero the count byte up front so callers always see a valid value */
+    sram_writebyte(0, sram_addr);
+    ips_scan_count = 0;
+
+    /* Three SIBLING frames, never nested: the directory scan (dirpath[256] +
+       DIR + FILINFO), the publish step (one 192-byte path buffer) and the YAML
+       overlay (a ~272-byte yaml_token_t).  Nesting them is what overflowed the
+       LPC175x stack into .bss the last time this pattern was written by hand. */
+    count = patch_scan_dir(rom_path);
+    if (!count) return 0;
+    patch_publish(rom_path, sram_addr, count);
+    patchmeta_apply(rom_path, ips_entries, count, sram_addr);
+
+    sram_writebyte(count, sram_addr);
+    ips_scan_count = count;
     printf("ips_find_patches: %d patch(es) for %s\n", count, rom_path);
     return count;
 }
@@ -303,14 +459,92 @@ static uint16_t psram_readstrn(void *buf, uint32_t addr, uint16_t size) {
         if (!(*(tgt++) = FPGA_RX_BYTE())) break;
         elemcount++;
     }
+    /* Step back onto the last byte written to force a terminator -- but ONLY if
+       something was written.  When the very first FPGA_WAIT_RDY_TO stalls (exactly
+       the case these helpers exist to survive) the loop breaks before tgt++ ever
+       runs, and an unconditional tgt-- would read and zero buf[-1]: one byte BEFORE
+       the caller's buffer, which in patch_apply_impl is a stack array.  A size of 0
+       lands here the same way. */
+    if (tgt == (uint8_t *)buf) {
+        *tgt = 0;
+        FPGA_DESELECT();
+        return 0;
+    }
     tgt--;
     if (*tgt) *tgt = 0;
     FPGA_DESELECT();
     return elemcount;
 }
 
+/* --- IPS copier-header auto-detection ---------------------------------------
+ * An IPS carries no metadata about its base ROM, so a patch authored against a
+ * headered (512-byte copier prefix) ROM is byte-for-byte indistinguishable from
+ * a headerless one by its record offsets alone -- guessing from offsets is
+ * exactly the inverted heuristic that used to corrupt unheadered patches (see
+ * the long comment in ips_apply below).  Instead of guessing we VALIDATE:
+ * materialize the SNES internal header the final image would carry under each
+ * hypothesis (literal vs shifted +512) from the base ROM already staged in
+ * PSRAM plus the patch's own header-region records, and pick the coherent one.
+ * Conservative: shift by 512 ONLY when the headered hypothesis yields a coherent
+ * header AND the literal one does not, so a working (matched-convention) patch
+ * -- e.g. Zelda: Parallel Worlds, which coheres literal -- is never touched.
+ * The detection is FOLDED into ips_apply()'s pass-1 scan (below) so the IPS is
+ * read only once; the helpers ips_hdr_overlay()/ips_hdr_coherent() do the work. */
+#define IPS_HDR_WIN  0x30u   /* header window [header_addr .. +0x30): covers the
+                                map/type/size bytes (+0x25..+0x27) and the
+                                checksum-complement/checksum pair (+0x2C/+0x2E) */
+
+static uint8_t ips_hdr_base[IPS_HDR_WIN] __attribute__((section(".ahbram")));
+static uint8_t ips_hdr_lit[IPS_HDR_WIN]  __attribute__((section(".ahbram")));
+static uint8_t ips_hdr_hdr[IPS_HDR_WIN]  __attribute__((section(".ahbram")));
+static uint8_t ips_hdr_tmp[IPS_HDR_WIN]  __attribute__((section(".ahbram")));
+
+/* Overlay one patch record onto a candidate header window, for the bytes that
+   land inside [header_addr+adj .. +IPS_HDR_WIN).  A data record (is_rle==0)
+   reads the intersecting bytes from the open file at data_start+(p-P); an RLE
+   record fills them with rle_val.  Returns the number of bytes written (0 if the
+   record misses the window) so the caller can tell whether the patch actually
+   authored this header. */
+static uint32_t ips_hdr_overlay(uint8_t *win, uint32_t header_addr, uint32_t adj,
+                                uint32_t P, uint32_t L, uint32_t data_start,
+                                int is_rle, uint8_t rle_val) {
+    uint32_t wstart = header_addr + adj;
+    uint32_t wend   = wstart + IPS_HDR_WIN;
+    uint32_t a = (P > wstart) ? P : wstart;
+    uint32_t b = ((P + L) < wend) ? (P + L) : wend;
+    if (a >= b) return 0;               /* record misses this window entirely */
+    uint32_t n = b - a;
+    if (is_rle) {
+        for (uint32_t i = 0; i < n; i++) win[(a - wstart) + i] = rle_val;
+    } else {
+        UINT br;
+        f_lseek(&file_handle, data_start + (a - P));
+        f_read(&file_handle, ips_hdr_tmp, n, &br);
+        for (UINT i = 0; i < br; i++) win[(a - wstart) + i] = ips_hdr_tmp[i];
+    }
+    return n;
+}
+
+/* Is the window a coherent SNES internal header for an image of image_size
+   bytes?  Requires the checksum/complement pair to XOR to 0xFFFF and the
+   declared ROM-size byte to be consistent with the actual image size. */
+static int ips_hdr_coherent(const uint8_t *win, uint32_t image_size) {
+    uint16_t comp = (uint16_t)win[0x2C] | ((uint16_t)win[0x2D] << 8);
+    uint16_t chk  = (uint16_t)win[0x2E] | ((uint16_t)win[0x2F] << 8);
+    if ((uint16_t)(comp ^ chk) != 0xFFFF) return 0;
+    uint32_t nominal = 1024u << (win[0x27] & 0x0F);   /* declared ROM size */
+    return image_size && (image_size <= nominal) && (image_size > (nominal >> 2));
+}
+
+/* How ips_apply() resolved the copier-header convention, for the USB debug
+   breadcrumb memory.c writes to $FF072E as 0xD0 + this value:
+     0 (D0) offsets applied literally      2 (D2) user forced headered
+     1 (D1) auto-detection shifted by 512  3 (D3) user forced headerless */
+uint8_t ips_header_adj_used = 0;
+
 uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
-                   uint32_t original_rom_size, uint32_t rom_header_size) {
+                   uint32_t original_rom_size, uint32_t rom_header_size,
+                   uint32_t header_addr) {
     if (index < 1 || index > IPS_MAX_PATCHES) return 0;
 
     patch_io_err = 0; /* PR#292 fix #1: clear stall latch for this apply */
@@ -320,6 +554,13 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     psram_readstrn(ips_path,
                   sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(ips_path));
+
+    /* Header convention for this patch: AUTO (detect) unless the user pinned it
+       on the patch screen.  Staged alongside the path so every launch path
+       (browser, recents, favorites, autoboot) gets it without a wider ABI. */
+    uint8_t pflags = 0;
+    psram_readblock(&pflags, sram_addr + IPS_FLAGS_BASE + (uint32_t)(index - 1), 1);
+    uint8_t hmode = PATCH_HDR_MODE(pflags);
 
     printf("Applying IPS: %s\n", ips_path);
 
@@ -350,6 +591,22 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     uint32_t adj_max_end = 0;
     uint8_t  rec[3];
 
+    /* Header auto-detection, FOLDED into pass 1 so the IPS is scanned only once
+       (a separate detection scan doubled the SD read time on big patches).
+       Enabled only for a headerless-convention base (rom_header_size == 0) with a
+       known header location; header_addr == 0 disables it (host tests / opt-out).
+       We build the SNES internal header the final image would carry under each
+       hypothesis -- literal (adj 0) and headered (adj 512) -- from the base ROM
+       already in PSRAM plus the patch's own header-region records, then pick the
+       coherent one after the scan. */
+    int detect = (hmode == PATCH_HDR_AUTO) && (rom_header_size == 0) && (header_addr != 0);
+    uint32_t hdr_touched = 0;
+    if (detect) {
+        psram_readblock(ips_hdr_base, rom_base_addr + header_addr, IPS_HDR_WIN);
+        memcpy(ips_hdr_lit, ips_hdr_base, IPS_HDR_WIN);
+        memcpy(ips_hdr_hdr, ips_hdr_base, IPS_HDR_WIN);
+    }
+
     for (;;) {
         f_read(&file_handle, rec, 3, &br);
         if (br != 3) break;
@@ -368,11 +625,22 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
             uint32_t offset = ((uint32_t)rec[0] << 16) | ((uint32_t)rec[1] << 8) | rec[2];
             uint32_t rle_count = ((uint16_t)rle[0] << 8) | rle[1];
             if (offset + rle_count > max_end) max_end = offset + rle_count;
+            if (detect) {
+                uint8_t rle_val = rle[2];
+                ips_hdr_overlay(ips_hdr_lit, header_addr, 0, offset, rle_count, 0, 1, rle_val);
+                hdr_touched |= ips_hdr_overlay(ips_hdr_hdr, header_addr, 0x200u, offset, rle_count, 0, 1, rle_val);
+            }
         } else {
             uint32_t offset = ((uint32_t)rec[0] << 16) | ((uint32_t)rec[1] << 8) | rec[2];
             if (offset + (uint32_t)hunk_size > max_end) max_end = offset + (uint32_t)hunk_size;
-            /* Skip data bytes */
-            f_lseek(&file_handle, file_handle.fptr + hunk_size);
+            uint32_t data_start = file_handle.fptr;
+            if (detect) {
+                ips_hdr_overlay(ips_hdr_lit, header_addr, 0, offset, hunk_size, data_start, 0, 0);
+                hdr_touched |= ips_hdr_overlay(ips_hdr_hdr, header_addr, 0x200u, offset, hunk_size, data_start, 0, 0);
+            }
+            /* Skip data bytes (from the captured start; an overlay above may have
+               moved the file pointer) */
+            f_lseek(&file_handle, data_start + hunk_size);
         }
     }
 
@@ -393,7 +661,38 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
      * failed its CRC.  Standard tools (Lunar IPS / Floating IPS / RomPatcher.js)
      * apply records at their literal offsets; matching the patch's header
      * convention to the ROM is the user's responsibility, exactly as on a PC. */
-    adj = rom_header_size;
+    /* A user override wins outright, and is ABSOLUTE rather than relative to
+       rom_header_size: the image staged in PSRAM is always header-stripped, so
+       "headered" means the offsets count the 512 bytes and "headerless" means
+       they do not, whatever form the ROM file on the card happened to be in.
+       That is what makes HEADERLESS useful on a ROM that does carry a copier
+       header, where the default would otherwise shift by 512. */
+    ips_header_adj_used = 0;
+    if (hmode == PATCH_HDR_HEADERED) {
+        adj = 0x200u;
+        ips_header_adj_used = 2;
+        printf("IPS: header mode forced to headered -> shift offsets by 512\n");
+    } else if (hmode == PATCH_HDR_HEADERLESS) {
+        adj = 0;
+        ips_header_adj_used = 3;
+        printf("IPS: header mode forced to headerless -> literal offsets\n");
+    } else {
+        adj = rom_header_size;
+        if (detect) {
+            /* Shift +512 ONLY when the headered image coheres AND the literal one does
+               not, AND the patch actually authored the headered header (hdr_touched) --
+               conservative, so a working matched-convention patch (Zelda: Parallel
+               Worlds coheres literal) is never flipped. */
+            uint32_t size_lit = max_end;
+            uint32_t size_hdr = (max_end > 0x200u) ? (max_end - 0x200u) : 0;
+            if (hdr_touched && ips_hdr_coherent(ips_hdr_hdr, size_hdr)
+                            && !ips_hdr_coherent(ips_hdr_lit, size_lit)) {
+                adj = 0x200u;
+                ips_header_adj_used = 1;
+                printf("IPS: headered patch auto-detected -> shift offsets by 512\n");
+            }
+        }
+    }
     if (adj > 0)
         printf("IPS: header offset correction: %lu bytes\n", (unsigned long)adj);
 
@@ -1097,7 +1396,8 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
 
 static uint32_t patch_apply_impl(uint32_t sram_addr, uint8_t index,
                                  uint32_t rom_base_addr, uint32_t original_rom_size,
-                                 uint32_t rom_header_size, uint8_t use_copier) {
+                                 uint32_t rom_header_size, uint32_t header_addr,
+                                 uint8_t use_copier) {
     if (index < 1 || index > IPS_MAX_PATCHES) return 0;
 
     /* Read the stored SD path to determine the patch format from its extension */
@@ -1111,28 +1411,20 @@ static uint32_t patch_apply_impl(uint32_t sram_addr, uint8_t index,
         return 0;
     }
 
-    const char *dot = NULL;
-    for (const char *p = (const char *)path; *p; p++)
-        if (*p == '.') dot = p;
-
-    if (dot) {
-        char e0 = dot[1], e1 = dot[2], e2 = dot[3];
-        if (e0 >= 'a' && e0 <= 'z') e0 -= 32;
-        if (e1 >= 'a' && e1 <= 'z') e1 -= 32;
-        if (e2 >= 'a' && e2 <= 'z') e2 -= 32;
-        if (e0 == 'B' && e1 == 'P' && e2 == 'S')
-            return bps_apply(sram_addr, index, rom_base_addr, original_rom_size,
-                             use_copier);
-    }
+    if (patch_ext_type((const char *)path) == PATCH_TYPE_BPS)
+        return bps_apply(sram_addr, index, rom_base_addr, original_rom_size,
+                         use_copier);
     /* IPS is not copier-accelerated (it is already fast vs a big BPS); always the
        legacy in-place apply regardless of use_copier. */
-    return ips_apply(sram_addr, index, rom_base_addr, original_rom_size, rom_header_size);
+    return ips_apply(sram_addr, index, rom_base_addr, original_rom_size,
+                     rom_header_size, header_addr);
 }
 
 uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
-                     uint32_t original_rom_size, uint32_t rom_header_size) {
+                     uint32_t original_rom_size, uint32_t rom_header_size,
+                     uint32_t header_addr) {
     return patch_apply_impl(sram_addr, index, rom_base_addr, original_rom_size,
-                            rom_header_size, 0);
+                            rom_header_size, header_addr, 0);
 }
 
 /* Copier-accelerated apply: for a .bps, decode the action stream and EMIT copier
@@ -1144,7 +1436,293 @@ uint32_t patch_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
    descriptors via the menu copier before booting), or 0 on error / list-full ->
    caller should fall back to patch_apply (byte-by-byte). */
 uint32_t patch_apply_copier(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
-                            uint32_t original_rom_size, uint32_t rom_header_size) {
+                            uint32_t original_rom_size, uint32_t rom_header_size,
+                            uint32_t header_addr) {
     return patch_apply_impl(sram_addr, index, rom_base_addr, original_rom_size,
-                            rom_header_size, 1);
+                            rom_header_size, header_addr, 1);
 }
+
+/* --- Patched-ROM export ------------------------------------------------- */
+/* The whole export is Mk.III-only: the mk2's LPC1754 has 122624 bytes of flash and
+   this firmware already fills it.  The patch-selector context menu still OPENS on the
+   mk2 (its header-mode entry is built for every config); only the "create patched ROM"
+   entry is gated there -- greyed, and refused at the top of patch_create_rom, since
+   greying alone is cosmetic in that menu -- so nothing can reach these.  Gating a heavy
+   feature per config is the established escape hatch when the mk2 flash runs out. */
+#ifndef CONFIG_MK2
+
+/* Name the exported ROM after the PATCH FILE, not after a composed label:
+   "<dir>/Chrono Trigger (USA) - [BR].ips" -> "<dir>/Chrono Trigger (USA) - [BR].sfc".
+   The patch already carries the ROM stem plus whatever separator its author chose,
+   so this reads naturally next to the original and needs no sanitising -- it IS a
+   filename that exists on this card, so every character in it is already FAT-legal.
+   The old scheme wrapped the derived suffix in parentheses and produced things like
+   "Chrono Trigger (USA) ([BR]).sfc".
+   The yml "Name:" deliberately does NOT feed this: it is a human label for the menu
+   row (it may be long, repeated across patches, or contain characters FAT rejects),
+   and a display string has no business deciding a filename.
+   A patch sharing the ROM's exact stem could derive the ROM's own name, but such a
+   patch is never listed in the first place (patch_belongs_to_rom refuses the shape)
+   -- and any name collision, the original ROM included, is refused by the f_stat
+   check anyway.  Returns 0 if it does not fit. */
+static int patch_export_name(char *out, int outlen, const char *patch_path) {
+    const char *dot = strrchr(patch_path, '.');
+    int n = dot ? (int)(dot - patch_path) : (int)strlen(patch_path);
+
+    if (n + 5 > outlen)
+        return 0;
+    memcpy(out, patch_path, (size_t)n);
+    memcpy(out + n, ".sfc", 5);
+    return 1;
+}
+
+int patch_export_exists(const uint8_t *patch_path) {
+    char out[IPS_PATH_LEN];
+    FILINFO fno;
+
+    if (!patch_export_name(out, sizeof(out), (const char *)patch_path))
+        return 0;   /* name would not fit -- let the write path report that */
+    fno.lfname = NULL;
+    if (f_stat((TCHAR *)out, &fno) != FR_OK) return 0;
+    /* Stage WHERE the collision is: both refusal paths want the browser to end
+       up ON the existing file rather than wherever it happens to be -- the
+       CMD_EXPORT_CHECK refusal stays in place (path unread, harmless), and the
+       belt-and-braces refusal inside the export reloads the menu, which then
+       reads this back the same way a successful export's landing path is read. */
+    sram_writestrn((uint8_t *)out, SRAM_EXPORT_PATH_ADDR, sizeof(out));
+    return 1;
+}
+
+int patch_export_write(const uint8_t *patch_path,
+                       uint32_t rom_base_addr, uint32_t size) {
+    char out[IPS_PATH_LEN];
+    FILINFO fno;
+
+    if (!size || !patch_path[0]) return 0;
+
+    if (!patch_export_name(out, sizeof(out), (const char *)patch_path))
+        return 0;
+
+    /* An existing .sfc under this name is REFUSED, never renamed around: the old
+       dedup ("<...> 2.sfc".."<...> 9.sfc") silently duplicated a multi-megabyte
+       ROM whenever the user re-ran an export by accident, and split the saves
+       between two stems.  patch_export_command already checked this BEFORE the
+       load and reported PATCH_EXPORT_EXISTS; this re-check is belt and braces. */
+    fno.lfname = NULL;
+    if (f_stat((TCHAR *)out, &fno) == FR_OK) return 0;
+
+    /* Always headerless: that is the form staged in PSRAM (load_rom seeks past
+       any copier header), and it is what every modern tool expects. */
+    printf("patch_export: writing %s (%lu bytes)\n", out, (unsigned long)size);
+    if (!save_sram((uint8_t *)out, size, rom_base_addr)) return 0;
+    /* Publish where it landed so the reloaded browser can walk to it and put the
+       cursor on it -- finding a freshly created file by hand in a folder of
+       hundreds is exactly the chore this feature should not create. */
+    sram_writestrn((uint8_t *)out, SRAM_EXPORT_PATH_ADDR, sizeof(out));
+    return 1;
+}
+
+/* --- Sidecar asset copy for the patched-ROM export ----------------------- */
+
+
+/* Stream the ALREADY-OPEN source (global file_handle) into dst_path.  Splitting it
+   this way is what lets the caller keep a SINGLE 256-byte path buffer: the source
+   name is dead the moment f_open succeeds, so the destination is built over it.
+   Returns 1 on success, 0 on failure. */
+static int patch_copy_to(const char *dst_path) {
+    FIL dst;
+    UINT br, bw;
+    int ok = 1;
+
+    if (f_open(&dst, (TCHAR *)dst_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
+        file_close();
+        file_res = 0;
+        return 0;
+    }
+    for (;;) {
+        if (f_read(&file_handle, file_buf, 512, &br) != FR_OK) { ok = 0; break; }
+        if (!br) break;
+        if (f_write(&dst, file_buf, br, &bw) != FR_OK || bw != br) { ok = 0; break; }
+    }
+    /* f_close flushes the last dirty sector AND the directory entry -- if it fails
+       the destination is short, so it has to count as a failure or the truncated
+       file would survive the f_unlink below. */
+    if (f_close(&dst) != FR_OK) ok = 0;
+    file_close();
+    file_res = 0;
+    /* A half-written save or manual is worse than none: it would load as garbage
+       instead of being silently absent. */
+    if (!ok) f_unlink((TCHAR *)dst_path);
+    return ok;
+}
+
+/* Do src_key and dst_key name the SAME asset file?  path_asset derives bucket and
+   stem from the LEAF of its key, so the built paths are identical exactly when the
+   leaf stems match (case-insensitively -- FAT).  This is the NORMAL case for every
+   save-keyed sidecar: the saves of a patched session are filed under the PATCH's
+   stem, and the export itself is NAMED after the patch -- a colliding name is
+   refused outright (PATCH_EXPORT_EXISTS), never renamed around -- so the
+   destination stem IS the source stem.
+   Streaming a file onto itself is not a copy -- patch_copy_to's FA_CREATE_ALWAYS
+   truncates the source mid-read (multi-cluster files then walk a freed FAT chain
+   and fail), and its error path f_unlinks the USER'S ORIGINAL save.  Skipping is
+   the correct outcome, not a workaround: the asset already sits exactly where the
+   exported ROM (same stem) will look for it.  (The sgb/ namespace cannot make two
+   equal stems diverge here: the export refuses .gb outright.) */
+static int patch_same_asset(const uint8_t *src_key, const uint8_t *dst_key) {
+    const char *a = (const char *)src_key, *b = (const char *)dst_key;
+    const char *la = a, *lb = b, *da = NULL, *db = NULL, *p;
+    unsigned na, nb;
+
+    for (p = a; *p; p++) if (*p == '/') la = p + 1;
+    for (p = b; *p; p++) if (*p == '/') lb = p + 1;
+    for (p = la; *p; p++) if (*p == '.') da = p;
+    for (p = lb; *p; p++) if (*p == '.') db = p;
+    na = da ? (unsigned)(da - la) : (unsigned)strlen(la);
+    nb = db ? (unsigned)(db - lb) : (unsigned)strlen(lb);
+    return na == nb && istartswith(lb, la, na);
+}
+
+/* One bucketed sidecar: <root>[sgb/]<BB>/<stem><ext>, src_key -> dst_key.
+   Returns 1 copied, 0 nothing to copy (or already in place), -1 tried and failed. */
+static int patch_copy_asset(const char *root, const uint8_t *src_key,
+                            const uint8_t *dst_key, const char *ext) {
+    char path[256];
+
+    if (patch_same_asset(src_key, dst_key)) return 0;   /* self-copy: see above */
+    if (path_asset(path, sizeof(path), root, (const char *)src_key, ext) < 0) return 0;
+    file_open((uint8_t *)path, FA_READ);
+    if (file_res) { file_res = 0; return 0; }   /* asset simply does not exist */
+
+    /* Source open -> its name is dead; reuse the buffer.  Everything below only runs
+       when there IS something to copy, which also keeps path_asset_mkdir (and its
+       312-byte check_or_create_folder frame) off the common path and stops it from
+       littering the card with empty <BB>/ directories for the ~20 absent sidecars. */
+    if (path_asset(path, sizeof(path), root, (const char *)dst_key, ext) < 0) {
+        file_close();
+        file_res = 0;
+        return -1;
+    }
+    path_asset_mkdir(path);
+    return patch_copy_to(path) ? 1 : -1;
+}
+
+/* Sidecars that live NEXT TO the rom instead of under /sd2snes (only .cov).
+   noinline is load-bearing, same as patch_publish: inlined, its 256-byte buffer
+   stays live in patch_export_copy_assets across ALL ~22 assets instead of just
+   this one, and this chain already sits near the stack ceiling for minutes. */
+__attribute__((noinline))
+static int patch_copy_sibling(const uint8_t *src_rom, const uint8_t *dst_rom,
+                              const char *ext) {
+    char path[256];
+    const char *dot;
+    size_t n;
+
+    /* Unreachable today (patch_belongs_to_rom guarantees the export's stem is longer
+       than the ROM's), but self-copy destroys the source -- cheap to rule out. */
+    if (patch_same_asset(src_rom, dst_rom)) return 0;
+
+    dot = strrchr((const char *)src_rom, '.');
+    n = dot ? (size_t)(dot - (const char *)src_rom) : strlen((const char *)src_rom);
+    if (n + strlen(ext) >= sizeof(path)) return 0;
+    memcpy(path, src_rom, n); strcpy(path + n, ext);
+
+    file_open((uint8_t *)path, FA_READ);
+    if (file_res) { file_res = 0; return 0; }
+
+    dot = strrchr((const char *)dst_rom, '.');
+    n = dot ? (size_t)(dot - (const char *)dst_rom) : strlen((const char *)dst_rom);
+    if (n + strlen(ext) >= sizeof(path)) { file_close(); file_res = 0; return -1; }
+    memcpy(path, dst_rom, n); strcpy(path + n, ext);
+
+    return patch_copy_to(path) ? 1 : -1;
+}
+
+/* Build "<pre>NN<post>" by hand.  NOT sprintf: pulling in <stdio.h>'s printf family
+   drags ~24 KB of newlib and overflows the mk2 flash outright (this firmware ships a
+   custom printf for exactly that reason). */
+static void patch_numext(char *out, const char *pre, int n, const char *post) {
+    while (*pre) *out++ = *pre++;
+    *out++ = (char)('0' + (n / 10));
+    *out++ = (char)('0' + (n % 10));
+    while (*post) *out++ = *post++;
+    *out = 0;
+}
+
+/* The sidecars, as (root, ext) pairs.  A table + one loop instead of twenty call
+   sites: each inlined call costs more than its table row.  root == NULL means
+   "next to the ROM".  Order is cosmetic; a missing file costs one failed f_open. */
+struct patch_asset { const char *root; const char *ext; };
+
+static const struct patch_asset patch_assets_rom[] = {
+    { NULL,          ".cov"  },   /* browser box art, sibling of the ROM     */
+    { GAMEINFO_DIR,  ".gcv"  },   /* info-screen cover                       */
+    { GAMEINFO_DIR,  ".gss"  },   /* screenshot                              */
+    { GAMEINFO_DIR,  ".fmv"  },   /* clip                                    */
+    { GAMEINFO_DIR,  ".pcm"  },   /* clip audio                              */
+    { GAMEINFO_DIR,  ".yml"  },   /* metadata (carries the long description) */
+    { GAMEINFO_DIR,  ".man"  },   /* guide 1                                 */
+    { CHEAT_BASEDIR, ".yml"  },
+};
+
+static const struct patch_asset patch_assets_save[] = {
+    { SAVE_BASEDIR,  ".srm"  },
+    { SAVE_BASEDIR,  ".slot" },
+    { SAVE_BASEDIR,  ".mpk"  },
+};
+
+int patch_export_copy_assets(const uint8_t *rom_path, const uint8_t *save_key) {
+    uint8_t dst[IPS_PATH_LEN];
+    char ext[12];
+    unsigned i;
+    int bad = 0;
+
+    psram_readstrn(dst, SRAM_EXPORT_PATH_ADDR, sizeof(dst));
+    if (!dst[0]) return 1;
+
+    /* Presentation assets are keyed off the BASE ROM name. */
+    for (i = 0; i < sizeof(patch_assets_rom) / sizeof(patch_assets_rom[0]); i++) {
+        int r;
+        /* Braces are load-bearing: without them the `else` binds to the INNER if
+           and the sibling copy would only run when patch_copy_asset failed. */
+        if (patch_assets_rom[i].root) {
+            r = patch_copy_asset(patch_assets_rom[i].root, rom_path, dst,
+                                 patch_assets_rom[i].ext);
+        } else {
+            r = patch_copy_sibling(rom_path, dst, patch_assets_rom[i].ext);
+        }
+        if (r < 0) bad++;
+    }
+    /* 8 = MAN_MAX_GUIDES, private to manual.c:116 with no header to include. */
+    for (i = 2; i <= 8; i++) {
+        patch_numext(ext, ".", (int)i, ".man");
+        if (patch_copy_asset(GAMEINFO_DIR, rom_path, dst, ext) < 0) bad++;
+    }
+
+    /* Saves and states are keyed off the PATCH while a patched game is loaded
+       (append_save_basename / savestate.c both prefer current_ips_srm_source), so
+       the progress the user actually made with this patch lives under the PATCH's
+       name -- copying from the base ROM's name would hand over the WRONG save, or
+       none.  save_key is that name; the caller passes it before it is cleared. */
+    for (i = 0; i < sizeof(patch_assets_save) / sizeof(patch_assets_save[0]); i++)
+        if (patch_copy_asset(patch_assets_save[i].root, save_key, dst,
+                         patch_assets_save[i].ext) < 0) bad++;
+    for (i = 2; i <= SRM_SLOT_COUNT; i++) {
+        patch_numext(ext, ".", (int)i, ".srm");
+        if (patch_copy_asset(SAVE_BASEDIR, save_key, dst, ext) < 0) bad++;
+    }
+    for (i = 1; i <= 4; i++) {
+        /* NO dot: savestate.c:34 builds "%02d.state" glued straight onto the stem,
+           so the file is <stem>01.state.  Spelling it ".01.state" by analogy with
+           the SRAM slots would quietly copy nothing. */
+        patch_numext(ext, "", (int)i, ".state");
+        if (patch_copy_asset(SS_BASEDIR, save_key, dst, ext) < 0) bad++;
+    }
+
+    /* Deliberately NOT copied: MSU-1 (.msu + -N.pcm) is tens of megabytes per track
+       and dozens of tracks; /sd2snes/patches/<stem>.yml describes patches the new ROM
+       does not have; .gtc is Game Boy only and .gb never reaches the export. */
+    return bad == 0;
+}
+
+#endif /* !CONFIG_MK2 -- patched-ROM export */

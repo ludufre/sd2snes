@@ -101,6 +101,18 @@ coldboot:       ; Regular, cold-start init
   sta @menu_scroll_active
   sta @menu_top
   sta @menu_vis
+  ; fork: patch-selector viewport + dirty gate, same $55 hazard. patchsel_dirty
+  ; left at $55 would make the FIRST patch dialog of a session write the sidecar
+  ; back on exit even though nothing was touched; pat_top would scroll the list
+  ; to a garbage row before the first draw.
+  sta @pat_top
+  sta @patchsel_dirty
+  ; fork: forced-nav gate shared by the browser restore and the post-export "land on
+  ; the new ROM" walk, same $55 hazard. filesel_nav_last tests it BEFORE consulting
+  ; CFG_ENABLE_RST_TO_MENU, and the plain reset-to-menu path reaches that routine
+  ; WITHOUT writing it first -- so garbage here makes a fresh session pre-select the
+  ; ROM even when the user configured Folder mode.
+  sta @fnl_force_rom
   jsr waitblank
   jsr snes_init
   jsr setup_gfx
@@ -795,14 +807,17 @@ game_handshake:
   sta @SNES_CMD
   pla
   sta @MCU_CMD
-; wait for ACK/NACK with error (noimpl warning etc.)
-- lda @SNES_CMD
-  cmp #$55
-  beq +
-  cmp #$aa
-  beq game_handshake_error
-  bra -
-+ lda @GH_SDD_SAVE          ; unfreeze: restore original screen_dma_disable (the iris set below reads it)
+  lda #$00
+  sta @LOAD_NACK            ; clear the refusal flag: anything set from here on is OURS
+; fork: START THE IRIS NOW, before waiting for the ACK, so its ~0.6 s of animation
+; OVERLAPS the MCU's work instead of queueing behind it.  That work is not shavable --
+; it opens the ROM (a linear long-name scan in a directory with hundreds of entries),
+; reads the header, checks the chip prerequisites and rewrites the Recents list -- so
+; the only way to stop the user staring at a frozen menu for a few hundred ms is to
+; stop waiting for it.  The MCU cannot get ahead of us: after its 0x55 it blocks in
+; `while(snes_get_mcu_cmd() != SNES_CMD_FPGA_RECONF)` (src/memory.c) waiting for the
+; MCU_CMD write we only issue further down, past the iris.
+  lda @GH_SDD_SAVE          ; unfreeze: restore original screen_dma_disable (the iris set below reads it)
   sta @screen_dma_disable
   stz $4200
   sei
@@ -826,6 +841,33 @@ gh_iris_set:
   jsl iris_out  ; fork: iris-out (closing black circle) over the still-displayed menu
                 ; before the boot reset zeroes the PPU. NMI/IRQ are off; the MCU is
                 ; spinning on the boot it already ACKed, so the ~0.6 s is safe.
+; fork: hand the fadeloop a screen that is ALREADY black.  iris_out ends in forced
+; blank ($2100 = $80), but the fadeloop that runs later (WRAM_ROUTINE -> BRAM_ROUTINE,
+; after the FPGA reconfig) starts from `ldx cur_bright` and writes $2100 every frame --
+; with the menu's brightness still in there its FIRST write RE-ENABLES the screen,
+; flashing whatever the iris just covered (the game-info ficha, or the browser) for a
+; few frames before fading it out again.  That fade used to BE the boot transition;
+; now the iris owns it and the fade is only a leftover.  cur_bright = 0 makes the
+; fadeloop write $FE (forced blank still set) once and exit, so the black holds all
+; the way to the reset.  Long store: DB here is not guaranteed to be the WRAM bank.
+  lda #$00
+  sta @cur_bright
+; Wait for the answer.  The screen is already black, so this is invisible however long
+; it takes.  LOAD_NACK is tested FIRST and is what actually catches a refusal: the $aa on
+; SNES_CMD lives only until the MCU's menu loop re-arms $55 (which doubles as the ACK)
+; microseconds later, so with the iris now running BEFORE this wait, polling SNES_CMD
+; alone would read that re-armed $55 as an ACK and hand a never-loaded ROM to the boot
+; trampoline -- which then spins on $77 forever with NMI off.  LOAD_NACK is written before
+; the $aa and stays put.  ($aa is still checked, for the case where we do catch it.)
+- lda @LOAD_NACK
+  bne game_handshake_error
+  lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq game_handshake_error
+  bra -
++
 ; fork: zero VRAM/CGRAM/OAM so a romhack that skips PPU init boots clean (no leftover
 ; VRAM garbage; the reset preserves it).  The firmware armed PPU_CLEAR_GATE=1 in load_rom
 ; iff the "Clear PPU on Boot" option is ON *and* an IPS/BPS patch was applied this load
@@ -857,10 +899,22 @@ game_handshake_error:
 ; Tear the ficha down first (gi_dc_restore rebuilds setup_gfx/video_init/setup_hdma, re-installs
 ; the WRAM routines, clears screen_dma_disable and sets filesel_dirty so the browser repaints on
 ; return). Read GH_SDD_SAVE BEFORE the call: setup_gfx zeroes $7E8000-$7EFFFF, which includes it.
-  lda @GH_SDD_SAVE
-  beq +
+; fork: the iris now runs BEFORE the ACK/NACK is known, so by the time we land here the
+; PPU is black and disarmed (forced blank, no window, no HDMA) no matter what -- rebuild
+; the menu graphics UNCONDITIONALLY.  This used to be gated on the ficha having been up,
+; which was the only case that needed it back when the NACK still arrived with the menu
+; live on screen.  DP is forced to 0: Recents/Favorites reach game_handshake from a
+; show_menu FUNC, whose DP is the AllocStack frame, and everything below addresses WRAM
+; assuming DP=0.
+  phd
+  pea $0000
+  pld
   jsr gi_dc_restore
-+ jsr show_error_msg
+  lda #$81                  ; NMI + auto-joypad back on BEFORE show_error_msg, which waits
+  sta $4200                 ; on isr_done -- game_handshake killed the NMI ahead of the iris,
+                            ; and that used to happen only on the success path
+  jsr show_error_msg
+  pld
   plp
   rts
 

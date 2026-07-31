@@ -92,6 +92,10 @@ extern char current_filename[];
 #define SS_OBC1_GATE_ADDR            (0xFF0718L) /* 1 byte armed at game load = (fpga_conf==FPGA_OBC1), on Mk.II AND Mk.III -- the OBC1 is purely reactive, so the handler captures/restores the SNES-visible $7800-$7FFF window directly over the bus (no chip halt/scan window). Free $FF0701..$FF07FF gap, after SRM_SLOT_STATUS. Lockstep with SS_OBC1_GATE in snes/memmap.i65. */
 #define SS_SDD1_GATE_ADDR            (0xFF0719L) /* 1 byte armed at game load = (fpga_conf==FPGA_SDD1), on Mk.II AND Mk.III -- the S-DD1 decompressor FSM is never mid-transfer at an NMI boundary, so the handler captures/restores the bus-visible config block ($4800-$4807) directly over the bus (no chip halt/scan window). Free $FF0701..$FF07FF gap, after SS_OBC1_GATE. Lockstep with SS_SDD1_GATE in snes/memmap.i65. */
 #define SS_CX4_GATE_ADDR             (0xFF071FL) /* 1 byte armed at game load = (fpga_conf==FPGA_CX4), on Mk.II AND Mk.III. The savestate handler reads it to decide whether to capture/restore the CX4: the core is asked to halt early and runs to its next clean boundary (run-to-stop), then the handler reaches its state through the $E8:00xx scan window plus the native $00:6000-$7FFF space, and REPLAYS the program cache instead of capturing it. Free $FF0701..$FF07FF gap, after EXPORT_RESULT -- the last byte before the BPS breadcrumbs at $FF0720. Lockstep with SS_CX4_GATE in snes/memmap.i65. */
+#define SRAM_LOAD_NACK_ADDR          (0xFF071DL) /* 1 = this game load was refused (missing chip BIOS / unimplemented chip). Set by load_abort_missing BEFORE the 0xaa it writes to SNES_CMD, and never cleared by the MCU: that 0xaa lasts only until the menu loop re-arms MCU_CMD_RDY (0x55 == the ACK) on its next iteration, which is far too short a window for the SNES to catch now that game_handshake runs the iris before waiting for an answer. The SNES clears this byte just before sending the command and tests it afterwards. Free $FF0701..$FF07FF gap, after PATCH_HDR_SEL. Lockstep with LOAD_NACK in snes/memmap.i65. */
+#define SRAM_EXPORT_PATH_ADDR        (0xFF4D00L) /* full SD path of the ROM the last "create patched ROM" wrote, 256 B. Parked in the free gap between SRAM_LASTGAME_FILE_ADDR's 256 bytes and IPS_LIST at 0xFF5000, because the menu reload rewrites SRAM_LASTGAME_DIR/FILE from the recents list before the SNES boots -- so the export cannot just fill those in directly; the reload path copies from here afterwards. Was 0xFF4B00 until the browser-restore feature landed on that same "free" address from another branch; it now owns 0xFF4B00/0xFF4C00, so this moved up to 0xFF4D00 (0xFF4E00..0xFF4FFF still free). */
+#define SRAM_EXPORT_RESULT_ADDR      (0xFF071EL) /* result of the last "create patched ROM" export, reported to the user AFTER the menu reload (the export resets the SNES, so nothing can be shown while it runs): 0 = nothing to report, 1 = written, 2 = failed, 3 = ROM written but a sidecar that existed did not copy, 4 = refused because the .sfc already exists (patch_export_exists, checked before the SNES is halted). Values are the PATCH_EXPORT_* constants in src/patch.h -- change them there, not here. The reloaded browser pops a modal and clears it. Free $FF0701..$FF07FF gap, after LOAD_NACK. Lockstep with EXPORT_RESULT in snes/memmap.i65. */
+#define SRAM_PATCH_HDR_SEL_ADDR      (0xFF071CL) /* 1 byte: scratch the patch selector's context menu uses to edit one patch's copier-header mode (0 auto, 1 headered, 2 headerless). The menu entry is a plain MTYPE_VALUE over this byte; patchsel_contextmenu seeds it from the patch's flags byte and folds the result back afterwards, which keeps the menu machinery unaware of the packed flags layout. Free $FF0701..$FF07FF gap, after SS_STAGED_SLOT and below the BPS breadcrumbs at $FF0720. Lockstep with PATCH_HDR_SEL in snes/memmap.i65. */
 #define SRAM_SS_STAGED_SLOT_ADDR     (0xFF071BL) /* 1 byte: savestate slot whose image is RESIDENT in PSRAM 0xF00000 (1..4; 0 = none). The in-game load is a pure PSRAM->console replay (snes/savestate.a65 load_state -> run_vm), so selecting a slot only changes CS_SLOT -- the handler compares it with this byte and requests a CMD_LOADSTATE when they differ. Written by load_backup_state (on a successful stage) and by save_backup_state (a fresh save leaves that slot's image resident). Lockstep with SS_STAGED_SLOT in snes/memmap.i65. */
 #define SRAM_CHEAT_MASTER_ADDR       (0xFF071AL) /* 1 byte: master cheat switch mirror (1 = cheats globally enabled). Published in cheat_program (= CFG.enable_cheats) and re-published when the L+R+Start+A / L+R+Start+B combos are served (main.c). The in-game CHEATS tab reads it for its status line and writes it when X toggles the master; the ACTUAL switch is the FPGA cheat_enable register, which the SNES flips by writing $82/$83 to MCU_CMD (cheat.v decodes that write directly) -- this byte is only the UI mirror. Free $FF0701..$FF07FF gap, after SS_SDD1_GATE. Lockstep with CHEAT_MASTER in snes/memmap.i65. */
 #define SRAM_CHEAT_ADDR              (0xD00000L) /* up to 512 cheat records (512 bytes each), spans banks D0..D3 */
@@ -145,14 +149,21 @@ extern char current_filename[];
    Consumed by filesel_nav_restore (snes/filesel.a65) gated on ST_RESTORE_BROWSER.
    Deliberately NOT reusing SRAM_LASTGAME_DIR/FILE: those are rewritten every menu boot by
    cfg_dump_listed_games_for_snes(). Sits in the verified-free gap 0xFF4B00..0xFF4FFF,
-   clear of the ESP's WiFi block. Lockstep with BROWSER_DIR/BROWSER_FILE in snes/memmap.i65. */
+   clear of the ESP's WiFi block. Lockstep with BROWSER_DIR/BROWSER_FILE in snes/memmap.i65.
+   NOTE: SRAM_EXPORT_PATH_ADDR shares this gap at 0xFF4D00 -- the two features were built in
+   parallel and both originally claimed 0xFF4B00. Anything else taking a slice of
+   0xFF4B00..0xFF4FFF has to check all three. */
 #define SRAM_BROWSER_DIR_ADDR        (0xFF4B00L)
 #define SRAM_BROWSER_FILE_ADDR       (0xFF4C00L)
-/* IPS/BPS patch list staged by ips_find_patches(). Layout (see patch.h):
-   +0 num_patches, +1 display names (8*IPS_NAME_LEN=512 -> [1,513)), +IPS_PATH_BASE(520)
-   full SD paths (8*IPS_PATH_LEN=2048 -> [520,2568) = 0xFF5000..0xFF5A08). Ends well below
-   the favorites mirror at 0xFF6000 (0x5F8 = 1528 bytes of slack). Lockstep with IPS_LIST
-   in snes/memmap.i65 (the menu reads only the name region, not the paths). */
+/* IPS/BPS patch list staged by ips_find_patches(). Layout (authoritative copy of the
+   comment lives in src/patch.h): +0 num_patches, +IPS_NAME_BASE(16) display slots
+   (16*IPS_NAME_LEN=768 -> [16,784); each slot is a 42-byte name plus an "IPS"/"BPS"
+   badge at +IPS_NAME_BADGE), +IPS_FLAGS_BASE(784) one flags byte per patch
+   (PATCH_FLAG_* -- type and the user's header-mode override), +IPS_PATH_BASE(800)
+   full SD paths (16*IPS_PATH_LEN=3072 -> [800,3872) = 0xFF5000..0xFF5F1F). Ends below
+   the favorites mirror at 0xFF6000 (224 bytes of slack); _Static_asserts in patch.c
+   enforce that. Lockstep with IPS_LIST in snes/memmap.i65: the menu reads the name and
+   badge slots and READS+WRITES the flags byte, while the paths stay MCU-only. */
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
 /* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Sits AFTER the
    favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
@@ -229,7 +240,11 @@ uint16_t sram_writeblock(void* buf, uint32_t addr, uint16_t size);
 void save_srm(uint8_t* filename, uint32_t sram_size, uint32_t base_addr);
 void saveinfo_stage(uint8_t *filename);
 extern uint8_t current_ips_srm_source[256];
-void save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr);
+extern uint8_t current_ips_flags;
+extern uint8_t rom_export_active;
+extern uint32_t patch_export_size;
+extern uint8_t patch_last_ok;
+int  save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr);
 uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc);
 uint16_t calc_sram_sum(uint32_t base_addr, uint32_t size);
 uint8_t sram_reliable(void);

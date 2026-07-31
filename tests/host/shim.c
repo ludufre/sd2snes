@@ -13,6 +13,7 @@
 #include "cfg.h"
 #include "crc32.h"
 #include "patch_copier.h"
+#include "patchmeta.h"
 #include "host.h"
 
 cfg_t CFG = { 0 };
@@ -181,3 +182,45 @@ uint32_t crc32_update(uint32_t crc, uint8_t b) {
   return crc;
 }
 uint32_t crc32_finalize(uint32_t crc) { return ~crc; }
+
+/* ---- patched-ROM export (no SD card on the host) ------------------------ */
+/* patch_export_write() is compiled but never exercised by the harness; these
+   keep the link honest without pretending to write anything. */
+FRESULT f_stat(const TCHAR *path, FILINFO *fno) {
+  (void)path; (void)fno;
+  return FR_NO_FILE;
+}
+
+void sram_writestrn(void *buf, uint32_t addr, uint16_t size) {
+  const char *src = buf;
+  uint16_t i = 0;
+  while(i < size) { host_sdram[(addr + i) & SDRAM_MASK] = src[i]; if(!src[i]) break; i++; }
+}
+
+int save_sram(uint8_t *filename, uint32_t sram_size, uint32_t base_addr) {
+  (void)filename; (void)sram_size; (void)base_addr;
+  return 0;
+}
+
+/* ---- sidecar asset copy (no SD card on the host) ------------------------ */
+/* patch_export_copy_assets() is compiled but never exercised by the harness;
+   path_asset failing keeps every copy a no-op. */
+int path_asset(char *buf, int buflen, const char *root, const char *src, const char *ext) {
+  (void)root; (void)src; (void)ext;
+  if(buflen > 0) buf[0] = 0;
+  return -1;
+}
+FRESULT path_asset_mkdir(char *path) { (void)path; return FR_OK; }
+FRESULT f_open(FIL *fp, const TCHAR *path, BYTE mode) { (void)fp; (void)path; (void)mode; return FR_NO_FILE; }
+FRESULT f_write(FIL *fp, const void *buff, UINT btw, UINT *bw) { (void)fp; (void)buff; (void)btw; if(bw) *bw = 0; return FR_DISK_ERR; }
+FRESULT f_close(FIL *fp) { (void)fp; return FR_OK; }
+FRESULT f_unlink(const TCHAR *path) { (void)path; return FR_OK; }
+
+/* ---- patch metadata sidecar (no SD card on the host) -------------------- */
+/* patch.c calls this after staging the scan results; with no card there is
+   nothing to overlay, and the harness writes the flags byte itself. */
+int patchmeta_apply(const uint8_t *rom_path, patch_entry_t *ents, uint8_t count,
+                    uint32_t sram_addr) {
+  (void)rom_path; (void)ents; (void)count; (void)sram_addr;
+  return 0;
+}

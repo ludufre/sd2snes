@@ -1217,6 +1217,48 @@ menu_enttab_recent_context:
 
  .byt  0
 
+; ---- per-patch context menu, opened with Y on the patch selector ----
+; The "Header mode" entry edits PATCH_HDR_SEL, a scratch byte patchsel_contextmenu
+; seeds from (and folds back into) the patch's packed flags byte, so the generic
+; MTYPE_VALUE machinery never has to know that layout.  It greys out on a .bps row
+; (mfunc_isenabled_patch_hdr): BPS encodes its sizes explicitly, so there is no
+; header convention to choose.
+menu_enttab_patch_context:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_filesel_selected_file ; window title
+ .byt  ^text_filesel_selected_file ; for this menu
+; ENTRIES
+ .byt  MTYPE_VALUE
+ .word !mtext_patch_header_mode
+ .byt  ^mtext_patch_header_mode
+ .word !kv_patch_hdrmode
+ .byt  ^kv_patch_hdrmode
+ .byt  OPTTYPE_KVBYTE
+ .word !PATCH_HDR_SEL
+ .byt  ^PATCH_HDR_SEL
+ .word !mdesc_patch_header_mode
+ .byt  ^mdesc_patch_header_mode
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_patch_hdr-1)
+ .byt  ^(mfunc_isenabled_patch_hdr-1)
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !mtext_patch_create_rom
+ .byt  ^mtext_patch_create_rom
+ .word !patch_create_rom-1
+ .byt  ^patch_create_rom-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_patch_create_rom
+ .byt  ^mdesc_patch_create_rom
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_patch_export-1)   ; greyed on the Mk.II (no export handler)
+ .byt  ^(mfunc_isenabled_patch_export-1)
+ .byt  0
+
 menu_enttab_filesel_context_spc:
 ; HEADER
  .byt  1              ; listsel_step=1
@@ -1453,6 +1495,14 @@ kv_bsx_timesource:
 kv_onoff:
 .word $0000, !text_off : .byt ^text_off
 .word $0001, !text_on : .byt ^text_on
+.word $ffff
+
+; Copier-header convention of one IPS patch, edited through PATCH_HDR_SEL.
+; Values match PATCH_HDR_AUTO/HEADERED/HEADERLESS >> PATCH_FLAG_HDR_SHIFT.
+kv_patch_hdrmode:
+.word $0000, !text_patch_hdrsel_auto : .byt ^text_patch_hdrsel_auto
+.word $0001, !text_patch_hdrsel_on : .byt ^text_patch_hdrsel_on
+.word $0002, !text_patch_hdrsel_off : .byt ^text_patch_hdrsel_off
 .word $ffff
 
 ; cover size: 1=large (legacy "on"), 2=small (half, 8x8 sprites), 0=off. Cycle

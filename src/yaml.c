@@ -34,6 +34,40 @@ void yaml_file_close() {
   ystate.flags &= ~YAML_FLAG_FILE_OPEN;
 }
 
+void yaml_puts_escaped(FIL *fp, const char *s) {
+  char one[2];
+  if(!fp || !s) return;
+  one[1] = 0;
+  while(*s) {
+    if(*s == '"') {
+      f_puts("&quot;", fp);
+    } else if(*s == '&') {
+      f_puts("&amp;", fp);
+    } else {
+      one[0] = *s;
+      f_puts(one, fp);
+    }
+    s++;
+  }
+}
+
+void yaml_decode_entities(char *s) {
+  char *r, *w;
+  if(!s) return;
+  r = w = s;
+  while(*r) {
+    if(*r == '&') {
+      if(!strncmp(r, "&quot;", 6)) { *w++ = '"';  r += 6; continue; }
+      if(!strncmp(r, "&amp;",  5)) { *w++ = '&';  r += 5; continue; }
+      if(!strncmp(r, "&apos;", 6)) { *w++ = '\''; r += 6; continue; }
+      if(!strncmp(r, "&lt;",   4)) { *w++ = '<';  r += 4; continue; }
+      if(!strncmp(r, "&gt;",   4)) { *w++ = '>';  r += 4; continue; }
+    }
+    *w++ = *r++;
+  }
+  *w = 0;
+}
+
 yaml_token_type yaml_detect_value(char **token, yaml_token_t *tok) {
   yaml_token_type type = YAML_UNKNOWN;
   /* as a default, copy the token literal value to stringvalue */

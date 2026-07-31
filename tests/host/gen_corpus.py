@@ -97,6 +97,23 @@ def main(outdir):
     (out / "ok-small.ips").write_bytes(b"PATCH" + recs + b"EOF")
     (out / "ok-small.ips.target").write_bytes(bytes(itgt))
 
+    # -- the SAME patch, offsets authored against a HEADERED ROM (+512) -------
+    # Applying it literally lands 512 bytes too high; the user's "headered"
+    # override has to shift every record back down by exactly 512, reproducing
+    # ok-small.ips.target.  "headerless" on the same file must NOT shift, so it
+    # reproduces the shifted image instead -- the two together prove the
+    # override is honoured in both directions and is independent of the ROM's
+    # own header (this base is headerless).
+    hrecs = bytearray()
+    hrecs += (0x000400).to_bytes(3, "big") + (16).to_bytes(2, "big") + b"ABCDEFGHIJKLMNOP"
+    hrecs += (0x000500).to_bytes(3, "big") + (0).to_bytes(2, "big") \
+             + (32).to_bytes(2, "big") + b"\xEE"                     # RLE
+    (out / "headered.ips").write_bytes(b"PATCH" + hrecs + b"EOF")
+    htgt = bytearray(rom)
+    htgt[0x400:0x410] = b"ABCDEFGHIJKLMNOP"
+    htgt[0x500:0x520] = b"\xEE" * 32
+    (out / "headered.ips.literal").write_bytes(bytes(htgt))
+
     # -- malformed IPS --------------------------------------------------------
     # record far beyond the ROM region (and beyond SRAM_SAVE_ADDR)
     (out / "oob-offset.ips").write_bytes(

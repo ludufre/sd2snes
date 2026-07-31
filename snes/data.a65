@@ -412,8 +412,32 @@ lsb_max         .word 0    ; list scrollbar: max scroll = N - H
 menu_top           .byt 0  ; settings menu: first visible entry (viewport top; 0 = at the top / no scroll)
 menu_vis           .byt 0  ; settings menu: visible entry rows = min(numentries, MENU_VISMAX)
 menu_scroll_active .byt 0  ; settings menu: 1 = scrolling viewport active (show_menu overflow); 0 = plain list (recents/patch) -> original no-scroll behaviour
+;----------patch selector (snes/patch.a65: patchsel_navigate) ----------
+; Own viewport vars rather than menu_top/menu_vis: opening the per-patch context
+; menu runs show_menu, which clobbers those, and the selection has to survive it.
+pat_top         .byt 0     ; patch selector: first visible row (0 = "[No patch]")
+pat_visible     .byt 0     ; patch selector: rows on screen = min(num+1, PATCHSEL_VISMAX)
+pat_row_cnt     .byt 0     ; patch selector: patchsel_draw_rows loop counter (temp)
+pat_row_idx     .byt 0     ; patch selector: absolute entry index while drawing (temp)
+pat_slot        .word 0    ; patch selector: 16-bit scratch for the idx*IPS_NAME_LEN address math
+pat_flags_tmp   .byt 0     ; patch selector: flags byte of the row being edited (temp)
+pat_mode_tmp    .byt 0     ; patch selector: header-mode nibble of that row (temp)
+pat_name_addr   .word 0    ; patch selector: file-entry address of the selected ROM (name at +6).
+pat_name_bank   .byt 0     ; patch selector: its bank. NOT dirent_addr/dirent_bank -- those are the
+                           ; browser's and get rewritten by every repaint between the PLAY press and
+                           ; the dialog, which showed another entry's bytes as the ROM name.
+modal_src       .word 0    ; show_modal_msg: caller's message pointer (push_window clobbers print_src)
+modal_bank      .byt 0     ; show_modal_msg: caller's message bank
+exr_ok          .byt 0     ; export_result_check: 1 = the export succeeded (latched before EXPORT_RESULT is cleared)
+patchsel_dirty  .byt 0     ; patch selector: 1 = a header mode changed -> persist the sidecar on exit
+patchsel_save_xy .word 0   ; patch selector: window_x/window_y saved across the context menu
+patchsel_save_wh .word 0   ; patch selector: window_w/window_h saved across the context menu
+
 ;----------browser position restore (filesel_nav_last / filesel_nav_restore) ----------
-fnl_force_rom   .byt 0     ; 1 = pre-select the file regardless of CFG_ENABLE_RST_TO_MENU (browser
-                           ; restore after a theme/BGM reload). BOTH entry points write it before
-                           ; use -- clear_wram fills WRAM with $55, so it must never be read first.
+; Shared by the theme/BGM browser restore AND by the post-export "land on the new ROM"
+; nav: both mean "pre-select the file even though CFG_ENABLE_RST_TO_MENU would not".
+; Zeroed in coldboot as well as written by each caller -- filesel_nav_last is ALSO
+; reached from the plain reset-to-menu path, which never writes it, and clear_wram
+; fills this segment with $55 (not 0), so a first-boot read would force the select.
+fnl_force_rom   .byt 0     ; 1 = pre-select the staged file regardless of CFG_ENABLE_RST_TO_MENU
 _END            .byt 0

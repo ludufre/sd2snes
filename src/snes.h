@@ -87,6 +87,9 @@
 #define SNES_CMD_FMV_NEXT            (0x37) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
 #define SNES_CMD_GI_DESC_FULL        (0x38) /* info-screen "full description" (Y): re-scan the .yml with a streaming reader and stage the COMPLETE (untruncated) description into SRAM_GAMEINFO_DESCEXT_ADDR ($FF7600). Non-booting (gameinfo_desc_full). */
 #define SNES_CMD_RESTORE_CLASSIC     (0x39) /* apply the classic (pre-2.16) look from the fixed path THEME_CLASSIC (/sd2snes/classic.thm), then reload menu. NACKs without touching CFG.skin_name when the file is missing (see main.c) */
+#define SNES_CMD_EXPORT_PATCHED_ROM  (0x3a) /* patch selector context menu: load the ROM, apply the patch at MCU_PARAM+7 (1..IPS_MAX_PATCHES) and write a .sfc next to it named after the PATCH FILE ("Foo (USA) - [BR].ips" -> "Foo (USA) - [BR].sfc"), then reload the menu. Refused up front (PATCH_EXPORT_EXISTS) when that .sfc already exists. Takes tens of seconds; the SNES stays in reset throughout. */
+#define SNES_CMD_PATCH_META_SAVE     (0x3b) /* patch selector: rewrite /sd2snes/patches/<BB>/<stem>.yml from the flags bytes the menu edited (IPS_FLAGS_BASE) plus the last live scan, pruning entries whose patch is gone. MCU_PARAM holds cwd+direntry like LOADROM. Non-booting. Was 0x39 while this branch was developed in parallel with RESTORE_CLASSIC, which took that opcode first. */
+#define SNES_CMD_EXPORT_CHECK        (0x3c) /* pre-flight for EXPORT_PATCHED_ROM: same MCU_PARAM contract (+7 = patch index), but only answers "would the .sfc collide?" -- writes PATCH_EXPORT_NONE (free) or PATCH_EXPORT_EXISTS (taken; the existing path is staged in SRAM_EXPORT_PATH_ADDR) to SRAM_EXPORT_RESULT_ADDR, then ACKs $55. The answer rides the persistent byte, NOT an $aa on SNES_CMD -- the menu loop re-arms $55 right after, the same race SRAM_LOAD_NACK_ADDR exists for. Non-booting: lets the menu refuse IN PLACE (modal over the live patch dialog) instead of tearing the screen down and cold-booting just to say no. */
 
 /* WiFi SRAM block layout (base = SRAM_WIFI_ADDR; menu side = WIFI_BLK $FF4000).
    RESERVED for the Companion port -- its own dedicated 437-byte block ($FF4000..$FF41B5),
@@ -211,9 +214,20 @@ typedef struct __attribute__ ((__packed__)) _mcu_status {
   uint8_t autoboot_enabled;        /* 1 if an autoboot ROM is configured */
   uint8_t reset_to_menu_active;    /* 1 if this boot is a reset-to-menu (not cold power-on) */
   uint8_t favorites_full;          /* 1 if the last "add favorite" was refused (list at MAX_FAVORITE_GAMES) */
-  uint8_t restore_browser;         /* 1 if this menu boot follows a theme/BGM change: reopen SRAM_BROWSER_DIR_ADDR
+  /* ORDER IS THE WIRE FORMAT: this struct is copied verbatim to ST_MCU_ADDR and the
+     menu reads it by fixed offset (snes/memmap.i65).  Append only, and update the
+     matching ST_* define in the same commit. */
+  uint8_t restore_browser;         /* +7. 1 if this menu boot follows a theme/BGM change: reopen SRAM_BROWSER_DIR_ADDR
                                       and put the cursor on SRAM_BROWSER_FILE_ADDR (see browser_pos_save). One-shot,
                                       cleared in RAM right after status_load_to_menu() publishes it. */
+  uint8_t is_mk2;                  /* +8. 1 on Mk.II (LPC1754). The menu binary is shared across
+                                      configs, so features the mk2 firmware does not carry have
+                                      to be gated at RUNTIME -- currently the patch selector's
+                                      "create patched ROM" entry, whose handler is compiled out
+                                      there for lack of flash. The entry is greyed AND refused
+                                      in patch_create_rom (greying alone is cosmetic in this
+                                      menu); the rest of that context menu works on the mk2.
+                                      Lockstep with ST_IS_MK2. */
 } mcu_status_t;
 
 typedef struct __attribute__ ((__packed__)) _snes_status {

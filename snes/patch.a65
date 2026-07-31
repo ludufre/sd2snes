@@ -37,17 +37,23 @@ ips_select_file:
     lda #$00
     sta @MCU_PARAM+3
 
-    ; ---- Save dirent info for ROM name display inside ips_patch_menu ----
-    ; dirent_bank = MCU_PARAM+6 + $C0  (sub-bank byte → SNES ROM bank)
+    ; ---- Save the selected ROM's name pointer for the patch dialog's title row ----
+    ; Same convention as the delete-confirm dialog (filesel.a65): the file name is at
+    ; (MCU_PARAM+4)+6, in bank (MCU_PARAM+6)+$C0 -- the +6 skips the size string.
+    ; Deliberately NOT reusing dirent_addr/dirent_bank: those belong to the BROWSER and
+    ; are rewritten for every entry it paints (filesel.a65 draw loop, gi_repaint_browser,
+    ; fnl_enter_subdir).  Anything that repaints between here and ips_patch_menu -- the
+    ; loading window, a Game-Info teardown, a cover reload -- left them pointing at the
+    ; last row drawn, so the dialog showed the tail of some other entry's size field
+    ; instead of the ROM name.  These two are ours alone and nothing else writes them.
     lda @MCU_PARAM+6
     clc
     adc #$c0
-    sta dirent_bank             ; lo byte of the dirent_bank word
+    sta @pat_name_bank
     rep #$20 : .al
-    lda @MCU_PARAM+4            ; lo-word of file entry address
+    lda @MCU_PARAM+4            ; lo-word of the file entry address
+    sta @pat_name_addr
     sep #$20 : .as
-    tax                         ; X = 16-bit lo-word (rep #$10 still active)
-    stx dirent_addr             ; 16-bit store to dirent_addr word
 
     ; ---- Query MCU for IPS patches (WRAM_WAIT_MCU pattern) ----
     ; NMI stays enabled so the screen keeps refreshing while the MCU scans
@@ -106,11 +112,30 @@ ips_select_file:
     pld
 ips_sf_have_menu:
 
+    ; ---- Hide the box-art cover behind the patch dialog ----
+    ; The cover is OBJ sprites with priority over the BG window, so it floats on
+    ; top of the patch list.  cover_hide, NOT cover_menu_off: the latter also
+    ; invalidates cover_last_sel, and the browser's cover_update would then fire a
+    ; CMD_LOAD_COVER whose $55 ACK races the game_handshake a few lines below --
+    ; MCU_CMD_RDY is the SAME $55 the handshake spins on, so the stray ACK sends
+    ; the SNES to the WRAM boot trampoline early and it hangs on "Loading".  That
+    ; is the hazard show_error_msg documents at length in filesel.a65.  The cancel
+    ; path below re-arms the reload itself, because it returns to the browser
+    ; instead of booting.
+    ; DB=$00 is required: cover_hide's chain reaches $2100/$2102/$4200 (and its
+    ; own WRAM vars, via the low-RAM mirror) with ABSOLUTE addressing.
+    phb
+    lda #$00
+    pha
+    plb
+    jsr cover_hide
+    plb
+
     ; ---- Show IPS selection menu ----
     jsr ips_patch_menu          ; A = 0 (no patch) .. N (patch N), $FF = B cancel
 
     cmp #$ff
-    beq ips_sf_cancel           ; B pressed → abort load entirely
+    beq ips_sf_cancel_cover     ; B pressed → abort load entirely
 
     ; Store selected IPS index into MCU_PARAM+7 (0 = no patch, 1..N = patch N)
     sta @MCU_PARAM+7
@@ -122,43 +147,107 @@ ips_sf_no_patch:
     sep #$20 : .as
     lda #CMD_LOADROM
     jsr game_handshake          ; disables NMI, loads ROM, resets SNES
+    rts
+
+ips_sf_cancel_cover:
+    ; B: the browser is coming back, so the cover has to come back with it.
+    ; cover_hide alone is not enough -- it clears cover_loaded but leaves
+    ; cover_last_sel matching the current entry, and cover_update skips a reload
+    ; while those agree, so the box art would stay missing until the user moved
+    ; the cursor.  cover_menu_off invalidates it (its own cover_hide is a no-op
+    ; here, guarded by cover_loaded).  Safe on THIS path only: nothing boots
+    ; after it, so there is no game_handshake for the reload's ACK to race.
+    sep #$20 : .as
+    phb
+    lda #$00
+    pha
+    plb
+    jsr cover_menu_off
+    plb
 
 ips_sf_cancel:
     rts
 
-
 ; ===========================================================================
 ; ips_patch_menu
 ;
-; Draws a centred dialog that lists "[No patch]" plus up to IPS_MAX_PATCHES
-; named IPS patches and lets the user choose one with A or cancel with B.
+; Draws a centred dialog listing "[No patch]" plus up to IPS_MAX_PATCHES
+; patches for the selected ROM.  Each patch row carries three fields, all of
+; them staged by the MCU so the 65816 only renders:
+;
+;   col 4  (42) display name  -- yml Name: override, else the cleaned suffix
+;   col 47 (3)  "IPS"/"BPS"   -- lives inside the name slot at +IPS_NAME_BADGE,
+;                                because a menu-side literal would have to go in
+;                                bank $C0, which is ~90% full
+;   col 51 (6)  header mode   -- auto / header / raw, for .ips rows only
+;
+; The list is READ-ONLY: it shows the header mode but does not edit it.  Y opens
+; the per-patch context menu, which is where the mode is changed; A picks;
+; B cancels.  The sidecar is written back once, on the way out, and only when
+; something actually changed.
+;
+; The context menu opens on the mk2 too.  Only its "create patched ROM" entry is
+; greyed out there (mfunc_isenabled_patch_export) -- the export handler is the part
+; that does not fit in the mk2's flash, while the header override and its sidecar
+; (CMD_PATCH_META_SAVE, patchmeta.c) are built for every config.  Hiding the whole
+; menu on the mk2 would have cost it the override, which is the escape hatch for a
+; patch the auto-detection reads wrong.
 ;
 ; Reads:   IPS_LIST + 0 = num_patches (must be >= 1 on entry)
 ; Returns: A = 0 (no patch selected)
 ;             1 .. num_patches (patch N selected)
 ;             $FF (B button pressed, cancel)
-; Clobbers: window_x/y/w/h/taddr/tbank, print_*, listsel_*, bar_*,
+; Clobbers: window_x/y/w/h/taddr/tbank, print_*, listsel_*, bar_*, pat_*,
 ;           ips_idx_tmp
 ; Note:    processor flags on entry must have M=1 (8-bit A), X=0 (16-bit XY).
 ; ===========================================================================
+
+#define PS_COL_NAME   $04
+#define PS_CNT_NAME   42
+#define PS_COL_BADGE  47
+#define PS_CNT_BADGE  3
+#define PS_COL_HDR    51
+#define PS_CNT_HDR    6
 
 ips_patch_menu:
     php                         ; save caller flags (M=1, X=0)
     sep #$20 : .as
     rep #$10 : .xl
 
-    ; ---- window_h = num_patches + 4 ----
-    ; Rows: [top-border | ROM-name-header | [No patch] | patch-1..N | bot-border]
-    lda @IPS_LIST               ; num_patches
+    ; ---- listsel_max = num_patches + 1 (the "[No patch]" row is item 0) ----
+    lda @IPS_LIST
+    inc
+    sta listsel_max
+
+    ; ---- pat_visible = min(listsel_max, PATCHSEL_VISMAX) ----
+    cmp #(PATCHSEL_VISMAX+1)
+    bcc ipm_vis_ok
+    lda #PATCHSEL_VISMAX
+ipm_vis_ok:
+    sta pat_visible
+
+    ; ---- window_h = pat_visible + 4 ----
+    ; Rows: [top border | ROM name | item rows | hint footer | bottom border]
     clc
     adc #$04
     sta window_h
 
-    ; ---- Centre vertically: window_y = (28 - window_h) / 2 ----
+    ; ---- Centre vertically, but NEVER above row 9 ----
+    ; The per-frame DMA (do_screen_dma, snes/reset.a65) uploads BG1 starting at
+    ; BG1_TILE_BASE+32*9: rows 0..8 are the baked logo and are written to VRAM once
+    ; at boot, never again.  BG2 rows 0..8 DO get a DMA, so in mode 5 -- where hiprint
+    ; splits every character across BG1 and BG2 -- a window drawn up there shows only
+    ; its BG2 halves: a shredded top border and a missing title row.  That is why no
+    ; other dialog starts above 9 either (sysinfo_win_y is exactly 9).
+    ; PATCHSEL_VISMAX is capped so the tallest window still ends by row 27.
     lda #$1c                    ; 28 SNES tile rows
     sec
     sbc window_h
     lsr
+    cmp #$09
+    bcs ipm_y_ok
+    lda #$09
+ipm_y_ok:
     sta window_y
 
     lda #$02
@@ -174,43 +263,160 @@ ips_patch_menu:
     sta window_taddr
     sep #$20 : .as
 
+    stz listsel_sel             ; start on "[No patch]"
+    stz pat_top
+    stz patchsel_dirty
+
     jsr push_window
     jsr window_greyout
     jsr draw_window
+    jsr patchsel_draw_romname
+    jsr patchsel_draw_rows
+    jsr patchsel_draw_footer
 
-    ; ==== Row: ROM filename (non-selectable header, palette 0 = white) ====
-    ; print_y = window_y + 1  (first content row inside top border)
+    lda #$01
+    sta listsel_pickbutton      ; allow Y (per-patch context menu)
+
+ips_pm_nav:
+    jsr patchsel_navigate       ; A = selection or $ff, listsel_pickbutton = 00/01/ff
+    sta ips_idx_tmp
+    lda listsel_pickbutton
+    cmp #$01
+    bne ips_pm_done             ; A or B -> leave the dialog
+    jsr patchsel_contextmenu    ; Y -> per-patch actions, then keep navigating
+    jmp ips_pm_nav
+
+ips_pm_done:
+    ; Persist BEFORE the window comes down: patchsel_persist_meta spins on the
+    ; MCU with the dialog still on screen, which is the only visible feedback.
+    lda patchsel_dirty
+    beq ipm_no_persist
+    jsr patchsel_persist_meta
+ipm_no_persist:
+    ; pop_window peels off exactly window_h rows, so restore OUR height first --
+    ; patchsel_persist_meta and the context menu both overwrite the globals.
+    lda #$02
+    sta window_x
+    lda #$3c
+    sta window_w
+    lda pat_visible
+    clc
+    adc #$04
+    sta window_h
+    lda #$1c
+    sec
+    sbc window_h
+    lsr
+    sta window_y
+
+    jsr pop_window              ; restore tile region; restores flags M=1,X=0
+
+    plp                         ; restore caller's flags
+    lda ips_idx_tmp             ; reload result (8-bit)
+    rts
+
+
+; ===========================================================================
+; patchsel_draw_romname -- non-selectable header row with the ROM's filename.
+; Source is the directory entry itself (bank dirent_bank, dirent_addr + 6; the
+; +6 skips the 6-byte size field), saved by ips_select_file.
+; ===========================================================================
+patchsel_draw_romname:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
     lda window_y
     inc
     sta print_y
-    lda #$04                    ; left margin
+    lda #PS_COL_NAME
     sta print_x
     stz print_pal               ; palette 0 = white
-
-    ; source = bank dirent_bank, address dirent_addr + 6
-    ; (offset +6 skips the 6-byte size field in the directory entry to reach
-    ; the null-terminated filename)
-    lda dirent_bank             ; bank byte
+    ; Long reads: this runs right after draw_window, which paints with DB = $80, and
+    ; these are $7E data-segment vars.  Absolute would resolve against whatever bank
+    ; happened to be live and the assembler would not complain.
+    lda @pat_name_bank
     sta print_bank
     rep #$20 : .al
-    lda dirent_addr
+    lda @pat_name_addr
     clc
-    adc #$0006                  ; skip size field
-    tax                         ; X = 16-bit source lo-word
+    adc #$0006                  ; skip the size string that precedes the name
+    tax
     sep #$20 : .as
-    stx print_src               ; 16-bit store (X is 16-bit)
-    lda #52                     ; max chars (60 wide - 4+4 margins)
+    stx print_src
+    lda #52
     sta print_count
     jsr hiprint
+    plp
+    rts
 
-    ; ==== Row: [No patch]  (selectable item 0, palette 0 = white) ====
+
+; ===========================================================================
+; patchsel_draw_footer -- control hints on the last interior row.
+; ===========================================================================
+patchsel_draw_footer:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
     lda window_y
     clc
-    adc #$02                    ; print_y = window_y + 2
+    adc pat_visible
+    clc
+    adc #$02                    ; top border + ROM name + all item rows
     sta print_y
-    lda #$04
+    lda #PS_COL_NAME
     sta print_x
     stz print_pal
+    lda #^text_patch_footer
+    sta print_bank
+    rep #$20 : .al
+    lda #!text_patch_footer
+    tax
+    sep #$20 : .as
+    stx print_src
+    lda #52
+    sta print_count
+    jsr hiprint
+    plp
+    rts
+
+
+; ===========================================================================
+; patchsel_slot_addr -- X = IPS_LIST low word of the display slot for the entry
+; in A (8-bit, 0-based patch index).  Slot stride is IPS_NAME_LEN = 48 = 16+32.
+; Enters .as/.xl, returns .as/.xl with X set.
+; ===========================================================================
+patchsel_slot_addr:
+    rep #$20 : .al
+    and #$00ff                  ; 16-bit AND: clears the hidden high byte that
+                                ; would otherwise ride into the multiply below
+    asl : asl : asl : asl       ; idx * 16
+    sta pat_slot
+    asl                         ; idx * 32
+    clc
+    adc pat_slot                ; idx * 48
+    clc
+    adc #!IPS_NAMES             ; = IPS_LIST + IPS_NAME_BASE
+    tax
+    sep #$20 : .as
+    rts
+
+
+; ===========================================================================
+; patchsel_draw_row -- paint one list row.  pat_row_idx = absolute row (0 =
+; "[No patch]"), print_y = its screen row.  Preserves pat_row_idx/print_y.
+; ===========================================================================
+patchsel_draw_row:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
+
+    lda pat_row_idx
+    bne psdrow_patch
+
+    ; ---- row 0: "[No patch]" ----
+    lda #PS_COL_NAME
+    sta print_x
+    stz print_pal               ; palette 0 = white
     lda #^text_ips_nopatch
     sta print_bank
     rep #$20 : .al
@@ -218,85 +424,907 @@ ips_patch_menu:
     tax
     sep #$20 : .as
     stx print_src
-    lda #52
+    lda #PS_CNT_NAME
+    sta print_count
+    jsr hiprint
+    plp
+    rts
+
+psdrow_patch:
+    ; ---- display name (palette 2 = green) ----
+    dec                         ; A = 0-based patch index
+    jsr patchsel_slot_addr      ; X = slot low word
+    stx print_src
+    lda #^IPS_LIST
+    sta print_bank
+    lda #PS_COL_NAME
+    sta print_x
+    lda #$02
+    sta print_pal
+    lda #PS_CNT_NAME
     sta print_count
     jsr hiprint
 
-    ; ==== Rows: patch display names (items 1..N, palette 2 = green) ====
-    ; Name[idx] is stored at IPS_LIST + 1 + idx * IPS_NAME_LEN  (64 bytes each)
-    stz ips_idx_tmp             ; loop counter: idx = 0
-
-    lda window_y
-    clc
-    adc #$03                    ; first patch name row = window_y + 3
-    sta print_y
-
-ips_pm_print_loop:
-    sep #$20 : .as
-    lda ips_idx_tmp
-    cmp @IPS_LIST               ; done when idx == num_patches
-    beq ips_pm_print_done
-
-    lda #$02                    ; palette 2 = green
-    sta print_pal
-    lda #$04
-    sta print_x
-    lda #52
-    sta print_count
-
-    ; address = IPS_LIST + 1 + idx * 64
+    ; ---- "IPS"/"BPS" badge, from +IPS_NAME_BADGE of the same slot ----
+    lda pat_row_idx
+    dec
+    jsr patchsel_slot_addr
     rep #$20 : .al
-    lda ips_idx_tmp
-    and #$00ff                  ; zero-extend 8-bit idx to 16 bits
-    asl : asl : asl : asl : asl : asl  ; * 64 (= IPS_NAME_LEN)
+    txa
     clc
-    adc #!IPS_LIST              ; + lo-word of IPS_LIST ($5000)
-    tax                         ; X = base of name[idx] in IPS bank
-    inx                         ; + 1 to skip count byte at IPS_LIST+0
+    adc #IPS_NAME_BADGE
+    tax
     sep #$20 : .as
     stx print_src
-    lda #^IPS_LIST              ; bank $FF
+    lda #^IPS_LIST
     sta print_bank
+    lda #PS_COL_BADGE
+    sta print_x
+    stz print_pal
+    lda #PS_CNT_BADGE
+    sta print_count
+    jsr hiprint
 
-    jsr hiprint                 ; flags restored to M=1, X=0 by hiprint's plp
+    ; ---- header-mode marker (.ips only; a .bps has no header convention) ----
+    jsr patchsel_draw_hdr
+    plp
+    rts
 
+
+; ===========================================================================
+; patchsel_draw_hdr -- paint just the header-mode field of the row currently in
+; pat_row_idx / print_y.  Kept separate from the rest of the row because the field
+; has its own source (a marker string, not the staged slot) and its own blank case;
+; the markers are all padded to PS_CNT_HDR characters so no residue is possible.
+; A .bps row draws nothing (draw_window already left the column blank).
+; ===========================================================================
+patchsel_draw_hdr:
+    php
     sep #$20 : .as
-    inc ips_idx_tmp
+    rep #$10 : .xl
+    lda pat_row_idx
+    bne psdh_have                ; "[No patch]" has no flags byte
+    jmp psdh_out                 ; (inverted: psdh_out is out of branch range)
+psdh_have:
+    dec
+    rep #$20 : .al
+    and #$00ff                  ; 16-bit AND before TAX: an 8-bit AND leaves the
+                                ; hidden high byte of A, which TAX would carry in
+    tax
+    sep #$20 : .as
+    lda @IPS_FLAGS,x
+    sta pat_flags_tmp
+    and #PATCH_FLAG_TYPE_MASK
+    cmp #PATCH_TYPE_BPS
+    bne psdh_ips                ; BPS encodes sizes explicitly: no convention to show
+    jmp psdh_out
+psdh_ips:
+    lda pat_flags_tmp
+    and #PATCH_FLAG_HDR_MASK
+    cmp #PATCH_HDR_HEADERED
+    beq psdh_on
+    cmp #PATCH_HDR_HEADERLESS
+    beq psdh_off
+    lda #^text_patch_hdr_auto
+    sta print_bank
+    rep #$20 : .al
+    lda #!text_patch_hdr_auto
+    bra psdh_put
+psdh_on:
+    sep #$20 : .as              ; reached by branch: the fall-through path above
+                                ; left the assembler tracking 16-bit A
+    lda #^text_patch_hdr_on
+    sta print_bank
+    rep #$20 : .al
+    lda #!text_patch_hdr_on
+    bra psdh_put
+psdh_off:
+    sep #$20 : .as              ; ditto
+    lda #^text_patch_hdr_off
+    sta print_bank
+    rep #$20 : .al
+    lda #!text_patch_hdr_off
+psdh_put:
+    tax
+    sep #$20 : .as
+    stx print_src
+    lda #PS_COL_HDR
+    sta print_x
+    stz print_pal
+    lda #PS_CNT_HDR
+    sta print_count
+    jsr hiprint
+psdh_out:
+    plp
+    rts
+
+
+; ===========================================================================
+; patchsel_draw_rows -- paint the pat_visible visible rows starting at pat_top,
+; then the scroll indicator.  listsel_scrollbar self-gates, so at the current
+; IPS_MAX_PATCHES (where the whole list always fits) it draws nothing.
+; ===========================================================================
+patchsel_draw_rows:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
+    lda pat_top
+    sta pat_row_idx
+    lda pat_visible
+    sta pat_row_cnt
+    lda window_y
+    clc
+    adc #$02                    ; top border + ROM name row
+    sta print_y
+psdr_row:
+    jsr patchsel_draw_row
+    inc pat_row_idx
     inc print_y
-    bra ips_pm_print_loop
+    dec pat_row_cnt
+    bne psdr_row
+    lda pat_visible
+    sta lsb_vis
+    lda pat_top
+    sta lsb_top
+    jsr listsel_scrollbar
+    plp
+    rts
 
-ips_pm_print_done:
 
-    ; ==== Set up and run menu_select ====
-    ;
-    ; Coordinate system: bar_y = (bar_yl - 1) * 8 pixels.
-    ; Text at print_y = P maps to screen tile row P.
-    ; bar_yl = P aligns bar with text at print_y = P + 1.
-    ;
-    ; Our first selectable item ("[No patch]") is at print_y = window_y + 2.
-    ; For bar alignment we need bar_yl = window_y + 1 at sel = 0.
-    ; menu_select initialises bar_yl = window_y + sel*step = window_y.
-    ; So we add 1 to window_y before calling menu_select.
-    ; draw_window was already completed above; this does not re-draw borders.
+; ===========================================================================
+; patchsel_scroll_redraw -- full repaint after a viewport move.  draw_window
+; blanks the interior first: the staged names have no trailing padding, so a
+; shorter name scrolling in would otherwise keep the tail of the longer one.
+; ===========================================================================
+patchsel_scroll_redraw:
+    jsr disable_screen_update
+    jsr draw_window
+    jsr patchsel_draw_romname
+    jsr patchsel_draw_rows
+    jsr patchsel_draw_footer
+    jsr enable_screen_update
+    rts
+
+
+; ===========================================================================
+; patchsel_bar_y -- bar_yl = window_y + 1 + (listsel_sel - pat_top).
+; The item rows start at window_y+2 and a bar at row P highlights the text at
+; print_y = P+1, hence the +1 rather than +2.
+; ===========================================================================
+patchsel_bar_y:
+    php
     sep #$20 : .as
-    inc window_y
+    lda listsel_sel
+    sec
+    sbc pat_top
+    clc
+    adc window_y
+    inc
+    sta bar_yl
+    plp
+    rts
 
-    lda @IPS_LIST               ; num_patches
-    inc                         ; + 1 for the "[No patch]" entry
+
+; ===========================================================================
+; patchsel_navigate -- dedicated navigation loop for the patch list.
+;
+; A clone of favsel_navigate (filesel.a65) rather than a flag bolted onto
+; menu_select_noinit, for the same reason favorites has one: menu_select's
+; scrolling path repaints through show_menu_scroll_repaint, which is wired to
+; the menudata tables, and every settings menu depends on its exact behaviour.
+;
+; Left/Right are deliberately NOT bound: the list only DISPLAYS the header mode,
+; and changing it goes through the Y context menu.  Driving a persisted per-patch
+; setting from the same d-pad that scrolls the list made it far too easy to alter
+; a patch while merely passing over it.
+;
+; listsel_sel is the ABSOLUTE selection (0..listsel_max-1), pat_top the first
+; visible row.  Returns the selection in A (or $ff) with listsel_pickbutton =
+; 00 (A) / 01 (Y) / ff (B), like menu_select.  Inherits the caller's DBR/DP=0.
+; ===========================================================================
+patchsel_navigate:
+    php
+    sep #$20 : rep #$10 : .as : .xl
+    lda window_x                ; cursor-bar x/width from the window
+    inc
+    inc
+    sta bar_xl
+    lda window_w
+    sec
+    sbc #$04
+    sta bar_wl
+    jsr patchsel_bar_y
+psn_loop:
+    lda isr_done
+    beq psn_loop
+    stz isr_done
+    jsr printtime
+    jsr read_pad
+    lda pad_up
+    bne psn_up
+    lda pad_down
+    bne psn_down
+    lda pad_a
+    bne psn_btn_a
+    lda pad_y
+    bne psn_btn_y
+    lda pad_b
+    bne psn_btn_b
+    jmp psn_loop
+psn_up:
+    lda listsel_sel
+    beq psn_loop                ; already at the first row
+    jsr snd_fx_cursor
+    dec listsel_sel
+    lda listsel_sel
+    cmp pat_top
+    bcs psn_up_bar              ; still visible -> just move the bar
+    dec pat_top
+    jsr patchsel_scroll_redraw
+psn_up_bar:
+    jsr patchsel_bar_y
+    jmp psn_loop
+psn_down:
+    lda listsel_sel
+    inc
+    cmp listsel_max
+    beq psn_loop                ; already at the last row
+    jsr snd_fx_cursor
+    inc listsel_sel
+    lda listsel_sel
+    sec
+    sbc pat_top
+    cmp pat_visible
+    bcc psn_dn_bar              ; still visible -> just move the bar
+    inc pat_top
+    jsr patchsel_scroll_redraw
+psn_dn_bar:
+    jsr patchsel_bar_y
+    jmp psn_loop
+psn_btn_a:
+    jsr snd_fx_confirm
+    lda #$00
+    sta listsel_pickbutton
+    lda listsel_sel
+    jmp psn_exit
+psn_btn_y:
+    ; Opens on EVERY config.  The mk2 only lacks the export handler, and that one
+    ; entry greys itself out (mfunc_isenabled_patch_export); the header override it
+    ; also carries is built for every config, so gating the whole menu here -- which
+    ; is what this used to do -- took the override away from the mk2 along with it.
+    lda listsel_pickbutton
+    cmp #$01
+    bne psn_loop                ; Y not allowed here
+    jsr snd_fx_confirm
+    lda #$01
+    sta listsel_pickbutton
+    lda listsel_sel
+    jmp psn_exit
+psn_btn_b:
+    jsr snd_fx_back
+    lda #$ff
+    sta listsel_pickbutton
+psn_exit:
+    plp
+    rts
+
+
+; ===========================================================================
+; patchsel_persist_meta -- hand the edited flags bytes back to the MCU, which
+; rewrites /sd2snes/patches/<BB>/<stem>.yml from its own live scan (so entries
+; for patches deleted since the scan are pruned).  MCU_PARAM still holds the
+; cwd + directory entry that ips_select_file set up, which is all the handler
+; needs.  Light $55/$aa handshake, no window: writing a handful of lines is
+; fast enough that a "saving" popup would only flicker.
+; ===========================================================================
+patchsel_persist_meta:
+    php
+    phb
+    sep #$20 : .as
+    lda #$00
+    pha
+    plb                         ; DB = $00 for MCU port access
+    jsr cover_sync_before_cmd   ; drain any in-flight cover so its $55 is not
+                                ; mistaken for our ACK (preserves MCU_PARAM)
+    lda #$00
+    sta @SNES_CMD
+    lda #CMD_PATCH_META_SAVE
+    sta @MCU_CMD
+psp_wait:
+    lda @SNES_CMD
+    cmp #$55
+    beq psp_done
+    cmp #$aa
+    beq psp_done
+    bra psp_wait
+psp_done:
+    lda #$55
+    sta @MCU_CMD
+    plb                         ; DBR back to $7E BEFORE touching a WRAM var --
+    stz patchsel_dirty          ; this is absolute, so it follows the data bank
+    plp
+    rts
+
+; ===========================================================================
+; patchsel_contextmenu -- Y on a patch row: a small menu with the header mode
+; and "create patched ROM".
+;
+; Two hazards this has to survive, both of them documented the hard way
+; elsewhere in this tree:
+;   * show_menu overwrites window_x/y/w/h.  pop_window peels off window_h rows,
+;     so the patch dialog's geometry is saved here and restored before the
+;     caller ever pops.  (pat_top/pat_visible are our OWN vars precisely so
+;     show_menu's menu_top/menu_vis cannot disturb the viewport either.)
+;   * The menu dispatches FUNCs with the show_menu frame's DP, and everything
+;     under here reads WRAM through direct-page-indirect addressing, so DP has
+;     to be forced back to 0.
+;
+; The header mode is handed to the menu through PATCH_HDR_SEL as a plain 0/1/2
+; (MTYPE_VALUE + kv_patch_hdrmode) and folded back into the flags byte on the
+; way out.  "[No patch]" has no context menu.
+; ===========================================================================
+patchsel_contextmenu:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
+    lda listsel_sel
+    bne pcm_have_row
+    plp
+    rts                         ; "[No patch]": nothing to act on
+pcm_have_row:
+    ; ---- remember which entry, and publish its header mode as 0/1/2 ----
+    sta pat_row_idx             ; absolute row: show_menu is about to overwrite
+                                ; listsel_sel with its OWN list, so this is what the
+                                ; fold-back and the listsel_sel restore read afterwards
+    dec
+    rep #$20 : .al
+    and #$00ff                  ; 16-bit AND before TAX (hidden high byte)
+    tax
+    sep #$20 : .as
+    lda @IPS_FLAGS,x
+    sta pat_flags_tmp
+    and #PATCH_FLAG_HDR_MASK
+    lsr
+    lsr                         ; PATCH_FLAG_HDR_SHIFT
+    sta @PATCH_HDR_SEL
+
+    ; ---- save the dialog geometry across show_menu ----
+    rep #$20 : .al
+    lda window_x                ; window_x/window_y are adjacent bytes
+    sta patchsel_save_xy
+    lda window_w                ; window_w/window_h likewise
+    sta patchsel_save_wh
+    sep #$20 : .as
+
+    jsr patch_contextmenu_show
+
+    ; ---- fold the (possibly changed) mode back into the flags byte ----
+    ; NOT listsel_sel: show_menu ran its own list through that variable, so by
+    ; now it holds the context menu's row.  pat_row_idx is the patch row we
+    ; latched before opening it.
+    lda pat_row_idx
+    dec
+    rep #$20 : .al
+    and #$00ff
+    tax
+    sep #$20 : .as
+    lda @PATCH_HDR_SEL
+    asl
+    asl                         ; PATCH_FLAG_HDR_SHIFT
+    and #PATCH_FLAG_HDR_MASK
+    sta pat_mode_tmp
+    lda pat_flags_tmp
+    and #PATCH_FLAG_HDR_CLR
+    ora pat_mode_tmp
+    cmp pat_flags_tmp
+    beq pcm_unchanged           ; unchanged -> don't dirty the sidecar
+    sta @IPS_FLAGS,x
+    lda #$01
+    sta patchsel_dirty
+pcm_unchanged:
+    ; ---- put back everything show_menu ran its own list through ----
+    ; listsel_sel/max/pickbutton belong to whichever list is active; show_menu
+    ; drove its own through them, so patchsel_navigate would otherwise resume on
+    ; the context menu's row, with the context menu's bounds, and with Y no
+    ; longer accepted.  pat_top/pat_visible are ours alone and survive untouched.
+    lda pat_row_idx
+    sta listsel_sel
+    lda @IPS_LIST
+    inc
     sta listsel_max
     lda #$01
-    sta listsel_step
-    lda #$00                    ; only A selects; B -> $FF cancel
     sta listsel_pickbutton
+    sta listsel_step
 
-    jsr menu_select             ; A = 0..N (selection) or $FF (cancel)
-
-    ; Preserve result across pop_window (which clobbers A).
+    ; ---- restore geometry, then repaint the dialog under the closed menu ----
+    rep #$20 : .al
+    lda patchsel_save_xy
+    sta window_x
+    lda patchsel_save_wh
+    sta window_w
     sep #$20 : .as
-    sta ips_idx_tmp
+    jsr patchsel_scroll_redraw
+    plp
+    rts
 
-    jsr pop_window              ; restore tile region; restores flags M=1,X=0
 
-    plp                         ; restore caller's flags
-    lda ips_idx_tmp             ; reload result (8-bit)
+; ===========================================================================
+; patch_contextmenu_show -- the show_menu wrapper, shaped exactly like
+; filesel_contextmenu_spc (menu.a65).  The geometry is re-applied before
+; pop_window because show_menu leaves window_* pointing at its own frame and
+; pop_window peels off window_h rows from wherever they happen to point.
+; ===========================================================================
+patch_contextmenu_show:
+    sep #$20 : .as
+    rep #$10 : .xl
+    lda #$02
+    sta window_x
+    lda #$09
+    sta window_y
+    lda #60
+    sta window_w
+    lda #18
+    sta window_h
+    jsr push_window
+    jsr window_greyout
+    lda #$06
+    sta window_x
+    lda #$0b
+    sta window_y
+    phb
+      lda #^menu_enttab_patch_context
+      pha
+      plb
+      ldx #!menu_enttab_patch_context
+      jsr show_menu
+    plb
+    lda #$02
+    sta window_x
+    lda #$09
+    sta window_y
+    lda #60
+    sta window_w
+    lda #18
+    sta window_h
+    jsr pop_window
+    rts
+
+
+; ===========================================================================
+; mfunc_isenabled_patch_hdr -- greys out "Header mode" for a .bps row (BPS
+; encodes source and target sizes explicitly, so there is no convention to
+; pick).  Carry SET = greyed out, carry CLEAR = selectable.
+;
+; SHAPED LIKE THE OTHER mfunc_isenabled_* ON PURPOSE -- four instructions, no
+; stack, no index registers, long addressing:
+;   * menu_check_disabled_func (menu.a65) reaches this with X = the ENTRY
+;     POINTER (`lda !20,x`) and menu_print_entries keeps using X right after the
+;     call, so clobbering it walks the draw loop off into garbage -- a half-drawn
+;     context menu and a hang, which is exactly what an earlier `tax` here did.
+;   * DB is the menudata bank ($C0) during the draw, so a WRAM var read as
+;     absolute lands in ROM.  Hence `@`.
+; The flags byte is pre-latched by patchsel_contextmenu, which also means row 0
+; ("[No patch]", no flags byte) can never reach here.
+; ===========================================================================
+mfunc_isenabled_patch_hdr:
+    .as
+    lda @pat_flags_tmp
+    and #PATCH_FLAG_TYPE_MASK
+    cmp #PATCH_TYPE_BPS         ; type 1 (BPS) -> C set = grey; type 0 (IPS) -> C clear
+    rtl
+
+
+; ===========================================================================
+; mfunc_isenabled_patch_export -- greys out "Create patched ROM" on the Mk.II.
+; Carry SET = greyed out, carry CLEAR = selectable.
+;
+; The mk2's 122624-byte flash has no room for the export handler + the sidecar
+; copier, so SNES_CMD_EXPORT_PATCHED_ROM is compiled out there (#ifndef CONFIG_MK2
+; in main.c/patch.c).  m3nu.bin is ONE binary shared by every config, so the check
+; has to be at runtime -- ST_IS_MK2 is published by the firmware at boot.
+;
+; Only THIS entry is gated.  The other one (header mode) writes its sidecar through
+; CMD_PATCH_META_SAVE, which is built for every config, so the mk2 keeps the
+; override -- the escape hatch for an IPS whose header convention is auto-detected
+; wrong.  Greying rather than hiding because the menu has no hide mechanism: entries
+; run to a terminating MTYPE 0, so a shorter menu means a SECOND table, and bank $C0
+; is ~90% full.  The greying predicate slot is already reserved in every entry, so
+; this costs the table nothing.
+;
+; Four instructions, no stack, no index registers, long addressing -- same contract
+; as mfunc_isenabled_patch_hdr above (X is the live entry pointer; DB is $C0).
+; ===========================================================================
+mfunc_isenabled_patch_export:
+    .as
+    lda @ST_IS_MK2
+    cmp #$01                    ; 1 (mk2) -> C set = grey; 0 (mk3) -> C clear
+    rtl
+
+
+; ===========================================================================
+; patch_create_rom -- context-menu action (MTYPE_FUNC_CLOSE): ask the MCU to
+; write the ROM with this patch already applied next to the original.
+;
+; DP is forced to 0 first: show_menu dispatches FUNCs with its own AllocStack
+; frame in the direct page, and everything below (cover_sync_before_cmd, the
+; window helpers) addresses WRAM assuming DP=0.
+;
+; The MCU holds the SNES in reset for the whole operation (it reuses load_rom),
+; so the screen goes black much like a normal game load and the menu is
+; cold-booted afterwards -- which is also how the freshly written file shows up
+; in the browser.  The rtl below is therefore usually moot, kept correct for the
+; FUNC_CLOSE dispatcher convention; on failure the MCU answers $aa, no reload
+; happens, and we surface the error instead.
+; ===========================================================================
+patch_create_rom:
+    php
+    phd
+    pea $0000
+    pld                         ; DP = 0 (show_menu dispatches FUNCs with DP != 0)
+    phb
+    sep #$20 : .as
+    rep #$10 : .xl
+    ; HARD gate for the Mk.II, which has no export handler (SNES_CMD_EXPORT_PATCHED_ROM
+    ; is compiled out under #ifndef CONFIG_MK2).  mfunc_isenabled_patch_export greys the
+    ; entry, but greying in this menu is COSMETIC ONLY -- menu_check_disabled_func just
+    ; picks a palette, and neither show_menu's MTYPE_FUNC_CLOSE dispatch nor
+    ; menu_edit_value has an early-out for it.  Without this check an mk2 user could
+    ; still press A and send a command nothing answers, leaving the modal spinning.
+    lda @ST_IS_MK2
+    beq pcr_not_mk2
+    jmp pcr_out
+pcr_not_mk2:
+    lda @pat_row_idx            ; NOT listsel_sel -- see mfunc_isenabled_patch_hdr.
+                                ; Long: a FUNC is dispatched with whatever data
+                                ; bank show_menu was using.
+    bne pcr_have                ; "[No patch]": nothing to apply
+    jmp pcr_out
+pcr_have:
+    sta @MCU_PARAM+7            ; 1-based patch index, same slot as LOADROM
+    lda #$00
+    pha
+    plb                         ; DB = $00 for MCU port access
+    jsr cover_sync_before_cmd   ; drain an in-flight cover request FIRST -- its $55
+                                ; ACK would read as the answer to the check below
+                                ; (and, later, land after the wipe and put the box
+                                ; art back on screen)
+
+    ; ---- pre-flight: would this export collide with an existing .sfc? ----
+    ; Asked BEFORE the screen teardown, so a refusal is a plain modal over the
+    ; LIVE dialog and B lands right back on the patch selector -- no menu reload,
+    ; no losing the browser position (the complaint that motivated this).  The
+    ; answer rides EXPORT_RESULT (persistent), NOT an $aa on SNES_CMD: the MCU's
+    ; menu loop re-arms $55 microseconds after a NACK, the same race LOAD_NACK
+    ; exists for.
+    lda #$00
+    sta @SNES_CMD
+    lda #CMD_EXPORT_CHECK
+    sta @MCU_CMD
+pcr_chk_wait:
+    lda @SNES_CMD
+    cmp #$55
+    bne pcr_chk_wait
+    lda #$55
+    sta @MCU_CMD
+    lda @EXPORT_RESULT
+    beq pcr_do_export
+    ; Exists: one-shot the flag (stale, it would pop the reload-path modal on the
+    ; next menu boot) and tell the user right here, over the intact dialog.
+    lda #$00
+    sta @EXPORT_RESULT
+    lda #^text_patch_export_exists
+    sta modal_bank
+    rep #$20 : .al
+    lda #!text_patch_export_exists
+    tax
+    sep #$20 : .as
+    stx modal_src
+    jsr show_modal_msg
+    jmp pcr_out
+
+pcr_do_export:
+    ; Re-stage the index: the check handler's get_selected_name went through
+    ; set_mcu_addr, which preserves only the low 24 bits -- MCU_PARAM+7 is gone.
+    lda @pat_row_idx
+    sta @MCU_PARAM+7
+    ; Take the screen over completely: blank it, wipe both tilemaps and every sprite,
+    ; and put ONLY the modal on it.  The MCU asserts SNES reset within milliseconds of
+    ; the command below, freezing whatever is on screen for the whole export -- so the
+    ; less of the menu is left standing, the less there is to freeze in a half state.
+    ; This is also the honest fix for the header that kept vanishing here: BG1 rows 0..8
+    ; are uploaded to VRAM exactly ONCE (cover_init, at boot -- the NMI's per-frame DMA
+    ; starts at row 9), so once something eats them nothing restores them.  Now they are
+    ; deliberately cleared along with everything else and the question disappears.
+    jsr hide_cursor             ; park the select bar (a hardware colour window, not
+                                ; part of any tilemap, so the wipe would miss it)
+    jsr patch_export_screen
+    lda #$00
+    sta @SNES_CMD
+    lda #CMD_EXPORT_PATCHED_ROM
+    sta @MCU_CMD
+pcr_wait:
+    ; Nothing to hand back: the MCU halts this CPU (assert_reset) within a few ms of
+    ; taking the command, and the menu is cold-booted when the export finishes either
+    ; way.  The outcome is reported by the reloaded browser from EXPORT_RESULT, because
+    ; a popup put up here would be frozen the instant the CPU stops.
+    bra pcr_wait
+pcr_out:
+    plb
+    pld
+    plp
+    rtl
+
+
+; ===========================================================================
+; patch_export_screen -- blank the screen, erase everything on it, then draw only
+; the "creating patched ROM" modal and show it again.
+;
+; Runs with the NMI OFF from here to the reset, so the per-frame tile DMA cannot
+; upload anything else on top -- which also means this routine has to push the
+; tilemaps to VRAM itself.  All of it in forced blank: VRAM and OAM writes are
+; dropped by the PPU with the screen on.
+; Entry: 8-bit A, 16-bit XY, DB = $00 (bank-0 registers below are absolute).
+; ===========================================================================
+patch_export_screen:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
+    lda #$01
+    sta $4200                   ; NMI off (auto-joypad stays on) -- cover.a65 idiom
+    jsr waitblank               ; land in vblank before the first write
+    lda #$8f
+    sta $2100                   ; forced blank
+
+    ; --- wipe the WRAM tilemap buffers ($7EA000 BG2, $7EB000 BG1) ---
+    ldx #$a000
+    stx $2181
+    lda #$00
+    sta $2183
+    DMA7(#$08, #$2000, #^zero, #!zero, #$80)
+
+    ; --- wipe both tilemaps in VRAM, including BG1 rows 0..8 which the NMI never
+    ;     refreshes (that is why a corrupted header used to survive on screen) ---
+    ldx #BG1_TILE_BASE
+    stx $2116
+    DMA7(#$09, #$1000, #^zero, #!zero, #$18)
+    ldx #BG2_TILE_BASE
+    stx $2116
+    DMA7(#$09, #$1000, #^zero, #!zero, #$18)
+
+    ; --- every sprite off-screen (the box art is OBJ; the wipe above misses it) ---
+    ldx #$0000
+    stx $2102
+    DMA7(#$08, #$220, #^oamhide, #!oamhide, #$04)
+
+    ; --- draw the modal into the (now empty) buffers ---
+    jsr draw_patch_busy_window
+
+    ; --- hand the upload back to the NMI ---------------------------------------
+    ; NOT a hand-rolled DMA here.  In mode 5 each character is split across BOTH
+    ; layers (hiprint alternates BG2/BG1 per character), and the NMI already owns
+    ; the exact per-layer offsets that keeps them in step -- rows 9+ for BG1, rows
+    ; 0-8 plus 9+ for BG2.  Rolling my own got one layer wrong and printed every
+    ; other character.  The modal sits at rows 12-14, well inside what the NMI
+    ; uploads, and the wiped BG1 rows 0-8 stay wiped because it never touches them.
+    lda cur_bright              ; un-blank: the modal is the only thing left
+    sta $2100
+    lda #$81
+    sta $4200                   ; NMI + auto-joypad back on
+    jsr waitblank
+    jsr waitblank               ; two frames: let it actually land in VRAM
+    plp
+    rts
+
+
+; ===========================================================================
+; draw_patch_busy_window -- the "creating patched ROM" MODAL, shown WHILE the export
+; runs.  A real bordered window (draw_window clears its own interior, so nothing shows
+; through) in the same shape and position as the missing-chip-BIOS popup, not a line
+; overwritten into the status bar.
+;
+; It is never popped: the MCU halts this CPU (assert_reset) a few milliseconds after
+; taking the command and holds it there for the whole export, so the PPU keeps
+; displaying this exact frame from beginning to end -- which is precisely what makes
+; the modal visible for the duration.  The menu is cold-booted afterwards and reports
+; the outcome through EXPORT_RESULT (export_result_check).
+; ===========================================================================
+draw_patch_busy_window:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
+    lda #18                     ; w=28 -> centred x=(64-28)/2=18
+    sta window_x
+    lda #12
+    sta window_y
+    lda #28
+    sta window_w
+    lda #$03
+    sta window_h
+    lda #^zero                  ; empty title -> closed top border
+    sta window_tbank
+    ldx #!zero
+    stx window_taddr
+    jsr draw_window             ; no push_window: nothing here is ever popped, the
+                                ; export ends in a menu cold-boot either way
+    lda window_y
+    inc
+    sta print_y
+    lda window_x
+    inc
+    inc
+    sta print_x
+    stz print_pal
+    lda #^text_patch_creating
+    sta print_bank
+    ldx #!text_patch_creating
+    stx print_src
+    lda #26
+    sta print_count
+    jsr hiprint
+    plp
+    rts
+
+
+; ===========================================================================
+; export_result_check -- called by the browser right after a full repaint.
+; Self-gating: does nothing unless the MCU left a "create patched ROM" outcome in
+; EXPORT_RESULT.  The export holds the SNES in reset from start to finish, so this
+; deferred modal is the only place the user can be told anything -- it is the same
+; shape as the missing-chip-BIOS popup (show_error_msg): a real bordered window over
+; the live browser, dismissed with A/B/Start/Select.
+; The values tested below are the PATCH_EXPORT_* constants in src/patch.h (0 none,
+; 1 OK, 2 failed, 3 ROM written but a sidecar did not copy) -- lockstep with those
+; and with the EXPORT_RESULT comment in snes/memmap.i65.
+; ===========================================================================
+export_result_check:
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
+    lda @EXPORT_RESULT
+    bne exr_have
+    plp
+    rts
+exr_have:
+    cmp #$03
+    beq exr_partial
+    cmp #$04
+    beq exr_exists
+    cmp #$01
+    bne exr_failed
+    lda #$01
+    sta exr_ok                  ; latched: EXPORT_RESULT is cleared before the modal runs
+    lda #^text_patch_export_ok
+    sta modal_bank
+    rep #$20 : .al
+    lda #!text_patch_export_ok
+    bra exr_show
+exr_partial:
+    ; The .sfc IS there, so still navigate to it -- the user just needs to know the
+    ; cover/saves did not all come along.
+    sep #$20 : .as
+    lda #$01
+    sta exr_ok
+    lda #^text_patch_export_part
+    sta modal_bank
+    rep #$20 : .al
+    lda #!text_patch_export_part
+    bra exr_show
+exr_exists:
+    ; Belt-and-braces refusal (a file appeared between the pre-flight
+    ; CMD_EXPORT_CHECK -- which refuses in place, without this reload -- and the
+    ; run): the .sfc this export would write is already on the card.  Nothing was
+    ; created, but patch_export_exists staged WHERE the existing file is, so still
+    ; walk the browser to it -- landing there beats dumping the user at the top of
+    ; a freshly booted browser.
+    sep #$20 : .as              ; reached by branch: the fall-through path above
+                                ; left the assembler tracking 16-bit A
+    lda #$01
+    sta exr_ok
+    lda #^text_patch_export_exists
+    sta modal_bank
+    rep #$20 : .al
+    lda #!text_patch_export_exists
+    bra exr_show
+exr_failed:
+    sep #$20 : .as              ; reached by branch: the fall-through path above left
+                                ; the assembler tracking 16-bit A
+    stz exr_ok
+    lda #^text_err_patchexport
+    sta modal_bank
+    rep #$20 : .al
+    lda #!text_err_patchexport
+exr_show:
+    tax
+    sep #$20 : .as
+    stx modal_src               ; NOT print_src: push_window/draw_window run first
+    lda #$00
+    sta @EXPORT_RESULT          ; one-shot: never nag twice for the same export
+    jsr show_modal_msg
+    ; Success: walk the browser to the file that was just created and put the cursor
+    ; on it.  fnl_force_rom makes filesel_nav_last select the ROM even when the
+    ; reset-to-menu setting would only navigate to the folder (or do nothing).
+    ; Shared with the theme/BGM browser restore, which wants the same thing; the
+    ; export always stages a filename, so the "empty name = folder only" branch in
+    ; filesel_nav_last never applies here.
+    lda exr_ok
+    beq exr_done
+    lda #$01
+    sta fnl_force_rom
+    jsr filesel_nav_last
+    stz fnl_force_rom
+exr_done:
+    plp
+    rts
+
+
+; ===========================================================================
+; show_modal_msg -- one-line modal over the live menu, print_src/print_bank
+; preloaded by the caller.  Waits for A/B/Start/Select, then closes.  The select
+; bar is parked off-screen first: it is a hardware colour window driven by the
+; NMI (bar_xl/yl/wl), not part of the pushed tilemap, so it would otherwise keep
+; flashing across the popup.  Modelled on show_error_msg (filesel.a65).
+; ===========================================================================
+show_modal_msg
+    php
+    sep #$20 : .as
+    rep #$10 : .xl
+    lda bar_xl
+    pha
+    lda bar_yl
+    pha
+    lda bar_wl
+    pha
+    lda #$ff
+    sta bar_xl
+    sta bar_yl
+    sta bar_wl
+    lda #18                     ; w=28 -> centred x=(64-28)/2=18
+    sta window_x
+    lda #12
+    sta window_y
+    lda #28
+    sta window_w
+    lda #$03
+    sta window_h
+    lda #^zero                  ; empty title -> closed top border
+    sta window_tbank
+    ldx #!zero
+    stx window_taddr
+    jsr push_window
+    jsr draw_window
+    lda window_y
+    inc
+    sta print_y
+    lda window_x
+    inc
+    inc
+    sta print_x
+    stz print_pal
+    lda modal_bank
+    sta print_bank
+    ldx modal_src
+    stx print_src
+    lda #26
+    sta print_count
+    jsr hiprint
+smm_wait:
+    lda isr_done
+    beq smm_wait
+    stz isr_done
+    jsr printtime
+    jsr read_pad
+    lda pad_a
+    ora pad_b
+    ora pad_start
+    ora pad_select
+    beq smm_wait
+    jsr snd_fx_back
+    jsr pop_window
+    pla
+    sta bar_wl
+    pla
+    sta bar_yl
+    pla
+    sta bar_xl
+    plp
     rts

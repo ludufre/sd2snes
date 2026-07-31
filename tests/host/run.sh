@@ -24,10 +24,10 @@ python3 gen_corpus.py corpus || exit 1
 
 pass=0; fail=0; xfail=0; xpass=0
 
-run_case() { # <name> <want> <xfail-code|-> <mode> <patch> <rom> [expected_target]
-  local name=$1 want=$2 xf=$3 mode=$4 patch=$5 rom=$6 tgt=${7:-}
+run_case() { # <name> <want> <xfail-code|-> <mode> <patch> <rom> [expected_target] [hdrmode]
+  local name=$1 want=$2 xf=$3 mode=$4 patch=$5 rom=$6 tgt=${7:-} hm=${8:-}
   local out rc
-  out=$(./harness "$mode" "corpus/$patch" "corpus/$rom" ${tgt:+corpus/$tgt} 2>&1)
+  out=$(./harness "$mode" "corpus/$patch" "corpus/$rom" ${tgt:+corpus/$tgt} ${hm:+$hm} 2>&1)
   rc=$?
   if [ "$rc" -eq "$want" ]; then
     if [ "$xf" != "-" ]; then
@@ -60,6 +60,12 @@ run_case probe-tiny          1    -      probe  tiny-truncated.bps     rom4k.bin
 run_case ok-small-ips        0    -      apply  ok-small.ips           rom4k.bin  ok-small.ips.target
 run_case ips-oob-offset      1    -      apply  oob-offset.ips         rom4k.bin
 run_case ips-truncated-noeof 1    -      apply  truncated-noeof.ips    rom4k.bin
+# Per-patch copier-header override (PATCH_HDR_*): the SAME headered-convention
+# patch must land differently under "on" and "off", and the default (auto) must
+# keep behaving exactly as it did before the override existed.
+run_case ips-hdr-forced-on   0    -      apply  headered.ips           rom4k.bin  ok-small.ips.target     on
+run_case ips-hdr-forced-off  0    -      apply  headered.ips           rom4k.bin  headered.ips.literal    off
+run_case ips-hdr-auto-literal 0   -      apply  headered.ips           rom4k.bin  headered.ips.literal    auto
 # BPS copier mode: descriptors for SourceCopy/TargetCopy must rebuild the exact
 # same image as the byte-by-byte apply (compared against the known-good target).
 run_case copier-ok-bps       0    -      copier ok-small.bps           rom4k.bin  ok-small.bps.target

@@ -75,24 +75,8 @@ static int cheat_read_code_string(int cheat_idx, int code_idx, char *out) {
 /* Decode common HTML character entity references in place. Some
    community cheat YAML files (gamehacking.org dumps in particular)
    contain entities like &quot; in description strings; the menu would
-   otherwise show them verbatim. The output is always no longer than
-   the input, so an in-place rewrite is safe. */
-static void cheat_decode_html_entities(char *s) {
-  if(!s) return;
-  char *r = s;
-  char *w = s;
-  while(*r) {
-    if(*r == '&') {
-      if(!strncmp(r, "&quot;", 6)) { *w++ = '"';  r += 6; continue; }
-      if(!strncmp(r, "&amp;",  5)) { *w++ = '&';  r += 5; continue; }
-      if(!strncmp(r, "&apos;", 6)) { *w++ = '\''; r += 6; continue; }
-      if(!strncmp(r, "&lt;",   4)) { *w++ = '<';  r += 4; continue; }
-      if(!strncmp(r, "&gt;",   4)) { *w++ = '>';  r += 4; continue; }
-    }
-    *w++ = *r++;
-  }
-  *w = 0;
-}
+   otherwise show them verbatim.  The implementation lives in yaml.c and is
+   shared with the patch metadata reader, so both sides accept the same forms. */
 
 void cheat_init(void) {
   rom_index = 0;
@@ -439,7 +423,7 @@ void cheat_yaml_load(uint8_t* romfilename) {
          character entity references in cheat descriptions, e.g. &quot;
          instead of a literal " character. Decode the common ones in
          place so the menu shows the text the way a human would expect. */
-      cheat_decode_html_entities(cheat.description);
+      yaml_decode_entities(cheat.description);
     }
     /* If the cheat's Name is empty after parsing + HTML decoding,
        substitute a visible placeholder so the row in the menu is not
@@ -571,33 +555,9 @@ void cheat_stage_names_window(int base) {
   sram_writeshort((uint16_t)base, SRAM_CHEAT_WIN_BASE_ADDR);
 }
 
-/* Inverse of cheat_decode_html_entities. Writes the supplied string to
-   the given FatFs file handle, re-encoding the two characters that would
-   otherwise break a load-save round trip:
-     '"' -> &quot;  (mandatory: an unescaped quote inside a YAML
-                    double-quoted scalar terminates the value early and
-                    corrupts the Name field)
-     '&' -> &amp;   (mandatory: a literal '&' followed by 'quot;', 'amp;',
-                    'apos;', 'lt;' or 'gt;' would be re-decoded by the
-                    next load and lose the original ampersand)
-   '<', '>' and '\'' are left literal so YAML stays human-readable; the
-   load side accepts both literal and entity forms for those. */
-static void cheat_write_yaml_string(FIL *fp, const char *s) {
-  if(!fp || !s) return;
-  char one[2];
-  one[1] = 0;
-  while(*s) {
-    if(*s == '"') {
-      f_puts("&quot;", fp);
-    } else if(*s == '&') {
-      f_puts("&amp;", fp);
-    } else {
-      one[0] = *s;
-      f_puts(one, fp);
-    }
-    s++;
-  }
-}
+/* The writer counterpart, yaml_puts_escaped (yaml.c), is the inverse of
+   yaml_decode_entities and is shared with the patch metadata writer, so both emit
+   exactly the escapes the loader understands. */
 
 /* save cheats to YAML file from ROM/menu */
 void cheat_yaml_save(uint8_t *romfilename) {
@@ -655,7 +615,7 @@ void cheat_yaml_save(uint8_t *romfilename) {
        used f_printf with "%s" which would emit a literal quote into a
        YAML double-quoted scalar and silently corrupt the file. */
     f_puts("- Name: \"", &file_handle);
-    cheat_write_yaml_string(&file_handle, desc_for_yaml);
+    yaml_puts_escaped(&file_handle, desc_for_yaml);
     f_puts("\"\n", &file_handle);
     f_printf(&file_handle, "  Enabled: %s\n", cheat.flags & CHEAT_FLAG_ENABLE ? "true" : "false");
     f_printf(&file_handle, "  Code:\n");

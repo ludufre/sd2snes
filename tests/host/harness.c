@@ -30,10 +30,6 @@
 #define CANARY 0xA5
 #define WATCHDOG_SECS 10
 
-extern uint32_t patch_apply(uint32_t sram_addr, uint8_t index,
-                            uint32_t rom_base_addr, uint32_t original_rom_size,
-                            uint32_t rom_header_size);
-
 static void on_alarm(int sig) {
   (void)sig;
   /* async-signal-safe exit: the patcher is wedged in an infinite loop */
@@ -62,11 +58,16 @@ static int region_is_legal(uint32_t a) {
 
 int main(int argc, char **argv) {
   if (argc < 4) {
-    fprintf(stderr, "usage: %s apply|probe <patch> <source_rom> [expected_target]\n", argv[0]);
+    fprintf(stderr, "usage: %s apply|probe|copier <patch> <source_rom> "
+                    "[expected_target] [auto|on|off]\n", argv[0]);
     return 99;
   }
   const char *mode = argv[1], *patch = argv[2], *src = argv[3];
   const char *expected = (argc > 4) ? argv[4] : NULL;
+  /* Optional 5th arg: header mode staged in the patch's flags byte, exactly as
+     ips_find_patches + the patch dialog would.  Absent = auto = the historic
+     behaviour, so every pre-existing case keeps its expectations. */
+  const char *hmode = (argc > 5) ? argv[5] : "auto";
 
   host_sdram_init();
 
@@ -76,6 +77,10 @@ int main(int argc, char **argv) {
   size_t plen = strlen(patch) + 1;
   if (plen > IPS_PATH_LEN) { fprintf(stderr, "patch path too long\n"); return 99; }
   memcpy(host_sdram + SRAM_IPS_LIST_ADDR + IPS_PATH_BASE, patch, plen);
+  host_sdram[SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE] =
+      (uint8_t)((!strcmp(hmode, "on")  ? PATCH_HDR_HEADERED :
+                 !strcmp(hmode, "off") ? PATCH_HDR_HEADERLESS :
+                                         PATCH_HDR_AUTO) << PATCH_FLAG_HDR_SHIFT);
 
   /* canary-fill every region the patcher must not touch */
   for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
@@ -95,10 +100,10 @@ int main(int argc, char **argv) {
        descriptors over the fake SDRAM (like the live menu running the FPGA
        copier) must finalize a byte-identical image -> the [expected] check below
        proves the copier decomposition equals the byte-by-byte apply. */
-    ret = patch_apply_copier(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0);
+    ret = patch_apply_copier(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0, 0);
     if (ret) host_copier_replay();
   } else {
-    ret = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0);
+    ret = patch_apply(SRAM_IPS_LIST_ADDR, 1, SRAM_ROM_ADDR, romsize, 0, 0);
   }
   alarm(0);
 

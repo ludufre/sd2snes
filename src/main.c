@@ -31,6 +31,7 @@
 #include "cfg.h"
 #include "savestate.h"
 #include "patch.h"
+#include "patchmeta.h"
 #include "cheat.h"
 #include "theme.h"
 #include "manual.h"
@@ -91,8 +92,10 @@ static void revalidate_game_lists(void) {
    since launch degrades to a clean vanilla boot instead of failing. */
 static void stage_patch_from_entry(char *entry) {
   char patchpath[256];
+  const char *pbase;
   ips_pending_index = 0;
   current_ips_srm_source[0] = '\0';
+  current_ips_flags = 0;
   if(!cfg_parse_patch_entry(entry, patchpath, sizeof(patchpath))) {
     return; /* no patch tag -> plain base ROM */
   }
@@ -102,12 +105,27 @@ static void stage_patch_from_entry(char *entry) {
     printf("stage_patch: patch gone (%s) -> vanilla\n", patchpath);
     return; /* patch deleted -> boot base vanilla */
   }
+  /* A path that does not fit the staging slot would be truncated and then opened
+     as some OTHER file, so refuse it the same way the directory scan does. */
+  if(strlen(patchpath) >= IPS_PATH_LEN) {
+    printf("stage_patch: path too long (%s) -> vanilla\n", patchpath);
+    return;
+  }
   strncpy((char*)current_ips_srm_source, patchpath, sizeof(current_ips_srm_source) - 1);
   current_ips_srm_source[sizeof(current_ips_srm_source) - 1] = '\0';
   /* Stage the patch path where patch_apply()/bps_probe_header() read it, exactly
      as ips_find_patches() would have for a normal LOADROM (slot index 1). */
   sram_writeblock(current_ips_srm_source, SRAM_IPS_LIST_ADDR + IPS_PATH_BASE,
                   (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
+  /* No directory scan happens on this path, so the header-mode override has to
+     come straight from the sidecar -- `entry` is the base ROM path by now, which
+     is exactly the key the sidecar is filed under. */
+  pbase = strrchr(patchpath, '/');
+  pbase = pbase ? pbase + 1 : patchpath;
+  current_ips_flags = patchmeta_flags_for((const uint8_t*)entry, pbase,
+                                          patch_ext_type(pbase) == PATCH_TYPE_BPS
+                                            ? PATCH_TYPE_BPS : PATCH_TYPE_IPS);
+  sram_writebyte(current_ips_flags, SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE);
   ips_pending_index = 1;
 }
 
@@ -261,6 +279,102 @@ uart_putc('\n');
   snescmd_writeshort(n, SNESCMD_MCU_PARAM);
 }
 
+#ifndef CONFIG_MK2
+/* "Create patched ROM" (SNES_CMD_EXPORT_PATCHED_ROM).
+ *
+ * Lifted out of the command switch because it is a whole procedure rather than a
+ * dispatch: it halts the SNES, drives a full load_rom + patch, streams the image
+ * out and drags every sidecar across.
+ *
+ * The ROM path comes in through file_lfn, which the CALLER fills via
+ * get_selected_name -- and it must do so only AFTER reading the index out of
+ * MCU_PARAM, because get_selected_name goes through set_mcu_addr, which preserves
+ * only the low 24 bits.
+ *
+ * Leaves the SNES HELD IN RESET on every path.  That is deliberate: PSRAM at
+ * 0x000000 now holds the exported GAME, so releasing the CPU would boot it and let
+ * it run -- reprogramming the PPU and trampling WRAM -- throughout the menu
+ * teardown that follows (RTC probe, cfg_save, ...), until the reload's reset pulse
+ * cut it off mid-stride.  The caller's menu_reload owns the reset from here: it
+ * restores the base core, loads the menu image and issues snes_reset(1)/(0) itself.
+ *
+ * Returns the PATCH_EXPORT_* code to park for the reloaded browser to report.
+ */
+static uint8_t patch_export_command(uint8_t xidx) {
+  uint8_t result = PATCH_EXPORT_FAILED;
+
+  /* A Game Boy ROM is staged behind the SGB BIOS at a different base, so
+     exporting it would write out the BIOS, not the game. */
+  if(xidx >= 1 && xidx <= IPS_MAX_PATCHES && !path_is_gb((char*)file_lfn)) {
+    uint32_t rom_bytes;
+
+    ips_pending_index = xidx;
+    sram_readstrn(current_ips_srm_source,
+                  SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
+                  + (uint32_t)(xidx - 1) * IPS_PATH_LEN,
+                  sizeof(current_ips_srm_source));
+
+    /* Refuse a name collision HERE, before the SNES is halted and before the
+       multi-second load_rom+patch: re-running an export is almost always an
+       accident, and the old answer -- silently minting "<...> 2.sfc" -- duplicated
+       a multi-MB ROM and split its saves off under the new stem.  The SNES is
+       still alive spinning in pcr_wait; the menu reload the caller issues either
+       way is what recovers it, and the reloaded browser reports EXISTS.
+       (PSRAM reads with the menu live are the norm; nothing here remaps.) */
+    if(patch_export_exists(current_ips_srm_source)) {
+      result = PATCH_EXPORT_EXISTS;
+    } else {
+      /* STOP THE SNES FIRST.  It is spinning inside patch_create_rom, executing the
+         MENU out of PSRAM -- and load_rom reprograms the cartridge mapping for the
+         game (set_rom_mask, set_mapper) LONG before its own assert_reset.  The moment
+         that remap lands, the code under the spinning CPU changes and it runs off
+         into whatever the new mapping exposes, scribbling over the PPU (the shredded
+         header rows).  The normal boot path is immune because the SNES waits in the
+         WRAM trampoline at $7EF000, off the cartridge entirely; the export has no
+         trampoline, so it must halt the CPU. */
+      assert_reset();
+
+      current_ips_flags = sram_readbyte(SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE + xidx - 1);
+      patch_export_size = 0;
+      patch_last_ok = 0;
+      rom_export_active = 1;   /* keep the SNES in reset across the dump */
+      rom_bytes = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_RESET);
+      rom_export_active = 0;
+
+      /* load_rom boots on through a failed patch by design; the export must not.
+         Writing the .sfc from an unpatched (or half-patched) image hands the user a
+         file that lies about what it contains -- and for a failed BPS
+         patch_export_size is 0, so it would be the pristine ROM verbatim. */
+      if(rom_bytes && patch_last_ok
+         && patch_export_write(current_ips_srm_source,
+                               SRAM_ROM_ADDR + romprops.load_address,
+                               patch_export_size ? patch_export_size
+                                                 : romprops.romsize_bytes)) {
+        /* Bring the cover, info screen, guides, cheats and saves along, so the new
+           entry is not a bare ROM the user has to re-decorate by hand.  MUST run
+           before current_ips_srm_source is cleared below: the saves and states of a
+           patched session are filed under the PATCH's name.
+           current_filename, NOT file_lfn: load_rom's savestate slot scan calls
+           cfg_get_listed_game(LAST_FILE, file_lfn, 0) (savestate.c:32), which
+           overwrites that global with the TOP OF RECENTS -- so by now file_lfn
+           names whatever was played last, not the ROM just loaded.  That is how a
+           correctly patched Chrono Trigger once got its sidecars copied from
+           another game's name.  load_rom stashes the real path in
+           current_filename and nothing else touches it. */
+        result = patch_export_copy_assets((uint8_t*)current_filename,
+                                          current_ips_srm_source)
+               ? PATCH_EXPORT_OK : PATCH_EXPORT_PARTIAL;
+      }
+    }
+  }
+
+  ips_pending_index = 0;
+  current_ips_srm_source[0] = '\0';
+  current_ips_flags = 0;
+  return result;
+}
+#endif /* !CONFIG_MK2 */
+
 int main(void) {
   power_init();
   GPIO_MODE_OUT(SNES_CIC_PAIR_REG, SNES_CIC_PAIR_BIT);
@@ -389,6 +503,50 @@ int main(void) {
     if(fpga_config != FPGA_BASE) fpga_pgm((uint8_t*)FPGA_BASE);
     STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
     STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
+#ifdef CONFIG_MK2
+    STM.is_mk2 = 1;   /* greys + refuses "create patched ROM" only; see snes.h */
+#else
+    STM.is_mk2 = 0;
+#endif
+    /* A just-finished "create patched ROM" wants the browser to open ON the new file.
+       This has to run AFTER the dump above, which rewrites both of those from the
+       recents list.  Reuses the reset-to-menu navigation (filesel_nav_last), which
+       walks LASTGAME_DIR component by component and then selects LASTGAME_FILE. */
+    /* PSRAM comes up with whatever the last power-on left in it -- nothing zeroes
+       $FF07xx -- so clear this byte ONCE, or garbage in it pops "Cannot write
+       patched ROM" on a cold start with no export in sight.
+       It has to be HERE, not up next to fpga_init(): sram_writebyte drives the FPGA
+       memory window and blocks in an UNBOUNDED FPGA_WAIT_RDY, so before fpga_pgm()
+       above has configured the FPGA that call never returns -- no menu, no USB, dead
+       console.  And it has to be gated on firstboot: a real export writes this byte
+       and then asks for a menu reload, which re-enters this very loop, and the
+       reloaded browser is exactly who consumes it. */
+    if(firstboot) sram_writebyte(PATCH_EXPORT_NONE, SRAM_EXPORT_RESULT_ADDR);
+    /* OK *and* PARTIAL: a partial export still WROTE the .sfc -- only some sidecar
+       failed to copy -- and export_result_check (snes/patch.a65) navigates the
+       browser to it in both cases.  Testing == PATCH_EXPORT_OK here left LASTGAME_
+       DIR/FILE pointing at the previous entry, so a partial export walked the user
+       to the top of Recents instead of to the file just created.
+       EXISTS too (the belt-and-braces refusal inside the export, when a file
+       appeared between the pre-flight CMD_EXPORT_CHECK and the run): there the
+       staged path is the EXISTING .sfc, and landing on it beats dumping the user
+       at the top of a fresh browser. */
+    uint8_t xres = sram_readbyte(SRAM_EXPORT_RESULT_ADDR);
+    if(xres == PATCH_EXPORT_OK || xres == PATCH_EXPORT_PARTIAL
+       || xres == PATCH_EXPORT_EXISTS) {
+      uint8_t xpath[256];
+      sram_readstrn(xpath, SRAM_EXPORT_PATH_ADDR, sizeof(xpath));
+      char *xslash = strrchr((char*)xpath, '/');
+      if(xslash) {
+        sram_writestrn((uint8_t*)(xslash + 1), SRAM_LASTGAME_FILE_ADDR, 256);
+        if(xslash == (char*)xpath) {
+          sram_writestrn((uint8_t*)"/", SRAM_LASTGAME_DIR_ADDR, 256);
+        } else {
+          *xslash = 0;
+          sram_writestrn(xpath, SRAM_LASTGAME_DIR_ADDR, 256);
+        }
+      }
+    }
     led_set_brightness(CFG.led_brightness);
 
     /* DEBUG: boot-time self-test of the MCU-driven copier in fpga_base (SNES in
@@ -513,19 +671,31 @@ int main(void) {
           printf("Selected name: %s (patch idx=%d)\n", file_lfn, ips_pending_index);
           /* Build the SRM-override path from the IPS file's full SD path. */
           current_ips_srm_source[0] = '\0';
+          current_ips_flags = 0;
           if(ips_pending_index > 0 && ips_pending_index <= IPS_MAX_PATCHES) {
             sram_readstrn(current_ips_srm_source,
                           SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
                           + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
                           sizeof(current_ips_srm_source));
-            printf("Patch SRM source: %s\n", current_ips_srm_source);
+            /* Kept in MCU RAM so a recore reload can re-stage it (see memory.c). */
+            current_ips_flags = sram_readbyte(SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE
+                                              + (uint32_t)(ips_pending_index - 1));
+            printf("Patch SRM source: %s (flags %02x)\n", current_ips_srm_source,
+                   current_ips_flags);
           }
-          /* Record into Recents AFTER the patch path is known.  For a patched
-             launch, store "<rom>\t<patch_basename>" so the list shows/relaunches
-             the patch (cfg_add_listed_game_patched appends the tag with bounded
-             strncat and dedups on the whole string; cwd qualification still
-             applies to the leading ROM part, and an over-long entry degrades to
-             base-only inside the helper). */
+          /* Record into Recents BEFORE the load.  This DOES sit on the critical
+             path -- it is SD write traffic (stream the list, write a .tmp, unlink,
+             rename) and the SNES is parked in game_handshake until load_rom hands
+             it the 0x55 -- but moving it after the load broke it: Recents stopped
+             updating and, with it, the reset-to-menu "return to the last ROM"
+             navigation that reads the same list.  The stall it costs is hidden the
+             right way instead, by starting the iris as soon as the command is sent
+             (snes/main.a65) rather than by shortening the MCU's work.
+             For a patched launch, store "<rom>\t<patch_basename>" so the list
+             shows/relaunches the patch (cfg_add_listed_game_patched appends the tag
+             with bounded strncat and dedups on the whole string; cwd qualification
+             still applies to the leading ROM part, and an over-long entry degrades
+             to base-only inside the helper). */
           if(current_ips_srm_source[0]) {
             const char *pbase = strrchr((char*)current_ips_srm_source, '/');
             pbase = pbase ? pbase + 1 : (char*)current_ips_srm_source;
@@ -543,13 +713,87 @@ int main(void) {
           cmd=0;
           break;
         case SNES_CMD_QUERY_IPS_PATCHES: {
+          /* MUST be its own buffer, never file_lfn: patch_scan_dir points the
+             FatFs long-name buffer AT file_lfn (fno.lfname), so the first
+             f_readdir would overwrite the ROM path we are scanning for -- the
+             stem stops matching, the scan returns 0 patches, and the dialog
+             silently never opens.  patch_publish/patchmeta_apply read the same
+             pointer afterwards and would key the sidecar off whatever directory
+             entry happened to be read last. */
           uint8_t qpath[256];
           get_selected_name(qpath);
           current_ips_srm_source[0] = '\0';
+          current_ips_flags = 0;
           ips_find_patches(qpath, SRAM_IPS_LIST_ADDR);
           cmd = 0; /* stay in menu loop */
           break;
         }
+        case SNES_CMD_PATCH_META_SAVE:
+          /* The menu edited the header-mode field of the staged flags bytes; fold
+             those back into the scan we still hold and rewrite the sidecar (which
+             also prunes entries whose patch has since been deleted).  Guard on the
+             scan being live so a stale ips_entries[] can never be written out
+             under some other ROM's name. */
+          if(ips_scan_count) {
+            get_selected_name(file_lfn);
+            for(uint8_t i = 0; i < ips_scan_count; i++)
+              ips_entries[i].flags = sram_readbyte(SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE + i);
+            patchmeta_save(file_lfn, ips_entries, ips_scan_count);
+          }
+          snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
+          cmd = 0; /* stay in menu loop */
+          break;
+#ifndef CONFIG_MK2
+        /* Not built on the mk2: its 122624-byte flash is full, and this handler plus
+           patch_export_write and the sidecar copier do not fit.  The menu greys the
+           "create patched ROM" entry there and patch_create_rom refuses it outright
+           (ST_IS_MK2), so neither command is ever sent. The REST of that context menu
+           does run on the mk2 -- CMD_PATCH_META_SAVE above is built for every config. */
+        case SNES_CMD_EXPORT_CHECK: {
+          /* Pre-flight for the export below: answer "would it collide?" while the
+             menu is still fully alive, so a refusal is a modal over the live patch
+             dialog instead of a screen teardown + cold boot.  Index read BEFORE
+             get_selected_name for the same set_mcu_addr reason as the export. */
+          uint8_t cidx = snescmd_readbyte(SNESCMD_MCU_PARAM + 7);
+          uint8_t cres = PATCH_EXPORT_NONE;
+          get_selected_name(file_lfn);
+          if(cidx >= 1 && cidx <= IPS_MAX_PATCHES && !path_is_gb((char*)file_lfn)) {
+            sram_readstrn(current_ips_srm_source,
+                          SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
+                          + (uint32_t)(cidx - 1) * IPS_PATH_LEN,
+                          sizeof(current_ips_srm_source));
+            /* patch_export_exists also stages the existing path in
+               SRAM_EXPORT_PATH_ADDR; unread on this path, needed on the fallback. */
+            if(patch_export_exists(current_ips_srm_source))
+              cres = PATCH_EXPORT_EXISTS;
+            current_ips_srm_source[0] = '\0';
+          }
+          /* Persistent answer first, $55 after: the menu waits on the $55 and then
+             reads EXPORT_RESULT (and one-shots it) -- no transient-NACK race. */
+          sram_writebyte(cres, SRAM_EXPORT_RESULT_ADDR);
+          snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
+          cmd = 0; /* stay in menu loop */
+          break;
+        }
+        case SNES_CMD_EXPORT_PATCHED_ROM: {
+          /* Read the index BEFORE get_selected_name, same as LOADROM: that call
+             goes through set_mcu_addr, which only preserves the low 24 bits.
+             It has to be its own statement, not an argument alongside the call --
+             C does not order argument evaluation. */
+          uint8_t xidx = snescmd_readbyte(SNESCMD_MCU_PARAM + 7);
+          get_selected_name(file_lfn);
+          /* The SNES is in reset and cannot read a handshake byte, so the outcome is
+             parked here and the reloaded browser pops a modal for it -- the same
+             modal machinery the missing-chip-BIOS message uses. */
+          sram_writebyte(patch_export_command(xidx), SRAM_EXPORT_RESULT_ADDR);
+          /* The menu image in PSRAM was overwritten by the game load either way,
+             so the menu has to be cold-booted back; that is also what makes the
+             new file show up in the browser listing.  NOTE: no cmd = 0 here --
+             menu_reload only takes effect once this loop exits (see SET_THEME). */
+          menu_reload = 1;
+          break;
+        }
+#endif /* !CONFIG_MK2 */
         case SNES_CMD_SETRTC:
           /* get time from RAM */
           btime = snescmd_gettime();

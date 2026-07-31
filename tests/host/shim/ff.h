@@ -35,6 +35,8 @@ typedef struct {
 
 #define FA_READ          0x01
 #define FA_OPEN_EXISTING 0x00
+#define FA_WRITE         0x02
+#define FA_CREATE_ALWAYS 0x08
 
 #define AM_DIR 0x10
 #define AM_HID 0x02
@@ -45,5 +47,10 @@ FRESULT f_lseek(FIL *fp, DWORD ofs);
 FRESULT f_opendir(DIR *dp, const TCHAR *path);
 FRESULT f_readdir(DIR *dp, FILINFO *fno);
 FRESULT f_closedir(DIR *dp);
+FRESULT f_stat(const TCHAR *path, FILINFO *fno);
+FRESULT f_open(FIL *fp, const TCHAR *path, BYTE mode);
+FRESULT f_write(FIL *fp, const void *buff, UINT btw, UINT *bw);
+FRESULT f_close(FIL *fp);
+FRESULT f_unlink(const TCHAR *path);
 
 #endif

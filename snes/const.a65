@@ -577,6 +577,26 @@ loading_win_h   .byt 1
 text_cheat      .byt "Cheats for ", 0
 text_ips_header .byt "Patches", 0
 text_ips_nopatch .byt "[No patch]", 0
+; Header-mode markers on the patch rows. PADDED TO 6 CHARACTERS in every
+; language: patchsel_draw_one repaints only this field, so a shorter
+; replacement would leave the tail of the previous marker on screen.
+text_patch_hdr_auto .byt "auto  ", 0
+text_patch_hdr_on   .byt "header", 0
+text_patch_hdr_off  .byt "raw   ", 0
+text_patch_footer   .byt "A:Play  Y:More  B:Back", 0
+text_patch_creating .byt "Creating patched ROM...", 0
+text_err_patchexport .byt "Cannot write patched ROM", 0
+text_patch_export_ok .byt "Patched ROM created", 0
+text_patch_export_part .byt "ROM ok, assets incomplete", 0
+text_patch_export_exists .byt "Patched ROM already exists", 0
+mtext_patch_header_mode .byt "Header mode", 0
+mdesc_patch_header_mode .byt "How this IPS patch's offsets are read: Auto detects a 512-byte copier header, Header forces the shift, Raw applies them literally.", 0
+mtext_patch_create_rom .byt "Create patched ROM", 0
+mdesc_patch_create_rom .byt "Write the patched ROM next to the original, named after the patch file, with the cover, saves, cheats and guides copied across. Takes minutes.", 0
+; kv values for the "Header mode" entry (distinct from the padded row markers above)
+text_patch_hdrsel_auto .byt "Auto (detect)", 0
+text_patch_hdrsel_on   .byt "Headered", 0
+text_patch_hdrsel_off  .byt "Headerless", 0
 
 ; pre-boot game info screen (snes/gameinfo.a65)
 text_gi_developer .byt "Developer", 0

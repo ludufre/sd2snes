@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "ff.h"   /* FIL, for yaml_puts_escaped */
+
 #define YAML_BUFLEN (256)
 
 /* token types emitted by yaml_get_next */
@@ -89,5 +91,17 @@ int yaml_next_item(void);
 int yaml_get_value(const char *key, yaml_token_t *tok, yaml_scope scope);
 /* retrieve value from within current item only */
 int yaml_get_itemvalue(const char *key, yaml_token_t *tok);
+
+/* Write s into an open file as the body of a double-quoted YAML scalar, with
+   '"' -> &quot; and '&' -> &amp;.  Both are mandatory: an unescaped quote ends
+   the scalar early, and a literal '&' before one of the entity names would be
+   re-decoded on the next load.  '<', '>' and '\'' stay literal so the file
+   remains readable; yaml_decode_entities accepts either form for those. */
+void yaml_puts_escaped(FIL *fp, const char *s);
+
+/* Decode the HTML character entities above in place.  Community YAML dumps
+   (gamehacking.org in particular) carry them in plain text, and the output is
+   never longer than the input, so rewriting in place is safe. */
+void yaml_decode_entities(char *s);
 
 #endif

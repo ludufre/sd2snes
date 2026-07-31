@@ -61,6 +61,20 @@ memory.c: RAM operations
 char* hex = "0123456789ABCDEF";
 
 uint8_t current_ips_srm_source[256];
+/* Flags byte (PATCH_FLAG_*) of the patch current_ips_srm_source names, kept in
+   MCU RAM for the same reason as the path: a recore reload wipes SDRAM and both
+   have to be re-staged before patch_apply reads them back. */
+uint8_t current_ips_flags = 0;
+
+/* CMD_EXPORT_PATCHED_ROM: hold the SNES in reset when load_rom() finishes, and
+   the exact (un-rounded) byte length of the patched image to write out. */
+uint8_t  rom_export_active = 0;
+uint32_t patch_export_size = 0;
+/* Did the patch this load requested actually apply?  load_rom deliberately boots on
+   anyway (a half-patched image is better than no game), but the export must NOT write
+   a file named "<ROM> (<patch>).sfc" that is not, in fact, patched. */
+uint8_t  patch_last_ok = 0;
+
 
 /* State for re-deriving the FPGA core from a PATCHED image.
    When a patch changes the cartridge type, load_rom() recurses once with
@@ -307,6 +321,9 @@ static uint32_t load_abort_missing(uint8_t flags, int err, const char *name) {
   printf("load aborted: err=%d missing=%s\n", err, name ? name : "");
   if(flags & LOADROM_WAIT_SNES) {
     snes_menu_errmsg(err, (void*)(name ? name : ""));
+    /* BEFORE the 0xaa: that byte is transient (the menu loop re-arms 0x55 right
+       after), while this flag persists until the SNES clears it on the next load. */
+    sram_writebyte(1, SRAM_LOAD_NACK_ADDR);
     snes_set_snes_cmd(0xaa);
   }
   file_res = FR_OK;
@@ -321,9 +338,11 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   tick_t ticksstart, ticks_total=0;
   ticksstart=getticks();
 
-  /* NB: menu SFX teardown (menu_sfx_shutdown) is deferred to the commit point
-     below -- AFTER the prerequisite check -- so that an aborted game load (missing
-     chip BIOS -> NACK -> back to menu) leaves the menu sound intact. */
+  /* NB: menu SFX teardown (menu_sfx_shutdown) is deferred all the way down to just
+     before the FPGA reconfig, past the prerequisite check AND past the 0x55 that
+     releases the SNES.  Two reasons: an aborted game load (missing chip BIOS ->
+     NACK -> back to menu) must leave the menu sound intact, and the confirm blip
+     gets to play across the SNES-side iris animation instead of being cut off. */
 
   // copy the full name and path
   strncpy(current_filename, (char *)filename, sizeof(current_filename)-1);
@@ -502,10 +521,8 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     if(!(flags & LOADROM_WITH_COMBO) && filesize < 1024) {
       return load_abort_missing(flags, MENU_ERR_FS, basename_of((const char*)filename));
     }
-    /* Prerequisites OK -> committed to the load: NOW tear down menu SFX so the
-       DAC/SD/feature set are free for the game (deferred from the top of load_rom
-       so an aborted load above keeps the menu sound alive). */
-    menu_sfx_shutdown();
+    /* Prerequisites OK -> committed to the load.  The menu SFX teardown itself is
+       deferred further, to just before the FPGA reconfig below -- see there. */
   }
   if(flags & LOADROM_WAIT_SNES) {
     /* Arm the pre-boot PPU-clear gate BEFORE releasing the SNES from game_handshake
@@ -526,6 +543,16 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     printf("Checking if ok to reconfigure...");
     while(snes_get_mcu_cmd() != SNES_CMD_FPGA_RECONF);
     printf("OK.\n");
+    /* Tear down the menu SFX HERE, not back at the commit point.  The wait above
+       IS the iris animation running on the SNES (~0.6 s), so letting the DAC keep
+       streaming across it gives the confirm blip its full length for free.  Killing
+       it at the commit point instead used to be masked by the Recents SD write
+       sitting on the critical path; with that moved off, the sound got chopped.
+       This is the LATEST safe point: fpga_pgm() below reconfigures the FPGA out
+       from under the sfxdma engine, which would leave the DAC stuck.
+       LOADROM_WAIT_SNES implies a game load (a menu load never sets it), so the
+       menu's own reload does not come through here. */
+    menu_sfx_shutdown();
   }
   if(romprops.fpga_conf || (flags & LOADROM_WITH_FPGA)) {
     const uint8_t *fpga_conf = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
@@ -617,7 +644,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
         uint32_t r = load_rom(filename, base_addr,
                               (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
         ips_recore_active = 0;
-        if(!r) deassert_reset();
+        /* ...unless this is an export, which owns the reset itself (see the
+           rom_export_active gate at the tail of load_rom): releasing the SNES
+           there would boot whatever half-staged image is in PSRAM. */
+        if(!r && !rom_export_active) deassert_reset();
         return r;
       }
     }
@@ -909,6 +939,11 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
                         SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
                           + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
                         (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
+        /* The header-mode override sits in the same wiped region; restage it too
+           or the re-patch silently falls back to auto-detect. */
+        sram_writebyte(current_ips_flags,
+                       SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE
+                         + (uint32_t)(ips_pending_index - 1));
       }
 
       /* (The chip-converting-BPS recore decision was MOVED earlier -- right after
@@ -923,6 +958,18 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
          off to get just the header size (0 or 0x200).
          BPS encodes exact sizes so no header correction is needed there. */
       uint32_t ips_header_size = romprops.offset & 0xFFFFF;
+      /* IPS-only auto-detection (folded into ips_apply's pass-1, so the IPS is
+         scanned only once): an IPS authored for a headered ROM but applied to a
+         headerless base (offset 0) lands 512 bytes too high.  ips_apply validates
+         the SNES internal header of each hypothesis and shifts by 512 only when
+         the headered image coheres and the literal one does not (conservative).
+         romprops.header_address (0x7FB0 LoROM / 0xFFB0 HiROM) locates the header;
+         BPS ignores it.  The user can pin the convention per patch on the patch
+         screen; that override is staged in the patch's flags byte and read by
+         ips_apply itself.  ips_header_adj_used reports which rule won ->
+         breadcrumb $FF072E below (D0 literal / D1 auto / D2 forced headered /
+         D3 forced headerless). */
+      ips_header_adj_used = 0;
       /* Approach B: drive the FPGA copier from the MCU (the SNES is held in reset
          here) for a BPS when EnableBpsCopier is on AND the currently-loaded core
          carries the copier (probe).  IPS, the gate off, or a core without the copier
@@ -936,7 +983,8 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
         tick_t t_copier = getticks();
         ips_end = patch_apply_copier(SRAM_IPS_LIST_ADDR, ips_pending_index,
                                      SRAM_ROM_ADDR + romprops.load_address,
-                                     romprops.romsize_bytes, ips_header_size);
+                                     romprops.romsize_bytes, ips_header_size,
+                                     romprops.header_address);
         uint32_t patch_ms = (uint32_t)(getticks() - t_copier) * 10u; /* 1 tick = 10ms */
         /* DEBUG ($FF0724 marker, $FF0721 op count): B1 = copier applied OK,
            B2 = copier failed mid-apply (timeout). */
@@ -955,12 +1003,42 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
       } else {
         ips_end = patch_apply(SRAM_IPS_LIST_ADDR, ips_pending_index,
                               SRAM_ROM_ADDR + romprops.load_address,
-                              romprops.romsize_bytes, ips_header_size);
+                              romprops.romsize_bytes, ips_header_size,
+                              romprops.header_address);
         /* B3 = gate on but copier not in this core (probe failed); B0 = gate off. */
         sram_writebyte(CFG.enable_bps_copier ? 0xB3 : 0xB0, 0xFF0724L);
       }
       ips_pending_index = 0;
+      /* IPS header-convention breadcrumb (set by ips_apply; D0 for BPS):
+         D0 literal, D1 auto-detected +512, D2 user forced headered,
+         D3 user forced headerless. */
+      sram_writebyte(0xD0 + ips_header_adj_used, 0xFF072EL);
       patch_ok = (ips_end > 0); /* 0 => patch error / FPGA stall */
+      patch_last_ok = patch_ok;
+      /* Exact byte length of the patched image, for CMD_EXPORT_PATCHED_ROM.
+         Deliberately NOT romprops.romsize_bytes: the loop far above ("while
+         filesize > romsize_bytes + offset") has already rounded that UP to a
+         power of two, because it drives the FPGA ROM mask.  A 3 MB ROM therefore
+         reports 4 MB, and exporting that would append a megabyte of zero padding
+         -- producing a file whose CRC matches nothing Floating IPS or
+         RomPatcher.js generates, which is the whole point of the export.
+         The true headerless payload is filesize minus the copier header, the same
+         expression sram_crc_romsize uses below.  A BPS states its target size
+         outright; an IPS only reports the highest offset it wrote, which for a
+         small hack is far short of the ROM, so there the original length is the
+         floor.  Combo ROMs keep the old value: their offset carries a slot shift
+         and filesize spans every slot, so the subtraction would not mean this.
+         DEPENDS ON THE EXPORT REFUSING .gb: the SGB path reassigns filesize to the
+         size of the .gb while romprops still describes the SGB BIOS, so the
+         subtraction would not mean this there.  patch_export_command gates on
+         path_is_gb(), the same predicate that gates sgb_id() -- keep them together. */
+      uint32_t rom_bytes = romprops.romsize_bytes;
+      if(!romprops.has_combo && filesize > ips_header_size)
+        rom_bytes = filesize - ips_header_size;
+      if((current_ips_flags & PATCH_FLAG_TYPE_MASK) == PATCH_TYPE_BPS)
+        patch_export_size = ips_end;
+      else
+        patch_export_size = (ips_end > rom_bytes) ? ips_end : rom_bytes;
       /* If the IPS patch wrote past the original ROM boundary (ROM expansion
          hack), expand the FPGA ROM mask so those new banks are accessible.
          romprops.romsize_bytes is always a power of 2, so a simple left-
@@ -1049,8 +1127,11 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
 #endif
         /* If the reload aborted early (before its own deassert_reset), the SNES
            is still held in reset from this pass — release it so the console is
-           never left frozen with the MCU alive. */
-        if(!r) deassert_reset();
+           never left frozen with the MCU alive.  EXCEPT during an export: there
+           the caller keeps the SNES in reset on purpose and cold-boots the menu
+           right after, so releasing it would run the half-staged PSRAM image over
+           the teardown (see rom_export_active at the tail of load_rom). */
+        if(!r && !rom_export_active) deassert_reset();
         return r;
       }
       /* The patch may change only the MAPPER without changing the FPGA core —
@@ -1069,7 +1150,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
         set_mapper(romprops.mapper_id);
       }
     }
-    deassert_reset();
+    /* CMD_EXPORT_PATCHED_ROM wants the patched image sitting still in PSRAM so it
+       can be streamed to the card; letting the SNES run would have it executing a
+       ROM that is about to be replaced by the menu reload anyway. */
+    if(!rom_export_active) deassert_reset();
   }
   // loading a new rom implies the previous crc is no longer valid
   sram_crc_valid = romprops.has_combo ? 1 : 0;
@@ -1559,7 +1643,11 @@ void save_bs_pack(uint8_t* filename) {
   save_sram((uint8_t*)bsfile, BS_PACK_SIZE, BS_PACK_ADDR);
 }
 
-void save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
+/* Returns 1 on success, 0 on any failure.  The three legacy callers (.srm, .mpk,
+   .state) ignore the result and behave exactly as before; the patched-ROM export
+   needs it, because there a half-written multi-megabyte file must not be
+   presented to the user as a finished ROM. */
+int save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
   uint32_t count = 0;
   uint32_t remain = sram_size;
   size_t copy;
@@ -1567,7 +1655,7 @@ void save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
   file_open(filename, FA_CREATE_ALWAYS | FA_WRITE);
   if(file_res) {
     uart_putc(0x30+file_res);
-    return;
+    return 0;
   }
   set_mcu_addr(base_addr);
   FPGA_SELECT();
@@ -1581,13 +1669,20 @@ void save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
     }
     file_write(copy);
     if(file_res) {
+      /* This used to return outright, leaving the FPGA chip-select ASSERTED and
+         the file handle open: the stuck CS then corrupts the next SD SPI
+         transaction (the very thing every FPGA_DESELECT() before a FatFs call
+         guards against), and the leaked handle blocks the single global FIL. */
       uart_putc(0x30+file_res);
-      return;
+      FPGA_DESELECT();
+      file_close();
+      return 0;
     }
     remain -= copy;
   }
   FPGA_DESELECT();
   file_close();
+  return file_res == FR_OK;
 }
 
 uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc) {

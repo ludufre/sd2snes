@@ -65,6 +65,9 @@ fileselloop_redraw
   jsr filesel_statusbar
   jsr filesel_redraw
   jsr filesel_cleanup ; update phase 2
+  jsr export_result_check ; fork: report a finished "create patched ROM" (self-gating;
+                          ; one byte load unless the MCU actually left a result). Here,
+                          ; after the repaint, so the modal sits on the real browser.
   bra fileselloop
 
 filesel_cleanup:
