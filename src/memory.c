@@ -52,6 +52,7 @@ memory.c: RAM operations
 #include "rtc.h"
 #include "savestate.h"
 #include "sgb.h"
+#include "nes.h"
 #include "sms.h"
 #include "patch.h"
 #include "patch_copier.h"
@@ -103,6 +104,7 @@ extern uint8_t bs_pack_erase_seq;
 static uint8_t rom_scan_bs_vendor(uint32_t size); /* BS slot auto-detect (defined below) */
 static uint8_t bs_pack_exists(uint8_t *filename);
 extern sgb_romprops_t sgb_romprops;
+extern nes_romprops_t nes_romprops;
 extern uint32_t saveram_crc_old;
 extern uint8_t sram_crc_valid;
 extern uint8_t sram_crc_init;
@@ -357,6 +359,22 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of(SGBSR));
   }
 
+  /* NES detect and file management (espelha o fluxo SGB acima; nes_id e' stub
+     no-op no mk2 -> has_nes fica 0 e nada disto dispara).  Mapper fora do
+     conjunto v0 / header iNES invalido -> popup NOIMPL + NACK ANTES do ACK
+     (mesma regra do pre-check: o menu fica vivo, sem reset). */
+  uint8_t *nes_filename = filename;
+  nes_id(&nes_romprops, nes_filename);
+  if (nes_romprops.has_nes && nes_romprops.error == MENU_ERR_NOIMPL) {
+    file_close();
+    return load_abort_missing(flags, MENU_ERR_NOIMPL,
+                              (const char*)nes_romprops.error_param);
+  }
+  /* stub SNES-side (nes_snes.bin) ausente -> message + NACK */
+  if (!nes_update_file(&filename)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
+                              basename_of((const char*)NES_SNES_STUB));
+  }
   /* SMS (experimental): a .sms boots the SNES-side player; the .sms ROM is staged
      separately into PSRAM (sms_load_rom below). Mirrors the SGB file swap. */
   sms_id(filename);
@@ -419,6 +437,14 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
      load error, not "file not found". */
   if (!sgb_update_romprops(&romprops, sgb_filename)) {
     return load_abort_missing(flags, MENU_ERR_FS, basename_of(SGBSR));
+  }
+
+  /* NES: aponta fpga_conf = fpga_nes + reloca o stub SNES-side pra RAM de
+     512KB (0x880000), igual ao SGB.  0 = stub presente mas fora dos requisitos
+     (LoROM <=512KB sem SaveRAM) -> erro generico de load. */
+  if (!nes_update_romprops(&romprops, nes_filename)) {
+    return load_abort_missing(flags, MENU_ERR_FS,
+                              basename_of((const char*)NES_SNES_STUB));
   }
 
   uint16_t fpga_features_preload = romprops.fpga_features | FEAT_CMD_UNLOCK | FEAT_2100_LIMIT_NONE;
@@ -504,7 +530,13 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   if(romprops.fpga_conf || (flags & LOADROM_WITH_FPGA)) {
     const uint8_t *fpga_conf = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
     printf("reconfigure FPGA with %s...\n", fpga_conf);
+    nes_dbg_log("PRE_PGM");            /* nesdbg: no-op fora de um load .nes */
     fpga_pgm((uint8_t*)fpga_conf);
+    /* nesdbg: POST_PGM + deteccao da falha SILENCIOSA do fpga_pgm (void; em
+       erro de open retorna sem reconfigurar nem atualizar fpga_config) ->
+       latcha o skip limpo do load NES em vez de deixar o 1o FPGA_WAIT_RDY
+       wedgar a MCU.  Ver nes.c (anti-wedge). */
+    nes_dbg_post_pgm(fpga_conf);
     fpga_set_features(fpga_features_preload);
   }
 #if RECORE_PSRAM_KEEP
@@ -522,6 +554,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     }
   }
 #endif
+  /* nesdbg: entre POST_PGM e PRE_STREAM ha' o $77 + o stream do STUB SNES-side
+     pra 0x880000 (caminho comum, esperas de MCU_RDY unbounded) -- este marco
+     desambigua um wedge nessa janela de um wedge no nes_load_prg. */
+  nes_dbg_log("PRE_STUB");
   if(flags & LOADROM_WAIT_SNES) snes_set_snes_cmd(0x77);
   set_mcu_addr(base_addr + romprops.load_address);
 #if RECORE_PSRAM_KEEP
@@ -676,6 +712,26 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     rommask = sgb_romprops.romsize_bytes ? (sgb_romprops.romsize_bytes - 1) : 0;
   }
 
+  /* NES: stream do PRG (0x000000) + CHR (0x200000) em formato NES nativo,
+     zera CIRAM/WRAM/CART-RAM e grava o breadcrumb "NESL" em 0x400000
+     (gate da Fase 0; ver nes.c).  No-op sem .nes. */
+  nes_load_prg(nes_filename);
+
+  /* NES update local file properties (espelha o bloco SGB acima) */
+  if (nes_romprops.has_nes) {
+    /* reset the filename to match the NES file (recentes/saves usam o .nes) */
+    filename = nes_filename;
+
+    /* sem SaveRAM na Fase 0 (PRG-RAM com bateria fica pra fase futura);
+       ROM_MASK nao e' consumido pelo nes_wrap (o mapper_flags carrega as
+       classes de tamanho), setado por higiene pro tamanho do PRG. */
+    romprops.ramsize_bytes  = 0;
+    romprops.srambase       = 0;
+    romprops.sramsize_bytes = 0;
+    rammask = 0;
+    rommask = nes_romprops.prgsize_bytes ? (nes_romprops.prgsize_bytes - 1) : 0;
+  }
+
   /* SGB load GB RTC */
   sgb_gtc_load(sgb_filename);
 
@@ -767,7 +823,16 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   }
   fpga_set_213f(romprops.region);
 //  fpga_set_features(romprops.fpga_features);
-  fpga_set_chipfeat(sgb_romprops.has_sgb ? sgb_romprops.fpga_sgbfeat : romprops.fpga_dspfeat);
+  /* NES: o chipfeat (0xef) E' o mapper_flags[15:0] do core (nes_feat_out em
+     mcu_cmd.v -> mapper_flags_in do nes_wrap).  INVARIANTE (false-path no
+     main.sdc do sd2snes_nes): esta escrita acontece ANTES do assert_reset/
+     deassert_reset abaixo -- o core NES so' sai do reset (SNES_reset_strobe no
+     retorno do clock do SNES) com os flags ja' estaveis, e o firmware NUNCA os
+     reprograma com o core rodando. */
+  fpga_set_chipfeat(nes_romprops.has_nes ? nes_romprops.mapper_flags16
+                    : sgb_romprops.has_sgb ? sgb_romprops.fpga_sgbfeat
+                                           : romprops.fpga_dspfeat);
+  nes_dbg_log("POST_CHIPFEAT");        /* nesdbg: no-op fora de um load .nes */
   fpga_set_dac_boost(CFG.msu_volume_boost);
   dac_pause();
   dac_reset(0);
@@ -1011,6 +1076,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   sram_crc_init = 1;
   sram_crc_romsize = filesize - romprops.offset;
 
+  nes_dbg_log("DONE");                 /* nesdbg: no-op fora de um load .nes */
   return (uint32_t)filesize;
 }
 

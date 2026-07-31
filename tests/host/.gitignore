@@ -2,3 +2,4 @@ harness
 harness.dSYM/
 build/
 corpus/
+corpus_chr/

@@ -1,0 +1,183 @@
+; nes_data_zp.a65 -- ponteiro de leitura indireta-longa do parser TLV,
+; SEPARADO de nes_data.a65 (Fase 1b). GOTCHA REAL (pego empiricamente):
+; um .o65 so' linka p/ 1 pagina -- um UNICO arquivo .a65 com dois blocos
+; '.link page' diferentes NAO produz dois segmentos, o linker so' usa
+; o ULTIMO 'page' declarado pro objeto inteiro (o bloco anterior vira
+; endereco/tamanho lixo -- foi o que gerou "Page 7F doesn't have
+; 8335066 bytes of space"). Por isso este pedacinho (banco $00 de
+; verdade, exigido pelo endereçamento indireto-longo -- 65816 so' tem
+; '[dp]'/'[dp],y', sempre resolvido em banco 0, nunca '[absoluto],y')
+; vira um ARQUIVO/OBJETO proprio.
+
+.link page $00
+*= $000010
+nes_parse_ptr    .word 0   ; addr (16 bits)
+nes_parse_bank   .byt 0    ; banco -- os 3 bytes juntos = ponteiro long p/ [nes_parse_ptr]
+nes_parse_len    .word 0   ; comprimento total do frame corrente (bytes)
+nes_parse_consumed .word 0 ; bytes ja consumidos do frame corrente
+
+; --- conversor de nametable (missao de perf, iteracao 7) -- tudo em DP
+;     (bank 0) p/ o loop quente usar enderecamento dp (4-5 cyc) em vez de
+;     long (6 cyc) e p/ [nes_nt_ptr],y (indireto-longo exige dp). ---
+nes_nt_ptr       .word 0   ; -> !nes_nametable_shadow ($2000); escrito no boot
+nes_nt_bank      .byt 0    ; ^nes_nametable_shadow ($7F) -- contiguo = ptr long
+nes_cr_p0        .word 0   ; or-val (bgbase|pal<<10) das colunas 0-1 do grupo
+nes_cr_p1        .word 0   ; idem colunas 2-3
+nes_cr_end       .word 0   ; celula final (exclusive) do range corrente
+nes_cr_rowend    .word 0   ; fim (exclusive) da linha corrente, clampado
+nes_cr_attridx   .word 0   ; offset do attr byte do grupo corrente no shadow
+nes_cr_bgbase    .word 0   ; $0000/$0100 = PPUCTRL bit4 (BG pattern select)
+nes_cr_gend      .word 0   ; fim (exclusive) do grupo corrente
+nes_cr_gmid      .word 0   ; fronteira p0->p1 dentro do grupo
+nes_cr_tmp       .word 0   ; scratch do refresh
+nes_cr_a         .word 0   ; loop de attr do NT_RUN (offset $3C0..$3FF)
+nes_cr_aend      .word 0
+nes_cr_base      .word 0   ; celula base do bloco 4x4 do attr corrente
+nes_cr_cs        .word 0   ; inicio do trecho de CELULAS do run
+nes_cr_ce        .word 0   ; fim (exclusive)
+nes_ho_msb       .byt 0    ; OAM: sprite-pattern-select (PPUCTRL b3) do comando
+nes_ho_a         .byt 0    ; OAM: attr NES scratch
+nes_ho_b         .byt 0    ; OAM: attr SNES em construcao
+
+; --- v1.1 multi-nametable (derivados do FRAME_HDR flags[5:4] em
+;     npf_op_hdr; consumidos pelo conversor e pelo dispatcher do NT_RUN) ---
+nes_cr_dstoff    .word 0   ; delta de destino: byte_tilemap = 2*phys + dstoff.
+                           ; H/V/single-lower = $0000 (banco N -> screen N
+                           ; cai exato, pois screen1 = words $400 = bytes
+                           ; $800 = 2*1024); single-upper = -2048 ($F800):
+                           ; banco1 -> screen0
+nes_cr_bankmask  .byt 0    ; bit0/bit1 = converter banco fisico 0/1 (H/V =
+                           ; $03; 1L = $01; 1H = $02). Banco mascarado e'
+                           ; PULADO -- em single-upper, converter banco0
+                           ; com dstoff -2048 escreveria FORA do shadow.
+nes_hnr_s0s      .word 0   ; segmento do run no banco 0: [s0s, s0e) fisico
+nes_hnr_s0e      .word 0
+nes_hnr_s1s      .word 0   ; segmento do run no banco 1: [s1s, s1e) fisico
+nes_hnr_s1e      .word 0
+nes_hnr_segs     .word 0   ; inicio do segmento corrente (loop de 2 bancos)
+nes_hnr_sege     .word 0   ; fim (exclusive)
+nes_hnr_bankb    .word 0   ; base fisica do banco do segmento ($0000/$0400)
+; --- v1.3 splits (nes_handle_splits, contexto MAIN) ---
+nes_sp_cnt       .byt 0    ; entradas restantes no loop
+nes_sp_y         .word 0   ; offset da entrada corrente no payload
+nes_sp_s0        .word 0   ; scanline SNES da faixa corrente (pos-crop)
+nes_sp_s1        .word 0   ; scanline SNES da PROXIMA entrada (ou 224)
+nes_sp_hofs      .word 0   ; HOFS da faixa (sx + 256*b0 no arranjo V)
+nes_sp_off       .word 0   ; write-ptr dentro da tabela HDMA corrente
+nes_sp_maxc      .word 0   ; maior line-count visto (faixa DOMINANTE p/ VOFS)
+nes_sp_sy        .byt 0    ; sy da entrada corrente
+nes_sp_nt        .byt 0    ; ntsel da entrada corrente
+nes_sp_tab       .word 0   ; -> tabela HDMA em construcao (tab0/tab1)
+nes_sp_tabb      .byt 0    ; banco ($7F) -- contiguo: [nes_sp_tab],y
+nes_sp_c         .word 0   ; line-count de trabalho da faixa
+nes_sp_slraw     .word 0   ; v1.5: scanline CRUA (0-255) da entrada, antes do
+                           ; crop -- a histerese (nes_sp_prev_*) opera nela; s0
+                           ; (pos-crop) so' e' derivado DEPOIS do snap
+nes_sp_idx       .word 0   ; v1.5: indice da entrada em BYTE-OFFSET de word
+                           ; (0,2,4,6) -- indexa nes_sp_prev_sl/_hofs/_snap
+nes_sp_pcnt      .byt 0    ; v1.5: contador do pre-pass de snap (preserva
+                           ; nes_sp_cnt p/ o build loop)
+nes_av_w12       .byt 0    ; scratch do nes_apply_vblank (mascara da coluna
+nes_av_tmw       .byt 0    ; esquerda) -- CONTEXTO NMI: NUNCA reusar os
+                           ; nes_ho_* aqui (sao do contexto MAIN; a NMI no
+                           ; meio do loop de OAM corrompia o attr do sprite
+                           ; corrente -- bug real, regressao DK iteracao 9;
+                           ; mesma regra do canal-de-DMA-por-contexto)
+; --- v1.5.1 frame buffer ping-pong ---
+nes_fb_doam      .word 0   ; nes_fb_commit (contexto MAIN): destinos do
+nes_fb_dcg       .word 0   ; snapshot (oam/cgram/regs do buffer alvo)
+nes_fb_dregs     .word 0
+nes_av_fbo       .word 0   ; nes_apply_vblank (contexto NMI): fontes do
+nes_av_fbc       .word 0   ; frame commitado (oam/cgram/regs) -- separados
+nes_av_fbr       .word 0   ; dos nes_fb_d* pela regra de contexto acima
+nes_av_tm        .byt 0    ; v1.5.2: TM em construcao (ppumask bits 3/4 ->
+                           ; BG1/OBJ; rendering-off => TM=0) -- contexto NMI
+nes_hl_x         .word 0   ; logger do harness (freerun): PONTEIRO do slot
+nes_hl_b         .byt 0    ; de escrita no ring ($7F6000+slot<<8; word+bank
+                           ; contiguos = ptr long p/ [nes_hl_x],y) --
+                           ; contexto NMI (harness-only; zp e' compartilhado)
+; --- v2.0a CHR-bank re-DMA (nes_chr_dma_service, contexto NMI) ---
+nes_av_reblank   .byt 0    ; !=0 => forced-blank foi ligado (INIDISP=$80);
+                           ; o fim do apply religa ($0f). NMI-context.
+nes_cd_src       .word 0   ; endereco 24-bit da fonte PSRAM/ROM (lo 16) da CHR
+nes_cd_srcbank   .byt 0    ; banco da fonte (base + carry do offset)
+nes_cd_dst       .word 0   ; VRAM word destino corrente
+nes_cd_len       .word 0   ; bytes deste DMA (calculado = min(chunk, restante))
+nes_cd_chunk     .word 0   ; chunk pedido (full=$ffff / slice=SLICE)
+nes_cd_total     .word 0   ; tamanho total do banco no eixo (BG/OBJ)
+nes_cd_tmp       .word 0   ; scratch (cursor_obj em nes_chr_dma_obj)
+nes_cd_v         .byt 0    ; V[7:0] capturado no late-guard (gate do slice)
+; --- v2.3 raster-split de CHR (nes_chr_handle_splits, contexto MAIN) --
+;     espelha 1:1 o bloco nes_sp_* do split de scroll; scratch SEPARADO de
+;     proposito (nenhum temp compartilhado entre rotinas -- no stream o $13
+;     vem ANTES do $11: a ordem do RTL e' CHR_STATE $12 -> CHR_SPLITS $13 ->
+;     SPLITS $11, os dois decodificados no mesmo frame). ---
+nes_cs_cnt       .byt 0    ; entradas restantes no laco de build
+nes_cs_pcnt      .byt 0    ; contador do pre-pass (preserva nes_cs_cnt)
+nes_cs_nba       .byt 0    ; byte de BG12NBA da faixa corrente (emit)
+nes_cs_armed     .byt 0    ; !=0 -> residencia secundaria ja programada NESTE
+                           ; frame (no maximo 1 par alternativo por frame)
+nes_cs_rq        .byt 0    ; regiao ALVO da residencia secundaria
+nes_cs_y         .word 0   ; offset da entrada corrente no payload
+nes_cs_idx       .word 0   ; indice da entrada em BYTE-OFFSET de word (0,2,4,6)
+nes_cs_slraw     .word 0   ; scanline crua (0-255) antes do crop -- o deadband
+                           ; opera nela; s0/s1 (pos-crop) so' saem DEPOIS do snap
+nes_cs_s0        .word 0   ; scanline SNES da faixa corrente (pos-crop)
+nes_cs_s1        .word 0   ; scanline SNES da PROXIMA entrada (ou 224)
+nes_cs_c         .word 0   ; line-count de trabalho da faixa
+nes_cs_off       .word 0   ; write-ptr dentro da tabela HDMA corrente
+nes_cs_bnk       .word 0   ; s0_bank da entrada, ja mascarado (16 bits)
+nes_cs_pair0     .word 0   ; par 4K derivado da entrada (metade PT0)
+nes_cs_pair1     .word 0   ; idem PT1
+nes_cs_tab       .word 0   ; -> tabela HDMA em construcao (chdma_tab0/1)
+nes_cs_tabb      .byt 0    ; banco ($7F) -- CONTIGUO: [nes_cs_tab],y
+nes_av_hmask     .byt 0    ; v2.3 (contexto NMI): mascara COMBINADA de $420C
+                           ; ($04 ch2 scroll | $08 ch3 tile-base) -- um unico
+                           ; 'sta $420c' no fim do apply liga/desliga os dois
+; --- v2.3 (fix A1/A2) -- APENDICE: vars NOVAS entram no FIM p/ nao deslocar
+;     o endereco de nenhuma var ja existente deste bloco. ---
+nes_cl0_reg      .byt 0    ; nes_chr_load_h0: regiao NOVA do arm (detecta o
+nes_cl1_reg      .byt 0    ; retarget cross-regiao); nes_chr_load_h1 idem.
+                           ; UM POR ROTINA de proposito (regra da casa: nenhum
+                           ; temp compartilhado entre rotinas, mesmo sem
+                           ; aninhamento hoje -- load_pair chama as duas)
+nes_crb_rq       .byt 0    ; nes_chr_reg_busy: regiao consultada (scratch
+                           ; PROPRIO -- a rotina e' chamada tanto pelo
+                           ; reconciliador do $12 quanto pelo resolve do $13)
+; --- v2.2-lite CHR-RAM: STAGE do CMD_CHR_RUN ($41), contexto MAIN
+;     (nes_chr_handle_run / nes_chrq_stage). Prefixo nes_cq_*. ---
+nes_cq_off       .word 0   ; chr_off do run (offset em BYTES na CHR-RAM)
+nes_cq_len       .word 0   ; len CRU do header (define o tamanho TLV = 4+len)
+nes_cq_cl        .word 0   ; len CLAMPADO na CHR-RAM de 8KB (o que e' copiado)
+nes_cq_t0        .word 0   ; primeiro tile tocado pelo run
+nes_cq_nt        .word 0   ; quantos tiles o run toca (>=1)
+nes_cq_ni        .word 0   ; byte-offset do buffer nos arrays nd*/nt* (0/2)
+nes_cq_dscb      .word 0   ; base dos descritores do buffer aberto
+nes_cq_obb       .word 0   ; base do array OBJ do buffer aberto
+nes_cq_dp        .word 0   ; ponteiro de trabalho no descritor -- word+banco
+nes_cq_dpb       .byt 0    ;   CONTIGUOS = ponteiro long p/ [nes_cq_dp],y
+nes_cq_tofs      .word 0   ; indice do 1o tile deste run nos arrays bg/ob
+; --- v2.2-lite CHR-RAM: SWIZZLE (NES -> SNES 2bpp+4bpp). Chamado pelo MAIN
+;     (stage) E pela NMI (rebuild total). NAO ha race: enquanto
+;     nes_chrq_full estiver setado -- unica condicao em que a NMI chama --
+;     o MAIN NAO converte tile nenhum (ver a INVARIANTE em nes_data.a65). ---
+nes_cqs_n        .word 0   ; tiles a converter
+nes_cqs_bgp      .word 0   ; -> array BG do buffer (word+banco CONTIGUOS =
+nes_cqs_bgb      .byt 0    ;   ponteiro long p/ [nes_cqs_bgp],y)
+nes_cqs_obp      .word 0   ; -> array OBJ, JA compensado (ob_base + 16*tofs),
+nes_cqs_obb      .byt 0    ;   pra usar o MESMO Y do BG -- ver nes_chrq_swz
+; --- v2.2-lite CHR-RAM: APPLY, contexto NMI (nes_chrq_service /
+;     nes_chrq_apply / nes_chrq_rebuild). Prefixo nes_cqa_*. ---
+nes_cqa_ni       .word 0   ; byte-offset do buffer publicado (0/2)
+nes_cqa_dscb     .word 0   ; base dos descritores do buffer publicado
+nes_cqa_bgb      .word 0   ; base do array BG
+nes_cqa_obb      .word 0   ; base do array OBJ
+nes_cqa_dp       .word 0   ; ponteiro no descritor corrente -- word+banco
+nes_cqa_dpb      .byt 0    ;   CONTIGUOS = ponteiro long p/ [nes_cqa_dp],y
+nes_cqa_t0       .word 0   ; primeiro tile do descritor
+nes_cqa_nt       .word 0   ; tiles do descritor
+nes_cqa_tofs     .word 0   ; indice do 1o tile nos arrays bg/ob
+nes_cqa_v        .word 0   ; V[7:0] lido no gate (16 bits p/ somar o custo)
+nes_cqa_cost     .word 0   ; custo do descritor em scanlines
+nes_cqa_fb       .byt 0    ; !=0 -> dreno em forced-blank (sem gate de V)
+nes_cqa_t        .word 0   ; cursor de tile do rebuild total

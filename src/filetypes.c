@@ -84,6 +84,7 @@ printf("start\n");
           case TYPE_ROM:
           case TYPE_SPC:
           case TYPE_SKIN:   /* theme files (.thm/.skin) are listed like ROMs */
+          case TYPE_NES:    /* .nes (core NES, mk3-only) -- listado como ROM */
           case TYPE_SUBDIR:
           case TYPE_PARENT:
             /* omit entries with hidden or system attribute -- but NEVER the
@@ -184,6 +185,13 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
   if(!strcasecmp(ext+1, "SKIN") || !strcasecmp(ext+1, "THM")) {
     return TYPE_SKIN;   /* menu theme file (see theme.c) */
   }
+#ifndef CONFIG_MK2
+  /* .nes (iNES) -- core NES, mk3-only: no mk2 fica TYPE_UNKNOWN (nao listado),
+     mesmo com o menu pedindo TYPE_NES no READDIR (menu binario e' compartilhado). */
+  if(!strcasecmp(ext+1, "NES")) {
+    return TYPE_NES;
+  }
+#endif
   return TYPE_UNKNOWN;
 }
 

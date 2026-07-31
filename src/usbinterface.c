@@ -209,6 +209,89 @@ static char    fbuf[MAX_STRING_LENGTH + 1];
 
 extern cfg_t CFG;
 
+/* === v2.0d: timeout-bounded SRAM helpers for USB GET/PUT space=SNES ===
+   sram_readblock/sram_writeblock (memory.c) call set_mcu_addr (fpga_spi.c),
+   and every one of those per-byte handshakes uses the UNBOUNDED
+   FPGA_WAIT_RDY: it busy-waits on the FPGA_MCU_RDY pin with no escape.
+   Proven by device investigation: under the NES core with heavy PSRAM bus
+   contention, a lost/delayed MCU_RDY poll wedges the MCU forever mid-block
+   -- the USB server keeps answering INFO (no SRAM touch) but every GET/PUT
+   space=SNES after that hangs with err=255 until power-cycle. See
+   NES-BRIDGE-SPEC.md SS13 (Errata), item 6.  The NDBG publisher half of
+   that errata (nes.c's nes_dbg_publish, called from the in-game main
+   loop) is ALREADY bounded -- it and the whole NES load path route
+   through nes.c's own nes_sram_*_to/nes_fpga_err latch (same pattern as
+   here); this file only had the USB-server half left to fix.
+
+   These wrappers mirror patch.c's psram_* pattern (itself mirroring
+   nes.c's nes_sram_*_to): bound every MCU_RDY wait with FPGA_WAIT_RDY_TO
+   and latch usbint_sram_err on timeout so a stalled transfer aborts in
+   O(1) timeouts (first bad byte trips the latch; every later byte/flit of
+   the SAME command short-circuits instantly) instead of hanging or
+   re-spending the full timeout per byte.  Kept LOCAL to usbinterface.c,
+   used ONLY at the two space=SNES call sites in usbint_recv_block (PUT)
+   and usbint_handler_dat (GET/VGET) -- every other caller of the global
+   sram_readblock/sram_writeblock (savestates, cheats, covers, cfg, DMA,
+   normal ROM loading, the MSU STREAM preload...) keeps the original
+   unbounded, timing-critical wait unchanged.
+
+   On timeout: a GET pads the unread tail of the request with 0xFF (same
+   "no data" fill the protocol already uses for LS end-of-listing / an
+   unrecognized opcode) and a PUT just reports the bytes as "consumed";
+   either way the caller's do-while sees the block as done and returns
+   control to the USB stack -- the host gets a finite (if bogus) reply
+   instead of a wedged device. usbint_sram_err is reset at the top of
+   every new command (usbint_handler_cmd, alongside server_info.error) so
+   one stalled command never poisons a later, healthy one. */
+static volatile uint8_t usbint_sram_err = 0;
+
+static void usbint_set_mcu_addr_to(uint32_t addr) {
+    if (usbint_sram_err) return;
+    FPGA_SELECT();
+    FPGA_WAIT_RDY_TO(usbint_sram_err);   /* mirrors set_mcu_addr's "wait for prior ops" */
+    if (usbint_sram_err) { FPGA_DESELECT(); return; }
+    FPGA_TX_BYTE(FPGA_CMD_SETADDR | FPGA_TGT_MEM);
+    FPGA_TX_BYTE((addr >> 16) & 0xff);
+    FPGA_TX_BYTE((addr >> 8) & 0xff);
+    FPGA_TX_BYTE((addr) & 0xff);
+    FPGA_DESELECT();
+}
+
+static uint16_t usbint_sram_readblock_to(void *buf, uint32_t addr, uint16_t size) {
+    uint8_t *tgt = buf;
+    uint16_t count = size;
+    if (usbint_sram_err) { memset(buf, 0xFF, size); return size; }
+    usbint_set_mcu_addr_to(addr);
+    if (usbint_sram_err) { memset(buf, 0xFF, size); return size; }
+    FPGA_SELECT();
+    FPGA_TX_BYTE(0x88);   /* READ */
+    while (count--) {
+        FPGA_WAIT_RDY_TO(usbint_sram_err);
+        if (usbint_sram_err) break;
+        *(tgt++) = FPGA_RX_BYTE();
+    }
+    FPGA_DESELECT();
+    if (usbint_sram_err) memset(tgt, 0xFF, (uint8_t *)buf + size - tgt);
+    return size;
+}
+
+static uint16_t usbint_sram_writeblock_to(void *buf, uint32_t addr, uint16_t size) {
+    uint8_t *src = buf;
+    uint16_t count = size;
+    if (usbint_sram_err) return size;
+    usbint_set_mcu_addr_to(addr);
+    if (usbint_sram_err) return size;
+    FPGA_SELECT();
+    FPGA_TX_BYTE(0x98);   /* WRITE */
+    while (count--) {
+        FPGA_TX_BYTE(*src++);
+        FPGA_WAIT_RDY_TO(usbint_sram_err);
+        if (usbint_sram_err) break;
+    }
+    FPGA_DESELECT();
+    return size;
+}
+
 // reset
 void usbint_set_state(unsigned open) {
     connected = open;
@@ -325,7 +408,8 @@ void usbint_recv_block(void) {
                 UINT bytesWritten = 0;
                 if (server_info.space == USBINT_SERVER_SPACE_SNES) {
                     UINT remainingBytes = min(server_info.block_size - blockBytesWritten, server_info.size - count);
-                    bytesWritten = sram_writeblock(recv_buffer + blockBytesWritten, server_info.offset + count, remainingBytes);
+                    bytesWritten = usbint_sram_writeblock_to(recv_buffer + blockBytesWritten, server_info.offset + count, remainingBytes);
+                    server_info.error |= usbint_sram_err;
                 }
                 else if (server_info.space == USBINT_SERVER_SPACE_CMD) {
                     UINT remainingBytes = min(server_info.block_size - blockBytesWritten, server_info.size - count);
@@ -474,6 +558,7 @@ int usbint_handler_cmd(void) {
 
     server_info.offset = 0;
     server_info.error = 0;
+    usbint_sram_err = 0;   /* v2.0d: fresh SRAM-timeout latch per command -- see helpers above */
 
     memset((unsigned char *)send_buffer[send_buffer_index], 0, USB_BLOCK_SIZE);
 
@@ -816,7 +901,8 @@ int usbint_handler_dat(void) {
                 UINT remainingBytes = min(server_info.block_size - bytesSent, server_info.size - count);
 
                 if (server_info.space == USBINT_SERVER_SPACE_SNES) {
-                    bytesRead = sram_readblock((uint8_t *)send_buffer[send_buffer_index] + bytesSent, server_info.offset + count, remainingBytes);
+                    bytesRead = usbint_sram_readblock_to((uint8_t *)send_buffer[send_buffer_index] + bytesSent, server_info.offset + count, remainingBytes);
+                    server_info.error |= usbint_sram_err;
                 }
                 else if (server_info.space == USBINT_SERVER_SPACE_MSU) {
                     bytesRead = msu_readblock((uint8_t *)send_buffer[send_buffer_index] + bytesSent, server_info.offset + count, remainingBytes);

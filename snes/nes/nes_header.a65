@@ -1,0 +1,76 @@
+; nes_header.a65 -- header LoROM ($FFB0-$FFFF) + stub de RESET + vetores,
+; SEPARADO de nes_snes.a65 (Fase 1b). GOTCHA REAL (pego empiricamente):
+; um UNICO objeto .o65 com dois '*=' distantes (ex. codigo em $8000 E
+; header em $FFB0, ~31KB de vao no meio) vira UM SEGMENTO MONOLITICO do
+; tamanho do vao inteiro (nes_snes.o65 chegou a 33439 bytes so' de
+; "ar" antes desse split) -- o linker nao concatena sub-blocos dentro do
+; mesmo objeto, ele precisa de OBJETOS SEPARADOS (mesmo padrao provado em
+; snes/boot/header.a65 vs snes/boot/main.a65: header pequeno e pinado
+; perto dos vetores, o resto sem '*=' pro linker posicionar livre).
+;
+; MESMO layout de utils/gen_nes_snes_stub.py (a Fase 0), validado por
+; nes_update_romprops (src/memory.c): mapper LoROM, <=512KB, sem SRAM.
+; romsize/checksum aqui sao PLACEHOLDER -- gen_lorom.py (Makefile) os
+; corrige no arquivo final de 32KB (sneslink so' enxerga o dump linear de
+; 64KB por pagina antes do corte, ver nota no Makefile/gen_lorom.py).
+;
+; RESET/RTI_STUB/IRQ_HANDLER ficam AQUI (minusculos, cabem no vao
+; $FF00-$FFAF sem estourar) -- NMI_HANDLER de verdade (corpo grande) mora
+; em nes_snes.a65, sem '*=' proprio, e e' so' REFERENCIADO no vetor daqui
+; (link cross-file normal).
+
+.link page $00
+#include "nes_equates.i65"
+
+*= $00FF00
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
+*= $00FF00
+RESET:
+        sei
+        clc
+        xce
+        sep #$20 : .as
+        rep #$10 : .xl
+        ldx #$1fff
+        txs
+        jmp @nes_snes_start
+
+RTI_STUB:
+        rti
+
+IRQ_HANDLER:
+        rti                     ; nao usado (timers/H-V IRQ desligados)
+
+*= $00FFB0
+.byt "LF"           ; maker (fork)
+.byt "NESR"         ; gamecode -- "NES Renderer" (Fase 0 usava "NESB" no stub)
+
+*= $00FFC0
+.byt "NES CORE RENDERER    "
+     ;123456789012345678901 -- max 21 chars
+
+*= $00FFD5     .byt $20  ; rom speed/map: LoROM slow
+*= $00FFD6     .byt $00  ; carttype: ROM only
+*= $00FFD7     .byt $05  ; romsize placeholder (gen_lorom.py corrige p/ 32KB real)
+*= $00FFD8     .byt $00  ; ramsize: none (exigido por nes_update_romprops)
+*= $00FFD9     .byt $01  ; destcode: US (NTSC)
+*= $00FFDA     .byt $33  ; licensee: header estendido valido
+*= $00FFDB     .byt $00  ; version
+
+*= $00FFDC     .word 0,0 ; checksum placeholder (gen_lorom.py recalcula)
+
+*= $00FFE4     .word RTI_STUB      ; COP nativo
+*= $00FFE6     .word RTI_STUB      ; BRK nativo
+*= $00FFE8     .word RTI_STUB      ; ABORT nativo
+*= $00FFEA     .word NMI_HANDLER   ; NMI nativo (corpo em nes_snes.a65)
+*= $00FFEE     .word IRQ_HANDLER   ; IRQ nativo
+*= $00FFF4     .word RTI_STUB      ; COP emulacao
+*= $00FFF8     .word RTI_STUB      ; ABORT emulacao
+*= $00FFFA     .word RTI_STUB      ; NMI emulacao (nunca deve disparar --
+                                    ; RESET vai nativo antes de qualquer NMI)
+*= $00FFFC     .word RESET
+*= $00FFFE     .word RTI_STUB      ; IRQ/BRK emulacao

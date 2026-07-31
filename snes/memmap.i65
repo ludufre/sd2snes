@@ -511,6 +511,7 @@
 #define TYPE_IPS                    $04
 #define TYPE_CHT                    $05
 #define TYPE_SKIN                   $06
+#define TYPE_NES                    $07 /* .nes (core NES mk3-only); lockstep com filetypes.h */
 #define TYPE_SUBDIR                 $40
 #define TYPE_PARENT                 $80
 

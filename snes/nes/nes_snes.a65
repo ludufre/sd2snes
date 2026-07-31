@@ -1,0 +1,213 @@
+; nes_snes.a65 -- corpo do renderer NES->SNES REAL (device), Fase 1b. O
+; header LoROM + RESET/vetores pinados moram em nes_header.a65 (SEPARADO
+; -- ver o cabecalho la' pro motivo: um objeto com dois '*=' distantes
+; virava um segmento monolitico do tamanho do vao inteiro, ~33KB de puro
+; "ar"). Este arquivo NAO tem nenhum '*=' -- o linker posiciona livre
+; dentro da pagina $00 (junto de nes_render.a65/nes_boot.a65/
+; nes_transport_device.a65, tambem sem '*=' proprio).
+;
+; Fluxo (espelha o pseudocodigo da NES-BRIDGE-SPEC SS4.4):
+;   boot:    nes_boot_init (PPU Mode 0 + shadows zerados) -> nes_chr_load x2
+;            (BG 2bpp de 0x500000, OBJ 4bpp de 0x600000) -> liga tela -> liga NMI
+;   display: main loop chama nes_dev_poll_frame (drena+decodifica+converte
+;            SE houver frame novo -- roda 100% aqui, NUNCA no vblank)
+;   vblank:  NMI chama nes_apply_vblank (DMA VRAM/OAM/CGRAM + scroll) +
+;            nes_dev_ack_frame (handshake) + nes_dev_send_pad (joypad)
+
+.link page $00
+#include "nes_equates.i65"
+
+; ============================================================
+; NMI_HANDLER -- prologo/epilogo padrao do fork (salva tudo, DBR=PBR,
+; espelha snes/boot/header.a65 IRQ_16bit/NMI_16bit). Todo o trabalho de
+; VBLANK mora aqui: apply (DMA de verdade) + ack (handshake) + pad.
+; Referenciado pelo vetor NMI em nes_header.a65 (link cross-file normal).
+; ============================================================
+NMI_HANDLER:
+        php
+        rep #$30 : .al : .xl
+        pha
+        phx
+        phy
+        phd
+        phb
+        phk
+        plb                     ; DBR=PBR (banco $00) -- todo o codigo do
+                                 ; renderer usa enderecamento longo (@label)
+                                 ; ou direct-page (banco 0), entao isso e'
+                                 ; so por seguranca/consistencia.
+        sep #$20 : .as
+        rep #$10 : .xl
+
+        lda $4210               ; confirma/limpa o flag de NMI (RDNMI,
+                                 ; book1 p.2-28-6 -- precisa ser lido)
+
+        ; ============================================================
+        ; GUARDA DE RE-ENTRADA -- CAUSA-RAIZ DE DUAS FALHAS DE CAMPO.
+        ; Nada mascara NMI neste renderer (o UNICO write de $4200 e' o do
+        ; boot, nes_boot.a65), entao QUALQUER caminho que passe de um frame
+        ; dentro do handler deixa o vblank seguinte re-disparar a NMI EM CIMA
+        ; dele.  Era o caso do rebuild total: 512 tiles de swizzle+DMA numa
+        ; passada (~4-5 frames de CPU) com nes_chrq_full so' limpo no FIM, de
+        ; modo que cada re-entrada via o flag ainda armado e RECOMECAVA o
+        ; rebuild do tile 0 -- recursao sem fundo ate' a pilha dar a volta.
+        ; Medido no device (instrumento de profundidade): profundidade 1 sa',
+        ; picos de 7 e 14 apos o START, e trava terminal.
+        ; A guarda e' NO TOPO DA NMI INTEIRA, nao so' no rebuild, de proposito:
+        ; protege a CLASSE (qualquer trabalho longo futuro), custa 5 instrucoes
+        ; por NMI, e nao quebra suposicao nenhuma do transporte -- apply, ack e
+        ; pad sao todos IDEMPOTENTES por frame: o pending fica para a proxima
+        ; NMI, o ack e' um espelho de nes_dev_last_seq (re-escrito no vblank
+        ; seguinte) e o pad e' re-lido.  Perder uma oportunidade de ack numa
+        ; NMI aninhada nao perde informacao; o que perdia informacao era o
+        ; colapso.
+        ; PAR OBRIGATORIO: sozinha, a guarda faria o rebuild PERDER progresso
+        ; (a re-entrada volta cedo, mas o rebuild original continua levando
+        ; 4-5 frames).  Por isso o rebuild passou a ser FATIADO por frame --
+        ; ver nes_chrq_rebuild.
+        ; ============================================================
+        lda @nes_nmi_busy
+        bne nmi_reentry_exit
+        lda #$01
+        sta @nes_nmi_busy
+
+        ; --- v1.5.1: apply SEM gate externo -- o proprio nes_apply_vblank
+        ;     so' aplica FRAME COMMITADO (nes_fb_pending) e le tudo do
+        ;     frame buffer ping-pong => atomico (Sintoma A: zero tear de
+        ;     OAM/CGRAM) E concorrente (o ready-gate v1.5.0 serializava
+        ;     decode->apply e regrediu a vazao: SMB attract 4,06% -> 10,22%
+        ;     overruns). pending==0 => apply retorna cedo e o frame
+        ;     anterior fica na tela. ---
+        jsr nes_apply_vblank
+        jsr nes_dev_ack_frame
+        ; auto-joypad: espera o read terminar antes de ler $4218+ (book1
+        ; p.2-28-7: HVBJOY bit0 -- "periodo em que o controller esta
+        ; lendo"; ler antes pega dado obsoleto/parcial).
+nmi_wait_pad:
+        lda $4212
+        and #$01
+        bne nmi_wait_pad
+        jsr nes_dev_send_pad
+
+        sep #$20 : .as
+        lda #$00
+        sta @nes_nmi_busy        ; libera a guarda (o 65816 nao tem STZ long)
+nmi_reentry_exit:
+
+        ; BUG REAL PEGO AQUI (achado no harness, mesmo prologo/epilogo):
+        ; nes_apply_vblank/nes_dev_ack_frame/nes_dev_send_pad deixam A em
+        ; 8-bit ao retornar, mas o PROLOGO empilhou A com 16 bits (rep#$30
+        ; antes do 'pha'). 'pla' com A em 8-bit so' puxa 1 byte, vs os 2
+        ; bytes empilhados -- desalinha a pilha em 1B POR NMI (corrupcao
+        ; em poucos segundos). Re-larga A E X/Y pro estado do prologo
+        ; ANTES de qualquer pull (D e' sempre 16-bit por hardware, DB/PB
+        ; sempre 8-bit, independente de M/X).
+        rep #$30 : .al : .xl
+        plb
+        pld
+        ply
+        plx
+        pla
+        plp
+        rti
+
+; ============================================================
+; nes_snes_start -- boot completo + main loop (display ativo). Alvo do
+; 'jmp @nes_snes_start' de RESET (nes_header.a65).
+; ============================================================
+nes_snes_start:
+        ; BUG REAL PEGO AQUI (achado no harness): sem redeclarar .as/.xl,
+        ; o snescom herda o ULTIMO estado declarado na ordem TEXTUAL do
+        ; arquivo (aqui, o 'rep#$30:.al:.xl' do fim de NMI_HANDLER, MESMO
+        ; arquivo), nao o estado real de runtime -- desalinha 'lda #imm'
+        ; seguintes por 1 byte (vira LDA 16-bit de 3 bytes em vez de 8-bit
+        ; de 2), corrompendo todas as instrucoes daqui em diante. Gotcha
+        ; gotcha conhecido do snescom (vazamento de .as/.al em ordem de fonte).
+        sep #$20 : .as
+        rep #$10 : .xl
+
+        ; BUG REAL PEGO AQUI NO HARNESS, mesma classe (achado via trace, ver
+        ; harness_main.a65): WRAM nao vira bytes no ROM -- '.word 0' em
+        ; nes_data.a65 e' so' tamanho/simbolo, nao um valor de boot de
+        ; verdade. nes_dev_last_seq comeca com lixo do power-on; se por
+        ; coincidencia bater com o NES_FRAME_SEQ inicial da bridge (tipico
+        ; 0), o 1o frame real seria perdido silenciosamente. Zera explicito
+        ; (mesmo gotcha do fork: "clear_wram enche de $55, zere gates
+        ; explicitamente").
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_dev_last_seq
+        sta @nes_dev_pad1_state
+        sta @nes_dev_pad2_state
+        sep #$20 : .as
+        ; nes_nmi_busy e' .byt, entao entra AQUI (8 bits), nao no bloco de
+        ; .word acima.  E TEM de ser zerado: e' um GATE LIDO-ANTES-DE-ESCRITO
+        ; -- a primeira NMI le a variavel antes de qualquer escrita.  Sem isto
+        ; o clear_wram do menu deixa $55, a 1a NMI ve busy!=0, desvia para o
+        ; early-out e NUNCA alcanca o clear (que so' existe no caminho
+        ; busy==0): toda NMI retorna imediatamente, para sempre = BRICK
+        ; DETERMINISTICO em todo boot, e a guarda de re-entrada teria trocado
+        ; uma recursao probabilistica por morte certa.  Invisivel a todo gate
+        ; offline porque o bsnes zera a WRAM.  Mesma regra citada 8x no
+        ; nes_boot.a65 e o motivo do bloco de zeragem logo acima existir.
+        lda #$00
+        sta @nes_nmi_busy
+        ; (v1.5.1: o estado do frame buffer ping-pong -- fb_pending/active/
+        ;  target -- e' zerado no nes_boot_init, COMPARTILHADO com o harness)
+
+        jsr nes_boot_init
+
+        ; --- carrega CHR (BG 2bpp de 0x500000, OBJ 4bpp de 0x600000 --
+        ;     janelas PSRAM provisorias, ver nes_equates.i65). Tamanho de
+        ;     v1 (Donkey Kong e alvos NROM similares): NES_CHR_SIZE_NES
+        ;     bytes NES = mesmo tanto em bytes SNES-2bpp (BG, 1:1) e 2x em
+        ;     SNES-4bpp (OBJ). ---
+        lda #NES_CHR_BG_PSRAM_BANK
+        sta @nes_boot_src_bank
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_boot_src_addr
+        lda #VRAM_BG_CHR_WORD
+        sta @nes_boot_dst_vram
+        lda #NES_CHR_SIZE_NES
+        sta @nes_boot_size
+        sep #$20 : .as
+        jsr nes_chr_load
+
+        lda #NES_CHR_OBJ_PSRAM_BANK
+        sta @nes_boot_src_bank
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_boot_src_addr
+        lda #VRAM_OBJ_CHR_WORD
+        sta @nes_boot_dst_vram
+        lda #NES_CHR_SIZE_OBJ    ; = 2x NES_CHR_SIZE_NES (OBJ 4bpp), constante
+                                  ; direta -- ver nota em nes_equates.i65
+        sta @nes_boot_size
+        sep #$20 : .as
+        jsr nes_chr_load
+
+        ; --- liga a tela + NMI/auto-joypad ---
+        lda #$0f
+        sta $2100                ; screen on, brilho maximo
+        lda #$81
+        sta $4200                ; NMI enable + auto-joypad enable (book1 p.2-28-1)
+        cli
+
+        ; --- GO: solta o core NES do reset (contrato da rodada final do
+        ;     RTL, ver NES_CTRL_GO em nes_equates.i65). Escrito UMA vez,
+        ;     como ULTIMO passo do boot -- depois dos 2 DMAs de CHR (a
+        ;     PSRAM era toda nossa ate' aqui, o core estava estacionado) e
+        ;     depois de armar NMI/handshake (linhas acima): o 1o
+        ;     NES_FRAME_SEQ++ da bridge ja' encontra o poll vivo. A bridge
+        ;     re-zera o GO em qualquer reset do SNES (load/IGR) -- nao
+        ;     re-zeramos aqui. DB=0 (reset), enderecamento absoluto banco 0
+        ;     como os demais acessos ao control block. ---
+        lda #$01
+        sta NES_CTRL_GO
+
+nes_main_loop:
+        jsr nes_dev_poll_frame
+        bra nes_main_loop
+
+

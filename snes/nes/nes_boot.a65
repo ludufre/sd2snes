@@ -1,0 +1,651 @@
+; nes_boot.a65 -- init PPU + shadows COMPARTILHADO entre device e harness
+; (Fase 1b). Roda 1x no boot, ANTES do NMI ser ligado -- forced-blank o
+; tempo todo, entao VRAM/OAM/CGRAM podem ser escritos livremente (book1
+; p.5232: "V-RAM, OAM: Forced Blank ou V-Blank"; CGRAM aceita tambem
+; H-Blank, mas forced-blank cobre os tres).
+;
+; O CARREGAMENTO da CHR (nes_chr_load, chamada 2x -- BG 2bpp + OBJ 4bpp)
+; recebe a fonte via parametros em WRAM (@nes_boot_src_bank/_src_addr/
+; _size) setados pelo CHAMADOR -- e' assim que o mesmo nes_chr_load serve
+; tanto o device (fonte = janela PSRAM 0x500000/0x600000, ver
+; nes_transport_device.a65) quanto o harness (fonte = banco de ROM com a
+; CHR da fixture, ver nes-tests/renderer-harness/harness_transport.a65).
+
+.link page $00
+#include "nes_equates.i65"
+
+; ============================================================
+; nes_boot_init -- registros PPU pro Mode 0 (BG1 2bpp + OBJ 4bpp) + zera
+; os shadows WRAM + o hardware VRAM/OAM/CGRAM correspondente, ANTES da CHR
+; ser carregada (nes_chr_load) e do primeiro frame chegar. Espelha
+; snes_init/setup_gfx de snes/boot/main.a65 (mesmo padrao do fork), mas
+; so com o que o Mode 0 do renderer precisa.
+; ============================================================
+nes_boot_init:
+        sep #$20 : .as
+        rep #$10 : .xl
+
+        ; --- zera os nes_regs_* staged (WRAM nao e' ROM-backed -- '.byt 0'
+        ;     em nes_data.a65 e' so' simbolo/tamanho, nao valor de boot; sem
+        ;     isso o 1o nes_convert_nametable/nes_handle_oam leria um
+        ;     PPUCTRL de lixo do power-on se rodasse antes do 1o CMD_REGS;
+        ;     mesmo gotcha "zere gates explicitamente" da base do fork). ---
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_regs_scrollx
+        sta @nes_regs_scrolly
+        sep #$20 : .as
+        lda #$00
+        sta @nes_regs_ppuctrl
+        sta @nes_regs_ppumask
+        sta @nes_regs_ntselect
+
+        ; --- stub MVN em WRAM (missao de perf, iteracao 7 -- ver nota em
+        ;     nes_data.a65): $54 dst src + $6B (RTL). dst = banco do
+        ;     shadow ($7F); src patchado por chamada em nes_handle_nt_run.
+        ;     WRAM nao e' ROM-backed -> os 4 bytes TEM que ser escritos
+        ;     aqui (mesmo gotcha dos gates). ---
+        lda #$54
+        sta @nes_mvn_stub
+        lda #^nes_nametable_shadow
+        sta @nes_mvn_stub+1
+        lda #$00
+        sta @nes_mvn_stub+2
+        lda #$6b
+        sta @nes_mvn_stub+3
+
+        ; --- ponteiro dp [nes_nt_ptr] -> shadow (leituras do conversor
+        ;     nes_convert_range; indireto-longo exige o ptr em dp) ---
+        rep #$20 : .al
+        lda #!nes_nametable_shadow
+        sta nes_nt_ptr
+        sep #$20 : .as
+        lda #^nes_nametable_shadow
+        sta nes_nt_bank
+
+        ; --- v1.1 multi-nametable: estado de arrangement (gates -- WRAM/dp
+        ;     nao sao ROM-backed, init explicito). ntarr=$FF = sentinela
+        ;     "nunca visto" -> o 1o FRAME_HDR SEMPRE deriva dstoff/bankmask/
+        ;     bg1sc e forca reconversao (npf_op_hdr). Defaults seguros ate'
+        ;     la': single 32x32 (so' screen0/banco0). ---
+        lda #$ff
+        sta @nes_ntarr
+        lda #REG_BG1SC_VAL
+        sta @nes_regs_bg1sc
+        rep #$20 : .al
+        lda #$0000
+        sta nes_cr_dstoff
+        sep #$20 : .as
+        lda #$01
+        sta nes_cr_bankmask
+
+        ; --- v1.3 splits: gates zerados (WRAM nao e' ROM-backed) --
+        ;     commit=0 = sem HDMA de split ate' o 1o CMD_SPLITS ---
+        lda #$00
+        sta @nes_hdma_commit
+        sta @nes_split_pend
+        sta @nes_hdma_sel
+
+        ; --- v1.5 Sintoma B: deadband da fronteira de banda zerado
+        ;     (prev_cnt=0 = frame anterior sem splits -> 1o frame nunca faz
+        ;     snap). WRAM nao e' ROM-backed -> init explicito (mesmo gotcha
+        ;     dos gates). COMPARTILHADO: device e harness inicializam aqui. ---
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_sp_prev_cnt
+        sep #$20 : .as
+
+        ; --- v1.5.1: frame buffer ping-pong zerado (pending/active/target=0
+        ;     = nada commitado/exibindo; 1o nes_fb_select escolhe buf0). A
+        ;     NMI pula o apply ate' o 1o commit -- a tela ja nasce limpa
+        ;     pelos clears de VRAM/OAM/CGRAM deste init. ---
+        lda #$00
+        sta @nes_fb_pending
+        sta @nes_fb_active
+        sta @nes_fb_target
+        sta @nes_fb_pd_acc
+
+        ; --- v2.2 CHR reconciliador (clear_wram enche de $55; zera explicito
+        ;     TODO gate lido-antes-de-escrito). Regiao 0 nasce = par (0,1)
+        ;     (o nes_chr_load do boot sobe os primeiros 8KB lineares);
+        ;     regiao 1 nasce vazia ($ffff). Base banks = defaults do DEVICE
+        ;     ($50/$60); o harness/runner sobrescreve p/ fixtures. ---
+        lda #$00
+        sta @nes_chr_active
+        sta @nes_chr_cur_slot
+        sta @nes_chr_reblank
+        sta @nes_chr_d0_mode
+        sta @nes_chr_d1_mode
+        sta @nes_chr_d0_reg
+        sta @nes_chr_d1_reg
+        sta @nes_chr_frame_fb
+        sta @nes_chr_esc_cool
+        sta @nes_chr_force_full
+        lda #NES_CHR_BG_PSRAM_BANK
+        sta @nes_chr_bg_base_bank
+        lda #NES_CHR_OBJ_PSRAM_BANK
+        sta @nes_chr_obj_base_bank
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_chr_r0_p0           ; boot linear: par (0,1) na regiao 0
+        sta @nes_chr_bg_base_addr
+        sta @nes_chr_obj_base_addr
+        sta @nes_chr_dma_count
+        lda #$0001
+        sta @nes_chr_r0_p1
+        lda #NES_CHR_BANK_EMPTY
+        sta @nes_chr_r1_p0           ; regiao 1 vazia
+        sta @nes_chr_r1_p1
+        sep #$20 : .as
+
+        ; --- v2.3 raster-split de CHR (CMD_CHR_SPLITS): gates zerados
+        ;     (clear_wram enche a WRAM de $55; nada aqui e' ROM-backed).
+        ;     pend=0 = canal 3 off ate' o 1o $13; prev_cnt=0 = deadband
+        ;     comeca fresh (1o frame nunca snapa); s1p=0 = modo 8K ate' o 1o
+        ;     CMD_CHR_STATE. Os arrays (sl/prev_sl/bank/nba) e as tabelas
+        ;     chdma_* NAO precisam de clear: prev_sl so' e' lido com
+        ;     idx < prev_cnt, os demais sao escritos antes de lidos e a
+        ;     tabela so' e' armada com pend != 0 (= tabela construida). ---
+        lda #$00
+        sta @nes_cspl_pend
+        sta @nes_cspl_cnt
+        sta @nes_cspl_s1p
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_cspl_prev_cnt
+        sta @nes_cspl_s1
+        sep #$20 : .as
+
+        ; --- v2.2-lite CHR-RAM: TODOS os gates da fila sao lidos-antes-de-
+        ;     escritos (wr/rdy escolhem buffer, rd e' cursor de leitura,
+        ;     full/fbwait/ram_mode gateiam politica) -> zerar explicito e'
+        ;     OBRIGATORIO (clear_wram/power-on nao zera). O nes_regs_ppumask
+        ;     entra aqui pelo mesmo motivo: o gate de forced-blank o le ANTES
+        ;     do 1o CMD_REGS chegar, e lixo $55 leria "rendering ligado". ---
+        lda #$00
+        sta @nes_chrq_wr
+        sta @nes_chrq_rdy
+        sta @nes_chr_ram_mode
+        sta @nes_chrq_full
+        sta @nes_chrq_fbwait
+        sta @nes_regs_ppumask
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_chrq_rd
+        sta @nes_chrq_drop
+        ; nes_chrq_rb_t entra na MESMA lista e pelo MESMO motivo: rb_t != 0
+        ; significa "rebuild fatiado em curso, continue do tile rb_t", e o
+        ; caminho de continuacao PULA o gate de blank.  Nascendo lixo (medido
+        ; $D8F0 no harness), o primeiro rebuild retomaria num tile arbitrario e
+        ; jamais cobriria os tiles abaixo dele -- CHR-RAM stale para sempre,
+        ; sem sintoma nenhum no transporte.  Fica AQUI (init compartilhado com
+        ; o harness), nao no nes_snes.a65: quem ARMA nes_chrq_full tem de
+        ; definir o cursor que o rebuild vai ler.
+        sta @nes_chrq_rb_t
+        sta @nes_chrq_nd0
+        sta @nes_chrq_nd1
+        sta @nes_chrq_nt0
+        sta @nes_chrq_nt1
+        sta @nes_chrq_tacc
+        sta @nes_chrq_bacc
+        sta @nes_chrq_tmax
+        sta @nes_chrq_bmax
+        sep #$20 : .as
+        jsr nes_boot_zero_chrq
+
+        ; --- v2.3w janelas de 1KB (mapper 4): TODOS os gates sao lidos-antes-
+        ;     de-escritos (clear_wram enche de $55) -> zerar explicito e'
+        ;     OBRIGATORIO. A regiao 0 nasce com a composicao IDENTIDADE
+        ;     (janela k = id k) e os DOIS planos carregados, porque e'
+        ;     exatamente isso que o nes_chr_load deste boot sobe (8KB BG
+        ;     lineares + 16KB OBJ); a regiao 1 nasce VAZIA ($ffff, sentinela
+        ;     que nunca casa com um id 0..255). Em CHR-RAM a identidade
+        ;     tambem e' a verdade (as 8 janelas do MMC3 apontam pros MESMOS
+        ;     8KB quando chr_mask=0), o que faz o reconciliador nascer em
+        ;     HIT total e nunca armar DMA por cima do que o $41 escreve. ---
+        lda #$00
+        sta @nes_chrw_active
+        sta @nes_chrw_cnt
+        sta @nes_chrw_full
+        sta @nes_chrw_secarm
+        sta @nes_chrw_pend0
+        sta @nes_chrw_pend1
+        sta @nes_chrw_need0
+        sta @nes_chrw_need1
+        sta @nes_chrw_jreg
+        sta @nes_chrw_jpl
+        sta @nes_chrw_reg
+        sta @nes_chrw_dmask
+        sta @nes_chrw_dcnt
+        sta @nes_chrw_starve         ; anti-fome do pick (gate 2.4)
+        lda #$ff
+        sta @nes_chrw_jk             ; nenhum job em voo
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_chrw_jcur
+        sta @nes_chrw_prev_cnt
+        sta @nes_chrw_arms
+        sta @nes_chrw_fulls
+        sta @nes_chrw_fallb
+        sta @nes_chrw_secs
+        sta @nes_chrw_skips
+        sta @nes_chrw_loads
+        sta @nes_chrw_1pl
+        rep #$10 : .xl
+        ldx #$0000
+nbz_win_loop:
+        txa                          ; X = k*2 -> id k = X>>1
+        lsr
+        sta @nes_chrw_r0,x           ; regiao 0 = identidade
+        lda #NES_CHRW_PLANE_BG+NES_CHRW_PLANE_OBJ
+        sta @nes_chrw_pl0,x          ; ... com os 2 planos ja' na VRAM
+        lda #NES_CHR_BANK_EMPTY
+        sta @nes_chrw_r1,x           ; regiao 1 vazia
+        lda #$0000
+        sta @nes_chrw_pl1,x
+        sta @nes_chrw_want,x
+        sta @nes_chrw_cmp,x
+        inx
+        inx
+        cpx #$0010
+        bcc nbz_win_loop
+        sep #$20 : .as
+
+        ; --- v1.5.3: fonte de zeros da high table de OAM (32B; WRAM nao e'
+        ;     ROM-backed -> zera explicito; o refresh de 544B do apply
+        ;     DMA-a todo frame) ---
+        rep #$10 : .xl
+        ldx #$0000
+        lda #$00
+nbz_hiz_loop:
+        sta @nes_oam_hi_zero,x
+        inx
+        cpx #32
+        bne nbz_hiz_loop
+
+        stz $4200        ; NMI/IRQ/auto-joy off ate o boot terminar
+        stz $420b
+        stz $420c
+        lda #$8f
+        sta $2100        ; forced blank, brilho 0 (INIDISP, book1 p.2-27-1)
+
+        ; ==============================================================
+        ; LIMPEZA COMPLETA DA PPU (bug de HARDWARE, iteracao 6): no
+        ; device o renderer NASCE com a PPU SUJA do MENU do fork (que
+        ; roda mode-5 hires + gradiente) -- o reset do SNES NAO zera os
+        ; $21xx. Sintoma no video de gameplay: LISTRAS VERTICAIS em todos
+        ; os tiles ("filtro CRT") = $2133 bit3 (pseudo-512: colunas
+        ; main/sub intercaladas; com sub vazio = coluna escura sim/nao) +
+        ; cores LAVADAS = color math do gradiente ($2130/$2131/$2132).
+        ; O harness nunca pegou porque o bsnes nasce com a PPU zerada --
+        ; por isso existe o modo "PPU suja" do harness (harness_ppu_dirty
+        ; em harness_main.a65), gate PERMANENTE deste init: qualquer reg
+        ; esquecido AQUI reprova la'. Escreve TODOS os regs de display
+        ; relevantes, como jogo licenciado faz.
+        ; ==============================================================
+        lda #$00
+        sta $2102        ; OAMADD lo (re-setado a cada DMA de OAM, mas
+        sta $2103        ;   nasce conhecido) + OAMADD hi/prioridade
+        sta $2106        ; MOSAIC off (herda lixo do menu/gi)
+        sta $2108        ; BG2SC \
+        sta $2109        ; BG3SC  > BGs 2-4 fora de TM/TS -- zeradas por
+        sta $210a        ; BG4SC /  higiene
+        sta $210c        ; BG34NBA
+        ; scrolls BG1-4: 2 escritas cada (latch duplo -- zerar 2x tambem
+        ; DETERMINA a fase do latch). O menu deixa BG1HOFS=$00fc
+        ; (alinhamento hires) e BG2VOFS=11.
+        sta $210d
+        sta $210d        ; BG1HOFS = 0 (re-escrito todo vblank, mas o 1o
+        sta $210e        ;   frame renderiza antes do 1o CMD_REGS)
+        sta $210e        ; BG1VOFS = 0
+        sta $210f
+        sta $210f        ; BG2HOFS
+        sta $2110
+        sta $2110        ; BG2VOFS (menu deixa 11)
+        sta $2111
+        sta $2111        ; BG3HOFS
+        sta $2112
+        sta $2112        ; BG3VOFS
+        sta $2113
+        sta $2113        ; BG4HOFS
+        sta $2114
+        sta $2114        ; BG4VOFS
+        sta $2121        ; CGADD = 0 (re-setado a cada DMA de CGRAM)
+        sta $2123        ; W12SEL: janelas OFF em BG1/BG2 (menu usa a
+                          ;   window 1 pra barra do cursor; o game-info
+                          ;   usa a 2, $2123=$cc -- edge-mask do menu)
+        sta $2124        ; W34SEL
+        sta $2125        ; WOBJSEL
+        sta $2126        ; WH0 \
+        sta $2127        ; WH1  > posicoes de janela (menu deixa 1/252)
+        sta $2128        ; WH2 /
+        sta $2129        ; WH3
+        sta $212a        ; WBGLOG
+        sta $212b        ; WOBJLOG
+        sta $212e        ; TMW: window mask off no main (menu deixa $1f)
+        sta $212f        ; TSW: idem no sub
+        sta $2133        ; SETINI = 0 -- **A LISTRA**: o menu deixa $08
+                          ;   (pseudo-512 do mode-5 hires)
+        lda #$30
+        sta $2130        ; CGWSEL: clip never (b7-6=00) + prevent color
+                          ;   math ALWAYS (b5-4=11) = color math OFF; sem
+                          ;   direct color (b0=0). Menu/gi deixam $11
+                          ;   (direct-color + math do gradiente = as
+                          ;   cores lavadas do video)
+        lda #$00
+        sta $2131        ; CGADSUB: math em NENHUMA camada
+        lda #$e0
+        sta $2132        ; COLDATA: R+G+B (b7-5) com intensidade 0 ->
+                          ;   fixed color preto (1 write cobre os 3
+                          ;   canais; menu deixa a cor do gradiente)
+
+        lda #REG_OBSEL_VAL
+        sta $2101
+        lda #$00
+        sta $2105        ; BGMODE=0 (mode 0, todos BG 8x8 2bpp, book1 p.2-27-3)
+        lda #REG_BG1SC_VAL
+        sta $2107
+        lda #REG_BG12NBA_VAL
+        sta $210b
+
+        lda #$80
+        sta $2115        ; VMAIN: incrementa VRAM addr apos escrita do byte
+                          ; alto ($2119), +1 word (book1 p.A-1/A-9)
+
+        lda #$11
+        sta $212c        ; TM: BG1 + OBJ no main screen (book1 p.2-27-14)
+        stz $212d        ; TS: nada no sub screen (menu deixa $03/$13 --
+                          ;   e' o sub vazio que o pseudo-512 intercalava
+                          ;   como coluna escura)
+
+        ; --- zera VRAM inteira (64KB) via DMA de uma fonte zerada (usa
+        ;     @nes_nametable_shadow, que so e' zerado LOGO DEPOIS -- para
+        ;     nao ler lixo, zera ele primeiro com um loop curto). ---
+        jsr nes_boot_zero_nametable_shadow
+        ldx #$0000
+        stx $2116
+        jsr nes_boot_vram_zero_loop
+
+        ; --- zera OAM inteira via DMA (544B) + esconde sprites 64-127 ---
+        jsr nes_boot_clear_oam
+
+        ; --- zera CGRAM (256 cores) via DMA ---
+        stz $2121
+        lda #$00
+        sta $4300
+        lda #$22
+        sta $4301
+        lda #^nes_nametable_shadow
+        sta $4304
+        ldx #!nes_nametable_shadow
+        stx $4302
+        ldx #512          ; 256 cores x 2B = 512B; a fonte (1024B zerada)
+        stx $4305          ; cobre folgado.
+        lda #$01
+        sta $420b
+
+        ; --- zera os shadows WRAM de trabalho (nametable ja zerado acima;
+        ;     tilemap/cgram/oam-shadow tambem, p/ o 1o apply nao mostrar
+        ;     lixo de power-on caso rode antes do 1o frame real chegar) ---
+        jsr nes_boot_zero_tilemap_shadow
+        jsr nes_convert_nametable   ; nametable zerado -> tilemap todo tile 0
+        jsr nes_boot_zero_cgram_shadows
+        jsr nes_boot_clear_oam_shadow
+
+        ; --- v1.5.3 (BUG DESDE A FASE 1, so visivel em jogo com OBJ tile 0
+        ;     NAO-vazio -- DK original/SMB; o Redux tem tile 0 vazio e por
+        ;     isso nunca apareceu): o clear acima deixa os sprites 64-127 da
+        ;     OAM REAL em (X=0,Y=0,tile=0) = uma pilha de tile 0 VISIVEL no
+        ;     canto (0,1..8). O esconde-64-127 do clear_oam_shadow so vivia
+        ;     no SHADOW -- e o apply DMA so 256B (sprites 0-63), entao a OAM
+        ;     real nunca recebia o park. DMA os bytes 256-511 do shadow
+        ;     (Y=$F0: linhas 241-248, invisiveis no 224 e SEM wrap p/ 8x8)
+        ;     pra OAM real 1x aqui. High table (32B) fica zerada do clear =
+        ;     X-high 0 + size small, correto. ---
+        ldx #$0080          ; OAMADD em WORDS: sprite 64 = byte 256 = word 128
+        stx $2102
+        lda #$00
+        sta $4300
+        lda #$04
+        sta $4301
+        lda #^nes_oam_shadow
+        sta $4304
+        ldx #!nes_oam_shadow+256
+        stx $4302
+        ldx #256
+        stx $4305
+        lda #$01
+        sta $420b
+
+        rts
+
+; ------------------------------------------------------------
+; nes_boot_zero_chrq -- v2.2-lite: zera os arrays OBJ dos dois buffers de
+; stage de CHR-RAM e o shadow.
+; Os arrays OBJ TEM que nascer zerados e assim ficar nos bytes 16..31 de cada
+; slot de 32: sao os planos 2/3 do tile SNES 4bpp, que o NES nunca tem. O
+; swizzle so' escreve os 16 primeiros bytes de cada slot, entao esse zero de
+; boot vale pra sempre -- e' por isso que os arrays tem PASSO FIXO (um layout
+; de registros de tamanho variavel faria os planos 2/3 caírem em cima de
+; dados de outro registro). O shadow nasce zerado como a CHR-RAM real (que o
+; loader tambem zera na PSRAM).
+; ------------------------------------------------------------
+nes_boot_zero_chrq:
+        rep #$30 : .al : .xl
+        lda #$0000
+        ldx #$0000
+nbz_ob0_loop:
+        sta @nes_chrq_ob0,x
+        inx
+        inx
+        cpx #6144
+        bcc nbz_ob0_loop
+        ldx #$0000
+nbz_ob1_loop:
+        sta @nes_chrq_ob1,x
+        inx
+        inx
+        cpx #6144
+        bcc nbz_ob1_loop
+        ldx #$0000
+nbz_shd_loop:
+        sta @nes_chr_shadow,x
+        inx
+        inx
+        cpx #8192
+        bcc nbz_shd_loop
+        sep #$20 : .as
+        rts
+
+; ------------------------------------------------------------
+; nes_boot_zero_nametable_shadow -- zera os 2048B de @nes_nametable_shadow
+; (v1.1: CIRAM fisica inteira, 2 bancos; fonte de varios DMAs de zero-fill).
+; ------------------------------------------------------------
+nes_boot_zero_nametable_shadow:
+        sep #$20 : .as
+        rep #$10 : .xl
+        ldx #$0000
+        lda #$00
+nbz_nt_loop:
+        sta @nes_nametable_shadow,x
+        inx
+        cpx #$0800
+        bne nbz_nt_loop
+        rts
+
+; ------------------------------------------------------------
+; nes_boot_vram_zero_loop -- a VRAM tem 64KB (32768 words); um unico DMA
+; so tem 2048B de fonte zerada (@nes_nametable_shadow, v1.1) -- repete o
+; DMA 32x (2048B x 32 = 65536B), reprogramando A-BUS (fonte) + MODO A CADA VOLTA
+; (GP-DMA avanca $4302/4303 automaticamente apos cada transferencia --
+; sem reprogramar, o 2o disparo em diante leria WRAM alem do buffer de
+; 1024B, incluindo regioes AINDA NAO zeradas -- bug real ja pego aqui).
+; VMADD (destino) fica corretamente avancado pelo proprio HW entre
+; disparos (modo increment do VMAIN), esse sim sem precisar reprogramar.
+; ------------------------------------------------------------
+nes_boot_vram_zero_loop:
+        sep #$20 : .as
+        rep #$10 : .xl
+        lda #$00                   ; "stz @long" nao existe no 65816 (STZ so
+        sta @nes_boot_zero_tmp     ; tem dp/abs/abs,x -- sem forma long); usa
+                                    ; LDA#0+STA long. Contador de blocos (0..63)
+nbz_vram_loop:
+        lda #$01
+        sta $4300
+        lda #$18
+        sta $4301
+        lda #^nes_nametable_shadow
+        sta $4304
+        ldx #!nes_nametable_shadow
+        stx $4302
+        ldx #$0800
+        stx $4305
+        lda #$01
+        sta $420b                 ; dispara
+        lda @nes_boot_zero_tmp
+        inc                        ; "inc a" da "Symbol 'a' undefined" neste
+                                    ; assembler -- acumulador e' implicito
+                                    ; sem operando (bug real pego aqui)
+        cmp #32
+        beq nbz_vram_done
+        sta @nes_boot_zero_tmp
+        bra nbz_vram_loop
+nbz_vram_done:
+        rts
+
+; ------------------------------------------------------------
+; nes_boot_zero_tilemap_shadow -- zera os 4096B de @nes_tilemap_shadow
+; (v1.1: 2 screens SNES).
+; ------------------------------------------------------------
+nes_boot_zero_tilemap_shadow:
+        sep #$20 : .as
+        rep #$10 : .xl
+        ldx #$0000
+        lda #$00
+nbz_tm_loop:
+        sta @nes_tilemap_shadow,x
+        inx
+        cpx #$1000
+        bne nbz_tm_loop
+        rts
+
+; ------------------------------------------------------------
+; nes_boot_zero_cgram_shadows -- zera @nes_cgram_bg_shadow(32B) +
+; @nes_cgram_obj_shadow(128B).
+; ------------------------------------------------------------
+nes_boot_zero_cgram_shadows:
+        sep #$20 : .as
+        rep #$10 : .xl
+        ldx #$0000
+        lda #$00
+nbz_cg1_loop:
+        sta @nes_cgram_bg_shadow,x
+        inx
+        cpx #32
+        bne nbz_cg1_loop
+        ldx #$0000
+nbz_cg2_loop:
+        sta @nes_cgram_obj_shadow,x
+        inx
+        cpx #128
+        bne nbz_cg2_loop
+        rts
+
+; ------------------------------------------------------------
+; nes_boot_clear_oam -- zera as 544B da OAM de verdade (low table 512B +
+; high table 32B) via DMA, usando @nes_nametable_shadow (ja zerado nesse
+; ponto) como fonte.
+; ------------------------------------------------------------
+nes_boot_clear_oam:
+        sep #$20 : .as
+        rep #$10 : .xl
+        ldx #$0000
+        stx $2102
+        lda #$00
+        sta $4300
+        lda #$04
+        sta $4301
+        lda #^nes_nametable_shadow
+        sta $4304
+        ldx #!nes_nametable_shadow
+        stx $4302
+        ldx #544
+        stx $4305
+        lda #$01
+        sta $420b
+        rts
+
+; ------------------------------------------------------------
+; nes_boot_clear_oam_shadow -- zera @nes_oam_shadow (512B) e depois marca
+; as entradas 64-127 (offset 256-511, byte Y de cada grupo de 4 = offset+1)
+; como escondidas (Y=$F0, fora do viewport 224 linhas). As entradas 0-63
+; ficam com Y=0 (lixo visualmente irrelevante ate o 1o CMD_OAM chegar --
+; a tela ainda esta em blank nesse ponto do boot).
+; ------------------------------------------------------------
+nes_boot_clear_oam_shadow:
+        sep #$20 : .as
+        rep #$10 : .xl
+        ldx #$0000
+        lda #$00
+nbz_oam_loop:
+        sta @nes_oam_shadow,x
+        inx
+        cpx #512
+        bne nbz_oam_loop
+
+        ldx #$0101                ; primeiro byte de Y a esconder:
+                                    ; sprite64 -> offset 64*4+1 = 257 ($101)
+nbz_hide_loop:
+        lda #$f0                   ; BUG PRE-EXISTENTE (Fase 1) PEGO PELO GATE
+                                    ; de 544B (v1.5.3): o lda #$f0 ficava FORA
+                                    ; do loop e o 'txa' abaixo CLOBBERAVA A --
+                                    ; sprites 65-127 recebiam o BYTE BAIXO DO
+                                    ; OFFSET como Y ($05,$09,...) = sprites
+                                    ; VISIVEIS espalhados em x=0. Era dado
+                                    ; morto (a pagina 256-511 do shadow nunca
+                                    ; era DMAda) ate' o refresh de 544B do
+                                    ; apply passar a le-la todo frame.
+        sta @nes_oam_shadow,x
+        rep #$20 : .al
+        txa
+        clc
+        adc #$0004
+        tax
+        sep #$20 : .as
+        cpx #$0201                 ; sprite128 (nao existe) -> offset 513 ($201)
+        bne nbz_hide_loop
+        rts
+
+; ============================================================
+; nes_chr_load -- DMA de @nes_boot_size bytes de (@nes_boot_src_bank:
+; @nes_boot_src_addr) p/ VRAM word @nes_boot_dst_vram. Usado 2x no boot
+; (BG 2bpp e OBJ 4bpp) com parametros diferentes setados pelo chamador
+; (device: janelas PSRAM; harness: bancos de ROM da fixture). Forced-
+; blank ainda ativo (chamado de dentro do boot, antes do screen-on).
+; ============================================================
+nes_chr_load:
+        sep #$20 : .as
+        rep #$10 : .xl
+        ; "ldx @long" nao existe no 65816 (LDX so' tem dp/abs/abs,y -- sem
+        ; forma long); usa LDA long (16-bit, .al) + STA direto no registro
+        ; de 16 bits (nao precisa de X nenhum aqui, so' estava usado como
+        ; carregador intermediario antes).
+        rep #$20 : .al
+        lda @nes_boot_dst_vram
+        sta $2116
+        sep #$20 : .as
+        lda #$01
+        sta $4300
+        lda #$18
+        sta $4301
+        lda @nes_boot_src_bank
+        sta $4304
+        rep #$20 : .al
+        lda @nes_boot_src_addr
+        sta $4302
+        lda @nes_boot_size
+        sta $4305
+        sep #$20 : .as
+        lda #$01
+        sta $420b
+        rts

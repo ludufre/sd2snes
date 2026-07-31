@@ -1,0 +1,287 @@
+; nes_transport_device.a65 -- transporte "device real" (control block $2BD0
+; -- realocado de $2A00, que colidia com o MCU_CMD/MCU_PARAM do fork; ver
+; nota do NES_CB_BASE em nes_equates.i65 --
+; + mailbox $6000-$7FFF, NES-BRIDGE-SPEC SS3/SS5). E' a UNICA parte que
+; sabe da bridge/FPGA; nes_render.a65 (decode/convert/apply) nao muda 1
+; byte entre este transporte e o do harness (nes-tests/renderer-harness/
+; harness_transport.a65) -- ver requisito (d) do briefing.
+;
+; Handshake (SS5.2): bridge fecha o frame no vblank do NES e faz
+; NES_FRAME_SEQ++; o renderer compara SEQ!=ACK, dreia o buffer indicado
+; por NES_BUF_SEL=SEQ&1, converte, e no vblank seguinte grava
+; NES_FRAME_ACK = o SEQ QUE FOI DRENADO. Newest-wins na SELECAO do buffer
+; (se o renderer atrasou e SEQ pulou mais de 1, so o buffer mais novo e'
+; processado -- os intermediarios sao descartados; a bridge acumula os
+; deltas dos frames pulados na UNIAO de pending, entregue no buffer novo).
+; INVARIANTE CRITICA (v1.4a): o ACK e' EXATAMENTE o seq do buffer drenado,
+; capturado no drain -- NUNCA uma releitura de NES_FRAME_SEQ apos o process.
+; Reler pegava o SEQ mais novo (a bridge pode ter incrementado durante o
+; process), reivindicando um frame que o renderer DESCARTOU: a bridge via
+; caught_w e limpava a uniao de pending que aquele buffer nunca carregou ->
+; deltas de nametable perdidos PERMANENTEMENTE (o title/boot nunca redesenha,
+; sem auto-cura). drain-seq == ack-seq, sempre.
+
+.link page $00
+#include "nes_equates.i65"
+
+; ============================================================
+; nes_dev_poll_frame -- chamada 1x por frame SNES (display ativo). Se
+; houver frame novo (NES_FRAME_SEQ != ultimo consumido), dreia a janela
+; da mailbox p/ WRAM e chama nes_process_frame. Devolve A=1 se um frame
+; foi processado (novo), A=0 senao.
+; ============================================================
+nes_dev_poll_frame:
+        php
+        rep #$20 : .al
+        lda NES_FRAME_SEQ
+        cmp @nes_dev_last_seq
+        sep #$20 : .as
+        beq ndp_none
+        ; --- v1.5.1 (Sintoma A, 2a rodada): escolhe o FRAME BUFFER alvo do
+        ;     decode (ping-pong SEM stall -- ver protocolo em nes_data.a65).
+        ;     Diferente do ready-gate v1.5.0 (que SERIALIZAVA decode->apply
+        ;     e regrediu a vazao: SMB attract 4,06% -> 10,22% overruns), o
+        ;     decode roda BACK-TO-BACK: alvo = o buffer nao-pendente (o
+        ;     consumido esta' morto; a tabela HDMA em exibicao e' a copia
+        ;     nes_hdma_live). Atomicidade preservada: a NMI le so' o buffer
+        ;     commitado (nes_fb_commit no fecho, dentro do process). ---
+        jsr nes_fb_select
+        bcs ndp_none               ; (nunca stalla; bcs fica por robustez)
+        jsr nes_dev_drain_mailbox  ; captura o seq DRENADO em @nes_dev_drain_seq
+                                    ; (o mesmo que escolheu NES_BUF_SEL) -- ver la.
+        jsl nes_process_frame
+        ; consumido: grava @nes_dev_last_seq = seq DRENADO (nunca uma
+        ; RELEITURA de NES_FRAME_SEQ -- essa releitura pegava o SEQ mais NOVO
+        ; que a bridge incrementou DURANTE o process e reivindicava frames que
+        ; o renderer DESCARTOU: a bridge limpava a uniao de pending nunca
+        ; entregue -> perda PERMANENTE de deltas de nametable (v1.4a).
+        ; INVARIANTE: drain-seq == ack-seq, sempre). Feito AQUI (pos-process),
+        ; identico ao TIMING antigo comprovado -- o ACK de verdade sai no
+        ; vblank (nes_dev_ack_frame) e so' avanca depois do frame processado;
+        ; so' o VALOR mudou (temp capturado, nao releitura).
+        rep #$20 : .al
+        lda @nes_dev_drain_seq
+        sta @nes_dev_last_seq
+        sep #$20 : .as
+        lda #$01                   ; A=1: frame decodificado (o COMMIT p/ a
+                                    ; NMI ja saiu no nes_fb_commit, dentro
+                                    ; do nes_process_frame)
+        plp
+        rts
+ndp_none:
+        lda #$00
+        plp
+        rts
+
+; ------------------------------------------------------------
+; nes_dev_drain_mailbox -- seta NES_BUF_SEL=SEQ&1, DMA a janela
+; $6000-$7FFF (NES_LEN bytes, max NES_MAILBOX_SIZE) p/ @nes_mailbox_buf,
+; e aponta nes_parse_ptr/_bank/_len pra ela. DMA (nao leitura byte-a-
+; byte): a janela e' REGISTRADA/pipelined (NES-BRIDGE-SPEC SS3.1) --
+; drenar de uma vez e' o caminho recomendado.
+; ------------------------------------------------------------
+nes_dev_drain_mailbox:
+        rep #$20 : .al
+        lda NES_FRAME_SEQ         ; SEQ que ESCOLHE o buffer a drenar. Le UMA
+        sta @nes_dev_drain_seq    ; vez e reusa p/ os DOIS papeis: (1) NES_BUF_SEL
+                                  ; = SEQ&1, o buffer que sera' processado; (2) o
+                                  ; ACK (poll_frame grava @nes_dev_last_seq =
+                                  ; ESTE valor pos-process). INVARIANTE (v1.4a):
+                                  ; o seq DRENADO == o ACK -- capturado UMA vez
+                                  ; aqui, NUNCA relido apos o process (o bug do
+                                  ; newest-wins reivindicava um buffer que este
+                                  ; frame nao carregou). Guardado em temp (nao
+                                  ; direto em nes_dev_last_seq) p/ o ACK avancar
+                                  ; so' pos-process, preservando o timing antigo
+                                  ; comprovado (nes_dev_ack_frame roda na NMI e
+                                  ; nao deve avancar antes do frame ser aplicado).
+        and #$0001
+        sep #$20 : .as
+        sta NES_BUF_SEL
+
+        rep #$20 : .al
+        lda NES_LEN
+        cmp #NES_MAILBOX_SIZE
+        bcc ndm_len_ok
+        lda #NES_MAILBOX_SIZE   ; clamp defensivo -- nunca estoura o buffer
+ndm_len_ok:
+        sta nes_parse_len
+        sep #$20 : .as
+        rep #$20 : .al
+        lda nes_parse_len
+        beq ndm_skip_dma          ; len==0: NAO dispara DMA -- GP-DMA trata
+                                   ; contagem 0 como 65536B (book1 p.2-28-4),
+                                   ; corromperia WRAM alem do buffer.
+        sep #$20 : .as
+
+        ; WRAM dest addr via WMDATA: $2181/$2182 = addr 16-bit (par),
+        ; $2183 bit0 = banco (0=$7E,1=$7F) -- @nes_mailbox_buf mora em $7F.
+        ;
+        ; ============================================================
+        ; CANAL 1 ($431x, trigger $420b=$02), NUNCA o canal 0 -- FIX DE
+        ; HARDWARE (iteracao 7: corrupcao PERSISTENTE de sprites apos
+        ; ~40s de gameplay). Este drain roda no DISPLAY ATIVO (main loop)
+        ; e a NMI (nes_apply_vblank) usa o canal 0 pros DMAs de VRAM/OAM/
+        ; CGRAM. Compartilhando o canal 0, uma NMI disparada NO MEIO
+        ; deste setup reprograma os mesmos $430x; ao retomar, o main
+        ; escreve os regs restantes + $420b e dispara um DMA FRANKENSTEIN
+        ; (B-bus/endereco herdados da NMI -- ex. $2118 = VRAM DATA -- com
+        ; os parametros daqui): payload aterrissa em VRAM com endereco
+        ; envenenado. Como nada re-envia a CHR de OBJ pos-boot, UM
+        ; episodio corrompe os sprites PARA SEMPRE (a assinatura do video
+        ; de hardware). Regra estrutural: canal de DMA por CONTEXTO --
+        ; ch0 = exclusivo da NMI, ch1 = exclusivo do main ($420b so'
+        ; dispara os bits escritos; um DMA em andamento nao e'
+        ; interrompivel pela NMI, entao cada sequencia e' atomica no SEU
+        ; canal; so' a NMI toca $2116/$2102/$2121). O harness nunca pegou
+        ; porque o transporte harness nao tem drain por DMA (device-only)
+        ; -- o gate de regressao e' a checagem de CHR-intacta por frame
+        ; no run_harness.
+        ; ============================================================
+        rep #$20 : .al
+        ldx #!nes_mailbox_buf
+        stx $2181
+        sep #$20 : .as
+        lda #$01
+        sta $2183
+        lda #$00
+        sta $4310                ; modo 0 (1 byte/1 reg), A-bus incrementa
+        lda #$80
+        sta $4311                ; B-bus = $2180 (WMDATA)
+        lda #$00
+        sta $4314                ; A-bus banco 0 (janela mailbox e' banco 0)
+        ldx #NES_MAILBOX_WINDOW
+        stx $4312
+        ; ============================================================
+        ; v1.5.3: drain em CHUNKS de 512B, NUNCA um DMA unico -- FIX DOS
+        ; FRAGMENTOS DE OAM PRESOS (DK original/SMB no device): um GP-DMA
+        ; em voo HALTA a CPU e ATRASA a NMI ate' terminar; um drain grande
+        ; (frame de transicao/resync, ate' ~8KB = ~47 scanlines) comendo o
+        ; comeco do vblank empurrava o apply pra fora da janela -> a CAUDA
+        ; do DMA de OAM caia no DISPLAY ATIVO, onde a PPU controla o
+        ; endereco interno de OAM -> os bytes aterrissavam ESPALHADOS,
+        ; inclusive nos sprites 64-127 (que nada reescrevia) = fragmentos
+        ; PERMANENTES no canto esquerdo (pedacos de Jumpman/Mario de um
+        ; frame antigo). Chunk de 512B = NMI atrasa <= ~3,5 scanlines (o
+        ; late-guard do apply cobre qualquer resto). O A-bus ($4312/3) e o
+        ; ponteiro WMDATA avancam SOZINHOS entre chunks -- so' $4315 e'
+        ; reescrito (mesmo comportamento do zero-loop de VRAM do boot). A
+        ; NMI pode preemptar ENTRE chunks: os regs do ch1 nao sao tocados
+        ; pela NMI (canal-por-contexto) e o loop usa so' dp/pilha.
+        ; ============================================================
+        rep #$20 : .al
+        lda #$0000
+        sta nes_parse_consumed   ; contador de drenado (process_frame re-zera)
+ndm_chunk_loop:
+        rep #$20 : .al
+        lda nes_parse_len
+        sec
+        sbc nes_parse_consumed   ; A = restante
+        beq ndm_chunks_done
+        cmp #$0200
+        bcc ndm_chunk_sz
+        lda #$0200               ; chunk = min(512, restante)
+ndm_chunk_sz:
+        rep #$10 : .xl
+        tax
+        stx $4315
+        pha                       ; tamanho do chunk (push 16-bit)
+        sep #$20 : .as
+        lda #$02
+        sta $420b                ; dispara SO' o canal 1 (este chunk)
+        rep #$20 : .al
+        pla                       ; pull 16-bit (larguras casadas)
+        clc
+        adc nes_parse_consumed
+        sta nes_parse_consumed
+        bra ndm_chunk_loop
+ndm_chunks_done:
+        lda #$0000
+        sta nes_parse_consumed   ; limpa p/ o parser (que tambem zera)
+        sep #$20 : .as
+
+ndm_skip_dma:
+        rep #$20 : .al
+        lda #!nes_mailbox_buf
+        sta nes_parse_ptr
+        sep #$20 : .as
+        lda #^nes_mailbox_buf
+        sta nes_parse_bank
+        rts
+
+; ============================================================
+; nes_dev_ack_frame -- grava NES_FRAME_ACK = @nes_dev_last_seq. Chamada no
+; VBLANK (junto de nes_apply_vblank), depois que os DMAs de VRAM/OAM/
+; CGRAM ja dispararam (a bridge so reusa o buffer apos ver o ACK).
+; ============================================================
+nes_dev_ack_frame:
+        rep #$20 : .al
+        lda @nes_dev_last_seq
+        sta NES_FRAME_ACK
+        sep #$20 : .as
+        rts
+
+; ============================================================
+; nes_dev_send_pad -- le o auto-joypad SNES (P1/P2, $4218-421B, book1
+; p.2-28-9) e escreve NES_CTRL_P1/P2 no control block (bit7=A,bit6=B,
+; bit5=Select,bit4=Start,bit3=Up,bit2=Down,bit1=Left,bit0=Right -- ordem
+; classica de saida serial do controle NES real). Chamada apos o NMI
+; confirmar que o auto-read terminou ($4212 bit0==0).
+; ============================================================
+nes_dev_send_pad:
+        sep #$20 : .as            ; declaracao explicita -- NAO confiar no
+        rep #$10 : .xl             ; estado herdado da ordem textual do
+                                    ; arquivo (gotcha real, ver nes_snes.a65)
+        jsr nes_dev_map_pad1
+        sta @nes_dev_pad_tmp
+        rep #$20 : .al
+        lda @nes_dev_pad_tmp
+        and #$00ff
+        sta NES_CTRL_P1
+        sep #$20 : .as
+
+        jsr nes_dev_map_pad2
+        sta @nes_dev_pad_tmp
+        rep #$20 : .al
+        lda @nes_dev_pad_tmp
+        and #$00ff
+        sta NES_CTRL_P2
+        sep #$20 : .as
+        rts
+
+; ------------------------------------------------------------
+; nes_dev_map_pad1 -- devolve em A(8b) o byte NES mapeado do P1 SNES.
+; ------------------------------------------------------------
+nes_dev_map_pad1:
+        sep #$20 : .as            ; declaracao explicita (gotcha .as/.al)
+        lda $4218               ; low: bit7=A bit6=X bit5=L bit4=R
+        and #$80          ; so nos interessa o A
+        sta @nes_dev_pad_tmp
+        lda $4219               ; high: bit7=B bit6=Y bit5=Sel bit4=St bit3-0=UDLR
+        lsr                    ; bit7(B)->bit6
+        and #$40
+        ora @nes_dev_pad_tmp
+        sta @nes_dev_pad_tmp
+        lda $4219
+        and #$3f           ; Select,Start,Up,Down,Left,Right ja nas
+                                  ; posicoes certas (bits5-0)
+        ora @nes_dev_pad_tmp
+        rts
+
+; ------------------------------------------------------------
+; nes_dev_map_pad2 -- idem, P2 ($421A/421B).
+; ------------------------------------------------------------
+nes_dev_map_pad2:
+        sep #$20 : .as            ; declaracao explicita (gotcha .as/.al)
+        lda $421a
+        and #$80
+        sta @nes_dev_pad_tmp
+        lda $421b
+        lsr
+        and #$40
+        ora @nes_dev_pad_tmp
+        sta @nes_dev_pad_tmp
+        lda $421b
+        and #$3f
+        ora @nes_dev_pad_tmp
+        rts

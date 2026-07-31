@@ -46,6 +46,7 @@ typedef enum {
   TYPE_IPS     =   4,
   TYPE_CHT     =   5,
   TYPE_SKIN    =   6,
+  TYPE_NES     =   7,   /* .nes (iNES) -- core NES mk3-only; lockstep com TYPE_NES em snes/memmap.i65 */
   TYPE_SUBDIR  =  64,
   TYPE_PARENT  = 128
 } SNES_FTYPE;

@@ -34,6 +34,7 @@
 #include "cheat.h"
 #include "theme.h"
 #include "manual.h"
+#include "nes.h"
 
 //usb
 #include "usb.h"
@@ -912,12 +913,16 @@ int main(void) {
 // uint8_t snes_res;
     while(fpga_test() == FPGA_TEST_TOKEN) {
       cli_entrycheck();
-      //usb upload/boot/lock  
+      //usb upload/boot/lock
       usb_cmd |= usbint_handler();
       if (usb_cmd == SNES_CMD_GAMELOOP) usb_cmd = 0;
 
 //        sleep_ms(250);
       sram_reliable();
+      /* NES in-game debug snapshot ("NDBG" @ PSRAM 0x400100): PC/regs do
+         6502 + contadores da bridge, lidos da config-bus (grupo 0x04) e
+         publicados 1x/iteracao.  No-op sem .nes; bounded (ver nes.c). */
+      nes_dbg_publish();
       
       // loop if we are in the middle of a reset
       if (usbint_server_reset()) continue;

@@ -1,0 +1,462 @@
+#if 0 /* #if0'd -- este arquivo e' #included, cpp nao faria parse direto dele
+       * como .a65 top-level (mesmo padrao de snes/boot/memmap.i65). */
+#endif
+/* nes_equates.i65 -- constantes do renderer NES->SNES (Fase 1b).
+ *
+ * Fonte de verdade dos NUMEROS: NES-BRIDGE-SPEC.md SS3.3 (control block) e
+ * SS4.3 (opcodes da mailbox) -- esses dois blocos sao CONTRATO FIXO, nao
+ * renegociar. O resto (layout de VRAM/CGRAM, janelas PSRAM de CHR-SNES) e'
+ * PROVISORIO: o lado RTL fecha o lockstep depois.
+ * Fragmento puro (sem .link page) -- inclua de um arquivo que ja declarou
+ * '.link page $00' (mesma convencao de dma.i65/memmap.i65 do menu original).
+ */
+
+/* ------------------------------------------------------------------ */
+/* Control block -- janela snescmd, banco 0 (NES-BRIDGE-SPEC SS3.3).
+ * REALOCADO $2A00 -> $2BD0 (bloco $2BD0-$2BDF; offsets internos +0x00..+0x0E
+ * IDENTICOS) na rodada final do RTL da bridge: $2A00-$2A0F e' o MCU_CMD/
+ * MCU_PARAM do protocolo SNES<->MCU do fork (src/snes.h) -- o decode antigo
+ * o sombreava e TRAVAVA o handshake do menu (wedge confirmado em hardware,
+ * corrigido no RTL). NAO voltar pra $2A00. NES_CTRL_GO final = $2BDE. */
+#define NES_CB_BASE        $2BD0
+/* SEM parenteses -- em snescom, '(' num operando de endereco vira
+ * enderecamento INDIRETO (ex. 'lda ($02,x)'); 'lda (NES_CB_BASE+$02)'
+ * quebra com "invalid parameter... 0 choices" (bug real pego aqui,
+ * confirmado no snescom de verdade). Soma sem parenteses funciona. */
+#define NES_MAGIC          NES_CB_BASE+$00  /* 2B: 'N','B' (bridge escreve 1x) */
+#define NES_FRAME_SEQ      NES_CB_BASE+$02  /* 2B LE: ++ a cada frame (bridge) */
+#define NES_FRAME_ACK      NES_CB_BASE+$04  /* 2B LE: ultimo SEQ consumido (renderer escreve) */
+#define NES_BUF_SEL        NES_CB_BASE+$06  /* 1B: qual BRAM a janela $6000-7FFF expoe (renderer escreve) */
+#define NES_STATUS         NES_CB_BASE+$07  /* 1B: b0=overrun b1=paused b2=forced_blank_hint (bridge) */
+#define NES_LEN            NES_CB_BASE+$08  /* 2B LE: bytes validos no buffer atual (bridge) */
+#define NES_CTRL_P1        NES_CB_BASE+$0A  /* 2B: joypad NES P1 A,B,Sel,St,U,D,L,R (renderer escreve) */
+#define NES_CTRL_P2        NES_CB_BASE+$0C  /* 2B: joypad NES P2 (renderer escreve) */
+#define NES_CTRL_GO        NES_CB_BASE+$0E  /* 1B: GO (renderer escreve 1, UMA vez).
+                                             * Contrato da rodada final do RTL: o core NES
+                                             * NASCE SEGURADO EM RESET apos o load; so' sai
+                                             * quando o renderer escreve 1 aqui -- DEPOIS do
+                                             * upload inicial de CHR (BG+OBJ; antes do GO a
+                                             * PSRAM e' toda do renderer, zero contencao) e
+                                             * com o caminho de drenagem armado (NMI on,
+                                             * handshake FRAME_SEQ pronto). Read-back devolve
+                                             * o valor corrente; reset do SNES (load/IGR)
+                                             * re-zera na bridge -- nao precisa re-zerar aqui.
+                                             * So' o transporte DEVICE escreve; o harness nao
+                                             * tem control block (no-op la'). */
+
+/* Mailbox (bridge real): janela SNES $6000-$7FFF, banco 0, 8 KiB, double-
+ * buffer selecionado por NES_BUF_SEL (NES-BRIDGE-SPEC SS3.1). Leitura
+ * registrada -> preferir DMA da janela inteira p/ WRAM (SS3.1). */
+#define NES_MAILBOX_WINDOW $6000
+#define NES_MAILBOX_SIZE   $2000  /* 8192 -- teto de 1 drain; nunca ultrapassar */
+
+/* ------------------------------------------------------------------ */
+/* Opcodes da mailbox (NES-BRIDGE-SPEC SS4.3, byte-exato ==
+ * nes-tests/bridge-sim/bridge_sim/mailbox.py OPCODES -- o golden do gate). */
+#define CMD_NOP          $00  /* 1B total */
+#define CMD_FRAME_HDR    $01  /* 6B: seq(2) frame(2) flags(1) */
+#define CMD_REGS         $10  /* 8B: scrollx(2) scrolly(2) ppuctrl(1) ppumask(1) nt_select(1) */
+#define CMD_SPLITS       $11  /* v1.3 multi-scroll: 2+4c B: hdr(1: b7=ovf,
+                               * [3:0]=cnt 2..4) + cnt x [sl(1) sx(1) sy(1)
+                               * ntsel(1)]; cada entrada vale de sl ate' a
+                               * proxima; entrada 0 = inicio do display.
+                               * Vira tabela HDMA de BG1HOFS (ver
+                               * nes_handle_splits/nes_apply_vblank). */
+#define CMD_PALETTE      $20  /* 2+2c B: count(1) [idx(1) nescol(1)]xcount */
+#define CMD_PALETTE_FULL $21  /* 33B: nescol(1)x32 */
+#define CMD_NT_RUN       $30  /* 4+len B: nt_off(2) len(1) data(len) */
+#define CMD_CHR_STATE    $12  /* 4B (v2.2): s0_bank(1) s1_bank(1) s1_present(1)
+                               * -- estado ABSOLUTO por frame, logo apos o REGS;
+                               * o renderer RECONCILIA (nes_chr_handle_state) */
+#define CMD_CHR_SPLITS   $13  /* v2.3 raster-split de CHR: 2+2c B: hdr(1: b7=ovf,
+                               * [3:0]=cnt 2..4) + cnt x [scanline(1) s0_bank(1)].
+                               * ADITIVO: so' aparece em frames com troca de banco
+                               * CHR mid-frame, e SEMPRE imediatamente APOS o
+                               * CMD_CHR_STATE ($12) -- o modo (s1_present) e o
+                               * s1_bank daquele $12 definem o PAR 4K de cada
+                               * entrada. Entrada 0 = inicio do display (sl 0);
+                               * cada entrada vale ate' a scanline da proxima
+                               * (a ultima ate' 240). Vira tabela HDMA mode-0 de
+                               * BG12NBA ($210B), canal 3 (ver
+                               * nes_chr_handle_splits/nes_apply_vblank). */
+#define CMD_CHR_STATE8   $14  /* v2.3w (Fase 2.3, mapper 4 / MMC3): 10B --
+                               * win[0..7](8) flags(1). ESTADO ABSOLUTO do frame
+                               * como VETOR DE 8 JANELAS DE 1KB (ja NORMALIZADAS
+                               * pelo RTL: o chr_a12_invert e os 6 registradores
+                               * do MMC3 ja viraram "que 1KB a PPU ve no slot k").
+                               * O par de 4KB do $12 e' caso PARTICULAR deste
+                               * vetor. Posicao canonica (CONTRATO DURO, design
+                               * SS3.4): offset 18 do frame, IMEDIATAMENTE apos o
+                               * $12 (offset 14), INCONDICIONAL em mapper 4 e
+                               * AUSENTE em qualquer outro mapper.
+                               * flags: RESERVADO -- o renderer NAO le nenhum bit
+                               * (as janelas ja chegam normalizadas; ler o
+                               * invert aqui seria derivar duas vezes, a licao
+                               * "nao inferir no renderer" da spec SS13.8).
+                               * Consumido por nes_chrw_handle_state. */
+#define CMD_CHR_SPLITS8  $15  /* v2.3w raster-split de CHR com vetor de janelas:
+                               * 2+9c B -- hdr(1: b7=ovf, [3:0]=cnt 2..4) +
+                               * cnt x [scanline(1) win[0..7](8)], SNAPSHOT
+                               * ABSOLUTO por entrada (nunca delta -- toda
+                               * entrada e' auto-suficiente, o mesmo invariante
+                               * que o $13 tinha). Posicao canonica: offset 28,
+                               * IMEDIATAMENTE apos o $14; so' aparece com
+                               * cnt>=2. Vira a MESMA tabela HDMA mode-0 de
+                               * BG12NBA ($210B, canal 3) do $13 -- so' a
+                               * RESOLUCAO da faixa muda (vetor de 8 x par 4K).
+                               * Consumido por nes_chrw_handle_splits. */
+#define CMD_CHR_BANK     $40  /* 3B: slot(1) bank(1) -- v2.2: ADVISORY (parse-only;
+                               * o estado autoritativo vem do CMD_CHR_STATE) */
+#define CMD_CHR_RUN      $41  /* v2.2-lite (Fase 2, CHR-RAM): 4+len B --
+                               * chr_off(2, LE, offset em BYTES na CHR-RAM,
+                               * 0..$1FFF) len(1, 1..255) data(len, formato NES
+                               * CRU: [plano0 x8][plano1 x8] por tile).
+                               * PAYLOAD INLINE (redefinicao do antigo
+                               * "base_tile(2) count(1)" parse-only, que era um
+                               * PONTEIRO e obrigava o renderer a reler a
+                               * CHR-RAM da PSRAM). Posicao canonica: DEPOIS
+                               * dos CMD_NT_RUN e ANTES do CMD_OAM; runs
+                               * fatiados em <=255B pelo RTL. Consumido por
+                               * nes_chr_handle_run (stage, MAIN) +
+                               * nes_chrq_service (plane-DMA, NMI). */
+#define CMD_OAM          $50  /* 257B: oam(256) NES cru */
+#define CMD_FRAME_DONE   $F0  /* 2B: sum(1) XOR checksum */
+
+#define FLAG_FORCED_BLANK   $01
+#define FLAG_FULL_REDRAW    $02
+#define FLAG_PALETTE_PRESENT $04
+#define FLAG_CHR_PRESENT    $08
+
+/* ------------------------------------------------------------------ */
+/* Layout de VRAM (word address) -- escolha do renderer, documentada aqui
+ * para o relatorio final (nao e' contrato fixo, mas precisa ficar coerente
+ * entre boot/apply/OBSEL/BG1SC/BG12NBA -- por isso tudo derivado aqui,
+ * 1 lugar so). Mode 0 (BG1 2bpp p/ fundo NES + OBJ 4bpp p/ sprites). */
+/* v1.1 (multi-nametable): BG1 ocupa DOIS screens SNES consecutivos de
+ * 32x32 words -- screen0 em $0000-$03FF, screen1 em $0400-$07FF (4KB,
+ * bytes 0x0000-0x0FFF). Banco FISICO N da CIRAM -> screen N (H mirroring:
+ * banco0=topo, banco1=base, BG1SC 32x64; V: banco0=esq, banco1=dir,
+ * 64x32; single: so' screen0, 32x32 -- ver npf_op_hdr). O gap de words
+ * $0800-$0FFF segue livre; CHR de BG em $1000 nao colide. */
+#define VRAM_TILEMAP_WORD   $0000  /* BG1 SC, 2 screens = 4096B (words $0000-$07FF) */
+#define VRAM_BG_CHR_WORD    $1000  /* BG1 char base, 4K-word aligned (BG12NBA granularity) */
+#define VRAM_OBJ_CHR_WORD   $4000  /* OBJ name base, 8K-word aligned (OBSEL granularity);
+                                     * deixa $1000-$3FFF (24KB) p/ CHR de BG antes de colidir --
+                                     * DK usa so 8KB (SS2.4 do CHR-SNES). */
+
+/* BG1SC ($2107): base_units(6b, 1K-word/unidade)<<2 | size(2b: 0=32x32,
+ * 1=64x32, 2=32x64). Base $0000 -> so' o size varia, POR ARRANGEMENT
+ * (FRAME_HDR flags[5:4], protocolo v1.1): H->$02, V->$01, single->$00.
+ * Valor STAGED em @nes_regs_bg1sc (derivado no parse do HDR, npf_op_hdr)
+ * e escrito no vblank (nes_apply_vblank). */
+#define REG_BG1SC_VAL    $00       /* default de boot (single 32x32) */
+#define NTARR_H          0
+#define NTARR_V          1
+#define NTARR_1L         2
+#define NTARR_1H         3
+
+/* BG12NBA ($210B): BG2 field(4b)<<4 | BG1 field(4b), unidade 4K-word.
+ * BG1 field = VRAM_BG_CHR_WORD/$1000 = 1; BG2 nao usado (campo 0). */
+#define REG_BG12NBA_VAL  $01
+
+/* OBSEL ($2101): size(3b)<<5 | name_select(2b)<<3 | name_base(3b, unidade
+ * 8K-word). name_base = VRAM_OBJ_CHR_WORD/$2000 = 2. size=0 (8x8/16x16,
+ * so usamos small=8x8 em v1 -- ver limitacao 8x16 no relatorio). */
+#define REG_OBSEL_VAL    $02
+
+/* CGRAM (word address, $2121 CGADD unidade = 1 byte-index de word, i.e.
+ * escreve-se o INDICE de word direto em $2121). BG1 usa grupos 0-3 (16
+ * cores, words 0-15); OBJ usa grupos 0-3 (64 words, 128-191) -- so os
+ * slots de cor 1-3 de cada grupo de 16 sao significativos (cor 0 = NES
+ * sprite-transparent, nunca mostrado; ver nes_render.a65). */
+#define CGRAM_BG_ADDR    $00
+#define CGRAM_OBJ_ADDR   $80  /* = 128 decimal */
+
+/* ------------------------------------------------------------------ */
+/* Dispatch da conversao incremental de nametable (missao de perf,
+ * iteracao 7): um CMD_NT_RUN converte SO' as celulas afetadas (custo =
+ * celulas_do_run + 16*attrs_do_run) quando o custo cabe neste teto;
+ * acima, marca nes_nt_dirty e cai na reconversao GLOBAL unica no fim do
+ * frame (caminho de resync/full-redraw: os runs de ~248B do resync custam
+ * >teto e se agrupam num UNICO pass global, em vez de converter 2x). */
+#define NHN_INCR_MAX_CELLS 128
+
+/* ------------------------------------------------------------------ */
+/* Viewport: NES 256x240 -> SNES 256x224 (modo 224 linhas), corta 8 linhas
+ * em cima + 8 embaixo (NES-BRIDGE-SPEC SS1.2, escolha default). Sprites e
+ * BG1VOFS sao deslocados por essa constante (ver nes_render.a65). */
+#define VIEWPORT_CROP_Y  8
+
+/* ------------------------------------------------------------------ */
+/* Janelas PSRAM de CHR-SNES pre-convertido (PROVISORIO -- convencao
+ * "banco SNES = endereco PSRAM >> 16", o MESMO padrao ja usado no fork p/
+ * regioes extras de PSRAM mapeadas direto no barramento SNES (ex.
+ * SRAM_COVER_ADDR $CA0000 -> banco SNES $CA, ver docs do fork, "Cover art").
+ * Esse mapeamento ainda NAO foi cablado em address.v (Fase -1
+ * so tem ROM_HIT=0) -- fechar em lockstep quando o fizer. Fonte dos dados:
+ * utils/nes_chr_convert.py SS "Regioes PSRAM de destino":
+ *   0x500000+ = CHR inteira convertida p/ SNES 2bpp (BG), tamanho == CHR NES
+ *   0x600000+ = CHR inteira convertida p/ SNES 4bpp (OBJ), tamanho == 2x CHR NES
+ */
+#define NES_CHR_BG_PSRAM_BANK   $50  /* long addr $500000 */
+#define NES_CHR_OBJ_PSRAM_BANK  $60  /* long addr $600000 */
+
+/* Tamanho da CHR de v1 (Donkey Kong Redux e alvos NROM similares): 8KB NES
+ * -> 8KB SNES-2bpp BG (idem tamanho) + 16KB SNES-4bpp OBJ (2x). O boot faz
+ * UM DMA de cada; jogos com CHR maior/menor mudam so o parametro de
+ * tamanho (nao hardcoded no core, ver nes_boot.a65 nes_chr_load). */
+#define NES_CHR_SIZE_NES  $2000    /* 8192 -- DK: tamanho da CHR-ROM em bytes NES */
+#define NES_CHR_SIZE_OBJ  $4000    /* = 2*NES_CHR_SIZE_NES (OBJ 4bpp, nes_chr_convert.py);
+                                     * constante direta, nao 'asl a' em runtime -- um
+                                     * 'lda #NES_CHR_SIZE_NES : asl a' bem aqui deu
+                                     * "Externs ... !a" (referencia externa a um
+                                     * simbolo 'a' nunca definido) no snescom real;
+                                     * nao investigado a fundo (bug estranho e
+                                     * isolado), so' contornado por ser mais simples. */
+
+/* ------------------------------------------------------------------ */
+/* CHR-BANK / residencia de VRAM (Fase 2.0a -- CMD_CHR_BANK, NES-BRIDGE-SPEC
+ * SS2.5/SS4.3, CONTRACT SS10.6.1). O renderer mantem um CACHE de RESIDENCIA
+ * de 2 slots na VRAM p/ bancos de 8KB (CNROM/MMC1-8K): troca de banco =
+ * troca de TILE-BASE (BG12NBA/OBSEL) quando o banco ja' esta' residente (o
+ * caso quente do sim: chr_bank_reupload_bytes=0), re-DMA so' no MISS. Isso
+ * casa BYTE-EXATO o modelo de custo do bridge_sim (residencia >= 2 bancos).
+ *
+ *   VRAM (word addr):
+ *     slot 0: BG $1000-$1FFF (8KB 2bpp) / OBJ $4000-$5FFF (16KB 4bpp)
+ *     slot 1: BG $2000-$2FFF (8KB 2bpp) / OBJ $6000-$7FFF (16KB 4bpp)
+ *   tile-base por slot:
+ *     BG12NBA ($210B): slot0=$01 (BG1 field 1=$1000) / slot1=$02 ($2000)
+ *     OBSEL   ($2101): slot0=$02 (name_base 2=$4000) / slot1=$03 ($6000)
+ *
+ * 4K (MMC1 4K -- PRIMEIRA CLASSE desde o v2.0c, alvo Tetris USA/SEROM):
+ * as metades vivem na regiao do slot 0: PT0 (tiles 0-255) em BG $1000/OBJ
+ * $4000, PT1 (256-511) em BG $1800/OBJ $5000 -- o mesmo layout que
+ * bg_patt/spr_msb (*256) ja seleciona; tile-base PINADA no slot 0.
+ * Residencia POR METADE (h0/h1 = banco-alvo) + descritor POR METADE +
+ * DEDUP por alvo (o RTL re-anuncia bancos em frames de resync -- sem o
+ * dedup o re-anuncio re-armava DMA = runaway; gate run_chrbank_usa). O
+ * modo e' INFERIDO no 1o CMD_CHR_BANK slot 1 (nao viaja no protocolo);
+ * 8K = residencia de 2 slots + troca de tile-base (banco de 8KB cobre
+ * PT0+PT1). */
+#define NES_CHR_SLOT0_BG_WORD   $1000
+#define NES_CHR_SLOT1_BG_WORD   $2000
+#define NES_CHR_SLOT0_OBJ_WORD  $4000
+#define NES_CHR_SLOT1_OBJ_WORD  $6000
+/* metades 4K (dentro da regiao do slot 0) */
+#define NES_CHR_HALF_BG_WORD    $0800  /* +2048 words = +4KB p/ PT1 (BG 2bpp) */
+#define NES_CHR_HALF_OBJ_WORD   $1000  /* +4096 words = +8KB p/ PT1 (OBJ 4bpp) */
+/* tile-base staged por slot (BG12NBA/OBSEL) */
+#define NES_CHR_BG12NBA_SLOT0   $01
+#define NES_CHR_BG12NBA_SLOT1   $02
+#define NES_CHR_OBSEL_SLOT0     $02
+#define NES_CHR_OBSEL_SLOT1     $03
+/* sentinela "slot vazio" (nunca um indice de banco valido) */
+#define NES_CHR_BANK_EMPTY      $ffff
+/* Fatiamento (rendering-ON miss, NES-BRIDGE-SPEC SS1.4 orcamento de vblank):
+ * um banco 8K = 8KB BG + 16KB OBJ = 24KB, NAO cabe num vblank (~6KB). Com
+ * rendering ON e SEM forced-blank, fatia em N vblanks apos OAM/tilemap: por
+ * frame DMAa NES_CHR_SLICE_BG bytes de BG + 2x de OBJ. Escolhido pra caber na
+ * SOBRA do orcamento (tilemap 4096 + OAM 544 + slice*3 <= ~6479 -> slice <=
+ * ~600). O slice roda no INICIO do apply (V<=NES_CHR_SLICE_V_MAX), gateado
+ * pra garantir que slice+baseline caibam ANTES do fim do vblank (262) --
+ * tilemap/OAM NUNCA sacrificados (escrita de VRAM apos 262 = ignorada pela
+ * PPU = bytes PERDIDOS, nao corrompidos, mas o slice NAO completaria). 256
+ * (BG) + 512 (OBJ) = 768B/frame ~= 4.6 scanlines; 8192/256 = 32 frames de
+ * tiles mistos (comportamento aceito em outros ports; ver relatorio). So' o
+ * caso RARO de >2 bancos ciclando com rendering ON usa o slice -- residencia
+ * de 2 slots cobre CNROM/MMC1<=2 bancos SEM slice (tetris = so' forced-blank
+ * no cold load + tile-base swaps). */
+#define NES_CHR_SLICE_BG    256
+#define NES_CHR_SLICE_V_MAX 227    /* V max no inicio do apply p/ fatiar (slice
+                                     * 4.6 + baseline ~27 = ~32 scanlines;
+                                     * 227+32 = 259 < 262, com folga) */
+/* v2.1 -- escalada anti-thrash: troca chegando com a MESMA metade ainda em
+ * slice (in-flight) escala p/ full forced-blank (1 frame escuro), no maximo
+ * 1x por NES_CHR_ESC_COOLDOWN vblanks (senao aceita reinicio do slice =
+ * tiles mistos) -- nunca vira pisca-preto sustentado. */
+#define NES_CHR_ESC_COOLDOWN 60
+
+/* ------------------------------------------------------------------ */
+/* v2.3w -- JANELAS DE 1KB (Fase 2.3, MMC3/mapper 4; CMD_CHR_STATE8 $14 +
+ * CMD_CHR_SPLITS8 $15). O MMC3 troca a visao de 8KB da PPU em 8 janelas de
+ * 1KB independentes, entao a CHAVE de residencia deixa de ser o par de ids
+ * 4K e vira um VETOR DE 8 ids de 1KB. As DUAS regioes de VRAM, o HDMA de
+ * $210B por faixa e a politica full/slice sao as MESMAS do v2.2/v2.3 -- so'
+ * a chave e a GRANULARIDADE do loader mudam (metade de 4KB -> janela de 1KB).
+ *
+ *   janela k (0..7) na regiao r:
+ *     BG  2bpp: 1024 B em  REGIAO_BG_WORD(r)  + k*NES_CHRW_BG_WORDS
+ *     OBJ 4bpp: 2048 B em  REGIAO_OBJ_WORD(r) + k*NES_CHRW_OBJ_WORDS
+ *   fonte (PSRAM CHR-SNES pre-convertida, mesma identidade linear do v2.2):
+ *     BG  = bg_base  + win*1024      OBJ = obj_base + win*2048
+ *
+ * DUPLICATAS (R2=R3=R4=R5 do MMC3): a residencia e' indexada por k, nunca
+ * por win -- duas janelas com o MESMO win sao carregadas DUAS vezes, cada
+ * uma no seu k. Nao existe lookup inverso (design SS5.5).
+ *
+ * ORCAMENTO (ancora da casa, licao A10: ~1020 master cyc de SETUP por
+ * TRANSFERENCIA de GP-DMA + 8 cyc/byte; 1 scanline = 1364 cyc; vblank do
+ * modo 224 = V 225..261 = 36 linhas = 49.104 cyc):
+ *   baseline do apply (tilemap 4096 B em 1 DMA + OAM 544 B em 3 DMAs)
+ *       = 4*1020 + 4640*8 = 41.200 cyc = 30,2 linhas  (com CGRAM: +3.320)
+ *   CAUDA livre no vblank            = 49.104 - 41.200 = 7.904 cyc = 5,8 lin
+ *   ATENCAO (correcao F7 do A13): o passo de 768 B em 2 DMAs custa 8.184 cyc
+ *      e portanto NAO cabe nessa cauda -- ele a excede em 3,5%. A conta de
+ *      "cauda" e' pessimista de proposito (assume a NMI entrando em 225 e a
+ *      baseline inteira depois do slice), e nao e' ela que autoriza o passo:
+ *      o passo de 768 B roda no INICIO do apply, gateado por
+ *      V<=NES_CHR_SLICE_V_MAX (227), e e' EXATAMENTE o envelope do slice
+ *      v2.2 -- medido e VALIDADO EM HARDWARE. A regra pratica deste arquivo
+ *      e': nenhum passo novo pode custar MAIS que esses 8.184 cyc.
+ *   1 janela COMPLETA (1024 BG + 2048 OBJ, 2 DMAs) = 2040 + 24576 = 26.616
+ *      cyc = 19,5 linhas => NAO cabe no vblank com rendering ON: e' por isso
+ *      que a janela e' FATIADA (4 passos de 768 B) e nao carregada inteira.
+ *   1 janela SO-BG (corte OBJ, 1024 B em 1 DMA) = 9.212 cyc = 6,8 linhas:
+ *      cabe, mas fica NO LIMITE da cauda -> o passo de plano unico e' 512 B
+ *      (5.116 cyc = 3,8 linhas, ABAIXO do envelope validado) = 2 passos.
+ *   composicao INTEIRA (8 janelas = 24.576 B, <=16 DMAs) = 212.928 cyc =
+ *      156 linhas => so' em FORCED BLANK, onde o frame inteiro (262 linhas =
+ *      357.368 cyc) esta' disponivel = 1 frame escuro, mesmo custo do par
+ *      de 24KB do v2.2 (ja validado em HW).
+ */
+#define NES_CHRW_COUNT      8      /* janelas de 1KB por composicao */
+#define NES_CHRW_BG_BYTES   $0400  /* 1024 B de BG 2bpp por janela */
+#define NES_CHRW_BG_WORDS   $0200  /* passo do destino BG em WORDS (=/2) */
+#define NES_CHRW_OBJ_WORDS  $0400  /* passo do destino OBJ em words (2048 B) */
+#define NES_CHRW_SHIFT_BG   10     /* win*1024 (deslocamento da fonte BG) */
+#define NES_CHRW_SHIFT_OBJ  11     /* win*2048 (fonte OBJ) */
+/* passo de slice (em BYTES DE BG; o OBJ do mesmo passo e' 2x). Os TRES casos
+ * ficam dentro do envelope de 8.184 cyc do slice v2.2 validado em hardware --
+ * o discriminante do codigo (nes_chrw_service) e' "o passo toca o OBJ?", NAO
+ * "quantos planos?", justamente porque o OBJ dobra os bytes:
+ *   2 planos: 256 BG + 512 OBJ em 2 DMAs = 2040 + 6144 = 8.184 cyc (4 passos)
+ *   so-BG   : 512 B        em 1 DMA      = 1020 + 4096 = 5.116 cyc (2 passos)
+ *   so-OBJ  : 256 -> 512 B em 1 DMA      = 1020 + 4096 = 5.116 cyc (4 passos)
+ * SO-OBJ COM CHUNK 512 SERIA BUG (F1/A13): viraria 1024 B num DMA = 9.212 cyc,
+ * a cauda cairia depois de V=262, a PPU DESCARTA a escrita e o dclear marca a
+ * janela como carregada assim mesmo = meia janela corrompida PARA SEMPRE. */
+#define NES_CHRW_SLICE_BG   256
+#define NES_CHRW_SLICE_1PL  512
+/* planos de uma janela (mascara). O CORTE DO PLANO (design SS4.5) usa o
+ * PPUCTRL: bit4 escolhe a pattern table do BG e bit3 a dos sprites -- quando
+ * diferem, 4 das 8 janelas sao SO-BG (1024 B em vez de 3072) e 4 so-OBJ.
+ * CONDICAO OBRIGATORIA: com sprites 8x16 (PPUCTRL bit5) o bit0 do indice do
+ * tile escolhe a pattern table e o bit3 e' IGNORADO => TODAS as janelas viram
+ * OBJ-relevantes e o corte de OBJ NAO vale.
+ * LIMITACOES DOCUMENTADAS (F3/A13, nao sao bugs -- sao o preco do corte):
+ *  (a) em jogo 8x16 o corte de OBJ e' NO-OP: SMB3 usa 8x16, entao o ganho de
+ *      "3072 -> 1024 B/janela" NAO vale la' (so' o corte de BG, que sozinho
+ *      ja poupa metade das janelas). Re-medir o ganho por jogo antes de
+ *      contar com ele em orcamento.
+ *  (b) o `need` sai do PPUCTRL de UMA amostra por frame (o CMD_REGS, snapado
+ *      em mid-display sl120): jogo que troca b3/b4 MID-FRAME materializa so'
+ *      a metade da amostra e a outra fica com tile stale ate' a amostra
+ *      seguinte concordar. Mesma classe do "PPUMASK mid-frame nao e'
+ *      representavel" do design SS2.3c. */
+#define NES_CHRW_PLANE_BG   $01
+#define NES_CHRW_PLANE_OBJ  $02
+#define NES_CHRW_CTRL_SPR   $08    /* PPUCTRL b3: pattern table dos sprites */
+#define NES_CHRW_CTRL_BG    $10    /* PPUCTRL b4: pattern table do BG */
+#define NES_CHRW_CTRL_8X16  $20    /* PPUCTRL b5: sprites 8x16 (mata o corte) */
+/* Ate' quantas janelas divergentes ainda valem carga IN-PLACE na regiao
+ * CORRENTE (slice, sem frame preto). Acima disso e' TRANSICAO DE TELA: vai
+ * pra regiao NAO-corrente com forced-blank (1 frame escuro limpo), a mesma
+ * politica da regra 4 do v2.2b -- so' que agora 2/8 em vez de 1/2. */
+#define NES_CHRW_INPLACE_MAX 2
+
+/* ANTI-FOME do pick de slice (gate 2.4 / bug de campo do SMB2+SMB3).
+ * Quantos jobs SEGUIDOS a regiao CORRENTE pode levar enquanto a NAO-corrente
+ * tem janela pendente esperando.  Ao atingir o limite, o proximo job comeca
+ * pela OUTRA regiao (uma vez; o contador zera).
+ *
+ * POR QUE ELE EXISTE (medido, nao suposto).  O pick varria SEMPRE a corrente
+ * primeiro.  Isso e' certo quando o trabalho e' finito, e RUINA quando a
+ * corrente tem trabalho PERPETUO: SMB2 e SMB3 animam a CHR do BG ciclando
+ * DUAS janelas de 1KB a cada 8 frames, e 2 janelas x 3072 B / 8 frames =
+ * 768 B por vblank = EXATAMENTE a banda do slice (envelope de 8.184 cyc).
+ * Com a corrente 100% ocupada, a regiao NAO-corrente -- que e' quem serve a
+ * faixa SECUNDARIA do $15 -- nunca ganhava um vblank.  Medido no golden do
+ * SMB3 (1800 frames): 749 frames com a secundaria armada e nunca servida,
+ * em DOIS trechos contiguos de 320+ frames, e cada frame desses e' uma faixa
+ * inteira do raster exibindo o banco ERRADO (o resolve cai no fallback).
+ * Fallback 781/3062 faixas = 25,5%.  Com o anti-fome: 354 = 11,6%.
+ *
+ * O QUE ELE NAO E'.  Nao e' fix de livelock: o restart de "id novo em janela
+ * com job em voo" mede ZERO no SMB2 e DOIS em 1800 frames do SMB3 -- a
+ * clausula de pendencia do nes_chrw_diff (F5) ja o matou.  E nao cria banda:
+ * o teto de 768 B/vblank e' fisico (nes_equates ORCAMENTO).  Ele so' impede
+ * que uma regiao monopolize a banda que existe.
+ *
+ * VALOR = 2: menor valor que ja converge nos goldens; subir alonga a fome e
+ * descer rouba vblanks da regiao que a tela esta' MOSTRANDO. */
+#define NES_CHRW_STARVE_MAX 2
+
+/* ------------------------------------------------------------------ */
+/* v2.2-lite -- CHR-RAM (mapper 2/7): shadow + fila de stage do CMD_CHR_RUN
+ * ($41). O mapa de WRAM e o protocolo dos 2 buffers estao em nes_data.a65;
+ * aqui ficam so' os numeros.
+ *
+ * MODELO DE CUSTO (revisao W10b/W10c -- corrige o erro do cost_model.py). A
+ * ancora medida da casa e' ~1020 master cyc por TRANSFERENCIA de GP-DMA
+ * (setup + ~12 escritas de registrador), nao os 45+28 do modelo. Por isso o
+ * caminho NAO pode ser "muitos DMAs pequenos" (a 1a versao fazia 4 por TILE,
+ * ~250 master por byte de payload -- um run de 240 B custaria 44 scanlines e
+ * estouraria o vblank): o renderer CONVERTE no decode (MAIN) e a NMI faz 2
+ * DMAs GRANDES por run.
+ *   custo NMI de um run de N tiles = 2*1020 + (16N + 32N)*8
+ *                                  = 2040 + 384N master cyc
+ *                                  = 1,50 + 0,281*N scanlines (1364 cyc/linha)
+ * O gate de V usa 0,281 ~= 9/32 (exato o bastante e so' shifts).
+ *   custo MAIN do swizzle ~= 512 cyc de CPU/tile ~= 3600 master (contagem
+ *   instrucao a instrucao do laco DESENROLADO; a estimativa de 2200 da
+ *   revisao anterior era otimista 1,6x).
+ * Regime medido (15 tiles/frame): 5,7 scanlines de vblank e ~17,6% do
+ * display ativo de CPU. Pico do corpus (133 tiles): 39 scanlines de DMA e
+ * ~156% do display -- os dois so' acontecem com a tela do NES APAGADA (100%
+ * dos despejos, medido), onde o frame gasta o quanto precisar. */
+#define NES_CHR_RAM_BYTES   $2000  /* 8192 -- CHR-RAM de mapper 2/7 (8KB fixos;
+                                    * CHR-RAM > 8KB e' NOIMPL no loader) */
+#define NES_CHR_TILES       512    /* = NES_CHR_RAM_BYTES/16 */
+/* *** ABI LOCKSTEP -- verilog/sd2snes_nes/nes_bridge.v RETX_CHUNK ***
+ * Este teto NAO e' so' um limite local de buffer: a bridge tem de garantir que
+ * um frame nunca entregue mais CHR do que cabe aqui, senao o staging escala pro
+ * rebuild total (nes_chrq_full), o frame nao termina e o renderer NUNCA ACKa --
+ * tela preta permanente, que foi o modo de falha em campo da v2.6e. O contrato:
+ *     fresh_plateau (2120 B, o platao medido do corpus) + RETX_CHUNK <= 192*16
+ * Mexeu aqui, re-derive o RETX_CHUNK do nes_bridge.v (e vice-versa). Nenhum gate
+ * byte-exato ve isso: os goldens nao tem retransmissao. Quem ve e' o
+ * tb/run_retx_renderer.sh. */
+#define NES_CHRQ_TILES_MAX  192    /* tiles convertidos por buffer (max medido
+                                    * no corpus inteiro = 133; margem de 44%) */
+#define NES_CHRQ_DSC_MAX    48     /* descritores por buffer (p99 = 1 run/frame) */
+#define NES_CHRQ_DSC_SZ     8      /* [t0(2) nt(2) tofs(2) pad(2)] */
+/* TETO DO MERGE (W10c). Runs que emendam no descritor anterior sao fundidos
+ * (economiza 2 DMAs), mas SEM teto isso vira um ratchet monotono quando o
+ * publish esta' bloqueado: o descritor cresce todo frame e nunca mais cabe na
+ * cauda de vblank (~4-7 linhas reais), so' saindo por forced-blank com a tela
+ * LIGADA. 16 tiles = 2 + (16*9)>>5 = 6 scanlines, que cabe na cauda; acima
+ * disso o stage abre um descritor NOVO e o dreno tira varios por vblank. */
+#define NES_CHRQ_MERGE_MAX  16
+/* Gate de V do dreno DENTRO do vblank. O servico roda no FIM do apply
+ * (tilemap/OAM ja gravados -- inviolaveis), quando V ja' esta' em ~252, e so'
+ * INICIA um descritor se ele CABE ate' o fim do vblank:
+ *     V >= V_MIN   e   V + 2 + ((nt*9)>>5) <= V_LIMIT
+ * V_LIMIT = 261 e' a ultima scanline de vblank do modo 224 (o frame vira em
+ * 262). Fora da janela o servico ADIA -- o cursor fica no descritor que NAO
+ * foi aplicado, nada se perde e NUNCA se escreve VRAM em display ativo (que a
+ * PPU descartaria). Um descritor cujo custo passa de VB_LINES nao cabe em
+ * vblank NENHUM (2 + (nt*9)>>5 > 36  <=>  nt >= 125): esse escala pra
+ * forced-blank = o despejo. */
+#define NES_CHRQ_V_MIN      225
+#define NES_CHRQ_V_LIMIT    261
+#define NES_CHRQ_VB_LINES   36     /* = V_LIMIT - V_MIN */
+/* O forced-blank do despejo e' gateado por rendering-OFF do ppumask corrente
+ * (medido: 100% dos despejos acontecem com a tela do NES apagada; e o teto
+ * FISICO com rendering LIGADO e' 24 tiles/frame = 8 scanlines, que sempre
+ * cabe no vblank) E por V >= V_MIN (nunca ligar blank em display ativo). O
+ * gate de ppumask tem contador de escape: apos NES_CHRQ_FBWAIT vblanks
+ * barrado ele blanka assim mesmo -- um frame preto e' melhor que uma fila
+ * travada, e a politica NUNCA pode deadlockar. */
+#define NES_CHRQ_FBWAIT     8
+

@@ -1,0 +1,23 @@
+/* nes_palette.i65 -- LUT NES(0-63) -> BGR555, GERADO por gen_palette.py.
+ * NAO EDITAR A MAO -- regenerar com: python3 gen_palette.py
+ * Fonte: paleta 2C02 classica (ver gen_palette.py); mesma tabela em
+ * nes-tests/renderer-harness/nes_palette_data.py (consistencia harness).
+ * Fragmento puro (sem .link page) -- inclua de um arquivo que ja
+ * declarou '.link page $00' (mesma convencao de dma.i65/memmap.i65). */
+nes_palette_lut:
+  .word $294a, $3860, $4841, $4406
+  .word $3008, $180b, $000a, $0067
+  .word $00a4, $00e1, $0100, $00e0
+  .word $1cc0, $0000, $0000, $0000
+  .word $4e53, $6121, $74c6, $706b
+  .word $5851, $3054, $1093, $00ef
+  .word $016a, $01c5, $01e1, $15c0
+  .word $3d80, $0000, $0000, $0000
+  .word $77bd, $7669, $75ef, $7596
+  .word $755c, $597d, $31bd, $123a
+  .word $02b4, $030e, $1349, $3727
+  .word $66c7, $1ce7, $0000, $0000
+  .word $77bd, $7735, $76f7, $76da
+  .word $76bd, $6abd, $5add, $4b1c
+  .word $3f59, $3f76, $4b95, $5b93
+  .word $7354, $5294, $0000, $0000

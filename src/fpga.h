@@ -33,6 +33,10 @@
 void fpga_set_prog_b(uint8_t val);
 void fpga_set_cclk(uint8_t val);
 int fpga_get_initb(void);
+/* DONE pin: 1 = a valid bitstream is loaded.  Was fpga.c-internal; exported
+   for the NES-load wedge diagnostics (nes_dbg_post_pgm detects fpga_pgm's
+   silent open-failure by DONE + fpga_config not being updated). */
+int fpga_get_done(void);
 
 void fpga_init(void);
 void fpga_postinit(void);
@@ -50,6 +54,9 @@ extern uint8_t fpga_boot_led;
 #define FPGA_SA1 ((const uint8_t*)"/sd2snes/fpga_sa1." FPGA_CONF_EXT)
 #define FPGA_SDD1 ((const uint8_t*)"/sd2snes/fpga_sdd1." FPGA_CONF_EXT)
 #define FPGA_SGB ((const uint8_t*)"/sd2snes/fpga_sgb." FPGA_CONF_EXT)
+/* NES core (fpganes adaptado, verilog/sd2snes_nes) -- mk3-only: so existe
+   fpga_nes.bi3; nenhum .bit mk2 e' planejado (ver nes.c). */
+#define FPGA_NES ((const uint8_t*)"/sd2snes/fpga_nes." FPGA_CONF_EXT)
 #define FPGA_SPC7110 ((const uint8_t*)"/sd2snes/fpga_spc7110." FPGA_CONF_EXT)
 #define FPGA_SMS ((const uint8_t*)"/sd2snes/fpga_sms." FPGA_CONF_EXT)
 #define FPGA_BASE ((const uint8_t*)"/sd2snes/fpga_base." FPGA_CONF_EXT)

@@ -574,6 +574,8 @@ select_item:
   lda [dirptr_addr], y
   cmp #TYPE_ROM
   beq sel_is_file
+  cmp #TYPE_NES
+  beq sel_is_file       ; .nes boota como ROM (CMD_LOADROM; o MCU detecta via nes_id)
   cmp #TYPE_SPC
   beq sel_is_spc
   cmp #TYPE_SKIN
@@ -1125,6 +1127,8 @@ open_context_menu:
   lda [dirptr_addr], y
   cmp #TYPE_ROM
   beq ctx_is_file
+  cmp #TYPE_NES
+  beq ctx_is_file       ; .nes: mesmo menu de contexto de ROM
   cmp #TYPE_SPC
   beq ctx_is_spc
   cmp #TYPE_SUBDIR
@@ -3218,8 +3222,11 @@ filesel_request_filelist:
   sta @MCU_PARAM+11
   lda #TYPE_SKIN
   sta @MCU_PARAM+12       ; show .thm/.skin theme files in the browser
+  lda #TYPE_NES
+  sta @MCU_PARAM+13       ; .nes (core NES): o firmware mk2 nunca devolve esse
+                          ; tipo (determine_filetype gated), pedir e' inocuo la'
   lda #$00
-  sta @MCU_PARAM+13
+  sta @MCU_PARAM+14
   sta @SNES_CMD
   lda #CMD_READDIR
   sta @MCU_CMD
