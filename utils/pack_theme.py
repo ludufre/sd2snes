@@ -11,7 +11,7 @@ overwriting the referenced regions in PSRAM right after the menu is loaded
     0    8     magic  "FXTHEME1"
     8    1     version (=1)
     9    1     N = number of regions
-    10   2     flags  (bit0 = has logo)
+    10   2     flags  (bit0 = has logo; bit1 = outline off; bit2 = AA off)
     12   4     reserved (0)
     16   N*4   TOC: per region { u8 slot ; u8 _rsv ; u16 length }
     ...        payload: region blobs concatenated in TOC order
@@ -78,6 +78,15 @@ SLOT_NAME = {
 
 PALETTE_SIZE = 512
 FLAG_HAS_LOGO = 0x0001
+# bit1: the MCU remaps the menu font's outline pixels (2bpp value 2) to
+# transparent at theme-apply -- true "outline off" without carrying the font.
+# bit2: same idea for the anti-alias step (2bpp value 3 -> 1, i.e. fill), so the
+# glyph edge is hard regardless of the palette. Together they reproduce the
+# official editor's antiAlias() tile edits without the .thm carrying the font.
+# Old firmware ignores the flags field entirely, so both are backward-safe (no
+# VERSION bump). The Theme Creator sets them; palette-only conversions here don't.
+FLAG_OUTLINE_OFF = 0x0002
+FLAG_AA_OFF = 0x0004
 
 GFXPTR_MAGIC = b"_GFXPTR_"
 
@@ -116,6 +125,52 @@ def check_firmware_caps():
     if bad:
         sys.exit("SLOT_MAX out of sync with src/theme.c theme_slot_max[]:\n  "
                  + "\n  ".join(bad))
+
+
+def _theme_c_font_len(theme_c=None):
+    """Parse THEME_FONT_LEN out of src/theme.c (the MCU-side bound for the
+    outline-off font remap). Raises when it can't be found."""
+    if theme_c is None:
+        theme_c = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "src", "theme.c")
+    with open(theme_c) as fh:
+        src = fh.read()
+    m = re.search(r"#define\s+THEME_FONT_LEN\s+(0x[0-9a-fA-F]+|\d+)", src)
+    if not m:
+        raise RuntimeError("THEME_FONT_LEN not found in %s" % theme_c)
+    return int(m.group(1), 0)
+
+
+def _font_asset_size(font_a65=None):
+    """Byte count of the menu font (snes/font.a65): sum the .byt hex tokens with
+    trailing comments stripped. This is what genfonts DMAs and what the MCU
+    outline-off remap walks."""
+    if font_a65 is None:
+        font_a65 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "snes", "font.a65")
+    n = 0
+    with open(font_a65) as fh:
+        for line in fh:
+            code = line.split(";", 1)[0]        # drop comments
+            if ".byt" not in code:
+                continue
+            n += len(re.findall(r"\$[0-9a-fA-F]{2}(?![0-9a-fA-F])", code))
+    if n == 0:
+        raise RuntimeError("no .byt data bytes parsed from %s" % font_a65)
+    return n
+
+
+def check_font_consts():
+    """Fail loudly when THEME_FONT_LEN in src/theme.c drifts from the actual
+    snes/font.a65 size. The MCU remap loop is bounded by that constant; a stale
+    value would under-run the font (outline left on some tiles) or over-run into
+    adjacent menu code."""
+    want = _theme_c_font_len()
+    actual = _font_asset_size()
+    if want != actual:
+        sys.exit("THEME_FONT_LEN (0x%X) in src/theme.c != snes/font.a65 size "
+                 "(0x%X = %d bytes). Update THEME_FONT_LEN and rebuild."
+                 % (want, actual, actual))
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +538,7 @@ def main():
     # Every subcommand produces or validates .thm files against SLOT_MAX, so
     # always prove SLOT_MAX still matches the firmware before doing anything.
     check_firmware_caps()
+    check_font_consts()
 
     if args.cmd == "convert-library":
         _, failed = convert_library(args.custom, args.out,

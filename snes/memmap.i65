@@ -149,6 +149,20 @@
 #define NMI_EXEC                    $002C00
 #define WINDOW_STACK_BASE           $7E2000
 
+/* iris_out $420c HDMA-enable selector byte. Lives in the iris WRAM scratch block
+   ($7E8000..$7E9FFF; free byte after IRIS_TMP8 $8402, see iris.a65). game_handshake
+   (main.a65) writes it right before `jsl iris_out`: $59 = menu set (keep ch0/3/4 scroll
+   + mode-switch, add ch6 window) or $48 = game-info ficha set (keep only ch3 = the ficha's
+   mode3->mode5 split + ch6 window). iris.a65 reads it at the $420c swap. The value is
+   discriminated by screen_dma_disable (=1 <=> the ficha is still on the PPU => $48). */
+#define IRIS_HDMA_EN                $7E8408
+
+/* game_handshake save slot for screen_dma_disable's original value. During an MCU load the
+   browser list DMA is frozen (screen_dma_disable=1) so its per-frame tile-buffer DMA can't
+   glitch a frame (the 1-frame black flash on GI-off loads); the original is restored before
+   the iris set is picked and in the NACK error path. Free byte in the iris scratch block. */
+#define GH_SDD_SAVE                 $7E8409
+
 #define BG2_TILE_BUF                $7EA000
 #define BG1_TILE_BUF                $7EB000
 #define COVER_OAM_LO                $7EC000    /* cover OAM low-table shadow (64 sprites*4) */
@@ -310,6 +324,8 @@
 #define WRAM_BAK                    $FF2000
 #define FAVORITE_GAMES              $FF6000 /* 20*256 = $1400 -> $FF6000..$FF73FF. Moved off $FF4000 (only fit 10) into the free gap past IPS_LIST so favorites could grow to 20. Lockstep with SRAM_FAVORITEGAMES_ADDR (src/memory.h). Old $FF4000..$FF49FF now unused. */
 #define LAST_GAME_FILE              $FF4A00 /* base ROM basename for reset_to_menu==3 pre-select (now-fully-free gap before IPS_LIST $FF5000; favorites moved off $FF4000 to $FF6000). NOT LAST_GAME[0]: that is the recents display name, which for a patch-aware entry is the patch name and never matches a TYPE_ROM directory entry. */
+#define BROWSER_DIR                 $FF4B00 /* folder to reopen after a theme/BGM menu reload (browser_pos_save); read by filesel_nav_restore when ST_RESTORE_BROWSER is set. Lockstep with SRAM_BROWSER_DIR_ADDR (src/memory.h). */
+#define BROWSER_FILE                $FF4C00 /* basename to put the cursor on after that reload ("" = reopen the folder only). Lockstep with SRAM_BROWSER_FILE_ADDR. */
 
 #define CMD_LOADROM                 $01 /* shortcut - load ROM with default settings */
 #define CMD_SETRTC                  $02
@@ -370,6 +386,7 @@
 #define CMD_GAME_INFO_FAVORITE      $36 /* GAME_INFO for the favorite game at MCU_PARAM index (FAVORITES_FILE) */
 #define CMD_FMV_NEXT                $37 /* info-screen FMV pump: stream next <rom>.fmv frame into GI_TILES ($CA0000) for the menu to re-DMA (gameinfo_fmv_next); non-booting */
 #define CMD_GI_DESC_FULL            $38 /* stage the full (untruncated) description into GI_DESC_EXT ($FF7600) NUL-term; non-booting */
+#define CMD_RESTORE_CLASSIC         $39 /* apply /sd2snes/classic.thm (the pre-2.16 baked look), reload menu; NACK ($aa) if the file is missing */
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
 /* WiFi status/scan block + connect params, RESERVED for the Companion port.
@@ -472,6 +489,7 @@
 
 #define MENU_ENTRY_SIZE             23
 #define FAV_VISMAX                  13 /* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */
+#define MENU_VISMAX                 12 /* settings menu (show_menu): max entry rows shown before the viewport scrolls. Deepest scrolling submenu opens at window_y=13 (mm 11 -> cfg 12 -> submenu 13); window_h=(vis-1)*step+3 so bottom=window_y+vis+1 -> vis=12 is the max that keeps the bottom border at row 26 (status bar = 27); the description box then shows ABOVE (rows 9..12). Must be >= the largest CURRENTLY-fitting menu's entry count (cfg=10) so those never start scrolling. Do NOT raise above 12, and keep scrolling menus at window_y<=13. */
 
 #define ST_RTC_VALID                ST_MCU_ADDR+$0000
 #define ST_NUM_RECENT_GAMES         ST_MCU_ADDR+$0001
@@ -480,6 +498,7 @@
 #define ST_AUTOBOOT_ENABLED         ST_MCU_ADDR+$0004
 #define ST_RESET_TO_MENU_ACTIVE     ST_MCU_ADDR+$0005
 #define ST_FAVORITES_FULL           ST_MCU_ADDR+$0006 /* 1 if the last add-favorite was refused (list full) */
+#define ST_RESTORE_BROWSER          ST_MCU_ADDR+$0007 /* 1 = reopen BROWSER_DIR and select BROWSER_FILE after this menu boot */
 
 #define ST_IS_U16                   ST_SNES_ADDR+$0000
 #define ST_U16_CFG                  ST_SNES_ADDR+$0001

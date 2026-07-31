@@ -629,6 +629,52 @@ select_file:
   jsr game_handshake
   rts
 
+menu_reload_blank:
+; Fade the menu out to black BEFORE handing a reload-causing command to the MCU.
+; WHY: every theme/BGM action makes the MCU reload m3nu.bin straight over the PSRAM
+; the SNES is displaying and executing from, and it does NOT wait for us -- it drops
+; out of the command loop and starts rewriting immediately, leaving the SNES spinning
+; on the handshake until the reset lands. Meanwhile the NMI keeps DMAing tilemap/tiles
+; and the HDMA keeps fetching gradient tables out of that image as it changes: that is
+; the garbled logo band and the scrambled tilemap during a theme change. So the fade
+; has to happen HERE, before the command goes out -- afterwards is too late, and the
+; code after the spin never even runs on the reload path.
+; Same shape as gin_reload (gameinfo.a65): ~3 levels/frame, then forced blank so a
+; still-running NMI/HDMA can't paint anything. The next menu boot fades back in on
+; its own (video_init leaves the screen black, screen_on ramps it up).
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+mrb_fade:
+  jsr waitblank
+  lda cur_bright
+  sec
+  sbc #$03
+  bcs mrb_set
+  lda #$00
+mrb_set:
+  jsr gi_set_bright         ; keeps cur/tgt/menu_brightness in step with $2100 so the
+                            ; NMI brightness ramp doesn't fight the fade
+  lda cur_bright
+  bne mrb_fade
+  lda #$80
+  sta $2100                 ; forced blank: nothing reaches the screen from here on
+  plp
+  rts
+
+menu_reload_unblank:
+; Undo menu_reload_blank when the MCU refused the command (NACK) and the menu stays
+; live: drop the forced blank and ramp back to the configured brightness.
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz $2100                 ; screen on at 0% ...
+  lda @CFG_BRIGHTNESS_LIMIT ; ... then let the NMI ramp it back up
+  sta tgt_bright
+  sta menu_brightness
+  plp
+  rts
+
 select_theme:
 ; A .thm theme file was picked. Build MCU_PARAM exactly like select_file (cwd +
 ; selected dir entry, using y) FIRST so the MCU's get_selected_name yields the
@@ -655,21 +701,21 @@ select_theme:
 ; exactly as game_handshake relies on for LOADROM)
   jsr cover_sync_before_cmd  ; drain any in-flight cover so its $55 isn't read as our ACK
   jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
+  jsr menu_reload_blank      ; fade out FIRST: the MCU starts rewriting the menu image
+                             ; as soon as it takes the command and never waits for us
   lda #$00
   sta @SNES_CMD
   lda #CMD_SET_THEME
   sta @MCU_CMD
-- lda @SNES_CMD
-  cmp #$55
+- lda @SNES_CMD              ; on the reload path this never leaves: the MCU reloads
+  cmp #$55                   ; and resets us. Only a NACK gets past it.
   beq +
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ jsr menu_reload_unblank
+  lda #$55
   sta @MCU_CMD
-  jsr pop_window
   rts
 
 restore_theme:
@@ -677,10 +723,16 @@ restore_theme:
 ; baked-in default look. No MCU_PARAM needed -- the MCU just clears CFG.skin_name
 ; and reloads the menu (which resets the SNES). Same light handshake as
 ; select_theme.
+; php/phb + rtl, NOT rts: show_menu_func (menu.a65) dispatches with rtl after
+; pushing a 3-byte long return, so an rts leaks a byte of stack per call. That was
+; invisible while this always ended in a menu reload; restore_classic_theme below
+; can return to a live menu (missing-file NACK), so the convention matters now.
+  php
+  phb
+  sep #$20 : .as
   jsr cover_sync_before_cmd  ; drain any in-flight cover so its $55 isn't read as our ACK
   jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
+  jsr menu_reload_blank      ; fade out before the MCU starts rewriting the image
   lda #$00
   sta @SNES_CMD
   lda #CMD_CLR_THEME
@@ -691,10 +743,44 @@ restore_theme:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ jsr menu_reload_unblank    ; only reached on a NACK: menu stays live
+  lda #$55
   sta @MCU_CMD
-  jsr pop_window
-  rts
+  plb
+  plp
+  rtl
+
+restore_classic_theme:
+; Config-menu action (Browser Options -> Restore Classic Theme, right below Restore
+; Theme): apply /sd2snes/classic.thm -- the look that used to be baked into the menu
+; before sd2snes+ became the default. Mirrors restore_theme, with one difference: the
+; theme lives on the card, so the MCU may NACK ($aa) when the file is missing (the
+; usual "updated firmware+menu but not the /sd2snes files" case). On a NACK the MCU
+; leaves CFG.skin_name alone and stays in the menu loop, so we show the standard
+; two-line error popup and return to a live menu instead of reloading.
+  php
+  phb
+  sep #$20 : .as
+  jsr cover_sync_before_cmd
+  jsr hide_cursor
+  jsr menu_reload_blank      ; fade out before the MCU starts rewriting the image
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_RESTORE_CLASSIC
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  beq +
+  cmp #$aa
+  beq +
+  bra -
++ jsr menu_reload_unblank    ; only reached when the MCU NACKed (classic.thm missing):
+  lda #$55                   ; the menu is still live, so bring the screen back and
+  sta @MCU_CMD               ; show the error
+  jsr show_error_msg         ; MCU staged code+filename at MCU_ERR_CODE/MCU_ERR_MSG
+  plb
+  plp
+  rtl
 
 select_dir:
   tyx
@@ -2266,6 +2352,7 @@ select_last_choose:
   lda #$01
   sta listsel_step
   sta listsel_pickbutton ; allow button Y
+  stz menu_scroll_active     ; fork: recents is a non-scrolling list (window sized to fit) -> original menu_select_noinit behaviour
   jsr listcover_list_enabled ; cover follows the highlighted entry only if allowed
   lda #$00
   bcs +
@@ -2652,7 +2739,8 @@ favsel_draw_rows:
 ; ============================================================================
 ; listsel_scrollbar: vertical scroll indicator for a scrolling list window
 ; (Recents/Favorites), the window-list analogue of gi_desc_scrollbar.  Draws
-; lsb_vis cells (glyph 16 = track, glyph 17 = thumb) down the window's right
+; lsb_vis cells (glyph 16 = track, glyph 17 = thumb, both in palette 3 -- the
+; same colour draw_window paints the border with) down the window's right
 ; interior column (window_x + window_w - 2), rows window_y+1 .. window_y+lsb_vis,
 ; reflecting the viewport lsb_top within listsel_max total entries.  Nothing is
 ; drawn when the whole list fits on screen (listsel_max <= lsb_vis) -- draw_window
@@ -2783,7 +2871,7 @@ lscb_glyph:
   adc lsb_i
   inc                            ; row = window_y + 1 + i
   sta print_y
-  stz print_pal
+  lda #$03 : sta print_pal       ; palette 3 = the window-border colour (draw_window's)
   lda #$02 : sta print_count
   rep #$20 : .al
   lda #!stringbuf : sta print_src
@@ -3058,8 +3146,7 @@ set_selected_spc_as_bgm:
   sep #$20 : .as
   jsr cover_sync_before_cmd
   jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
+  jsr menu_reload_blank      ; fade out before the MCU starts rewriting the image
   lda #$00
   sta @SNES_CMD
   lda #CMD_SET_MENU_SPC
@@ -3070,9 +3157,9 @@ set_selected_spc_as_bgm:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ jsr menu_reload_unblank    ; only reached on a NACK: menu stays live
+  lda #$55
   sta @MCU_CMD
-  jsr pop_window
   plb
   plp
   rtl
@@ -3088,8 +3175,7 @@ restore_music:
   sep #$20 : .as
   jsr cover_sync_before_cmd
   jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
+  jsr menu_reload_blank      ; fade out before the MCU starts rewriting the image
   lda #$00
   sta @SNES_CMD
   lda #CMD_CLR_MENU_SPC
@@ -3100,9 +3186,9 @@ restore_music:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ jsr menu_reload_unblank    ; only reached on a NACK: menu stays live
+  lda #$55
   sta @MCU_CMD
-  jsr pop_window
   plb
   plp
   rtl
@@ -3267,14 +3353,61 @@ filesel_request_filelist_wait_mcu:
 ;   Uses scratch variables: testvar[0..5], longptr,
 ;   dirent_addr, dirent_bank, mm_tmp.
 ; =========================================================
+; =========================================================
+; filesel_nav_restore:
+;   Same navigation, but for the browser position staged by the MCU
+;   (browser_pos_save) when a theme/BGM action forced a menu reload.
+;   Called after filesel_init when ST_RESTORE_BROWSER is set, with no
+;   CFG_ENABLE_RST_TO_MENU gate -- coming back to the .thm you just applied
+;   must work whatever the short-reset setting is.
+;   Copies BROWSER_DIR/BROWSER_FILE over LAST_GAME_DIR/LAST_GAME_FILE and
+;   reuses the whole navigator instead of duplicating it. Clobbering those
+;   is safe: they only feed filesel_nav_last (the reset-to-menu path, which
+;   is mutually exclusive with this one -- one comes from leaving a game,
+;   the other from a menu action) and the MCU rewrites both on every menu
+;   boot in cfg_dump_listed_games_for_snes.
+; =========================================================
+filesel_nav_restore:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+- lda @BROWSER_DIR, x
+  sta @LAST_GAME_DIR, x
+  beq +
+  inx
+  cpx #$0100
+  bne -
++ ldx #$0000
+- lda @BROWSER_FILE, x
+  sta @LAST_GAME_FILE, x
+  beq +
+  inx
+  cpx #$0100
+  bne -
++ lda #$01
+  sta fnl_force_rom       ; pre-select the file even when short-reset is Off/On
+  plp
+  bra fnl_entry
+
 filesel_nav_last:
+  php
+  sep #$20 : .as
+  lda #$00
+  sta fnl_force_rom
+  plp
+fnl_entry:
   php
   sep #$20 : .as
   rep #$10 : .xl
   ; Bail out early if no directory path is stored
   lda @LAST_GAME_DIR
   beq fnl_out
-  ; For Rom mode (3) also bail if no last game filename is stored
+  ; For Rom mode (3) also bail if no last game filename is stored.
+  ; Not in force mode: there the empty filename is legitimate (a config-menu
+  ; action stages the folder only), so navigate the folder and skip the select.
+  lda fnl_force_rom
+  bne +
   lda @CFG_ENABLE_RST_TO_MENU
   cmp #$03
   bne +
@@ -3307,11 +3440,19 @@ fnl_got_comp_eos:
   jsr fnl_enter_subdir    ; navigate into last path component
   ; fall through to file scan
 fnl_find_file:
-  ; Only pre-select ROM when mode is Rom (3); Folder (2) skips this
+  ; Only pre-select ROM when mode is Rom (3); Folder (2) skips this.
+  ; Force mode (browser restore) always pre-selects, but only if a name was
+  ; staged -- an empty LAST_GAME_FILE means "reopen the folder only".
   sep #$20 : .as
-  lda @CFG_ENABLE_RST_TO_MENU
+  lda fnl_force_rom
+  beq +
+  lda @LAST_GAME_FILE
+  beq fnl_out
+  bra fnl_do_select
++ lda @CFG_ENABLE_RST_TO_MENU
   cmp #$03
   bne fnl_out
+fnl_do_select:
   jsr fnl_select_file
 fnl_out:
   sep #$20 : .as
@@ -3501,6 +3642,10 @@ fnl_sf_loop:
   beq fnl_sf_check
   cmp #TYPE_SPC
   beq fnl_sf_check
+  cmp #TYPE_NES
+  beq fnl_sf_check
+  cmp #TYPE_SKIN          ; .thm: the browser-restore path lands on the theme that
+  beq fnl_sf_check        ; was just applied, so it has to be selectable here too
   bra fnl_sf_next
 fnl_sf_check:
   ldy #$0000

@@ -7,42 +7,41 @@ oamlarge        .word  $aaaa   ; OAM hi-table fill: size=1 (16x16) + X bit8=0 fo
 oamsmall        .word  $0000   ; OAM hi-table fill: size=0 (8x8) + X bit8=0 (small cover)
 bg2tile         .byt $20
 hdma_pal_src
-  .byt 44
-  .byt $60, $2d
-  .byt 10
+  .byt 56
   .byt $00, $00
-  .byt 2
-  .byt $60, $2d
-  .byt 11
+  .byt 12
   .byt $00, $00
-  .byt 11
-  .byt $20, $04
-  .byt 11
-  .byt $40, $08
-  .byt 11
-  .byt $60, $0c
-  .byt 11
-  .byt $80, $10
-  .byt 11
-  .byt $a0, $14
-  .byt 11
-  .byt $c0, $18
-  .byt 11
-  .byt $e0, $1c
-  .byt 11
-  .byt $00, $21
-  .byt 11
-  .byt $20, $25
-  .byt 11
-  .byt $40, $29
-  .byt 27
-  .byt $60, $2d
-  .byt 2
-  .byt $20, $04
-  .byt 11
-  .byt $60, $2d
-  .byt 1
-  .byt $20, $04
+  .byt 12
+  .byt $00, $04
+  .byt 12
+  .byt $20, $08
+  .byt 12
+  .byt $40, $10
+  .byt 12
+  .byt $40, $14
+  .byt 12
+  .byt $60, $18
+  .byt 12
+  .byt $80, $20
+  .byt 12
+  .byt $80, $24
+  .byt 12
+  .byt $a0, $2c
+  .byt 12
+  .byt $c0, $30
+  .byt 12
+  .byt $e0, $34
+  .byt 12
+  .byt $e0, $3c
+  .byt 12
+  .byt $00, $41
+  .byt 12
+  .byt $20, $49
+  .byt $00
+  ; pad to the 55-byte region size: main.a65 DMAs a fixed #55 into the
+  ; hdma_pal WRAM buffer, and HDMA stops at the $00 above, so these are
+  ; never fetched -- they only keep the region (and theme_slot_max[4]) at 55.
+  .byt $00, $00, $00, $00, $00, $00, $00, $00
   .byt $00
 
 hdma_cg_addr_src
@@ -99,19 +98,23 @@ hdma_bg2scroll_src
   .byt $0f, $00
   .byt 0
 
-; colors:
-; upper border: + #547fff -> 10,15,31
+; colors (sd2snes+ default):
+; upper border: + #5400ff -> 10,0,31
 ; selection bar:+ #5400ff -> 10,0,31
 ; lower border: 1/2 #5400ff
+; NB: the two COLDATA bytes below that differ from the classic look (offsets 5 and
+; 11) are overwritten every time by set_bar_color (ui.a65) out of
+; hdma_bar_color_src, so this block's real contribution is offsets 6..18. Kept in
+; sync with the theme anyway so a .thm round-trip through here is faithful.
 hdma_math_src
   .byt 1 ; these are filled in...
   .byt $00, $2a
   .byt 1 ; ...to move the color bar
-  .byt $00, $4f
+  .byt $00, $40
   .byt 1
   .byt $23, $9f   ; $2131: BG1+BG2+backdrop color math (OBJ bit cleared so the
   .byt 7          ;        cover sprites stay OPAQUE over the selection bar)
-  .byt $23, $40
+  .byt $23, $00
   .byt 1
   .byt $63, $00
   .byt 1
@@ -119,8 +122,8 @@ hdma_math_src
   .byt 0
 
 hdma_bar_color_src
-  .byt $2a, $4f, $9f, $40 ; normal color
-  .byt $36, $4f, $8a, $40 ; highlight color (active editing)
+  .byt $2a, $40, $9f, $00 ; normal color
+  .byt $36, $40, $8a, $00 ; highlight color (active editing)
 
 oam_data_l
   .byt 88, 56, 0, $08
@@ -211,11 +214,11 @@ text_lang_fr                      .byt "Fran", 141, "ais", 0
 ;      Keep the label set in lockstep with HELP_LABELS in gen_igmenu_lang.py and the
 ;      igm_help_rows/igm_help_cols tables in igmenu.a65 (same count + order).
 text_igm_hdr_controls             .byt "IN-GAME CONTROLS", 0
-text_igm_open                     .byt "Open menu:   L+R+Y+Left", 0
-text_igm_save                     .byt "Save state:  Start+R", 0
-text_igm_load                     .byt "Load state:  Start+L", 0
-text_igm_slot                     .byt "Choose slot: Select + D-Pad", 0
-text_igm_reset                    .byt "Reset to menu: L+R+Select+X", 0
+text_igm_open                     .byt "Open menu:      L+R+Y+Left", 0
+text_igm_save                     .byt "Save savestate: Start+R", 0
+text_igm_load                     .byt "Load savestate: Start+L", 0
+text_igm_slot                     .byt "Choose slot:    Select + D-Pad", 0
+text_igm_reset                    .byt "Reset to menu:  L+R+Select+X", 0
 text_igm_hdr_keys                 .byt "MENU KEYS", 0
 text_igm_tab                      .byt "L / R:     switch tab", 0
 text_igm_page                     .byt "Left/Right: change page", 0
@@ -229,19 +232,20 @@ text_igm_note                     .byt "Some combos set in the Options menu", 0
 ;      igmenu_lang.i65 ($C2). Lockstep with STATES_LABELS in gen_igmenu_lang.py and the
 ;      IGM_ST_* indices in igmenu.a65 (same count + order). Column layout in igmenu.a65
 ;      caps the slot word (text_igm_st_slot) at 8 cols -- guarded in gen_igmenu_lang.py.
-text_igm_st_title                 .byt "SELECT SAVE STATE SLOT", 0
+text_igm_st_title                 .byt "SELECT SAVESTATE SLOT", 0
 text_igm_st_slot                  .byt "SLOT", 0
 text_igm_st_full                  .byt "OCCUPIED", 0
 text_igm_st_empty                 .byt "EMPTY", 0
 text_igm_st_hint                  .byt "Start+R save   Start+L load", 0
-text_igm_st_disabled              .byt "Save state slots disabled", 0
+text_igm_st_disabled              .byt "Savestate slots disabled", 0
 ; ---- In-game TAB menu tab-bar labels (i18n). ENGLISH base; per-language dicts carry the
 ;      translations. gen_igmenu_lang.py re-reads THESE + the dicts to emit igm_tab_tbl in
 ;      igmenu_lang.i65 ($C2), read by igmenu.a65's tab bar. Lockstep with TAB_LABELS in
-;      gen_igmenu_lang.py (same count + order). Capped at 8 encoded cols (IGM_TAB_FIELD in
-;      igmenu.a65) -- guarded in gen_igmenu_lang.py (TAB_LABEL_MAX).
+;      gen_igmenu_lang.py (same count + order; tab order is 0=Cheats 1=Savestates 2=Saves
+;      3=Guides 4=Help). Capped at 10 encoded cols (IGM_TAB_FIELD in igmenu.a65) -- guarded
+;      in gen_igmenu_lang.py (TAB_LABEL_MAX).
 text_igm_tab_cheats               .byt "CHEATS", 0
-text_igm_tab_states               .byt "STATES", 0
+text_igm_tab_states               .byt "SAVESTATES", 0
 text_igm_tab_saves                .byt "SAVES", 0
 text_igm_tab_help                 .byt "HELP", 0
 text_igm_tab_manual               .byt "GUIDES", 0
@@ -301,6 +305,7 @@ mtext_bsx_time                    .byt "Custom time", 0
 mtext_scic_enable                 .byt "Enable SuperCIC", 0
 mtext_scic_vmode_menu             .byt " ",129,"Menu video mode", 0
 mtext_scic_vmode_game             .byt " ",129,"Game video mode", 0
+mtext_scic_buscompat              .byt "Bus timing compat", 0
 mtext_browser_sort                .byt "Sort directories", 0
 mtext_browser_hide_ext            .byt "Hide file extensions", 0
 mtext_browser_screensaver         .byt "Screensaver", 0
@@ -319,6 +324,7 @@ mtext_gameinfo_enable             .byt "Show info screen", 0
 mtext_browser_gameinfo_video      .byt " ", 129, "Show video", 0
 mtext_browser_gameinfo_music      .byt " ", 129, "Play video music", 0
 mtext_browser_restoretheme        .byt "Restore theme", 0
+mtext_browser_restoreclassic      .byt "Restore classic theme", 0
 mtext_browser_restoremusic        .byt "Restore music", 0
 mtext_ingame_cheats               .byt "Start with cheats enabled", 0
 mtext_ingame_shortreset           .byt "Reset to menu", 0
@@ -326,7 +332,6 @@ mtext_ingame_enable               .byt "In-game hook", 0
 mtext_ingame_buttons              .byt " ",129,"In-game buttons", 0
 mtext_ingame_cheat_overlay        .byt " ",129,"Cheat menu", 0
 mtext_ingame_game_manual          .byt " ",129,"Game manual", 0
-mtext_ingame_sram_slots           .byt " ",129,"SRAM slots", 0
 mtext_ingame_holdoff              .byt " ",129,"Initial holdoff", 0
 mtext_ingame_savestate            .byt "In-game savestates", 0
 mtext_savestate_slots             .byt " ",129,"Savestate slots", 0
@@ -366,6 +371,7 @@ mdesc_bsx_time                    .byt "Set custom time and date for BS-X games"
 mdesc_scic_enable                 .byt "Required for SuperCIC enhanced features", 0
 mdesc_scic_vmode_menu             .byt "Set video mode for menu", 0
 mdesc_scic_vmode_game             .byt "Set video mode for games", 0
+mdesc_scic_buscompat              .byt "Narrow cart bus timing for consoles where some games hang or glitch. Enable only if you see freezes on this console.", 0
 mdesc_browser_sort                .byt "Choose whether to sort file lists", 0
 mdesc_browser_hide_ext            .byt "Choose whether to hide file extensions", 0
 mdesc_browser_screensaver         .byt "Fade-out the screen after some time", 0
@@ -384,6 +390,7 @@ mdesc_cfg_gameinfo                .byt "Options for the pre-boot game info scree
 mdesc_browser_gameinfo_video      .byt "Play the animated clip on the game info screen (off shows a static snapshot)", 0
 mdesc_browser_gameinfo_music      .byt "Play the clip's soundtrack while it shows. Requires Show video.", 0
 mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
+mdesc_browser_restoreclassic      .byt "Load the classic sd2snes look (needs /sd2snes/classic.thm on the card)", 0
 mdesc_browser_restoremusic        .byt "Revert the menu background music to the default (menu.spc)", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
 mdesc_ingame_shortreset           .byt "Go back to menu on short reset (Off/On/Folder/ROM). Folder: return to last game folder. ROM: also pre-select the ROM.", 0
@@ -391,11 +398,10 @@ mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F c
 mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
 mdesc_ingame_cheat_overlay        .byt "In-game cheat menu (hold L+R+Y+Left) to toggle cheats live. Requires in-game hook. Does not work on special-chip games.", 0
 mdesc_ingame_game_manual          .byt "Show the game manual in the in-game menu (Manual tab). Needs a <rom>.man file in /sd2snes/info (same place as the game-info assets).", 0
-mdesc_ingame_sram_slots           .byt "Multiple battery-save slots. The in-game SAVES tab picks the active slot (applies on the next game boot). Off keeps the single <rom>.srm.", 0
 mdesc_ingame_holdoff              .byt "Wait 10 seconds before enabling hook (helps some games boot with hook enabled)", 0
 mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+R / Load - Start+L", 0
 mdesc_savestate_slots             .byt "Enable savestate slots. Select+Dpad: Each direction is a slot to choose", 0
-mdesc_loadstate_delay             .byt "Adjust the load state delay (frames)", 0
+mdesc_loadstate_delay             .byt "Adjust the savestate load delay (frames)", 0
 mdesc_sgb_enable_hooks            .byt "Required for in-game buttons", 0
 mdesc_sgb_enable_state            .byt "Enable built-in savestates on SGB2 (XR, XL)", 0
 mdesc_sgb_enh_override            .byt "Disable/enable the SGB enhancements", 0
@@ -614,3 +620,8 @@ gfxptr_info     .byt "_GFXPTR_"
                 .word oam_data_h
                 .word palette
                 .word logo_tiles
+; slot 0 (font) lives in bank $C1 while every other themed region is in $C0. A
+; .word only carries the low 16 bits, so the MCU can't know the font's bank from
+; gfxptr[0] alone. Emit the font's bank byte here (assembler-resolved, robust to
+; future relocations) so theme.c can address the font for the outline-off remap.
+                .byt ^font

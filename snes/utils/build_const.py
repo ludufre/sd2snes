@@ -180,14 +180,24 @@ def main():
     # entry's description), so they get localized too. The localized string pool
     # + dispatch tables are emitted into a SEPARATE bank ($C1, see below) so the
     # menu spans banks $C0-$C1 (m3nu.bin grows to 128K) instead of overflowing.
-    SKIP_PREFIXES = ()
+    #
+    # text_igm_* labels are consumed ONLY by gen_igmenu_lang.py, which parses
+    # const.a65 directly and emits them into the igmenu's own bank ($C2, a
+    # separate link) -- nothing in the m3nu link references them, so emitting
+    # them here would waste bytes in the full $C0 bank (neutral labels) and the
+    # $C1 pool (dispatch tables). Drop them from BOTH the verbatim copy and the
+    # localized pool. They must stay in const.a65 itself: it is the single
+    # source the igmenu generator reads.
+    DROP_PREFIXES = ("text_igm_",)
     localized = {k for _, d in langs for k in d
-                 if not (SKIP_PREFIXES and k.startswith(SKIP_PREFIXES))}
+                 if not k.startswith(DROP_PREFIXES)}
     lines, en_args = parse_base(base)
 
     out, order = [], []
     for line in lines:
         m = LINE_RE.match(line)
+        if m and m.group(2).startswith(DROP_PREFIXES):
+            continue                            # igmenu-only label, dead in this link
         if m and m.group(2) in localized:
             order.append(m.group(2))            # moved to the localized block below
         else:

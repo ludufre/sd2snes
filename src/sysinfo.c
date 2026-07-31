@@ -155,6 +155,12 @@ int write_sysinfo(int sd_measured) {
   } else {
     sram_memset(sram_addr, 40, 0x20);
   }
+  /* line 12: hardware model (DEVICE_NAME, compile-time -- same string the USB INFO
+     reports). Shown below the CPU/PPU line on the menu's System Information screen. */
+  sram_addr += 40;
+  len = snprintf(linebuf, sizeof(linebuf), "Model: %s", DEVICE_NAME);
+  memset(linebuf+len, 0x20, 40-len);
+  sram_writeblock(linebuf, sram_addr, 40);
 
   sram_hexdump(SRAM_SYSINFO_ADDR, 13*40);
   if(sysclk != -1 && sd_ok && !sd_measured){

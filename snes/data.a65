@@ -408,4 +408,12 @@ lsb_thumb       .word 0    ; list scrollbar: thumb height in cells (1..H)
 lsb_pos         .word 0    ; list scrollbar: thumb top cell (0..H-thumb)
 lsb_end         .word 0    ; list scrollbar: thumb bottom cell, exclusive (pos+thumb)
 lsb_max         .word 0    ; list scrollbar: max scroll = N - H
+;----------settings-menu scrolling viewport (show_menu / menu_select_noinit) ----------
+menu_top           .byt 0  ; settings menu: first visible entry (viewport top; 0 = at the top / no scroll)
+menu_vis           .byt 0  ; settings menu: visible entry rows = min(numentries, MENU_VISMAX)
+menu_scroll_active .byt 0  ; settings menu: 1 = scrolling viewport active (show_menu overflow); 0 = plain list (recents/patch) -> original no-scroll behaviour
+;----------browser position restore (filesel_nav_last / filesel_nav_restore) ----------
+fnl_force_rom   .byt 0     ; 1 = pre-select the file regardless of CFG_ENABLE_RST_TO_MENU (browser
+                           ; restore after a theme/BGM reload). BOTH entry points write it before
+                           ; use -- clear_wram fills WRAM with $55, so it must never be read first.
 _END            .byt 0

@@ -44,6 +44,9 @@ extern char current_filename[];
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 #define SRAM_GAMEINFO_TILES_ADDR     (0xCA0000L) /* bank CA: game-info DirectColor 8bpp tiles (up to ~48KB) */
 #define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
+#define SRAM_MENU_SFX_ADDR           (0xCC0000L) /* banks CC..CF (256 KB, free during menu, below cheats @D0):
+                                                    4x 64KB slots holding the preloaded nav-SFX PCM bodies the
+                                                    FPGA sfxdma engine streams into the DAC (msu1.c menusfx). */
 
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SS_SCENE_GATE_ADDR           (0xFF0702L) /* 1 byte armed on EVERY game load (savestate.c, before the core gate, so it is never stale) = "this game needs the overlay probe gated on scene liveness". Keyed by core+checksum; today only Super Mario RPG (US) on the SA-1 core. When 1, the probe in snes/savestate.a65 additionally requires the FPGA's scene_fresh bit at $F90720 (cheat.v: the S-CPU wrote the pad to SA-1 IRAM $3010/$3011 or polled $4218/$4219 in the last ~49-73ms) before it opens the overlay -- the NMI hook also fires during scene transitions where the frame loop is parked mid-RPC, and opening there hangs the game on resume (proven in hardware on Mk.II). Takes the first byte of the free $FF0702..$FF0707 gap (NUM_CHEATS is a short at $FF0700-01; CHEAT_WIN_BASE follows at $FF0708), leaving $FF0703..$FF0707 free. Lockstep with SS_SCENE_GATE in snes/memmap.i65. */
@@ -135,6 +138,16 @@ extern char current_filename[];
    TYPE_ROM entry in the folder). Lives in the (now fully) free gap before
    IPS_LIST (0xFF5000); the favorites list was moved off 0xFF4000 to 0xFF6000. */
 #define SRAM_LASTGAME_FILE_ADDR      (0xFF4A00L)
+/* Browser position to restore on the NEXT menu boot, staged by browser_pos_save() when a
+   theme/BGM action forces a menu reload (the reload cold-boots the SNES, and clear_wram
+   fills $7E/$7F with $55, so dirlog/filesel_sel can't survive -- only strings in BSRAM do).
+   DIR is the folder to reopen, FILE the basename to put the cursor on ("" = folder only).
+   Consumed by filesel_nav_restore (snes/filesel.a65) gated on ST_RESTORE_BROWSER.
+   Deliberately NOT reusing SRAM_LASTGAME_DIR/FILE: those are rewritten every menu boot by
+   cfg_dump_listed_games_for_snes(). Sits in the verified-free gap 0xFF4B00..0xFF4FFF,
+   clear of the ESP's WiFi block. Lockstep with BROWSER_DIR/BROWSER_FILE in snes/memmap.i65. */
+#define SRAM_BROWSER_DIR_ADDR        (0xFF4B00L)
+#define SRAM_BROWSER_FILE_ADDR       (0xFF4C00L)
 /* IPS/BPS patch list staged by ips_find_patches(). Layout (see patch.h):
    +0 num_patches, +1 display names (8*IPS_NAME_LEN=512 -> [1,513)), +IPS_PATH_BASE(520)
    full SD paths (8*IPS_PATH_LEN=2048 -> [520,2568) = 0xFF5000..0xFF5A08). Ends well below

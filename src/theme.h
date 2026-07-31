@@ -15,6 +15,14 @@
  * folder is not browsable, so themes go e.g. in /Themes at the card root). */
 #define THEME_DEFAULT    "sd2snes.skin"
 
+/* The classic (pre-sd2snes+) look. It used to BE the baked default; now that the
+ * baked regions carry the sd2snes+ theme it ships as a regular theme file, applied
+ * by the "Restore classic theme" menu entry (SNES_CMD_RESTORE_CLASSIC). Lives in
+ * the hidden /sd2snes folder -- not browsable, but the MCU opens it by full path,
+ * and theme_apply only requires skin_name to start with '/'. Shipped by build.sh
+ * (mcu_artifact_list) like menu.spc and the sfx_*.pcm. */
+#define THEME_CLASSIC    "/sd2snes/classic.thm"
+
 /* Apply the theme whose full SD path is in CFG.skin_name onto the just-loaded
  * menu image in PSRAM (SRAM_MENU_ADDR). Call AFTER load_rom(MENU_FILENAME, ...)
  * and BEFORE the SNES is released. A missing/invalid theme leaves the baked

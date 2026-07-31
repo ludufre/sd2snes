@@ -58,6 +58,16 @@ ips_select_file:
     plb                         ; DB = $00 for MCU port access
     jsr cover_sync_before_cmd   ; drain any in-flight CMD_LOAD_COVER first so the
                                 ; query's $55 isn't mistaken for the cover's ACK
+    ; fork: freeze the browser list tile DMA across the IPS-patch scan so the NMI's per-frame
+    ; BG1/BG2 DMA can't race push/pop_window and glitch a frame (the 1-frame black flash on
+    ; GI-off loads: content gone, backdrop gradient intact). GI-on already has
+    ; screen_dma_disable=1 (ficha up), which is why only GI-off flashed. Restored after
+    ; pop_window so the patch check / ips_patch_menu / game_handshake see the original value.
+    sep #$20 : .as
+    lda @screen_dma_disable
+    sta @GH_SDD_SAVE
+    lda #$01
+    sta @screen_dma_disable
     jsr draw_loading_window     ; push + display loading indicator
     lda #$00
     sta @SNES_CMD               ; clear ready flag so WRAM_WAIT_MCU does not
@@ -68,6 +78,9 @@ ips_select_file:
 
     jsr pop_window              ; remove loading indicator tile region
 
+    sep #$20 : .as
+    lda @GH_SDD_SAVE            ; unfreeze: restore the original screen_dma_disable before the
+    sta @screen_dma_disable    ; patch check (ips_patch_menu / game_handshake need it live)
     plb                         ; restore data bank
 
     ; ---- How many patches did the MCU find? ----
@@ -75,6 +88,23 @@ ips_select_file:
     rep #$10 : .xl
     lda @IPS_LIST               ; byte 0 of IPS list = num_patches
     beq ips_sf_no_patch         ; zero → load ROM without a patch
+
+    ; ---- >= 1 patch: ips_patch_menu is drawn into the WRAM tile buffers and animated by the
+    ;      NMI, so it needs the VISIBLE menu pipeline (screen_dma_disable = 0). When the browser
+    ;      PLAY happened over the game-info FICHA (Game Info on: gms_common left it up with
+    ;      screen_dma_disable = 1), the IPS menu would be invisible and the user would be stuck.
+    ;      Tear the ficha down and repaint the browser list first. Only the browser reaches here
+    ;      (Recents/Favorites go straight to slfp_load/sffp_load). After the restore the follow-on
+    ;      game_handshake sees screen_dma_disable = 0 -> iris closes over the menu ($59). ----
+    lda @screen_dma_disable     ; low byte (0/1); long read, DB-independent
+    beq ips_sf_have_menu
+    jsr gi_dc_restore           ; drop ficha, rebuild menu, screen_dma_disable=0, reinstall WRAM rout.
+    phd                         ; gi_repaint_browser reads the dir table via [dirptr_addr],y ->
+    pea $0000                   ; needs DP=0 (the browser path already is; force it defensively)
+    pld
+    jsr gi_repaint_browser
+    pld
+ips_sf_have_menu:
 
     ; ---- Show IPS selection menu ----
     jsr ips_patch_menu          ; A = 0 (no patch) .. N (patch N), $FF = B cancel

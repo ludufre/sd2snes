@@ -5,7 +5,8 @@
  *     0    8     magic  "FXTHEME1"
  *     8    1     version (=THEME_VERSION)
  *     9    1     N = number of regions
- *     10   2     flags
+ *     10   2     flags  (bit0 = has logo; bit1 = outline off; bit2 = AA off,
+ *                        see the font remap notes below)
  *     12   4     reserved
  *     16   N*4   TOC: per region { u8 slot ; u8 _rsv ; u16 length }
  *     ...        payload: region blobs concatenated in TOC order
@@ -31,6 +32,28 @@ static const char THEME_MAGIC[8]  = { 'F','X','T','H','E','M','E','1' };
 static const char GFXPTR_MAGIC[8] = { '_','G','F','X','P','T','R','_' };
 #define THEME_VERSION   1
 #define THEME_NSLOTS    9
+
+/* Font edge remaps: .thm header flags bit1/bit2 ask the MCU to edit the menu
+   font's edge pixels, matching what the official editor does to the tiles it
+   bakes into a menu.bin -- but WITHOUT the .thm carrying the font. The 2bpp
+   font (slot 0) uses pixel value 1 = fill, 2 = the 1px outline ring, 3 = the
+   anti-alias step between them:
+     bit1 outline off: value 2 -> 0 (transparent), so the HDMA backdrop
+                       gradient shows through where the ring was;
+     bit2 AA off:      value 3 -> 1 (fill), so the glyph edge is hard.
+   Both are applied to the PSRAM copy before the SNES runs its genfonts DMA;
+   font.a65 and the ROM are untouched. Flags clear -> no-op.
+   NB: the AA-off remap makes the edge hard regardless of the palette. The
+   Theme Creator ALSO writes shade 0x03 as the group's own text colour for the
+   same effect on firmware that predates this flag; the two agree, so a theme
+   built either way looks the same here. */
+#define SLOT_FONT               0
+#define THEME_FLAG_OUTLINE_OFF  0x0002u
+#define THEME_FLAG_AA_OFF       0x0004u
+#define THEME_FONT_LEN          0x1000u   /* 256 tiles x 16 B == snes/font.a65
+                                             asset size == bytes genfonts DMAs.
+                                             Kept in sync by pack_theme.py. */
+#define THEME_MENU_SIZE         0x20000u  /* snes/Makefile MENU_SIZE (128 KB) */
 
 /* Window of the loaded menu image scanned for the _GFXPTR_ magic. The table's
  * offset shifts with the menu layout: ~0x2EB1 in the old 128px-logo build, but
@@ -101,23 +124,56 @@ static int theme_stream_logo_left(uint32_t dest, uint32_t cap) {
 }
 
 /* Locate "_GFXPTR_" in the loaded menu PSRAM and read its THEME_NSLOTS word
- * pointers (16-bit bank-$C0 offsets) into gfxptr[]. Returns 1 on success. */
-static int theme_read_gfxptr(uint16_t gfxptr[THEME_NSLOTS]) {
+ * pointers (16-bit bank-$C0 offsets) into gfxptr[]. Also reads the byte after
+ * the 9 words (`.byt ^font` in snes/const.a65) into *font_bank -- slot 0 (font)
+ * lives in bank $C1, so its .word alone can't carry the bank. Returns 1 on ok. */
+static int theme_read_gfxptr(uint16_t gfxptr[THEME_NSLOTS], uint8_t *font_bank) {
   uint8_t buf[512];
   const uint32_t step = sizeof(buf) - 8;   /* overlap so the magic isn't split */
   for(uint32_t off = THEME_GFXPTR_SCAN_START; off < THEME_GFXPTR_SCAN_END; off += step) {
     sram_readblock(buf, SRAM_MENU_ADDR + off, sizeof(buf));
     for(uint32_t i = 0; i + 8 <= sizeof(buf); i++) {
       if(!memcmp(buf + i, GFXPTR_MAGIC, 8)) {
-        uint8_t words[THEME_NSLOTS * 2];
+        uint8_t words[THEME_NSLOTS * 2 + 1];   /* 9 words + font bank byte */
         sram_readblock(words, SRAM_MENU_ADDR + off + i + 8, sizeof(words));
         for(int k = 0; k < THEME_NSLOTS; k++)
           gfxptr[k] = (uint16_t)words[k * 2] | ((uint16_t)words[k * 2 + 1] << 8);
+        *font_bank = words[THEME_NSLOTS * 2];  /* .byt ^font after the 9 words */
         return 1;
       }
     }
   }
   return 0;
+}
+
+/* Font edge remap: the menu font is 2bpp, each 8x8 tile = 8 rows of
+ * [low-plane byte, high-plane byte]; pixel value = (high<<1)|low. Only the
+ * high plane is touched, so every pixel keeps its low bit:
+ *   high &= ~low  ->  value 3 (high=1,low=1) becomes 1 (fill)        [AA off]
+ *   high &=  low  ->  value 2 (high=1,low=0) becomes 0 (transparent) [ring off]
+ * Values 0 and 1 have high=0 already and survive both. Applying both leaves
+ * high = 0 throughout: ring gone, AA folded into the fill -- exactly what the
+ * official editor's antiAlias() produces with both boxes unchecked.
+ * Rewrites THEME_FONT_LEN bytes of the PSRAM font in place, chunked to keep the
+ * stack small; the buffer size is even so [low,high] pairs never straddle a
+ * chunk boundary. Caller guarantees at least one remap is requested. */
+static void theme_font_remap(uint32_t font_addr, int aa_off, int outline_off) {
+  uint8_t buf[512];
+  uint32_t p = font_addr, remaining = THEME_FONT_LEN;
+  while(remaining) {
+    uint16_t chunk = (remaining > sizeof(buf)) ? (uint16_t)sizeof(buf)
+                                               : (uint16_t)remaining;
+    sram_readblock(buf, p, chunk);
+    for(uint16_t i = 0; i + 1 < chunk; i += 2) {
+      uint8_t lo = buf[i], hi = buf[i + 1];
+      if(aa_off)      hi &= (uint8_t)~lo;   /* AA step   -> fill        */
+      if(outline_off) hi &= lo;             /* ring      -> transparent */
+      buf[i + 1] = hi;
+    }
+    sram_writeblock(buf, p, chunk);
+    p += chunk;
+    remaining -= chunk;
+  }
 }
 
 void theme_apply(void) {
@@ -140,6 +196,7 @@ void theme_apply(void) {
     file_close();
     return;
   }
+  uint16_t flags = (uint16_t)hdr[10] | ((uint16_t)hdr[11] << 8);
   uint8_t n = hdr[9];
   if(n == 0 || n > THEME_NSLOTS) { file_close(); return; }
 
@@ -157,7 +214,8 @@ void theme_apply(void) {
   if(need > file_handle.fsize) { file_close(); return; }
 
   uint16_t gfxptr[THEME_NSLOTS];
-  if(!theme_read_gfxptr(gfxptr)) {
+  uint8_t  font_bank = 0;
+  if(!theme_read_gfxptr(gfxptr, &font_bank)) {
     printf("theme: _GFXPTR_ not found in menu image\n");
     file_close();
     return;
@@ -188,6 +246,23 @@ void theme_apply(void) {
       return;
     }
   }
+
+  /* Font edge remaps (flags bit1 outline-off / bit2 AA-off): rewrite the font's
+     edge pixels in place, before the SNES boots and runs genfonts. Both remaps
+     share one pass over the font. The font is bank $C1 while gfxptr[SLOT_FONT]
+     carries only the low word, so add the bank byte read from the _GFXPTR_
+     table. Guarded to a valid menu bank and to the loaded image so a stale/old
+     menu (no bank byte) or bogus value can never write out of range. */
+  if((flags & (THEME_FLAG_OUTLINE_OFF | THEME_FLAG_AA_OFF)) && gfxptr[SLOT_FONT] != 0
+     && (font_bank == 0xC0 || font_bank == 0xC1)) {
+    uint32_t font_addr = SRAM_MENU_ADDR
+                       + (((uint32_t)(font_bank - 0xC0)) << 16)
+                       + gfxptr[SLOT_FONT];
+    if(font_addr + THEME_FONT_LEN <= SRAM_MENU_ADDR + THEME_MENU_SIZE)
+      theme_font_remap(font_addr, !!(flags & THEME_FLAG_AA_OFF),
+                                  !!(flags & THEME_FLAG_OUTLINE_OFF));
+  }
+
   file_close();
   printf("theme: applied %s\n", skin);
 }

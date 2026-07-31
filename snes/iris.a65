@@ -1,0 +1,387 @@
+.link page $c1
+#include "memmap.i65"
+
+; =============================================================================
+; IRIS OUT -- fork feature (menu -> game boot transition)
+;
+; A black circle that closes over the menu until the screen is fully black, run
+; from game_handshake right after NMI+IRQ are turned off but while the menu PPU
+; is still displayed (the "Loading..." popup is up).  The reset that boots the
+; game (jsl @WRAM_ROUTINE) comes AFTER this and zeroes the PPU, so the iris runs
+; over the live menu image.  The MCU spins forever waiting for the boot ($55) it
+; already got, so this ~0.6 s effect is safe.
+;
+; Lives in bank $C1 (bank $C0 is full) and is entered by a cross-bank `jsl` from
+; main.a65's game_handshake ($C0) -> exits with `rtl`.  All internal calls are
+; same-bank `jsr`.  PPU/DMA registers use long @$00xxxx (DB-independent); the
+; iris WRAM uses absolute addressing under DB=$7E (set once here).
+;
+; WHY the effect is a WINDOW, not a fade: window 2 is enabled+inverted for
+; BG1/BG2/OBJ (mask = OUTSIDE [L,R]).  A per-scanline HDMA (ch6) drives WH2/WH3
+; ($2128/$2129) so the shown span [L,R] is a circle that shrinks to nothing.
+; Outside the aperture the PPU shows the backdrop (CGRAM color 0).
+;
+; DEVIATION from the original spec (`$420c=$5f`, keep ch1/ch2): the menu's ch1
+; (CGADD=0/line) + ch2 (CGDATA/line) HDMA rewrite CGRAM color 0 -- the gradient
+; backdrop -- every scanline.  The iris clips to that same color 0, so keeping
+; ch1/ch2 would make the "black" iris (and the final frame) show the gradient,
+; not black.  We DROP ch1/ch2 (palette) and ch5 (color-math) and keep ch0
+; (BG2VOFS scroll) + ch3 (mode-3->mode-5 switch, needed for the hi-res text) +
+; ch4 (BG1HOFS scroll) + ch6 (our window): $420c = $59.  CGRAM 0 is set to solid
+; black once and, with ch1/ch2 gone, stays black.  Cost: the menu backdrop
+; flattens to black for the ~0.6 s fade (content inside the circle stays
+; correct); the payoff is a true solid-black final frame that holds through the
+; FPGA reconfig.
+;
+; WHY build (compute) is split from expand (write the HDMA table): the midpoint
+; pass is too heavy to finish inside one vblank, but writing the table during
+; active display would tear (the HDMA reads it live).  So ir_build runs the
+; midpoint + L/R conversion (touches only scratch, huge active-display budget)
+; and ir_expand does a pure fast copy of the ready L[]/R[] into the ch6 table
+; inside vblank (fits with margin).
+;
+; STORAGE: fixed WRAM at $7E8000 (a free 8 KB gap between the window stack at
+; $7E2000 and the BG tile buffers at $7EA000).  It CANNOT go in the data segment
+; [_END,$7E2000): that range is the stack mirror ($00:xxxx == $7E:0000-1FFF, SP
+; inits to $1FFF growing down).  During the launch nothing else touches $7E8000
+; (NMI/menu DMA off, no window pushes).  Low-16 addresses below are for abs
+; addressing under DB=$7E; physical bank is $7E.
+; =============================================================================
+
+; --- WRAM scratch (low-16; DB=$7E; physical = $7E8000..) ---
+#define IRIS_HDMA       $8000   ; ch6 HDMA source table (451 B)  -- MUST be WRAM
+#define IRIS_HW         $8200   ; per-dy half-width (180 B; only [0..112] read)
+#define IRIS_L          $8300   ; per-dy window left  byte (113 B)
+#define IRIS_R          $8380   ; per-dy window right byte (113 B)
+#define IRIS_RAD        $83f8   ; current radius (byte)
+#define IRIS_X          $83fa   ; midpoint x (16-bit)
+#define IRIS_Y          $83fc   ; midpoint y (16-bit)
+#define IRIS_ERR        $83fe   ; midpoint err (16-bit signed)
+#define IRIS_TMP        $8400   ; 16-bit scratch (2*x)
+#define IRIS_TMP8       $8402   ; 8-bit scratch (h)
+; IRIS_HDMA_EN ($7E8408, low-16 $8408) -- the $420c HDMA-enable set for this launch --
+; is defined in memmap.i65 (game_handshake writes it before jsl iris_out). Read below
+; via long addressing so it is DB-independent.
+
+#define IRIS_R_START    176     ; start radius (screen corner ~170 -> starts fully open)
+#define IRIS_STEP       5       ; radius decrement per frame (~35 frames, ~0.58 s)
+
+; -----------------------------------------------------------------------------
+; iris_out -- entered by `jsl` from game_handshake; returns via `rtl`.
+; Exits with the PPU DISARMED (no window, no HDMA, no colour math) and the black held by
+; forced blank instead, so the booting ROM inherits a clean $21xx block (see iris_close).
+; -----------------------------------------------------------------------------
+iris_out:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e : pha : plb                  ; DB = $7E (abs access to the iris WRAM)
+
+  ; --- ch6: A->B transfer mode 1 (2 regs x 1 byte) -> $2128 (WH2 L) + $2129 (WH3 R).
+  ;     DMA config only -- inert until $420c arms it below. ---
+  lda #$01 : sta @$004360               ; DMAP: A->B direct, mode 1
+  lda #$28 : sta @$004361               ; B base = $2128
+  rep #$20 : .al
+  lda #IRIS_HDMA : sta @$004362         ; A1T low/high ($4362=$00, $4363=$80)
+  sep #$20 : .as
+  lda #$7e : sta @$004364               ; A1B bank = $7E
+
+  ; --- static HDMA headers (written once; only the 224 L/R pairs change) ---
+  lda #$f0 : sta IRIS_HDMA+0            ; count = repeat|112, scanlines 0..111
+  lda #$f0 : sta IRIS_HDMA+225          ; count = repeat|112, scanlines 112..223
+  lda #$00 : sta IRIS_HDMA+450          ; terminator
+
+  ; --- build the FIRST frame (r = R_START = fully open) in ACTIVE DISPLAY, BEFORE the window
+  ;     clip is enabled. ir_build only touches scratch, so the menu keeps showing NORMALLY while
+  ;     it runs. *** FLASH FIX ***: the old order enabled the window-2 clip FIRST, then ran the
+  ;     heavy ir_build with ch6 still un-armed -> for that whole active-display frame WH2/WH3
+  ;     ($2128/$2129) held STALE values, so the inverted window masked ALL the menu content and
+  ;     only the gradient backdrop showed for 1 vblank ("no header, no list, just the gradient,
+  ;     before it turns black" -- the GI-off flash, whose stale window 2 clipped everything;
+  ;     the ficha's stale window happened not to). Nothing is clipped now until the full-open
+  ;     table is armed in the SAME vblank as the clip. ---
+  lda #IRIS_R_START : sta IRIS_RAD
+  jsr ir_build
+  jsr iris_waitblank                    ; land at vblank to publish the table + clip atomically
+  jsr ir_expand                         ; write the full-open ch6 table (in vblank, no tearing)
+
+  ; --- take ownership of the windowing AND arm ch6 in the SAME vblank, so the very first
+  ;     clipped frame already has the full-open circle in WH2/WH3 (no stale-window frame) ---
+  lda #$cc : sta @$002123               ; W12SEL: BG1+BG2 window-2 enable+invert (mask OUTSIDE)
+  lda #$cc : sta @$002124               ; W34SEL: BG3+BG4 window-2 enable+invert
+  lda #$8c : sta @$002125               ; WOBJSEL (manual p.2-27-12): D7=COLOUR window-2 ENABLE,
+                                        ;   D6=IN/OUT (0=IN, 1=OUT). $8c = colour window-2 ENABLE + IN
+                                        ;   (mask = INSIDE the circle) + OBJ window-2 enable + OUT.
+                                        ;   Using IN (not the OUT/$cc) keeps screen position 0 INSIDE the
+                                        ;   window at full open -> column 0 stays shown, no left-edge
+                                        ;   catch. ($4c before had D7=0, which DISABLED the colour window
+                                        ;   -> the "degenerate all-black/nothing" I saw was that, not a
+                                        ;   real hardware limit.)
+  lda #$00 : sta @$00212a               ; WBGLOG = OR (BG window logic)
+  lda #$00 : sta @$00212b               ; WOBJLOG = OR (OBJ + COLOUR window logic) so the colour
+                                        ;   window follows window 2 alone, not a stale AND/XOR
+  lda #$1f : sta @$00212e               ; TMW: clip BG1-4+OBJ (main) inside the inverted window
+  lda #$1f : sta @$00212f               ; TSW: same (mode-5 hi-res drives both screens)
+  lda #$40 : sta @$002130               ; CGSWSEL (manual p.2-27-16): MAIN SW D7-D6=01 = main screen
+                                        ;   ON *inside the colour window only* -> BLACK outside. Colour
+                                        ;   window = INSIDE the circle (above), so main is ON inside the
+                                        ;   circle and black outside -- solid (colour window is 256-pos,
+                                        ;   §19.2, no hi-res dither). CGRAM 0 is NOT blacked -> the
+                                        ;   gradient backdrop stays alive and shows through INSIDE the
+                                        ;   shrinking circle (the "original menu background inside the
+                                        ;   black circle" the user asked for).
+  ; --- swap the HDMA set: $5F (menu: keep ch0/ch1/ch2/ch3/ch4 + ch6, drop only ch5) or $4E
+  ;     (ficha: keep ch1/ch2/ch3 + ch6). ch1/ch2 KEEP the gradient backdrop animating. ---
+  lda IRIS_HDMA_EN : sta @$00420c       ; arm ch6 (full-open table already staged)
+
+  ; --- colour math OFF (kills the ch5 blue-purple), AFTER dropping ch5 so it sticks. ch5
+  ;     rewrote $2131/$2132 per scanline, so setting this BEFORE the swap would be clobbered.
+  ;     No CGRAM 0 black anymore -- the gradient lives on inside; the colour window blacks
+  ;     only outside the circle. ---
+  jsr iris_waitblank                    ; next vblank (ch5 now off)
+  lda #$00 : sta @$002131               ; CGADSUB = 0
+
+  ; --- animation: shrink the radius to 0 ---
+iris_loop:
+  lda IRIS_RAD
+  sec
+  sbc #IRIS_STEP
+  bcc iris_close                        ; borrow -> r would go < 0 -> done
+  sta IRIS_RAD
+  jsr ir_build                          ; compute hw + L/R (active display; scratch only)
+  jsr iris_waitblank
+  jsr ir_expand                         ; write the ch6 table (in vblank)
+  bra iris_loop
+
+iris_close:
+  ; final fully-black frame: r=0 -> hw all zero -> every scanline L=$ff,R=$00
+  lda #$00 : sta IRIS_RAD
+  jsr ir_build
+  jsr iris_waitblank
+  jsr ir_expand
+  ; --- DISARM before handing the console to the game. The black is held by FORCED BLANK
+  ;     ($2100 = $80) from here on, NOT by the colour window: leaving the window + ch6 armed
+  ;     (what this did before) hands the booting ROM a PPU with W12SEL/W34SEL/WOBJSEL clipping,
+  ;     TMW/TSW masking main+sub and CGSWSEL "black outside the colour window" still set. The
+  ;     console reset does NOT reliably clear the $21xx block (same reason "Clear PPU on Boot"
+  ;     exists for VRAM/CGRAM/OAM), so any ROM that does not initialise the whole PPU inherits
+  ;     it -- that broke the SMS player (snes-side smsplayer.sfc), which only sets BGMODE/BG1
+  ;     base/TM/scroll: blurred picture + flickering top rows. A commercial game re-inits
+  ;     everything and never noticed. Forced blank is safe: every boot path clears it (the SMS
+  ;     player writes $8f then $0f in its first NMI), and it keeps the screen black across the
+  ;     FPGA reconfig exactly like the window did. ---
+  lda #$80 : sta @$002100               ; forced blank -- holds the black from here to the reset
+  lda #$00 : sta @$00420c               ; HDMA off (drops ch6 and every menu channel)
+  lda #$00 : sta @$002123               ; W12SEL   (no BG1/BG2 window)
+  lda #$00 : sta @$002124               ; W34SEL   (no BG3/BG4 window)
+  lda #$00 : sta @$002125               ; WOBJSEL  (no OBJ/colour window)
+  lda #$00 : sta @$00212a               ; WBGLOG
+  lda #$00 : sta @$00212b               ; WOBJLOG
+  lda #$00 : sta @$00212e               ; TMW  (nothing clipped on main)
+  lda #$00 : sta @$00212f               ; TSW  (nothing clipped on sub)
+  lda #$00 : sta @$002130               ; CGSWSEL (main screen always on, no colour window)
+  lda #$00 : sta @$002131               ; CGADSUB (no colour math)
+  lda #$e0 : sta @$002132               ; COLDATA: R=G=B=0 (fixed colour cleared)
+  lda #$00 : sta @$002106               ; MOSAIC off
+  lda #$00 : sta @$00212d               ; TS: subscreen off -- the menu leaves BG1+BG2 on it
+  lda #$00 : sta @$002133               ; SETINI: no interlace / no overscan and, above all,
+                                        ;   PSEUDO-HIRES OFF. The menu's mode-5 text setup arms
+                                        ;   $2133 = $08 (pseudo-512, see filesel/gameinfo) and a
+                                        ;   ROM that never writes $2133 inherits it: the PPU then
+                                        ;   interleaves main/sub every half dot -> the "blurry,
+                                        ;   not sharp" picture the SMS player showed.
+  plb
+  plp
+  rtl
+
+; -----------------------------------------------------------------------------
+; ir_build -- DB=$7E.  Midpoint circle (no sqrt) for radius IRIS_RAD -> per-dy
+; half-width IRIS_HW[0..112], then convert to IRIS_L[dy]/IRIS_R[dy].
+; Runs in active display (only touches scratch), so cost is not vblank-bound.
+; -----------------------------------------------------------------------------
+ir_build:
+  php
+  rep #$30 : .al : .xl
+
+  ; zero IRIS_HW[0..179] (90 words) -- sentinel 0 = "closed" (combine is max)
+  ldx #$0000
+  lda #$0000
+ir_bl_zero:
+  sta IRIS_HW,x
+  inx
+  inx
+  cpx #180
+  bcc ir_bl_zero
+
+  ; midpoint init: x = r, y = 0, err = 0
+  lda IRIS_RAD
+  and #$00ff
+  sta IRIS_X
+  lda #$0000
+  sta IRIS_Y
+  sta IRIS_ERR
+
+ir_bl_loop:
+  lda IRIS_X                            ; signed 16-bit compare x - y (|x-y|<32768)
+  sec
+  sbc IRIS_Y
+  bpl ir_bl_body                        ; x >= y -> body
+  jmp ir_bl_lrpass                      ; x <  y -> midpoint done
+
+ir_bl_body:
+  ; if x > hw[y]: hw[y] = x
+  lda IRIS_Y
+  and #$00ff
+  tay
+  sep #$20 : .as
+  lda IRIS_X                            ; low byte = x (< 256)
+  cmp IRIS_HW,y
+  bcc ir_bl_p1
+  beq ir_bl_p1
+  sta IRIS_HW,y
+ir_bl_p1:
+  rep #$20 : .al
+  ; if y > hw[x]: hw[x] = y
+  lda IRIS_X
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda IRIS_Y                            ; low byte = y (< 256)
+  cmp IRIS_HW,x
+  bcc ir_bl_p2
+  beq ir_bl_p2
+  sta IRIS_HW,x
+ir_bl_p2:
+  rep #$20 : .al
+  ; y = y + 1
+  lda IRIS_Y
+  inc
+  sta IRIS_Y
+  ; err = err + 1 + 2*y   (A = new y)
+  asl
+  clc
+  adc IRIS_ERR
+  inc
+  sta IRIS_ERR
+  ; if 2*(err - x) + 1 > 0  <=>  (asl 2*(err-x)) sign clear  -> x--, err += 1 - 2*x
+  lda IRIS_ERR
+  sec
+  sbc IRIS_X
+  asl
+  bmi ir_bl_loop                        ; false -> next iteration (no decrement)
+  lda IRIS_X
+  dec
+  sta IRIS_X                            ; x = x - 1
+  asl                                 ; 2*x (A = new x)
+  sta IRIS_TMP
+  lda IRIS_ERR
+  sec
+  sbc IRIS_TMP                          ; err - 2x
+  inc                                 ; + 1
+  sta IRIS_ERR
+  jmp ir_bl_loop
+
+ir_bl_lrpass:
+  ; convert IRIS_HW[dy] -> IRIS_L[dy], IRIS_R[dy] for dy = 0..112
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldy #$0000
+ir_lrp:
+  lda IRIS_HW,y                         ; h
+  cmp #$01
+  bcc ir_lrp_closed                     ; h == 0 -> line fully black
+  cmp #128
+  bcs ir_lrp_open                       ; h >= 128 -> line spans the FULL width (see ir_lrp_open).
+                                        ;   For h <= 127 the exact span 128+-h still fits a byte
+                                        ;   (R = 128+127 = 255), so no clamp is needed below.
+  ; middle: L = 128 - h, R = 127 + h  (span centred on 127.5 = the screen middle, NOT 128).
+  ;   With R = 128 + h the circle was centred on column 128, so the LEFT edge (column 0) left the
+  ;   shrinking aperture one frame before the RIGHT edge (column 255) -> "only the first column
+  ;   disappears". Centring on 127.5 makes columns 0 and 255 leave together (symmetric close).
+  sta IRIS_TMP8
+  lda #128
+  sec
+  sbc IRIS_TMP8
+  sta IRIS_L,y
+  lda #127
+  clc
+  adc IRIS_TMP8
+  sta IRIS_R,y
+  bra ir_lrp_next
+ir_lrp_closed:
+  lda #$ff
+  sta IRIS_L,y
+  lda #$00
+  sta IRIS_R,y
+  bra ir_lrp_next
+ir_lrp_open:
+  ; FULL width [0,255]. This used to be [1,252] to "trim mode-5 edge garbage", which was
+  ; invisible back when the whole backdrop was blacked (the trimmed edge columns were black
+  ; against black). Now that the gradient stays alive INSIDE the circle, those trimmed columns
+  ; render as black bars -> the first/last pixel columns "disappear" as the iris starts.
+  lda #$00
+  sta IRIS_L,y
+  lda #$ff
+  sta IRIS_R,y
+ir_lrp_next:
+  iny
+  cpy #113
+  bne ir_lrp
+
+  plp
+  rts
+
+; -----------------------------------------------------------------------------
+; ir_expand -- DB=$7E.  Fast copy of the ready IRIS_L[dy]/IRIS_R[dy] into the
+; ch6 HDMA table (the 224 per-scanline pairs).  Runs in vblank (no tearing).
+;   scanline y in 0..111  -> dy = 112 - y  -> table[1 + 2y], [2 + 2y]
+;   scanline y in 112..223-> dy = y - 112  -> table[226 + 2j], [227 + 2j], j=y-112
+; -----------------------------------------------------------------------------
+ir_expand:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; top half: scanline 0..111, dy = 112..1
+  ldx #$0001                            ; L byte offset
+  ldy #112                              ; dy
+ir_exp_top:
+  lda IRIS_L,y
+  sta IRIS_HDMA,x
+  lda IRIS_R,y
+  sta IRIS_HDMA+1,x
+  inx
+  inx
+  dey
+  bne ir_exp_top
+  ; bottom half: scanline 112..223, dy = 0..111
+  ldx #226                              ; L byte offset
+  ldy #$0000                            ; dy
+ir_exp_bot:
+  lda IRIS_L,y
+  sta IRIS_HDMA,x
+  lda IRIS_R,y
+  sta IRIS_HDMA+1,x
+  inx
+  inx
+  iny
+  cpy #112
+  bne ir_exp_bot
+  plp
+  rts
+
+; -----------------------------------------------------------------------------
+; iris_waitblank -- poll $4212 (NMI is off).  Drains any current vblank, then
+; waits for the next vblank to START.  DB-independent (long addressing).
+; -----------------------------------------------------------------------------
+iris_waitblank:
+  php
+  sep #$20 : .as
+ir_wb1:
+  lda @$004212
+  bmi ir_wb1                            ; wait while in vblank (drain)
+ir_wb2:
+  lda @$004212
+  bpl ir_wb2                            ; wait until vblank starts
+  plp
+  rts

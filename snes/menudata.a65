@@ -559,6 +559,19 @@ menu_enttab_browser:
  .byt  0,0,0
 
  .byt  MTYPE_FUNC
+ .word !mtext_browser_restoreclassic
+ .byt  ^mtext_browser_restoreclassic
+ .word !restore_classic_theme-1
+ .byt  ^restore_classic_theme
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_browser_restoreclassic
+ .byt  ^mdesc_browser_restoreclassic
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC
  .word !mtext_browser_restoremusic
  .byt  ^mtext_browser_restoremusic
  .word !restore_music-1
@@ -854,20 +867,6 @@ menu_enttab_ingame:
  .byt  ^(mfunc_isenabled_hooks-1)
 
  .byt  MTYPE_VALUE
- .word !mtext_ingame_sram_slots
- .byt  ^mtext_ingame_sram_slots
- .word !kv_onoff
- .byt  ^kv_onoff
- .byt  OPTTYPE_KVBYTE
- .word !CFG_ENABLE_SRAM_SLOTS
- .byt  ^CFG_ENABLE_SRAM_SLOTS
- .word !mdesc_ingame_sram_slots
- .byt  ^mdesc_ingame_sram_slots
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_VALUE
  .word !mtext_ingame_holdoff
  .byt  ^mtext_ingame_holdoff
  .word !kv_onoff
@@ -906,6 +905,20 @@ menu_enttab_ingame:
  .byt  ^CFG_1CHIP_TRANSIENT_FIXES
  .word !mdesc_ingame_1chiptransientfixes
  .byt  ^mdesc_ingame_1chiptransientfixes
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_scic_buscompat
+ .byt  ^mtext_scic_buscompat
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_BUS_COMPAT
+ .byt  ^CFG_BUS_COMPAT
+ .word !mdesc_scic_buscompat
+ .byt  ^mdesc_scic_buscompat
  .byt  0,0,0
  .byt  0,0,0
  .byt  0,0,0

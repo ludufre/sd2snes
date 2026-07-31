@@ -515,6 +515,7 @@ set_global_assignment -name VERILOG_FILE rtc.v
 set_global_assignment -name VERILOG_FILE msu.v
 set_global_assignment -name VERILOG_FILE mcu_cmd.v
 set_global_assignment -name VERILOG_FILE main.v
+set_global_assignment -name VERILOG_FILE sfxdma.v
 set_global_assignment -name VERILOG_FILE dac.v
 set_global_assignment -name VERILOG_FILE clk_test.v
 set_global_assignment -name VERILOG_FILE cheat.v

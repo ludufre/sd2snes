@@ -86,6 +86,7 @@
 #define SNES_CMD_GAME_INFO_FAVORITE  (0x36) /* like GAME_INFO but for the favorite game at the index in MCU_PARAM (resolved via FAVORITES_FILE) */
 #define SNES_CMD_FMV_NEXT            (0x37) /* pre-boot info screen FMV pump: stream the next <rom>.fmv frame into the band tile bank ($CA0000) for the menu to re-DMA (gameinfo_fmv_next). Non-booting. */
 #define SNES_CMD_GI_DESC_FULL        (0x38) /* info-screen "full description" (Y): re-scan the .yml with a streaming reader and stage the COMPLETE (untruncated) description into SRAM_GAMEINFO_DESCEXT_ADDR ($FF7600). Non-booting (gameinfo_desc_full). */
+#define SNES_CMD_RESTORE_CLASSIC     (0x39) /* apply the classic (pre-2.16) look from the fixed path THEME_CLASSIC (/sd2snes/classic.thm), then reload menu. NACKs without touching CFG.skin_name when the file is missing (see main.c) */
 
 /* WiFi SRAM block layout (base = SRAM_WIFI_ADDR; menu side = WIFI_BLK $FF4000).
    RESERVED for the Companion port -- its own dedicated 437-byte block ($FF4000..$FF41B5),
@@ -210,6 +211,9 @@ typedef struct __attribute__ ((__packed__)) _mcu_status {
   uint8_t autoboot_enabled;        /* 1 if an autoboot ROM is configured */
   uint8_t reset_to_menu_active;    /* 1 if this boot is a reset-to-menu (not cold power-on) */
   uint8_t favorites_full;          /* 1 if the last "add favorite" was refused (list at MAX_FAVORITE_GAMES) */
+  uint8_t restore_browser;         /* 1 if this menu boot follows a theme/BGM change: reopen SRAM_BROWSER_DIR_ADDR
+                                      and put the cursor on SRAM_BROWSER_FILE_ADDR (see browser_pos_save). One-shot,
+                                      cleared in RAM right after status_load_to_menu() publishes it. */
 } mcu_status_t;
 
 typedef struct __attribute__ ((__packed__)) _snes_status {

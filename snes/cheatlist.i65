@@ -96,7 +96,8 @@
 // Vertical scroll indicator (logical column OVL_SB_COL), the in-game analogue of the
 // browser's listsel_scrollbar: ovl_sb_calc derives the thumb span ONCE per list rebuild
 // and ss_ovl_draw_full_row stamps one cell per row (glyph 16 = track, 17 = thumb) while
-// it is building OVL_RB. Nothing is drawn when the whole list fits (ovl_sb_on = 0) --
+// it is building OVL_RB, then ovl_sb_recolor repaints that cell in the frame palette after
+// the flush. Nothing is drawn when the whole list fits (ovl_sb_on = 0) --
 // ovl_row_clear already left that column blank, so a non-scrolling list shows no bar.
 // State block $F482DE..$F482E7: the free gap above the overlay's IGM_THM_* theme hand-off
 // (which ends at $F482D2) and directly BELOW OVL_CUR_OFF ($F482E8) -- memmap.i65 documents
@@ -356,6 +357,62 @@ osb_off:
 	plp
 	rts
 
+// ---- ovl_sb_recolor: re-stamp the scrollbar cell of the row that was JUST flushed in
+//      palette 3 -- the window-frame colour ig_draw_window paints its borders with, which
+//      is also what the menu's own scrollbars hiprint in (draw_window's palette). The flush
+//      paints the WHOLE line in ovl_pal, so this one odd cell is rewritten afterwards rather
+//      than branching inside the two 32-entry flush loops -- every other screen of the shell
+//      runs through those, and the bar is the only cell that wants a palette of its own.
+//      Only the FOCUSED list ($2000) gets the frame colour: greyed ($2400, tab bar has focus)
+//      the bar greys along with the rows whose viewport it marks.
+//      Y (16-bit) = list screen row 0..visible-1; the glyph is read back out of OVL_RB, so
+//      this must run AFTER the row is built and flushed. Honours ovl_flush_dst exactly like
+//      the flush: VRAM entry (initial draw) or the OVL_TMBUF word the DMA pipeline uploads.
+//      Assumes DBR=$F4 and, on the VRAM path, $2115=$80 (same assumption as ovl_flush_abs --
+//      it runs right after it, with the same register file). .al/.xl. Clobbers A/X/Y. ----
+ovl_sb_recolor:
+	php
+	rep #$30 : .al : .xl
+	lda OVL_RB+OVL_SB_COL                   // abs (DBR=$F4): the cell's glyph in the low byte
+	and #$00ff
+	asl                                     // glyph N lives at tile 2N (as the flush does)
+	pha                                     // stash the tile index
+	lda @ovl_pal
+	cmp #$2000
+	bne osr_pal_grey
+	pla
+	ora #$2c00                              // FOCUSED -> palette 3 + priority, as hiprint builds it
+	bra osr_pal_done
+osr_pal_grey:
+	// The tab bar owns focus: the whole list is greyed (ovl_pal = $2400) and the bar greys with
+	// it -- it marks the ROWS' viewport, so it follows them rather than the chrome.
+	pla
+	ora @ovl_pal
+osr_pal_done:
+	pha                                     // stash the tilemap entry
+	lda @ovl_flush_dst
+	bne osr_buf
+	// VRAM: BG2 entry (OVL_LIST_ROW0 + row)*32 + 31 (logical col 62 is even -> BG2 entry 31)
+	tya
+	clc : adc #OVL_LIST_ROW0
+	asl : asl : asl : asl : asl             // row * 32 (tilemap entries per row)
+	clc : adc #(OVL_BG2_MAP+31)
+	sta @$002116
+	pla
+	sta @$002118
+	plp
+	rts
+osr_buf:
+	// OVL_TMBUF: BG2 region, list_row*64 + OVL_SB_COL (byte offset; one word per column)
+	tya
+	asl : asl : asl : asl : asl : asl       // list_row * 64
+	clc : adc #OVL_SB_COL
+	tay
+	pla
+	sta OVL_TMBUF, y                        // abs,Y (DBR=$F4)
+	plp
+	rts
+
 // ---- ovl_build_list_to_buf: build ALL visible rows' tilemap entries into OVL_TMBUF
 //      (via draw_full_row with ovl_flush_dst=1). Runs in active display (no vblank
 //      limit). Sets DBR=$F4. ----
@@ -466,7 +523,8 @@ ss_ovl_dfr_flush:
 	rep #$30 : .al : .xl
 	// scrollbar cell at OVL_SB_COL: glyph 17 (thumb) when pos <= row < end, else 16 (track).
 	// Raw glyph CODE into OVL_RB -- the flush turns it into (glyph<<1)|ovl_pal like any other
-	// column. ovl_sb_calc (run once per rebuild) already gated the whole bar off when the list
+	// column, and ovl_sb_recolor then rewrites that one cell in palette 3 (the frame colour).
+	// ovl_sb_calc (run once per rebuild) already gated the whole bar off when the list
 	// fits, in which case the space ovl_row_clear left stands.
 	lda @ovl_sb_on : and #$00ff
 	beq ss_ovl_dfr_nosb
@@ -496,6 +554,11 @@ ss_ovl_dfr_nosb:
 ss_ovl_dfr_vram:
 	jsr ovl_flush_abs                       // clobbers X/Y
 ss_ovl_dfr_fdone:
+	lda @ovl_sb_on : and #$00ff
+	beq ss_ovl_dfr_done                     // no bar -> the flushed blank cell stands
+	ply : phy                               // peek screen row (still saved)
+	jsr ovl_sb_recolor                      // the bar cell wears the frame palette, not ovl_pal
+ss_ovl_dfr_done:
 	ply                                     // restore screen row -> Y
 	plp
 	rts

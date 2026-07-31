@@ -207,6 +207,8 @@ menu_select:
   php
   sep #$20 : rep #$10 : .as : .xl
   stz listsel_sel
+  lda #$00                   ; fork: menu_select (init) is used by non-scrolling lists (patch) ->
+  sta menu_scroll_active     ; keep the original no-scroll behaviour (no viewport, no scrollbar)
   bra +
 menu_select_noinit:
   php
@@ -220,15 +222,7 @@ menu_select_noinit:
   sec
   sbc #$04
   sta bar_wl
-  lda listsel_sel
-  sta $211b
-  stz $211b
-  lda listsel_step
-  sta $211c
-  lda window_y
-  clc
-  adc $2134
-  sta bar_yl
+  jsr menu_select_barpos     ; fork: bar_yl = window_y + (listsel_sel - menu_top)*step (menu_top=0 when not scrolling)
 
 menu_select_loop1
   lda isr_done
@@ -272,6 +266,17 @@ menu_select_up
   beq menu_select_loop1
   jsr snd_fx_cursor          ; (A/X/Y preserved)
   dec listsel_sel
+  lda menu_scroll_active     ; fork: scrolling viewport?
+  beq msel_up_barmove        ; no -> plain bar move (original behaviour)
+  lda listsel_sel
+  cmp menu_top
+  bcs msel_up_barmove        ; selection still within the viewport -> just move the bar
+  dec menu_top               ; scrolled above the top row -> move the viewport up + repaint
+  jsr show_menu_scroll_repaint
+  jsr menu_select_barpos
+  jsr menu_desc_redraw
+  bra menu_select_loop1
+msel_up_barmove:
   lda bar_yl
   sec
   sbc listsel_step
@@ -285,6 +290,19 @@ menu_select_down
   beq menu_select_loop1
   jsr snd_fx_cursor          ; (A/X/Y preserved)
   inc listsel_sel
+  lda menu_scroll_active     ; fork: scrolling viewport?
+  beq msel_dn_barmove        ; no -> plain bar move (original behaviour)
+  lda listsel_sel
+  sec
+  sbc menu_top
+  cmp menu_vis
+  bcc msel_dn_barmove        ; selection still within the viewport -> just move the bar
+  inc menu_top               ; scrolled past the bottom row -> move the viewport down + repaint
+  jsr show_menu_scroll_repaint
+  jsr menu_select_barpos
+  jsr menu_desc_redraw
+  bra menu_select_loop1
+msel_dn_barmove:
   lda bar_yl
   clc
   adc listsel_step
@@ -311,6 +329,38 @@ menu_select_button_b ; cancel
   lda #$ff
   sta listsel_pickbutton
 menu_select_exit
+  plp
+  rts
+
+; ------------------------------------------------------------------
+; fork: menu_select_barpos -- bar_yl = window_y + (listsel_sel - top)*listsel_step,
+; where top = menu_top when the scrolling viewport is active (menu_scroll_active) and
+; 0 otherwise (making it byte-identical to the original bar_yl formula for the
+; non-scrolling lists: recents and the patch/preset selectors). Called at the start of
+; menu_select_noinit and after each viewport scroll. Uses the HW multiplier
+; ($211b/$2134), so DB must map $2000-$5FFF to registers -- already required by every
+; menu_select_noinit caller. Entry .as; preserves P; clobbers A (dead after).
+; ------------------------------------------------------------------
+menu_select_barpos:
+  php
+  sep #$20 : .as
+  lda menu_scroll_active
+  beq msbp_plain
+  lda listsel_sel            ; scrolling -> on-screen row = selection - viewport top
+  sec
+  sbc menu_top
+  bra msbp_mul
+msbp_plain:
+  lda listsel_sel            ; not scrolling -> selection maps straight to a row
+msbp_mul:
+  sta $211b
+  stz $211b
+  lda listsel_step
+  sta $211c
+  lda window_y
+  clc
+  adc $2134
+  sta bar_yl
   plp
   rts
 
@@ -848,6 +898,7 @@ show_menu:
 #define w_title_len     $06
 #define w_menu_addr     $08
 #define w_menu_bank     $0a
+#define w_menu_top_save $0b  ; fork: parent viewport (menu_top) saved across a submenu recurse
   AllocStack()
 ; backup params
   sep #$20 : .as
@@ -861,7 +912,10 @@ show_menu:
   phb
     pha
     plb
-    lda w_numentries
+    lda #$00                   ; fork: fresh menu -> viewport starts at the top
+    sta menu_top
+    jsr show_menu_scroll_calc  ; fork: menu_vis = min(numentries, MENU_VISMAX); set menu_scroll_active
+    lda menu_vis               ; window height is sized to the clamped visible count
     sta $211b
     stz $211b
     lda [w_menu_addr] ; listsel_step from menu structure
@@ -910,6 +964,7 @@ show_menu:
     sta menu_drawn_lang
     lda w_numentries
     sta listsel_max
+    jsr show_menu_scrollbar  ; fork: draw the scroll indicator (self-gates when the list fits)
     sep #$20 : rep #$10 : .as : .xl   ; draw the description for the initial selection
     ldx w_menu_addr
     lda w_menu_bank
@@ -957,7 +1012,10 @@ show_menu_cont:
     sta mainmenu_relang
     jmp show_menu_out
 show_menu_cont_reprint:
+    sep #$20 : .as
+    jsr show_menu_scroll_calc  ; fork: recompute menu_vis/scroll flag + reclamp menu_top (a submenu may have clobbered them)
     jsr show_menu_entries
+    jsr show_menu_scrollbar    ; fork: redraw/clear the scroll indicator for this level
     sep #$20 : rep #$10 : .as : .xl   ; re-arm + redraw the description for this level
     ldx w_menu_addr
     lda w_menu_bank
@@ -973,6 +1031,7 @@ show_menu_out:
 show_menu_entries:
   php
   sep #$20 : .as
+  rep #$10 : .xl
   phb
     lda w_menu_bank
     pha
@@ -981,7 +1040,21 @@ show_menu_entries:
     inx
     inx
     inx
-    inx
+    inx                        ; X = &entry[0]
+    lda @menu_top              ; fork: skip menu_top entries -> first visible row is entry[menu_top]
+    beq sme_noskip
+    rep #$20 : .al
+    and #$00ff                 ; A = menu_top (high byte of the 8-bit load is stale)
+    tay                        ; Y = number of entries to skip
+    txa                        ; A = &entry[0]
+sme_skip:
+    clc
+    adc #MENU_ENTRY_SIZE
+    dey
+    bne sme_skip
+    tax                        ; X = &entry[menu_top]
+    sep #$20 : .as
+sme_noskip:
     lda w_max_lbl_len
     pha
     lda w_max_opt_len
@@ -990,6 +1063,78 @@ show_menu_entries:
     pla
     pla
   plb
+  plp
+  rts
+
+; ------------------------------------------------------------------
+; fork: settings-menu (show_menu) scrolling viewport helpers.
+; A menu with more entries than fit on screen (menu_enttab_ingame/_browser have 13,
+; the deepest window opens at window_y=13) shows only MENU_VISMAX rows and scrolls the
+; viewport (menu_top) as the cursor moves, with a scrollbar. Menus that fit keep
+; menu_top=0 / menu_scroll_active=0 -> byte-identical to the pre-fork renderer, and the
+; scrollbar self-gates (nothing drawn).
+; ------------------------------------------------------------------
+; show_menu_scroll_calc: (re)compute the scroll geometry for the current level.
+;   menu_vis           = min(w_numentries, MENU_VISMAX)
+;   menu_scroll_active = 1 if w_numentries > MENU_VISMAX else 0
+;   menu_top           = clamp(menu_top, 0 .. listsel_max - menu_vis)
+; Entry .as; DP = show_menu frame (reads w_numentries); DB = low-RAM mirror. Preserves P.
+; At the initial call listsel_max is still stale, but menu_top is 0 there so the clamp is
+; a no-op (the maxtop-underflow branch guards it either way).
+show_menu_scroll_calc:
+  php
+  sep #$20 : .as
+  lda w_numentries
+  cmp #MENU_VISMAX+1
+  bcc smsc_fits
+  lda #MENU_VISMAX          ; overflow -> clamp visible rows, enable scrolling
+  sta menu_vis
+  lda #$01
+  sta menu_scroll_active
+  bra smsc_clamp
+smsc_fits:
+  sta menu_vis             ; A = w_numentries (fits) -> show them all, no scrolling
+  lda #$00
+  sta menu_scroll_active
+smsc_clamp:
+  lda listsel_max          ; maxtop = listsel_max - menu_vis
+  sec
+  sbc menu_vis
+  bcc smsc_done            ; listsel_max < menu_vis (initial call) -> leave menu_top
+  cmp menu_top             ; maxtop >= menu_top ?
+  bcs smsc_done
+  sta menu_top             ; clamp the viewport into range
+smsc_done:
+  plp
+  rts
+
+; show_menu_scrollbar: wire the shared list scrollbar to the menu window.
+; lsb_vis = menu_vis, lsb_top = menu_top, N = listsel_max. listsel_scrollbar self-gates
+; (menu_vis >= listsel_max -> nothing drawn), so a menu that fits shows no bar. Entry .as;
+; DB = low-RAM mirror ($80 in show_menu, so listsel_scrollbar's WRAM accesses resolve).
+; Preserves P.
+show_menu_scrollbar:
+  php
+  sep #$20 : .as
+  lda menu_vis
+  sta lsb_vis
+  lda menu_top
+  sta lsb_top
+  jsr listsel_scrollbar
+  plp
+  rts
+
+; show_menu_scroll_repaint: repaint the visible rows + scrollbar after menu_top moved.
+; Only ever reached with menu_scroll_active=1, i.e. from within show_menu's frame
+; (DP = show_menu locals, DB = $80). Mirrors favsel_scroll_redraw.
+show_menu_scroll_repaint:
+  php
+  sep #$20 : rep #$10 : .as : .xl
+  jsr disable_screen_update
+  jsr draw_window            ; blank the menu window interior (window_* = menu window)
+  jsr show_menu_entries      ; repaint menu_vis rows starting at menu_top
+  jsr show_menu_scrollbar
+  jsr enable_screen_update
   plp
   rts
 
@@ -1011,12 +1156,16 @@ show_menu_submenu:
     sta @window_y
     iny
     iny
+    lda menu_top               ; fork: preserve the parent's viewport across the child menu
+    sta w_menu_top_save
     lda [w_menu_addr], y
     phb
       pha
       plb
       jsr show_menu
     plb
+    lda w_menu_top_save        ; fork: restore the parent's viewport (the child clobbered menu_top)
+    sta menu_top
     phy
     jsr pop_window
     ply
@@ -1301,19 +1450,25 @@ menu_kv_value_len:
 
 .byt "MENU_PRINT_ENTRIES"
 menu_print_entries:
-#define _locals         $00
+#define _locals         $01
 ; params
 ; x: address of menu entry structure
 ; db: bank of menu entry structure
 #define p_max_lbl_len   $01
 #define p_max_opt_len   $00
+#define w_rows_left     $00  ; fork: remaining visible rows to paint (scrolling clip)
   AllocStack()
   sep #$20 : .as
+  lda @menu_vis            ; fork: cap painting to the visible window (menu_vis rows)
+  sta w_rows_left
   lda @window_y
   inc
   sta @print_y
 menu_print_ent_loop:
-  lda @window_w
+  lda w_rows_left          ; fork: stop after menu_vis visible rows
+  bne +
+  jmp menu_print_ent_out
++ lda @window_w
   sta @print_count
   lda @window_x
   inc
@@ -1377,11 +1532,13 @@ menu_print_ent_loop:
   clc
   adc @listsel_step
   sta @print_y
+  dec w_rows_left          ; fork: one visible row consumed
   jmp menu_print_ent_loop
 menu_print_ent_out:
   FreeStack()
   rts
 #undef _locals
+#undef w_rows_left
 
 .byt "MENU_PRINT_OPT_STRING"
 menu_print_opt_string_none:

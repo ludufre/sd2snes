@@ -158,4 +158,4 @@ snes/const_lang_str.a65
 # generated in-game HELP tab i18n tables (snes/utils/gen_igmenu_lang.py)
 snes/igmenu_lang.i65
 
-/snes/utils/__pycache__
+__pycache__

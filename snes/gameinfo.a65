@@ -149,12 +149,24 @@ gms_common:
   bne gms_noinfo
   jsr gi_dc_show
   jsr gi_input
-  jsr gi_dc_restore
   lda gi_result
-  bne gms_cancel
+  bne gms_cancel            ; gi_result != 0 -> BACK: tear the ficha down, return to browser/list
+  ; PLAY (gi_result == 0): DO NOT call gi_dc_restore. Leave the game-info screen LIVE on the
+  ; PPU (screen_dma_disable stays 1) so the caller's game_handshake -> iris_out closes the
+  ; black circle over the FICHA itself (iris set $48), not over a torn-down/blank menu -- this
+  ; is the fix for the "empty screen" flash on boot. gi_dc_show left the WRAM routines intact
+  ; (only setup_gfx, inside gi_dc_restore, destroys them), so the follow-on IPS query /
+  ; game_handshake WRAM trampolines still work.
   clc
   rts
 gms_cancel:
+  jsr gi_dc_restore         ; BACK only: rebuild the menu graphics, reinstall the WRAM routines,
+                            ; clear screen_dma_disable. Moved here from the shared path so PLAY
+                            ; can keep the ficha; this restore was what erased the list pre-iris.
+  jsr snd_fx_back            ; fire the back blip HERE -- after gi_dc_restore's cover reload
+                            ; has finished -- so the fetcher is not starved and it plays clean.
+                            ; snd_fx_back is self-contained (php/plp, saves A) -> carry is set
+                            ; by the sec below regardless.
   sec
   rts
 gms_noinfo:
@@ -256,7 +268,9 @@ gin_play:
   plp
   rts
 gin_back:
-  jsr snd_fx_back
+  ; NB: the back blip is fired by gms_cancel AFTER gi_dc_restore, not here -- firing it
+  ; now makes it play THROUGH gi_dc_restore's browser cover reload (an sram_writeblock/
+  ; MCU_WR burst), which starves the FPGA SFX fetcher mid-blip -> a click/crackle on exit.
   lda #$01
   sta gi_result
   plp
@@ -1603,7 +1617,8 @@ gi_desc_full_redraw:
 
 ; -- gi_desc_scrollbar: draw an 8-cell scroll indicator in the last usable half-column
 ;    (GIB_SB_X), rows GIB_FULL_R0..GIB_FULL_R0+GIB_FULL_ROWS-1, reflecting gi_desc_scroll
-;    within gi_desc_lines. Glyph 16 = track, glyph 17 = thumb. Nothing is drawn when the
+;    within gi_desc_lines. Glyph 16 = track, glyph 17 = thumb, both in palette 3 -- the
+;    same colour draw_window paints its borders with, so the bar reads as chrome. Nothing is drawn when the
 ;    whole description fits (gi_desc_lines <= GIB_FULL_ROWS). No HW divide: the two integer
 ;    divides use bounded subtraction loops (gi_desc_lines is a handful of wrapped lines).
 ;    Called from gi_desc_full_redraw between gi_draw_desc and the footer so it rides the
@@ -1704,7 +1719,7 @@ gsb_glyph:
   clc
   adc #GIB_FULL_R0
   sta print_y
-  stz print_pal
+  lda #$03 : sta print_pal       ; palette 3 = the window-border colour (draw_window's)
   lda #$02 : sta print_count
   rep #$20 : .al
   lda #!stringbuf : sta print_src

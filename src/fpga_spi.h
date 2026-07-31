@@ -45,7 +45,8 @@
 
 #define FEAT_BSLOROM       (1 << 15)
 #define FEAT_BSSLOT        (1 << 14)
-#define FEAT_COMBO         (1 << 13)
+#define FEAT_COMBO         (1 << 13)  /* dead: set by smc.c, never read by any FPGA core */
+#define FEAT_BUSCOMPAT     (1 << 13)  /* reuses the dead COMBO bit; forced from CFG.bus_compat in fpga_set_features (global bus-timing compat, not per-ROM). main.v muxes SNES_PULSE_end/READ_narrow on it */
 #define FEAT_SATELLABASE   (1 << 12)
 #define FEAT_DMA1          (1 << 11)
 #define FEAT_2100_LIMIT(x) ((x & 15) << 7)
@@ -118,7 +119,12 @@
 #define FPGA_CMD_MSUGETVOLUME    (0xf4)
 #define FPGA_CMD_MSUREAD         (0xf5)
 #define FPGA_CMD_MSUGETSCADDR    (0xf6)
-#define FPGA_CMD_DSPSSHALT       (0xfb) /* DSP1-4 savestate halt (MCU debug; 0xf7/0xf8 are reserved by the BS-X download path) */
+#define FPGA_CMD_SFX_STATUS      (0xf7) /* read: bit1 = fetcher active, bit0 = done (sfxdma.v) */
+#define FPGA_CMD_SFX_PLAY        (0xfb) /* 6 param bytes base[23:0]+len[23:0]; last byte kicks playback (base core, menu) */
+#define FPGA_CMD_SFX_DISABLE     (0xfc) /* abort the SFX fetcher + release the DAC port (game load) */
+/* 0xfb is a PER-CORE opcode: the base core decodes it as SFX_PLAY (menu only); the DSP and
+   SA-1 cores decode it as the savestate halt below (in-game only). The contexts never overlap. */
+#define FPGA_CMD_DSPSSHALT       (0xfb) /* DSP1-4 / SA-1 savestate halt (in-game; shares 0xfb with SFX_PLAY -- different cores) */
 #define FPGA_CMD_CONFIG_READ     (0xf9)
 #define FPGA_CMD_CONFIG_WRITE    (0xfa)
 #define FPGA_CMD_GETSYSCLK       (0xfe)
@@ -134,6 +140,8 @@ void set_dac_addr(uint16_t);
 void dac_play(void);
 void dac_pause(void);
 void dac_reset(uint16_t);
+void fpga_sfx_play(uint32_t base, uint32_t len); /* arm + start the FPGA SFX fetcher (sfxdma.v) */
+void fpga_sfx_disable(void);                     /* abort it + release the DAC write port */
 void msu_reset(uint16_t);
 void set_msu_addr(uint16_t);
 void set_msu_status(uint16_t status);

@@ -119,6 +119,19 @@ set_clock_uncertainty -fall_from [get_clocks {CLKIN}] -fall_to [get_clocks {CLKI
 # Set False Path
 #**************************************************************
 
+# RTC clock-domain crossing (the "fix de principio" the .qsf comment flagged as a
+# follow-up).  rtc:snes_rtc runs on CLKIN (8 MHz); its data register rtc_data_r is
+# loaded across the domain boundary from the PLL clk[0] domain (96 MHz) by the
+# SNES-facing RTC write path (srtc / mcu_cmd).  That transfer is quasi-static (the
+# clock value only changes when the user sets the time), so the PLL->CLKIN hold
+# "violation" the fitter reports on it is not physically meaningful -- it is a real
+# CDC.  Before this, SEED 2 was hand-picked to place the crossing so it happened to
+# meet hold; any logic change (e.g. the sfxdma engine) reshuffled placement and
+# reopened it (hold TNS -3.5).  Cutting the crossing here closes it robustly,
+# independent of seed/placement, without masking any genuine synchronous path
+# (intra-CLKIN paths into rtc_data_r stay constrained).
+set_false_path -from [get_clocks {snes_pll|altpll_component|auto_generated|pll1|clk[0]}] -to [get_registers {rtc:snes_rtc|rtc_data_r[*]}]
+
 
 
 #**************************************************************

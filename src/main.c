@@ -196,6 +196,43 @@ static void listed_game_cheats(const uint8_t *listfile, const char *what,
   else     cheat_yaml_load((uint8_t*)src);
 }
 
+/* Stage where the browser should reopen after a menu reload, and arm the one-shot
+   ST_RESTORE_BROWSER flag the SNES reads on the next boot.
+
+   Every theme/BGM action cold-boots the menu (menu_reload -> the outer loop reloads
+   m3nu.bin and resets the SNES), and clear_wram fills $7E/$7F with $55, so the menu's
+   own dirlog/filesel_sel cannot survive -- only strings in BSRAM do. filesel_nav_restore
+   re-navigates the path component by component from these, the same way
+   filesel_nav_last does for reset-to-menu.
+
+   `path` = full SD path of the item that was acted on (browser selections), or NULL when
+   the action came from the config menu, in which case we reopen the folder the browser is
+   sitting in (FILESEL_CWD, which the menu keeps at SRAM_MENU_FILEPATH_ADDR) with no item
+   pre-selected. Never reuse SRAM_LASTGAME_DIR/FILE for this: those are rewritten on every
+   menu boot by cfg_dump_listed_games_for_snes. */
+static void browser_pos_save(const char *path) {
+  char dir[256];
+  const char *slash = path ? strrchr(path, '/') : NULL;
+  if(slash) {
+    size_t dir_len = slash - path;
+    if(dir_len == 0 || dir_len >= sizeof(dir)) {
+      strcpy(dir, "/");
+    } else {
+      memcpy(dir, path, dir_len);
+      dir[dir_len] = 0;
+    }
+    sram_writestrn((uint8_t*)dir, SRAM_BROWSER_DIR_ADDR, sizeof(dir));
+    sram_writestrn((uint8_t*)(slash + 1), SRAM_BROWSER_FILE_ADDR, 256);
+  } else {
+    /* no path: reopen the browser's current folder, cursor left at the top */
+    sram_readstrn(dir, SRAM_MENU_FILEPATH_ADDR, sizeof(dir));
+    if(dir[0] != '/') strcpy(dir, "/");
+    sram_writestrn((uint8_t*)dir, SRAM_BROWSER_DIR_ADDR, sizeof(dir));
+    sram_writestrn((uint8_t*)"", SRAM_BROWSER_FILE_ADDR, 1);
+  }
+  STM.restore_browser = 1;
+}
+
 void menu_cmd_readdir(void) {
   uint8_t path[256];
   SNES_FTYPE filetypes[16];
@@ -425,6 +462,7 @@ int main(void) {
     STM.autoboot_enabled = cfg_is_autoboot_enabled();
     status_load_to_menu();
     STM.reset_to_menu_active = 0;  /* SRAM now holds the flag for the SNES; zero in RAM so later status_load_to_menu() calls don't re-broadcast it */
+    STM.restore_browser = 0;       /* same one-shot contract: this boot consumes it (see browser_pos_save) */
 
     uint8_t cmd = 0;
     uint8_t menu_reload = 0;
@@ -807,12 +845,33 @@ int main(void) {
              patches the gfxptr regions of the fresh menu image. */
           get_selected_name(file_lfn);
           theme_select((char*)file_lfn);
+          browser_pos_save((char*)file_lfn); /* come back to this .thm, not to the root */
           menu_reload = 1; /* leave loop -> outer loop reloads + themes the menu */
           break;
         case SNES_CMD_CLR_THEME:
           /* revert to the baked-in default look */
           theme_select(NULL);
+          browser_pos_save(NULL);
           menu_reload = 1;
+          break;
+        case SNES_CMD_RESTORE_CLASSIC:
+          /* "Restore classic theme": apply the pre-2.16 look, which now ships as a
+             regular theme file instead of being the baked default.
+             f_stat first: the common update path is "copy firmware + m3nu.bin" without
+             refreshing /sd2snes, and writing a skin_name that points at a missing file
+             would persist in config.yml while the menu reloaded to no visible effect.
+             On miss: leave CFG.skin_name alone, NACK, and stay in the menu loop so the
+             SNES pops an error instead of reloading. */
+          if(f_stat((const TCHAR*)THEME_CLASSIC, NULL) == FR_OK) {
+            theme_select(THEME_CLASSIC);
+            browser_pos_save(NULL);
+            menu_reload = 1;
+          } else {
+            printf("theme: %s not found on card\n", THEME_CLASSIC);
+            snes_menu_errmsg(MENU_ERR_SUPPLFILE, THEME_CLASSIC);
+            snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+            cmd = 0;
+          }
           break;
         case SNES_CMD_SET_MENU_SPC:
           /* a .spc was picked in the browser (any visible folder) to become the menu
@@ -827,6 +886,7 @@ int main(void) {
           CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
           CFG.enable_menu_music = 1;
           cfg_save();
+          browser_pos_save((char*)file_lfn); /* come back to this .spc */
           menu_reload = 1; /* leave loop -> outer loop reloads, boots into the new BGM */
           break;
         case SNES_CMD_CLR_MENU_SPC:
@@ -834,6 +894,7 @@ int main(void) {
              /sd2snes/menu.spc, then reload the menu (like CLR_THEME). */
           CFG.bgm_name[0] = 0;
           cfg_save();
+          browser_pos_save(NULL);
           menu_reload = 1;
           break;
         case SNES_CMD_LOAD_CHT:

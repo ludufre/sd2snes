@@ -94,6 +94,13 @@ coldboot:       ; Regular, cold-start init
   ; like the description-box gates. Both are .byt; A is still #$00 in .as.
   sta @mainmenu_active
   sta @egg_shown
+  ; fork: settings-menu scrolling viewport gates. menu_scroll_active is read by
+  ; menu_select_noinit; left at $55 (clear_wram fills the $7E data segment with $55,
+  ; not 0) a Recents/Favorites list opened before any show_menu would take the
+  ; scrolling path with a garbage menu_top. Zero them like the description-box gates.
+  sta @menu_scroll_active
+  sta @menu_top
+  sta @menu_vis
   jsr waitblank
   jsr snes_init
   jsr setup_gfx
@@ -136,9 +143,20 @@ coldboot_autoboot_out:
   lda #$00              ; unknown -> English
 + sta @cur_lang
   jsr filesel_init
+  ; If this menu boot follows a theme/BGM change (the MCU staged the browser
+  ; position in BROWSER_DIR/BROWSER_FILE), reopen that folder and put the cursor
+  ; back on the item that was acted on -- otherwise trying themes one after another
+  ; means re-navigating from the root every time. Checked FIRST and ungated by
+  ; CFG_ENABLE_RST_TO_MENU: it is mutually exclusive with the reset-to-menu path
+  ; below (that one comes from leaving a game, this one from a menu action).
+  sep #$20 : .as
+  lda @ST_RESTORE_BROWSER
+  beq +
+  jsr filesel_nav_restore
+  bra ++
   ; If reset_to_menu >= 2 (Folder/Rom) AND this was a reset-to-menu (not cold power-on):
   ; navigate to last game's directory and optionally pre-select the ROM.
-  sep #$20 : .as
++ sep #$20 : .as
   lda @CFG_ENABLE_RST_TO_MENU
   cmp #$02
   bcc +                          ; < 2 → Off or On, skip nav
@@ -146,6 +164,7 @@ coldboot_autoboot_out:
   beq +                          ; not a reset-to-menu boot → skip nav
   jsr filesel_nav_last
 +
+++
   sep #$20 : .as
   lda @ST_RTC_VALID
   beq +
@@ -755,6 +774,17 @@ game_handshake:
   php
   sep #$20 : .as
   pha
+; fork: freeze the browser list tile DMA for the WHOLE load (BEFORE draw_loading_window) so
+; the NMI's per-frame BG1/BG2 DMA can't race push/pop_window and glitch a frame -- the
+; 1-frame black flash on GI-off loads (content gone, backdrop gradient intact). reset.a65's
+; NMI skips that DMA when screen_dma_disable=1, which is exactly why GI-on (ficha up, =1)
+; never flashed. Restored at gh_iris_set (the iris $59/$48 pick reads the original) and in
+; game_handshake_error (so the NACK popup can repaint). A is clobbered but reloaded (the
+; command) from the stack below. Matches GI-on: the browser holds still, then the iris.
+  lda @screen_dma_disable
+  sta @GH_SDD_SAVE
+  lda #$01
+  sta @screen_dma_disable
   jsr cover_sync_before_cmd ; idle the MCU channel: drain any in-flight cover
                             ; request so its $55 can't be read as this cmd's ACK
   jsr hide_cursor
@@ -772,8 +802,30 @@ game_handshake:
   cmp #$aa
   beq game_handshake_error
   bra -
-+ stz $4200
++ lda @GH_SDD_SAVE          ; unfreeze: restore original screen_dma_disable (the iris set below reads it)
+  sta @screen_dma_disable
+  stz $4200
   sei
+; fork: pick the iris $420c HDMA-enable set for this launch. screen_dma_disable == 1 means
+; the game-info FICHA is still on the PPU (browser/recents/favorites PLAY with Game Info on:
+; gms_common deliberately left it up), so keep its ch3 mode3->mode5 split -> $48 and the iris
+; closes over the ficha. Otherwise the menu/browser is displayed -> the menu set $59. A is
+; 8-bit here (.as); the byte is written before jsl iris_out reads it.
+  lda @screen_dma_disable
+  bne gh_iris_ficha
+  lda #$5f                    ; menu set: keep ch0/ch1/ch2/ch3/ch4 + ch6, drop only ch5. ch1/ch2
+                              ;   (CGADD+CGDATA) KEEP the gradient backdrop alive so it shows
+                              ;   INSIDE the closing circle; the iris blacks only OUTSIDE via the
+                              ;   colour window instead of blacking CGRAM 0.
+  bra gh_iris_set
+gh_iris_ficha:
+  lda #$4e                    ; ficha set: keep ch1/ch2 (gradient) + ch3 (mode split) + ch6, drop
+                              ;   ch0/ch4 scroll + ch5
+gh_iris_set:
+  sta IRIS_HDMA_EN            ; long store to $7E8408 (DB-independent)
+  jsl iris_out  ; fork: iris-out (closing black circle) over the still-displayed menu
+                ; before the boot reset zeroes the PPU. NMI/IRQ are off; the MCU is
+                ; spinning on the boot it already ACKed, so the ~0.6 s is safe.
 ; fork: zero VRAM/CGRAM/OAM so a romhack that skips PPU init boots clean (no leftover
 ; VRAM garbage; the reset preserves it).  The firmware armed PPU_CLEAR_GATE=1 in load_rom
 ; iff the "Clear PPU on Boot" option is ON *and* an IPS/BPS patch was applied this load
@@ -795,8 +847,20 @@ game_handshake_error:
 ; never booted -> the menu is still live. Close the loading window, show the error
 ; (names the missing file/chip via @MCU_ERR_CODE/@MCU_ERR_MSG), return to the
 ; browser. No reset.
+  lda @GH_SDD_SAVE          ; unfreeze: restore screen_dma_disable so the browser NMI repaints the popup
+  sta @screen_dma_disable
   jsr pop_window
-  jsr show_error_msg
+; fork: screen_dma_disable == 1 here means the game-info FICHA is still LIVE on the PPU --
+; PLAY from the ficha deliberately skips gi_dc_restore so the iris can close over it (see
+; gms_common). The popup below draws into the MENU's tilemap, which is NOT what the PPU is
+; showing in that state (mode3 + ch3 split), so it would render as garbage over the ficha.
+; Tear the ficha down first (gi_dc_restore rebuilds setup_gfx/video_init/setup_hdma, re-installs
+; the WRAM routines, clears screen_dma_disable and sets filesel_dirty so the browser repaints on
+; return). Read GH_SDD_SAVE BEFORE the call: setup_gfx zeroes $7E8000-$7EFFFF, which includes it.
+  lda @GH_SDD_SAVE
+  beq +
+  jsr gi_dc_restore
++ jsr show_error_msg
   plp
   rts
 

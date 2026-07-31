@@ -101,14 +101,14 @@ SAVES_LABEL_MAX = {
     "text_igm_sv_slot": 8,   # slot word drawn at col 24 with the digit at ~col 31 (like STATES)
 }
 
-# The tab-bar labels, IN TAB ORDER (0=Cheats..4=Manual). Lockstep with the tab dispatch
+# The tab-bar labels, IN TAB ORDER (0=Cheats..4=Help). Lockstep with the tab dispatch
 # order in snes/igmenu.a65 and with the EN base labels in const.a65.
 TAB_LABELS = [
     "text_igm_tab_cheats",   # 0 CHEATS
-    "text_igm_tab_states",   # 1 STATES
+    "text_igm_tab_states",   # 1 SAVESTATES
     "text_igm_tab_saves",    # 2 SAVES
-    "text_igm_tab_help",     # 3 HELP
-    "text_igm_tab_manual",   # 4 MANUAL
+    "text_igm_tab_manual",   # 3 GUIDES
+    "text_igm_tab_help",     # 4 HELP
 ]
 
 # The MANUAL tab (Phase 5) strings, IN INDEX ORDER. Lockstep with the IGM_MN_* indices in
@@ -133,9 +133,9 @@ MANUAL_LABELS = [
     "text_igm_mn_slug_other",   # 13 slug 5 -> Other
 ]
 
-# The tab bar centers each label in an 8-column field (IGM_TAB_FIELD in igmenu.a65), so
-# every translated tab label must stay <= 8 encoded columns; guard it here.
-TAB_LABEL_MAX = 8
+# The tab bar centers each label in a 10-column field (IGM_TAB_FIELD in igmenu.a65), so
+# every translated tab label must stay <= 10 encoded columns; guard it here.
+TAB_LABEL_MAX = 10
 
 
 def cap_for(label):

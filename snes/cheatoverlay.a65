@@ -363,6 +363,15 @@ ss_ovl_init_drawn:
 	lda #$ef : sta @$002122 : lda #$3d : sta @$002122   ; CGRAM 17 = grey
 	lda #$c6 : sta @$002122 : lda #$18 : sta @$002122   ; CGRAM 18 = dark grey
 	lda #$4a : sta @$002122 : lda #$29 : sta @$002122   ; CGRAM 19 = dim grey
+	; palette 3 = the WINDOW-FRAME colour the scrollbar cell wears (ovl_sb_recolor stamps that
+	; one cell as $2C00 so it matches the menu's own scrollbars, which hiprint in palette 3).
+	; The $C2 shell themes this slot (igt_pal_apply); this fail-safe path hardcodes it like the
+	; two palettes above, with the menu's baked pal3 bevel. BG2 2bpp pal3 = CGRAM 12-15, and the
+	; bar sits on an EVEN column (BG2 only), so entry 12 (colour 0) stays transparent = backdrop.
+	lda #$0d : sta @$002121                              ; CGADD = 13 (BG2 palette 3, colour 1)
+	lda #$b1 : sta @$002122 : lda #$7f : sta @$002122   ; CGRAM 13 = light cyan (track glyph)
+	lda #$a1 : sta @$002122 : lda #$24 : sta @$002122   ; CGRAM 14 = dark blue (edge/outline)
+	lda #$ec : sta @$002122 : lda #$62 : sta @$002122   ; CGRAM 15 = teal (thumb glyph)
 
 	; --- BG setup: MODE 5 hi-res. BG1 tilemap $5800 + BG2 tilemap $5000 (32x64),
 	;     char base BG1=$0000 / BG2=$4000, BG1 H-scrolled $00fc against BG2=0 to
@@ -656,7 +665,44 @@ ss_ovl_do_exit:
 	lda #CMD_CHEAT_REPROGRAM
 	sta @MCU_CMD
 ss_ovl_exit_noapply:
+	jsr ss_ovl_pad_drain                   ; don't hand the closing press to the game
 	jmp ss_overlay_restore
+
+; ---- ss_ovl_pad_drain: hold the close until every button is released.  The shell reads the
+;      SAME $4218 the game does, and the game is live again ~1.5 frames from here, so a B or
+;      START still held at close reaches it as a FRESH press -- a pause menu popping open, a
+;      line of dialogue advancing, a jump.  Draining the pad is also the only fix that covers
+;      games polling $4016 by hand instead of the auto-joypad: it removes the PRESS, not one
+;      way of reading it.
+;      WHERE this sits is load-bearing: auto-joypad is OURS here ($4200 = $01 since the open),
+;      while the GAME's $4200 -- which may have auto-joypad DISABLED -- only goes back at the
+;      tail of ss_overlay_restore, so $4218 is guaranteed live BEFORE the restore and not
+;      after.  It also leaves the restore's closing vblank sync (the fix for the off-vblank
+;      CGRAM corruption) immediately adjacent to the resume, with no frames wedged in between.
+;      Bounded at 180 frames (~3 s): a physically stuck button must never strand the game --
+;      hitting the ceiling just degrades to the old leak.  Reads with the same START-then-DONE
+;      idiom as the input loop; a stale $4218 could read idle with a button still down.
+;      Entry .as, X width not assumed.  Restores P. ----
+ss_ovl_pad_drain:
+	php
+	rep #$30 : .al : .xl
+	ldx #$00b4                             ; 180-frame ceiling (~3 s)
+ss_ovl_pd_frame:
+	sep #$20 : .as
+	- lda @$004212 : bpl -                 ; wait for the vblank rising edge
+	- lda @$004212 : and #$01 : beq -      ; auto-joypad read STARTED (bit0 set)
+	- lda @$004212 : and #$01 : bne -      ; ...and FINISHED -> $4218 is fresh
+	rep #$20 : .al
+	lda @$004218
+	beq ss_ovl_pd_done                     ; pad idle -> nothing left to leak
+	sep #$20 : .as
+	- lda @$004212 : bmi -                 ; wait out of vblank: one sample per frame
+	rep #$30 : .al : .xl
+	dex
+	bne ss_ovl_pd_frame
+ss_ovl_pd_done:
+	plp
+	rts
 
 ; ---- ovl_stage_theme: publish the ACTIVE menu theme into the PSRAM $F4 hand-off
 ;      block (IGM_THM_*) the $C2 shell reads. igmenu.bin is a separate link and
@@ -671,6 +717,9 @@ ss_ovl_exit_noapply:
 ;      LAST, so a shell reached after an aborted copy sees an invalid block
 ;      instead of half a theme. ----
 ovl_stage_theme:
+	.as : .xl                              ; declared, not inherited: ss_ovl_pad_drain above
+	                                       ;   leaves the ASSEMBLER in .al, which would size
+	                                       ;   every `lda #imm` here 16-bit against 8-bit A
 	lda #$00 : sta @IGM_THM_MAGIC          ; invalidate while we fill (no long stz)
 	; --- backdrop gradient blob: hdma_pal_src -> IGM_THM_GRAD (55 B) ---
 	ldx #$0000

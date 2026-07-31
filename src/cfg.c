@@ -88,7 +88,7 @@ cfg_t CFG_DEFAULT = {
   .clear_ppu_on_boot = 0,
   .bus_compat = 0,
   .enable_game_manual = 1,
-  .enable_sram_slots = 0
+  .enable_sram_slots = 1
 };
 
 cfg_t CFG;
@@ -213,8 +213,6 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_BUS_COMPAT, CFG.bus_compat ? "true" : "false");
   f_printf(&file_handle, "#  %s: show the in-game MANUAL tab (pages a <rom>.man from /sd2snes/info)\n", CFG_ENABLE_GAME_MANUAL);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_GAME_MANUAL, CFG.enable_game_manual ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Multi-slot battery SRAM (in-game SAVES tab selects the active slot; applies on next game load). Default off = single <rom>.srm.\n", CFG_ENABLE_SRAM_SLOTS);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_SRAM_SLOTS, CFG.enable_sram_slots ? "true" : "false");
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
@@ -400,9 +398,6 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_ENABLE_GAME_MANUAL, &tok)) {
       CFG.enable_game_manual = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_SRAM_SLOTS, &tok)) {
-      CFG.enable_sram_slots = tok.boolvalue ? 1 : 0;
     }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);
