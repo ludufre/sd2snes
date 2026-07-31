@@ -50,6 +50,7 @@ memory.c: RAM operations
 #include "rtc.h"
 #include "savestate.h"
 #include "sgb.h"
+#include "sms.h"
 #include "patch.h"
 #include "patch_copier.h"
 
@@ -354,8 +355,30 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of(SGBSR));
   }
 
+  /* SMS (experimental): a .sms boots the SNES-side player; the .sms ROM is staged
+     separately into PSRAM (sms_load_rom below). Mirrors the SGB file swap. */
+  sms_id(filename);
+  if (!sms_update_file(&filename)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of((const char*)SMS_PLAYER_FILE));
+  }
+  /* the swap changed the open file (player); refresh smc_id's view of it */
+  if (sms_active) {
+    file_close();
+    file_open(filename, FA_READ);
+    if (file_res) {
+      return load_abort_missing(flags, MENU_ERR_FS, basename_of((const char*)SMS_PLAYER_FILE));
+    }
+    file_offset = 0;
+  }
+
   filesize = file_handle.fsize;
   smc_id(&romprops, file_offset);
+  /* the player is a plain LoROM; force the SMS core + drop any chip the header faked */
+  if (sms_active) {
+    romprops.fpga_conf = FPGA_SMS;
+    romprops.has_dspx = 0; romprops.has_gsu = 0; romprops.has_sa1 = 0;
+    romprops.error = MENU_ERR_OK;
+  }
   /* On a recore reload, the file still holds the UNPATCHED header, so smc_id()
      picked the old core again.  Force the cartridge type detected from the
      patched image (ips_recore_props), but keep the file's own copier offset /
@@ -632,6 +655,9 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
 
   /* SGB setup romprops and load SRAM */
   sgb_load_sram(sgb_filename);
+
+  /* SMS: stage the .sms ROM into PSRAM (FPGA Z80 fetches it) before the SNES boots */
+  sms_load_rom();
 
   /* SGB update local file properties */
   if (sgb_romprops.has_sgb) {

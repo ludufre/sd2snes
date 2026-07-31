@@ -166,6 +166,7 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
      ||(!strcasecmp(ext+1, "GB"))
      ||(!strcasecmp(ext+1, "GBC"))
      ||(!strcasecmp(ext+1, "SGB"))
+     ||(!strcasecmp(ext+1, "SMS"))   /* Sega Master System (experimental SMS core) */
     ) {
     return TYPE_ROM;
   }
