@@ -440,4 +440,17 @@ patchsel_save_wh .word 0   ; patch selector: window_w/window_h saved across the 
 ; reached from the plain reset-to-menu path, which never writes it, and clear_wram
 ; fills this segment with $55 (not 0), so a first-boot read would force the select.
 fnl_force_rom   .byt 0     ; 1 = pre-select the staged file regardless of CFG_ENABLE_RST_TO_MENU
+
+;----------game info from the browser context menu (ShowGameInfo == 2) ----------
+; Raised by gi_ctx_request (snes/contextdata.a65) while the context menu is still open;
+; read and consumed by filesel_key_y once show_menu has closed, and by gms_noinfo to tell
+; a context request apart from the normal pre-boot auto-show. Appended at the END of the
+; segment on purpose: vars here are laid out in sequence, so inserting one mid-file shifts
+; every address after it -- harmless for the relocatable ones, but gh_cmd_bak/mcuparam_bak
+; above are documented as having to stay inside the backup_wram window ($7E:0000-$1FFF).
+; Re-armed to 0 at the top of filesel_key_y on EVERY Y press rather than once in coldboot:
+; clear_wram fills this segment with $55 (not 0), so a gate read before its first write
+; would fire spuriously, and re-arming per press also keeps a stale raise from leaking
+; into the next context menu.
+gi_ctx_pending  .byt 0     ; 1 = the context menu asked for this ROM's info screen
 _END            .byt 0

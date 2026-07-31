@@ -7,9 +7,8 @@
  * a per-guide table in AHB, and publishes:
  *   - MANUAL_GUIDES ($FF9000, 260B): the compacted guide list the GUIDES tab reads.
  *   - MANUAL_META   ($FF0760, 16B) : present bit + guide-0 npages + meta_abi sanity byte.
- * The in-game GUIDES tab then requests one block at a time via SNES_CMD_MANUAL_BLOCK ($43), whose
- * MCU_PARAM carries [0..1]=block index, [2]=compacted guide (0..7), [3]=mode (vestigial).
- * manual_stage_block() streams 57856B into PSRAM at SRAM_MANUAL_BLOCK_ADDR ($C30000).
+ * The in-game GUIDES tab then requests ONE WHOLE page at a time: SNES_CMD_MANUAL_S1PAGE ($46)
+ * stages a scale-1 page (4bpp, 256px wide) via manual_stage_s1page().
  *
  * The 2x zoom is a SEPARATE path: SNES_CMD_MANUAL_ZPAGE ($45) stages ONE WHOLE scrollable 2x page
  * (4bpp, per-tile palette, <=119KB) into $C5/$C6 via manual_stage_zpage(), after which the viewer
@@ -105,10 +104,6 @@ extern cfg_t CFG;
 #define MAN_INDEX_ENTRY   (8)
 #define MAN_INDEX_OFS     (MAN_HEADER_SIZE)
 
-/* fixed 1x block: 512B palette (256x BGR555) + 896*64B 8bpp tile-order tiles = 57856B. 57856/512
- * = 113 sectors exactly (sector-aligned). Matches SRAM_MANUAL_BLOCK_ADDR in memory.h. */
-#define MAN_BLOCK_BYTES   (57856u)
-
 /* navigable-block cap (u16 sanity bound; no per-block state, so this is generous). */
 #define MAN_MAX_BLOCKS    (4096)
 
@@ -159,13 +154,13 @@ extern cfg_t CFG;
  * so NO persistent path buffer: the full guide path is built transiently in man_buf, and the
  * "/sd2snes/info/<C>/<stem>" base is re-derived on demand from the game path each time, never
  * retained; and NO per-guide title in RAM: titles are written straight through to the BSRAM guide
- * records during the probe). man_guides holds only the few fields the block streamer/HUD need
+ * records during the probe). man_guides holds only the few fields the page stagers/HUD need
  * (nn/npages/nblocks/zoom) -- 8 * 5B. .ahbram is NOLOAD (not zeroed at boot), which is
  * fine: man_guide_count gates every reader and is reset by manual_stage_meta before anything else
  * runs. Touched only from the menu/in-game loop, not an IRQ.
  *
  * Path source: the probe re-derives from `rom_path` (manual_stage_meta's arg = the game being
- * loaded); manual_stage_block re-derives from the global `file_lfn`, which is the current game's
+ * loaded); the page stagers re-derive from the global `file_lfn`, which is the current game's
  * path in-game (the same source savestate.c / the COMBO_TRANSITION reload use). A rare base
  * mismatch (e.g. a patched game whose recent-list entry differs) just fails the reopen -> the
  * error latch -> the viewer shows an error, never a hang or wrong file. */
@@ -183,10 +178,24 @@ static uint8_t  man_zres_guide = 0xff;
 static uint16_t man_zres_page;
 static uint8_t  man_s1res_guide = 0xff;   /* same idea for the scale-1 page (own PSRAM region, so */
 static uint16_t man_s1res_page;           /*   1x and 2x stay resident together -> instant toggle) */
+/* Last path staged by manual_stage_meta_cached() (the MENU-side entry point). The pre-boot game
+   info screen restages the meta on EVERY Up/Down, and a full stage is a whole directory pass plus
+   up to 8 f_open + header reads -- AND it clears the in-game session magic ($F4819E). Remembering
+   the path makes a repeat visit to the same game a true no-op on both counts.
+   The path buffer is IN_AHBRAM: 256B is a big bite out of the tight main SRAM, it is never a DMA
+   target, and it is always written before it is read. The VALIDITY FLAG deliberately stays in the
+   normal .bss (1B, zero-initialised at boot): .ahbram is NOLOAD, so a flag living there would
+   start as power-on garbage and could fake a hit against a garbage path. */
+static char     man_meta_cache_path[256] IN_AHBRAM;
+static uint8_t  man_meta_cache_valid;     /* .bss on purpose -- see above */
+static uint8_t  man_meta_cache_cfg;       /* CFG.enable_game_manual captured at arm time: toggling
+                                             the option must invalidate the hit, or a cached
+                                             "present" would survive the user turning it OFF */
 /* Where man_stage_zattrs builds one prebuilt tilemap row, INSIDE man_buf (attr bytes land at +0,
-   the 128B of entries at +MAN_ZMAP_OFS). A dedicated buffer is not an option: a 128-byte
-   IN_AHBRAM array overflows the mk3 AHB region by 12 bytes, and the main .bss is exactly where a
-   growing global silently corrupts something else (see memory.h). 64 + 128 fits man_buf twice over. */
+   the 128B of entries at +MAN_ZMAP_OFS). A dedicated buffer is a bad idea: the AHB region is down
+   to ~100B free (measured from the .map after man_meta_cache_path went in; it was ~356B before),
+   and the main .bss is exactly where a growing global silently corrupts something else (see
+   memory.h). 64 + 128 fits man_buf twice over. */
 #define MAN_ZMAP_OFS  (256)
 
 /* Read a u16/u32 LE out of man_buf without alignment assumptions (man_buf is a byte scratch). */
@@ -267,6 +276,11 @@ static void man_publish_meta(void) {
 void manual_stage_meta(uint8_t *rom_path) {
   UINT     got;
   int      c;
+
+  /* Drop the menu-side path cache before anything else: every caller of THIS function wants a
+     real restage (the game-load path in memory.c depends on the probe + the $F4819E clear running
+     again). Only the manual_stage_meta_cached() wrapper re-arms it, after the stage completed. */
+  man_meta_cache_valid = 0;
 
   /* fail-safe FIRST: reset state and publish "not present" so a missing/bad set of guides (or the
      CFG-off / early-return paths) never leaves stale meta from a previous game. */
@@ -409,82 +423,41 @@ void manual_stage_meta(uint8_t *rom_path) {
   }
 }
 
-/* Read global block index `idx`'s absolute file offset from its index entry (offset = first 4
-   bytes LE, at MAN_INDEX_OFS + idx*8). Bounded single read; 0 on error, else *out set. */
-static uint8_t man_ent_page, man_ent_block, man_ent_rows;  /* last index entry read (for the HUD) */
+/* Menu-side wrapper: stage the meta only when the game actually changed. See manual.h. */
+void manual_stage_meta_cached(uint8_t *rom_path) {
+  unsigned len;
 
-static int man_block_offset(uint16_t idx, uint32_t *out) {
-  UINT got;
-  if(f_lseek(&man_fil, MAN_INDEX_OFS + (uint32_t)idx * MAN_INDEX_ENTRY)) return 0;
-  if(f_read(&man_fil, man_buf, MAN_INDEX_ENTRY, &got) || got != MAN_INDEX_ENTRY) return 0;
-  *out = (uint32_t)man_buf[0] | ((uint32_t)man_buf[1] << 8)
-       | ((uint32_t)man_buf[2] << 16) | ((uint32_t)man_buf[3] << 24);
-  man_ent_page  = man_buf[4];   /* the entry carries page/block/content_rows -- published to the */
-  man_ent_block = man_buf[5];   /* META HUD bytes on a successful stage (contract amendment: the */
-  man_ent_rows  = man_buf[6];   /* smart-seam makes bands-per-page variable, so the viewer cannot
-                                   derive the page arithmetically) */
-  return 1;
+  if(man_meta_cache_valid && man_meta_cache_cfg == CFG.enable_game_manual
+     && !strcmp(man_meta_cache_path, (const char *)rom_path)) return;
+
+  manual_stage_meta(rom_path);          /* clears man_meta_cache_valid itself */
+
+  /* Re-arm the cache with the path we just staged. A path that does not FIT is simply left
+     uncached (restage every time, i.e. today's behaviour): storing a truncated key would make two
+     long paths sharing a prefix collide and show the wrong game's guides. */
+  len = (unsigned)strlen((const char *)rom_path);
+  if(len && len < sizeof(man_meta_cache_path)) {
+    memcpy(man_meta_cache_path, rom_path, len + 1);
+    man_meta_cache_cfg = CFG.enable_game_manual;
+    man_meta_cache_valid = 1;
+  }
 }
 
-void manual_stage_block(uint8_t guide, uint16_t idx, uint8_t mode) {
-  UINT     got;
-  int      tries;
-  uint16_t global_idx;
-  uint8_t  nn;
-
-  if(guide >= man_guide_count) return;   /* nothing to stage; the ACK still clears */
-
-  /* `mode` is vestigial: the index now holds ONLY the 1x stream. The 2x path is a separate
-     command (SNES_CMD_MANUAL_ZPAGE) over a completely different section, so there is no second
-     stream to select here. The parameter stays for ABI shape; bit0 is ignored. */
-  (void)mode;
-  if(idx >= man_guides[guide].nblocks) return;
-  global_idx = idx;
-  nn = man_guides[guide].nn;
-
-  /* clear any prior transient-error latch so a subsequent successful stage isn't masked by a stale
-     bit1 (the viewer reads bit1 on the ACK path and would otherwise reject good data). */
-  { uint8_t f = sram_readbyte(SRAM_MANUAL_META_ADDR);
-    if(f & MAN_META_FLAG_ERROR)
-      sram_writebyte((uint8_t)(f & ~MAN_META_FLAG_ERROR), SRAM_MANUAL_META_ADDR); }
-
-  /* point man_fil at the requested guide -- reopen only when the guide changed (cache man_open_nn).
-     file_lfn is the current game's path in-game (the path base is re-derived from it, not retained). */
-  if(nn != man_open_nn || !man_open) {
-    man_close();
-    if(!man_open_guide(file_lfn, nn)) man_open_nn = 0xff;  /* success sets man_open + man_open_nn=nn */
-  }
-
-  for(tries = 0; tries < MAN_READ_RETRIES; tries++) {
-    uint32_t addr   = SRAM_MANUAL_BLOCK_ADDR;
-    uint32_t remain = MAN_BLOCK_BYTES;
-    uint32_t off;
-    int      ok     = 1;
-
-    if(!man_open && !man_open_guide(file_lfn, nn)) break;  /* couldn't reopen -> hard fail */
-    if(!man_block_offset(global_idx, &off)) { man_close(); continue; }
-    if(f_lseek(&man_fil, off)) { man_close(); continue; }
-
-    while(remain) {
-      UINT want = (remain > sizeof(man_buf)) ? (UINT)sizeof(man_buf) : (UINT)remain;
-      if(f_read(&man_fil, man_buf, want, &got) || got != want) { ok = 0; break; }
-      sram_writeblock(man_buf, addr, (uint16_t)got);
-      addr += got; remain -= got;
-    }
-    if(ok) {                                              /* block staged in PSRAM */
-      /* publish the staged block's index-entry fields for the viewer HUD ("Pg X/N"):
-         META+3 = page (0-based), +4 = block-within-page, +5 = content_rows. */
-      sram_writebyte(man_ent_page,  SRAM_MANUAL_META_ADDR + 3);
-      sram_writebyte(man_ent_block, SRAM_MANUAL_META_ADDR + 4);
-      sram_writebyte(man_ent_rows,  SRAM_MANUAL_META_ADDR + 5);
-      return;
-    }
-    man_close();                                          /* glitched read -> retry from scratch */
-  }
-
-  /* hard failure: latch the transient-error bit so the viewer can show an error and re-try. */
-  { uint8_t f = sram_readbyte(SRAM_MANUAL_META_ADDR);
-    sram_writebyte((uint8_t)(f | MAN_META_FLAG_ERROR), SRAM_MANUAL_META_ADDR); }
+/* Drop the "this page is already resident in PSRAM" memo. MANDATORY after anything overwrites
+ * $C30000.. or $C50000.. behind our back -- concretely CMD_READDIR, whose file-STRING table grows
+ * from SRAM_MANUAL_S1TILES_ADDR ($C30000) and runs right through both staging regions.
+ *
+ * Without this the menu-side viewer (snes/manhost.a65: X on the game-info screen) breaks on the
+ * SECOND open: its restore fires a READDIR to rebuild the browser's string table, the re-query is
+ * a manual_stage_meta_cached() HIT so nothing else resets anything, and the next
+ * manual_stage_s1page() for the same (guide, page) takes the skip branch -- leaving the SNES to
+ * DMA the browser's FILENAMES into VRAM as 4bpp tiles.
+ *
+ * Only the residency memo is dropped, on purpose: the guide TABLE stays valid, so this costs
+ * nothing but one page restage instead of a whole directory pass per viewer exit. */
+void manual_invalidate_resident(void) {
+  man_zres_guide  = 0xff;
+  man_s1res_guide = 0xff;
 }
 
 /* ---------------------------------------------------------------- scrollable 2x zoom ----------

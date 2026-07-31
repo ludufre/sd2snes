@@ -1,0 +1,120 @@
+; Context-menu entry-table VARIANTS carrying the "Game info" entry.
+;
+; ShowGameInfo is tri-state (0 = off, 1 = on, 2 = context).  In mode 2 the info screen is
+; no longer auto-shown before boot; it is reached from a context menu (Y) instead -- from
+; the browser, from the recent-games list and from the favorites list.  Rather than
+; grey/hide a row at runtime -- the greying predicate at entry offset +20 is COSMETIC ONLY
+; (menu_check_disabled_func just picks a palette; neither the MTYPE_FUNC_CLOSE dispatch nor
+; menu_edit_value has an early-out) -- each wrapper in menu.a65 picks a whole DIFFERENT
+; table, so the entry is not merely greyed but truly absent in modes 0/1.
+;
+; WHY $C1: every reader of an entry table is bank-explicit, so a table is free to live
+; outside $C0.  show_menu captures the caller's DBR into w_menu_bank (`phb : pla`) and
+; every subsequent access goes through the direct-page LONG pointer [w_menu_addr] --
+; menu_measure, show_menu_entries, menu_edit_value, menu_desc_draw and
+; show_menu_func_close all reload the bank from w_menu_bank (phb/plb or the long read)
+; instead of assuming $C0.  The menu.a65 wrappers already pass the bank via
+; `lda #^table : pha : plb`, so pointing one at a $C1 table needs no reader change.
+;
+; WHY IT MATTERS: $C0 is the page that runs out (a few hundred bytes of tail before the
+; fixed $C0FF00 block), while $C1 has tens of KB free.  The three variants below come to
+; 452 bytes together (143 + 166 + 143) -- more than the entire $C0 tail.
+;
+; NO DRIFT BY CONSTRUCTION: each variant is header + the "Game info" row + the SAME
+; ctxrows_*.i65 file the plain table in menudata.a65 includes + terminator.  There is no
+; copy left to keep in sync: a row added to ctxrows_recent.i65 shows up in both the mode-0/1
+; and the mode-2 recents menu automatically.  (Those .i65 files are #include'd, so they may
+; only carry `//` comments -- a `;` in one dies with "Error: What is".)
+
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+; '.link page' wins and they emit no bytes) so every byte of this object lands in $C1.
+.link page $c1
+
+; ---------------------------------------------------------------------------
+; gi_ctx_request: the "Game info" row's MTYPE_FUNC_CLOSE action, shared by all three
+; variants -- the row means the same thing everywhere, and it is the CALLER that knows
+; which list the raised flag refers to (browser / recents / favorites).
+;
+; It does NOT run the info screen.  It only raises a flag; the actual dispatch happens in
+; the caller (filesel_key_y, select_last_file_context_menu, select_favorite_file_context_menu)
+; AFTER show_menu has closed and unwound, so the ficha runs with the very same DP / DBR /
+; window-stack state as the normal A-press path.  Running it from inside the menu FUNC would
+; instead enter with the show_menu AllocStack frame still live and DP != 0 -- exactly the
+; condition that corrupted the cover art when Recents/Favorites opened it from a menu FUNC.
+;
+; There is deliberately NO mode check here: the variant table IS the gate.  A `cmp #$02`
+; hidden in the action would only mask a mis-wired table (the row would be reachable in a
+; mode that should not have it and would silently do nothing instead of failing loudly).
+;
+; Reached via show_menu_func_close's `rtl`, so it must end in rtl.  DBR is whatever the
+; menu left behind, hence the absolute-LONG store (snescom has no long `stz`, so the
+; value goes through A).
+gi_ctx_request:
+  php
+  sep #$20 : .as
+  lda #$01
+  sta @gi_ctx_pending
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------
+; The "Game info" row itself is written out once per variant below (13 source lines, 23
+; bytes).  Two things about it are the same in all three:
+;
+;  - The routine pointer is PARENTHESIZED, `^(gi_ctx_request-1)`, unlike every row in the
+;    ctxrows_*.i65 files: those all target $C0 symbols, where a bank byte that came out one
+;    short would be caught instantly, whereas this is the only table entry whose target
+;    lives in $C1.  Parenthesizing makes "bank of (symbol-1)" explicit and is the form
+;    menudata.a65 already uses for its isEnabled pointers, so the cross-bank case cannot
+;    hinge on how the assembler associates `^` with the trailing `-1`.
+;
+;  - It goes FIRST, ahead of the shared rows, so "Game info" is the selection the menu
+;    opens on.
+
+; ---------------------------------------------------------------------------
+; Browser file context menu (Y on a .sfc/.nes), ShowGameInfo == 2 variant.
+; 6 entries = 1 + the 5 of ctxrows_file.i65.
+menu_enttab_filesel_context_file_gi:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_filesel_selected_file ; window title
+ .byt  ^text_filesel_selected_file ; for this menu
+; ENTRIES
+#include "ctxrow_gameinfo.i65"
+
+#include "ctxrows_file.i65"
+
+ .byt  0
+
+; ---------------------------------------------------------------------------
+; Recent games list context menu, ShowGameInfo == 2 variant.
+; 7 entries = 1 + the 6 of ctxrows_recent.i65 -- still inside MENU_VISMAX, so the list
+; does not start scrolling.
+menu_enttab_recent_context_gi:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_filesel_selected_file ; window title
+ .byt  ^text_filesel_selected_file ; for this menu
+; ENTRIES
+#include "ctxrow_gameinfo.i65"
+
+#include "ctxrows_recent.i65"
+
+ .byt  0
+
+; ---------------------------------------------------------------------------
+; Favorites list context menu, ShowGameInfo == 2 variant.
+; 6 entries = 1 + the 5 of ctxrows_favorites.i65.
+menu_enttab_filesel_favorites_context_gi:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_filesel_selected_file ; window title
+ .byt  ^text_filesel_selected_file ; for this menu
+; ENTRIES
+#include "ctxrow_gameinfo.i65"
+
+#include "ctxrows_favorites.i65"
+
+ .byt  0

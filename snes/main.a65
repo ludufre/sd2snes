@@ -94,6 +94,11 @@ coldboot:       ; Regular, cold-start init
   ; like the description-box gates. Both are .byt; A is still #$00 in .as.
   sta @mainmenu_active
   sta @egg_shown
+  ; fork: gi_ctx_pending is a boot-time gate too -- gms_noinfo READS it on every
+  ; game-info return path (auto-show included), and filesel_key_y's re-arm only
+  ; covers the browser's Y route. Left at $55 it would turn the (unreachable
+  ; today) STATUS_NONE arm into "error blip + cancel" instead of play.
+  sta @gi_ctx_pending
   ; fork: settings-menu scrolling viewport gates. menu_scroll_active is read by
   ; menu_select_noinit; left at $55 (clear_wram fills the $7E data segment with $55,
   ; not 0) a Recents/Favorites list opened before any show_menu would take the

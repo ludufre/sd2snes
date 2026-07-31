@@ -1,0 +1,1811 @@
+// manviewer.i65 -- the MANUAL/GUIDES image viewer, shared source.
+//
+// Extracted verbatim from igmenu.a65 so the SAME viewer can be assembled into the in-game $C2
+// shell AND (next step) into the menu. Like cheatlist.i65 this file has NO .link directive: it
+// inherits the including file's bank. #include "manviewer_defs.i65" BEFORE this file.
+//
+// EXTRACTION GUARD (durable): nothing here may name a HOST label or a host-only variable. The
+// separate $C2 link fails loudly on an undefined symbol (snes/Makefile greps igmenu.link.log
+// for "still undefined"), and that failure IS the proof the boundary stayed clean. Concretely:
+// no host-side scratch, no host tilemap/font constants, no host draw routine may be named
+// here -- the contract names below are the only way across.
+//
+// WHAT THE HOST MUST PROVIDE
+//   #defines (see igmenu.a65, declared before the includes):
+//     man_t_tmp man_t_slot man_t_coff man_t_entry man_t_row  -- 5 word transients, freely
+//         clobbered by the viewer; the host may alias them onto whatever scratch it already has
+//         (igmenu.a65 aliases its sst_* draw transients -- the viewer is modal, so they can
+//         never be live at the same time).
+//     man_pad_cur   -- pad word, HELD state (pan uses held state, not edges)
+//     man_pad_edge  -- pad word, newly-pressed bits this frame
+//     man_modal     -- host flags word; the viewer OWNS bit0 (1 = viewer sub-mode). It sets bit0
+//         on enter and clears it on exit; the host routes input to manual_viewer_input while set.
+//   routines (near jsr -- this include is in the host's bank):
+//     man_host_enter        -- called from manual_viewer_enter, BEFORE any PPU takeover: quiesce
+//         whatever draw pipeline the host runs and snapshot the graphics it wants back.
+//     man_host_restore_gfx  -- called from man_viewer_exit inside forced blank, $2115 already
+//         $80: put that snapshot back (fonts/tiles/CGRAM). ch0 is free.
+//     man_host_chrome       -- called from man_viewer_exit, still in forced blank, A/X/Y 16-bit:
+//         repaint the host's own screen and UNBLANK ($2100 = $0f). Last thing the exit does.
+//
+// WHAT THIS FILE PROVIDES
+//   man_state_reset        -- zero the viewer's transient scratch + arm the $ffff sentinels.
+//         ONE source of truth: every host calls it once at init instead of open-coding the list.
+//   manual_viewer_enter    -- open the viewer on man_sel_guide (position resume included).
+//   manual_viewer_input    -- one frame of viewer input; call while man_modal bit0 is set.
+//   man_viewer_exit        -- close it (also called by the host to unwind on a global close).
+//   man_restore_mode5_regs -- reprogram the PPU register file for the 64-column mode-5 text
+//         screen. SHARED ON PURPOSE: the state it programs (base mode 3 + HDMA flip to 5,
+//         BG1 map $5800 / BG2 map $5000 SC 32x64, char base BG1 $0000 / BG2 $4000, pseudo-512,
+//         BG1 HOFS $00fc, window 2 = [1,252] clipping BG1+BG2 on main AND sub) is the SAME
+//         layout the menu draws in -- the in-game overlay copied it from there. Whoever hosts
+//         the viewer gets its text screen back from this one routine.
+//
+// INVARIANTS carried over from igmenu.a65:
+//  - .as/.al declared at the entry of every routine (snescom leaks the last directive in SOURCE
+//    order -> a wrong-width immediate becomes a stray byte / BRK).
+//  - Bank-alto vars are ALWAYS @long -- a bare symbol assembles absolute (DBR-relative) and
+//    links with NO error but reads the wrong bank.
+//  - The viewer uses ONLY DMA ch0, leaving the host's HDMA channel files intact.
+//  - Every MCU page handshake is bounded by MN_TIMEOUT_HI: it can NEVER spin forever.
+
+// ======================================================================
+//  Transient state init. The scratch lives in memory that is NOT zeroed on entry (PSRAM
+//  is stale from the previous open), and 0 is a legitimate page/block, hence the explicit
+//  $ffff "nothing staged" sentinels. Call once per host init, before the first enter.
+//  Does NOT touch the man_pos_* reading position: that is gated by MN_POS_MAGIC and is
+//  meant to survive (the host decides when a session is fresh).
+// ======================================================================
+man_state_reset:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @man_error                              // last request timed out (consumed by the host)
+	sta @man_sel_guide                          // active compacted guide
+	sta @man_zoom_mode
+	sta @man_zx                                 // scrollable 2x zoom state
+	sta @man_zy
+	sta @man_ring_top
+	sta @man_zmaxy
+	sta @man_znrows
+	sta @man_zslot
+	sta @man_hold_h
+	sta @man_hold_v
+	sta @man_last_h
+	sta @man_last_v
+	sta @man_sav_zx
+	sta @man_sav_zy
+	sta @man_zreqmode
+	sta @man_zfirstblk
+	sta @man_zentry
+	lda #MN_FR_X0 : sta @man_frx                // zoom-area box starts centred
+	lda #MN_FR_Y0 : sta @man_fry
+	lda #MN_FR_Y0 : sta @man_fry_scr
+	lda #$ffff                                  // "nothing staged" / "no saved pan" sentinels --
+	sta @man_zpage                              //   NOT 0, which is a valid page/block
+	sta @man_zblk
+	plp
+	rts
+
+// ======================================================================
+//  MANUAL viewer (mode 1). Entered from manual_input (A). Uses ONLY DMA ch0, leaving
+//  the shell's ch1 BGMODE HDMA table intact ($420C reloads it at V=0 on exit). All
+//  VRAM traffic is in forced blank or the vblank. The MCU page handshakes are bounded by
+//  MN_TIMEOUT_HI so they can NEVER spin forever (SD ejected / .man gone -> error + exit).
+// ======================================================================
+manual_viewer_enter:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @man_zoom_mode                          // always start at 1x (man_sel_guide set by caller)
+	sta @man_zx
+	sta @man_zy
+	sta @man_ring_top
+	sta @man_s1y
+	sta @man_s1top
+	sta @man_s1page
+	lda #MN_FR_X0 : sta @man_frx                 // box starts centred (the restore below overrides
+	lda #MN_FR_Y0 : sta @man_fry                 //   it when the saved position is for this guide)
+	// --- resume the remembered reading position, but ONLY for the same guide ---
+	lda @man_pos_magic
+	cmp #MN_POS_MAGIC
+	bne mve_nopos
+	lda @man_pos_guide
+	cmp @man_sel_guide
+	bne mve_nopos
+	lda @man_pos_block : sta @man_s1page        // the saved "block" is now a PAGE
+	lda @man_pos_zx    : sta @man_zx
+	lda @man_pos_zy    : sta @man_zy
+	lda @man_pos_s1y   : sta @man_s1y           // real 1x scroll (not the lossy man_pos_zy>>1)
+	lda @man_pos_frx   : sta @man_frx           // and the zoom-area box (was reset to centre)
+	lda @man_pos_fry   : sta @man_fry
+mve_nopos:
+	jsr man_host_enter                           // HOST: quiesce its own draw pipeline, then
+	                                             //   snapshot the screen it wants back on exit
+	lda @man_modal : ora #$0001 : sta @man_modal   // enter viewer sub-mode
+	jsr man_s1_setup
+	lda @man_s1page
+	jsr man_s1page_show                          // carry set = timeout
+	bcs mve_err
+	// were we reading zoomed last time? resume that too
+	lda @man_pos_magic
+	cmp #MN_POS_MAGIC
+	bne mve_done
+	lda @man_pos_guide
+	cmp @man_sel_guide
+	bne mve_done
+	lda @man_pos_zoom
+	beq mve_done
+	jsr man_zoom_toggle
+mve_done:
+	plp
+	rts
+mve_err:
+	lda #$0001 : sta @man_error
+	jsr man_viewer_exit                          // restore shell + repaint tab (shows error)
+	plp
+	rts
+
+// ---- viewer input (routed by the igmenu_loop bypass while bit0 set). B leaves; Y toggles
+//      1x<->2x zoom (guides with a zoom stream only); nav depends on man_zoom_mode. ----
+manual_viewer_input:
+	php
+	rep #$30 : .al : .xl
+	lda @man_pad_edge
+	bit #$8000                                 // B: in 2x step back to 1x, in 1x leave the viewer
+	beq mvi_no_b
+	lda @man_zoom_mode
+	beq mvi_b_exit
+	jsr man_zoom_toggle                        // 2x -> 1x (B is "back", not "close", while zoomed)
+	plp
+	rts
+mvi_b_exit:
+	lda #$0000 : sta @man_error                 // normal exit (no error)
+	jsr man_viewer_exit
+	plp
+	rts
+mvi_no_b:
+	lda @man_pad_edge
+	bit #$0080                                 // A -> zoom in (no-op if already at 2x)
+	beq mvi_no_a
+	lda @man_zoom_mode
+	bne mvi_a_done
+	jsr man_zoom_toggle
+mvi_a_done:
+	plp
+	rts
+mvi_no_a:
+mvi_no_y:
+	lda @man_zoom_mode
+	bne mvi_zoom_pan                            // 2x: continuous pan (held state, every frame)
+	// --- 1x: L/R turn the page, D-pad pans continuously over the whole page ---
+	lda @man_pad_edge
+	and #$0020                                 // L -> previous page
+	beq mvi_s1_chk_r
+	lda @man_s1page
+	beq mvi_vdone
+	dec : sta @man_t_slot
+	jsr man_s1_park_box                         // new page -> box to the top, or the next frame's
+	lda @man_t_slot                           //   follow_box demands a huge scroll and the ring
+	jsr man_s1page_show                         //   tries to stage dozens of rows in one vblank
+	plp
+	rts
+mvi_s1_chk_r:
+	lda @man_pad_edge
+	and #$0010                                 // R -> next page
+	beq mvi_s1_pan
+	lda @man_s1page : inc : sta @man_t_slot
+	jsr man_cur_zpages
+	cmp @man_t_slot
+	bcc mvi_vdone
+	beq mvi_vdone
+	jsr man_s1_park_box
+	lda @man_t_slot
+	jsr man_s1page_show
+	plp
+	rts
+mvi_s1_pan:
+	jsr man_s1_input
+	plp
+	rts
+mvi_zoom_pan:
+	// L / R are explicit page turns while zoomed (the tab-bar L/R is already suppressed in
+	// viewer sub-mode), both entering the new page at its top.
+	lda @man_pad_edge
+	and #$0020                                 // L -> previous page
+	beq mvi_z_chk_r
+	jsr man_zturn_prev_top
+	plp
+	rts
+mvi_z_chk_r:
+	lda @man_pad_edge
+	and #$0010                                 // R -> next page
+	beq mvi_z_pan
+	jsr man_zturn_next
+	plp
+	rts
+mvi_z_pan:
+	jsr man_zoom_input                          // held-state pan, runs EVERY frame
+mvi_vdone:
+	plp
+	rts
+
+// ======================================================================
+//  Scrollable 2x zoom. The whole 2x page lives in PSRAM, so a pan step touches ONLY the PPU:
+//  horizontal is a pure scroll-register write (free), vertical costs four small DMAs to slide
+//  the ring by one tile row. Nothing here talks to the MCU, which is precisely why the pan
+//  cannot stall, tear on a half-streamed row, or need a prefetch/watchdog.
+// ======================================================================
+
+// ---- generic VRAM DMA on ch0: man_dma_len bytes from man_dma_srcb:man_dma_srcl -> VRAM word
+//      man_dma_vw. ch0 ONLY -- ch1 still holds the shell's BGMODE HDMA table. ----
+man_vdma:
+	php
+	sep #$20 : .as
+	lda #$80 : sta @$002115                      // VMAIN: word step after high byte
+	rep #$20 : .al
+	lda @man_dma_vw : sta @$002116               // VMADD
+	sep #$20 : .as
+	lda #$01 : sta @$004300                      // ch0: mode 1 (2 regs $2118/9), A->B, A inc
+	lda #$18 : sta @$004301
+	rep #$20 : .al
+	lda @man_dma_srcl : sta @$004302
+	sep #$20 : .as
+	lda @man_dma_srcb : sta @$004304
+	rep #$20 : .al
+	lda @man_dma_len : sta @$004305
+	sep #$20 : .as
+	lda #$01 : sta @$00420b                      // trigger ch0
+	plp
+	rts
+
+// ---- stage content tile row man_t_tmp into its ring slot: BG1 tiles, BG2 tiles, and BOTH prebuilt
+//      tilemap rows. 2176 bytes total (~0.81ms) -- fits the ~2.4ms vblank window, which is what
+//      caps vertical panning at one row (8px) per frame.
+//      slot = r mod MN_Z_RING via ONE conditional subtract: nrows <= 56 < 2*29, so that is exact,
+//      and it keeps the hardware divider ($4202-$4206) untouched -- those belong to the frozen game.
+//      The tilemap is 32 rows while the ring is 29, so map row (r & 31) and data slot (r mod 29)
+//      desync; that is exactly why the map row is rewritten on every row load, and why the 3 stale
+//      map rows are never visible (only 29 consecutive rows are ever on screen). ----
+man_zrow_dma:
+	php
+	rep #$30 : .al : .xl
+	lda @man_t_tmp
+mzrd_mod:
+	cmp #MN_Z_RING                               // slot = r mod 29 by repeated subtract. A zoom
+	bcc mzrd_haveslot                            //   page is a WHOLE PDF page (up to 96 rows), so
+	sec : sbc #MN_Z_RING                         //   ONE subtract is not enough -- it must loop.
+	bra mzrd_mod                                 //   (No divide: $4202-$4206 belong to the game.)
+mzrd_haveslot:
+	sta @man_zslot
+	// --- BG1 tiles (cols 0-31): linear row r ---
+	lda @man_t_tmp
+	jsr man_zsrc_row
+	lda @man_zslot
+	asl : asl : asl : asl : asl : asl : asl : asl : asl          // slot*512 words
+	clc : adc #MN_Z_BG1_TILEW : sta @man_dma_vw
+	lda #MAN_Z_HALF_BYTES : sta @man_dma_len
+	jsr man_vdma
+	// --- BG2 tiles (cols 32-63): the SAME linear array, MN_Z_B_ROWOFS rows further in ---
+	lda @man_t_tmp
+	clc : adc #MN_Z_B_ROWOFS
+	jsr man_zsrc_row
+	lda @man_zslot
+	asl : asl : asl : asl : asl : asl : asl : asl : asl
+	clc : adc #MN_Z_BG2_TILEW : sta @man_dma_vw
+	lda #MAN_Z_HALF_BYTES : sta @man_dma_len
+	jsr man_vdma
+	// --- tilemap rows: MANUAL_ZTMAP + r*128 (BG1 half) and +64 (BG2 half) -> map row (r & 31).
+	//     96*128 = 12288 bytes, so this one never leaves its bank. ---
+	lda @man_t_tmp
+	asl : asl : asl : asl : asl : asl : asl                       // r*128
+	clc : adc #MN_Z_TMAP_LO : sta @man_dma_srcl
+	lda #MN_Z_TMAP_BANK : sta @man_dma_srcb
+	lda @man_t_tmp
+	and #$001f                                                    // map row = r & 31
+	asl : asl : asl : asl : asl                                   // *32 words
+	sta @man_zslot                                                // reuse as the row word offset
+	clc : adc #MN_Z_BG1_MAPW : sta @man_dma_vw
+	lda #MN_Z_MAPROWW*2 : sta @man_dma_len                        // 64 bytes
+	jsr man_vdma
+	lda @man_t_tmp
+	asl : asl : asl : asl : asl : asl : asl
+	clc : adc #MN_Z_TMAP_LO+MN_Z_MAPROWW*2 : sta @man_dma_srcl    // +64 = the BG2 half
+	lda #MN_Z_TMAP_BANK : sta @man_dma_srcb
+	lda @man_zslot
+	clc : adc #MN_Z_BG2_MAPW : sta @man_dma_vw
+	lda #MN_Z_MAPROWW*2 : sta @man_dma_len
+	jsr man_vdma
+	plp
+	rts
+
+// ---- A = linear tile-row index q -> man_dma_srcl/srcb. A zoom page is up to 96 rows and each
+//      row is 1024B, so the tile array is 98304B and SPANS BANKS -- and a DMA's A-bus does NOT
+//      carry into the bank register, so the bank has to be computed here rather than assumed.
+//      1024 divides 65536 exactly => 64 rows per bank and no row ever straddles one. ----
+man_zsrc_row:
+	php
+	rep #$30 : .al : .xl
+	pha
+	and #$003f                                                    // row within its bank
+	asl : asl : asl : asl : asl : asl : asl : asl : asl : asl     // *1024
+	sta @man_dma_srcl
+	pla
+	lsr : lsr : lsr : lsr : lsr : lsr                             // q >> 6 = banks to advance
+	clc : adc #MN_Z_TILES_BANK
+	sta @man_dma_srcb
+	plp
+	rts
+
+// ---- fill the whole ring from man_ring_top (used on page load / entry, under forced blank). ----
+man_zfill_ring:
+	php
+	rep #$30 : .al : .xl
+	lda @man_ring_top : sta @man_t_tmp
+	ldy #$0000
+mzfr_loop:
+	lda @man_t_tmp
+	cmp @man_znrows
+	bcs mzfr_done                                // past the last real row -> stop (page is short)
+	phy
+	jsr man_zrow_dma
+	ply
+	lda @man_t_tmp : inc : sta @man_t_tmp
+	iny
+	cpy #MN_Z_RING
+	bne mzfr_loop
+mzfr_done:
+	plp
+	rts
+
+// ---- palette: 256B at MANUAL_ZPAL -> CGRAM 0..127 (mode-1 BG uses 0..127; the OBJ HUD lives in
+//      128..255, so the two never collide). ----
+man_zpal_dma:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	lda #$00 : sta @$002121                      // CGADD = 0
+	lda #$00 : sta @$004300                      // ch0: mode 0 (1 reg), A->B, A inc
+	lda #$22 : sta @$004301                      // B-bus = $2122 (CGRAM data)
+	rep #$20 : .al
+	lda #MN_Z_PAL_LO : sta @$004302              // MANUAL_ZPAL low 16
+	sep #$20 : .as
+	lda #MN_Z_PAL_BANK : sta @$004304
+	rep #$20 : .al
+	lda #MN_Z_PALBYTES : sta @$004305            // 256
+	sep #$20 : .as
+	lda #$01 : sta @$00420b
+	plp
+	rts
+
+// ---- expand the 1bpp mn_hud_font into 4bpp OBJ tiles at the current mode's OBJ char base.
+//      bp0 = bitmap, bp1 = ~bitmap, bp2 = bp3 = 0 -> every pixel is opaque, ink = colour 1 and
+//      box = colour 2: visually identical to the mode-3 HUD, but on a non-scrolling layer.
+//      A(16) = how many glyphs to upload: 1x takes the whole font (legend glyphs included), 2x
+//      stops at 15 because tile 16 up is its BG1 image pool. ----
+man_obj_glyphs:
+	php
+	rep #$30 : .al : .xl
+	and #$00ff                                   // an 8-bit caller would leave junk in A's hidden
+	                                             //   high byte -> 16-bit compare never matches ->
+	                                             //   endless VRAM loop under forced blank
+	sta @man_t_slot                              // glyph count for THIS mode (man_frame_draw reloads it before use)
+	sep #$20 : .as
+	lda #$80 : sta @$002115                      // VMAIN word step after high byte
+	rep #$30 : .al : .xl
+	lda @man_obj_base : sta @$002116             // OBJ char base for THIS mode (1x and 2x differ)
+	ldx #$0000                                   // font byte index (glyph*8 + row)
+	ldy #$0000                                   // glyph counter
+mog_glyph:
+	phy
+	ldy #$0008
+mog_row:
+	sep #$20 : .as
+	lda @mn_hud_font, x
+	rep #$20 : .al
+	and #$00ff
+	sta @man_t_tmp                                 // bitmap
+	eor #$00ff                                   // ~bitmap (low byte)
+	xba                                          // -> high byte = plane 1
+	ora @man_t_tmp                                 // low byte  = plane 0
+	sta @$002118
+	inx
+	dey
+	bne mog_row
+	ldy #$0008                                   // planes 2,3 = 0 (8 words)
+mog_zero:
+	lda #$0000 : sta @$002118
+	dey
+	bne mog_zero
+	ply
+	iny
+	tya                                          // Y<=19: high byte is 0, .al transfer is safe
+	cmp @man_t_slot                              // CPY has no abs-long mode; CMP does
+	bne mog_glyph
+	// OBJ palette 0 entries 1/2 -- CGRAM 128+ is untouched by the page palette DMA (0..127)
+	sep #$20 : .as
+	lda #MN_Z_OBJ_CG_INK : sta @$002121
+	lda #$ff : sta @$002122
+	lda #$7f : sta @$002122                      // ink  = $7FFF white
+	lda #$08 : sta @$002122
+	lda #$21 : sta @$002122                      // box  = $2108 dark grey
+	plp
+	rts
+
+// ---- park every sprite off-screen (Y = 240) and blank the high table. Used before drawing the
+//      HUD and again on viewer exit, so the resuming game never flashes our glyphs. ----
+man_obj_hide:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	lda #$00 : sta @$002102
+	sta @$002103                                 // OAM word addr 0 = main table
+	ldx #MN_Z_OBJ_COUNT
+moh_loop:
+	lda #$00 : sta @$002104                      // X
+	lda #$f0 : sta @$002104                      // Y = 240 -> off the 224-line screen
+	lda #$00 : sta @$002104                      // tile
+	sta @$002104                                 // attr
+	dex
+	bne moh_loop
+	lda #$00 : sta @$002102
+	lda #$01 : sta @$002103                      // OAM word addr $0100 = high table
+	ldx #$0020
+moh_hi:
+	lda #$00 : sta @$002104                      // X bit8 = 0, size = small
+	dex
+	bne moh_hi
+	plp
+	rts
+
+// ---- emit one 8x8 glyph sprite (A = tile index) at man_obj_x, then advance. ----
+man_obj_put:
+	php
+	sep #$20 : .as
+	pha
+	lda @man_obj_x : sta @$002104                // X (low 8; bit8 stays 0 in the high table)
+	lda #MN_Z_HUD_Y : sta @$002104               // Y
+	pla
+	sta @$002104                                 // tile
+	lda #MN_Z_OBJ_ATTR : sta @$002104            // attr
+	rep #$30 : .al : .xl
+	lda @man_obj_x : clc : adc #$0008 : sta @man_obj_x
+	lda @man_obj_n : inc : sta @man_obj_n
+	plp
+	rts
+
+// ---- A(16) = 0..255 as decimal glyph sprites (no leading zeros; a hundreds digit forces tens). ----
+man_obj_putdec:
+	php
+	rep #$30 : .al : .xl
+	and #$00ff
+	ldx #$0000
+mopd_h:
+	cmp #$0064
+	bcc mopd_hd
+	sec : sbc #$0064
+	inx
+	bra mopd_h
+mopd_hd:
+	sta @man_t_coff                            // remainder (man_t_tmp belongs to man_obj_put)
+	cpx #$0000
+	beq mopd_tens
+	txa
+	clc : adc #(MN_G_DIG0)
+	sep #$20 : .as
+	jsr man_obj_put
+	rep #$30 : .al : .xl
+	lda #$0001 : sta @man_t_entry               // hundreds seen -> always print tens
+	bra mopd_t0
+mopd_tens:
+	lda #$0000 : sta @man_t_entry
+mopd_t0:
+	lda @man_t_coff
+	ldx #$0000
+mopd_t:
+	cmp #$000a
+	bcc mopd_td
+	sec : sbc #$000a
+	inx
+	bra mopd_t
+mopd_td:
+	sta @man_t_coff                            // units
+	cpx #$0000
+	bne mopd_tprint
+	lda @man_t_entry
+	beq mopd_units                                // no tens and no hundreds -> skip
+mopd_tprint:
+	txa
+	clc : adc #(MN_G_DIG0)
+	sep #$20 : .as
+	jsr man_obj_put
+	rep #$30 : .al : .xl
+mopd_units:
+	lda @man_t_coff
+	clc : adc #(MN_G_DIG0)
+	sep #$20 : .as
+	jsr man_obj_put
+	plp
+	rts
+
+// ---- draw "Pg X/N 2X" as sprites. Page number comes from MANUAL_META+3, which the MCU
+//      publishes for zoom pages too (a zoom page IS a 1x block, so it has a PDF page). ----
+man_obj_hud:
+	php
+	rep #$30 : .al : .xl
+	jsr man_obj_hide                              // clear first: the string shrinks as well as grows
+	lda #MN_Z_HUD_X0 : sta @man_obj_x
+	lda #$0000 : sta @man_obj_n
+	sep #$20 : .as
+	lda #$00 : sta @$002102
+	sta @$002103                                  // rewind OAM to sprite 0
+	lda #MN_G_P : jsr man_obj_put
+	lda #MN_G_G : jsr man_obj_put
+	lda #MN_G_SPACE : jsr man_obj_put
+	lda @MANUAL_META|$0003                        // staged page (0-based)
+	rep #$30 : .al : .xl
+	and #$00ff
+	inc                                           // 1-based
+	jsr man_obj_putdec
+	sep #$20 : .as
+	lda #MN_G_SLASH : jsr man_obj_put
+	rep #$30 : .al : .xl
+	jsr man_cur_npages
+	jsr man_obj_putdec
+	sep #$20 : .as
+	rep #$30 : .al : .xl
+	lda @man_zoom_mode
+	beq moh_1x                                    // 1x: no "2X" suffix, but DO draw the box
+	sep #$20 : .as
+	lda #MN_G_SPACE : jsr man_obj_put
+	lda #(MN_G_DIG0 + 2) : jsr man_obj_put        // '2'
+	lda #MN_G_X : jsr man_obj_put                 // 'X'
+	bra moh_done
+moh_1x:
+	jsr man_obj_legend                            // "A:2X  L/R:Pg" right-aligned (1x only)
+	jsr man_frame_draw
+moh_done:
+	plp
+	rts
+
+// ---- 1x controls legend "A:2X  L/R:Pg", right-aligned on the HUD row. FIXED OAM slots
+//      MN_LG_SPR0..+11 (man_frame_draw pattern), so it never depends on how long "Pg X/N"
+//      was. 1x ONLY: glyph tiles 15..18 are never uploaded in 2x (16-tile pool), so
+//      emitting them there would show BG image data. Caller (man_obj_hud) is ALWAYS in
+//      forced blank, so the $2102/$2104 writes are safe. Every sprite is 8x8 with X<256:
+//      the $00 man_frame_redraw writes to high-table byte 5 during vblank is exactly what
+//      sprites 20-23 need, so the box redraw cannot corrupt the legend. ----
+man_obj_legend:
+	php
+	rep #$30 : .al : .xl
+	lda #MN_LG_X0 : sta @man_obj_x
+	sep #$20 : .as
+	lda #MN_LG_SPR0*2 : sta @$002102             // OAM word addr = sprite*2 (all small)
+	lda #$00 : sta @$002103
+	rep #$10 : .xl
+	ldx #$0000
+mol_loop:
+	lda @mn_legend_txt, x                        // glyph tile index (byte)
+	jsr man_obj_put                              // X advance + man_obj_n ride along
+	inx
+	cpx #MN_LG_LEN
+	bne mol_loop
+	plp
+	rts
+
+// ======================================================================
+//  Scale-1 (1x) scrollable view. Same ring machine as the 2x at 256px: one BG layer, no split,
+//  no window, no horizontal pan. The page is a whole PDF page, so the 1x scrolls continuously
+//  instead of jumping band to band.
+// ======================================================================
+
+// ---- stage content tile row man_t_tmp into its ring slot (tiles + prebuilt tilemap row).
+//      2 DMAs, 1088 bytes. Both source arrays stay inside one PSRAM bank, so unlike the 2x this
+//      needs no bank arithmetic. ----
+man_s1row_dma:
+	php
+	rep #$30 : .al : .xl
+	lda @man_t_tmp
+ms1r_mod:
+	cmp #MN_Z_RING                               // slot = r mod 29 (loop: pages reach 64 rows)
+	bcc ms1r_haveslot
+	sec : sbc #MN_Z_RING
+	bra ms1r_mod
+ms1r_haveslot:
+	sta @man_zslot
+	lda @man_t_tmp
+	asl : asl : asl : asl : asl : asl : asl : asl : asl : asl    // r*1024
+	clc : adc #MN_S1_TILES_LO : sta @man_dma_srcl
+	lda #MN_S1_TILES_BK : sta @man_dma_srcb
+	lda @man_zslot
+	asl : asl : asl : asl : asl : asl : asl : asl : asl          // slot*512 words
+	clc : adc #MN_S1_TILEW : sta @man_dma_vw
+	lda #MAN_S1_ROW_BYTES : sta @man_dma_len
+	jsr man_vdma
+	lda @man_t_tmp
+	asl : asl : asl : asl : asl : asl                            // r*64
+	clc : adc #MN_S1_TMAP_LO : sta @man_dma_srcl
+	lda #MN_S1_TMAP_BK : sta @man_dma_srcb
+	lda @man_t_tmp
+	and #$001f                                                   // map row = r & 31
+	asl : asl : asl : asl : asl                                  // *32 words
+	clc : adc #MN_S1_MAPW : sta @man_dma_vw
+	lda #MAN_S1_TMAP_STRIDE : sta @man_dma_len
+	jsr man_vdma
+	plp
+	rts
+
+man_s1fill_ring:
+	php
+	rep #$30 : .al : .xl
+	lda @man_s1top : sta @man_t_tmp
+	ldy #$0000
+ms1f_loop:
+	lda @man_t_tmp
+	cmp @man_s1nrows
+	bcs ms1f_done
+	phy
+	jsr man_s1row_dma
+	ply
+	lda @man_t_tmp : inc : sta @man_t_tmp
+	iny
+	cpy #MN_Z_RING
+	bne ms1f_loop
+ms1f_done:
+	plp
+	rts
+
+man_s1pal_dma:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	lda #$00 : sta @$002121
+	lda #$00 : sta @$004300
+	lda #$22 : sta @$004301
+	rep #$20 : .al
+	lda #MN_S1_PAL_LO : sta @$004302
+	sep #$20 : .as
+	lda #MN_S1_PAL_BK : sta @$004304
+	rep #$20 : .al
+	lda #MN_Z_PALBYTES : sta @$004305
+	sep #$20 : .as
+	lda #$01 : sta @$00420b
+	plp
+	rts
+
+// ---- 1x has no horizontal pan (the page is exactly screen-width), so this is BG1VOFS only. ----
+man_s1scroll_apply:
+	php
+	rep #$30 : .al : .xl
+	lda @man_s1y
+	sec : sbc #MN_Z_VOFS_BIAS                    // VOFS = Y-1 (PPU shows VOFS+1 .. VOFS+224)
+	sep #$20 : .as
+	sta @$00210e : xba : sta @$00210e
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+man_s1ring_follow:
+	php
+	rep #$30 : .al : .xl
+ms1rf_step:
+	lda @man_s1y
+	lsr : lsr : lsr
+	cmp @man_s1top
+	beq ms1rf_done
+	bcc ms1rf_up
+	lda @man_s1top : inc : sta @man_s1top
+	clc : adc #MN_Z_RING-1
+	cmp @man_s1nrows
+	bcs ms1rf_step
+	sta @man_t_tmp
+	jsr man_s1row_dma
+	bra ms1rf_step
+ms1rf_up:
+	lda @man_s1top : dec : sta @man_s1top
+	sta @man_t_tmp
+	jsr man_s1row_dma
+	bra ms1rf_step
+ms1rf_done:
+	plp
+	rts
+
+// ---- upload the 4 bracket quarter tiles at MN_FR_T_BASE, and their colour. 1bpp mask -> 4bpp where a
+//      set bit is colour 3 and a clear bit is 0 (TRANSPARENT), so the box outlines the page
+//      instead of covering it. Only the 1x needs these; the 2x has no spare OBJ tiles anyway. ----
+man_frame_upload:
+	php
+	sep #$20 : .as
+	lda #$80 : sta @$002115
+	rep #$30 : .al : .xl
+	ldx #$0000                                   // mask byte index
+	ldy #$0000                                   // quarter 0..3
+mfu_tile:
+	// VRAM word = obj_base + tile*16, tile = base + (0,1,16,17) for quarter (0,1,2,3)
+	phy
+	tya
+	cmp #$0002
+	bcc mfu_q01
+	clc : adc #$000e                             // quarters 2,3 -> tiles +16,+17
+mfu_q01:
+	clc : adc #MN_FR_T_BASE
+	asl : asl : asl : asl                        // *16 words per 4bpp tile
+	clc : adc @man_obj_base
+	sta @$002116
+	ldy #$0008
+mfu_row:
+	sep #$20 : .as
+	lda @mn_frame_mask, x
+	rep #$20 : .al
+	and #$00ff
+	sta @man_t_tmp
+	xba                                          // plane 1 = same mask -> colour 3
+	ora @man_t_tmp                                 // plane 0
+	sta @$002118
+	inx
+	dey
+	bne mfu_row
+	ldy #$0008                                   // planes 2,3 = 0 (transparent elsewhere)
+mfu_zero:
+	lda #$0000 : sta @$002118
+	dey
+	bne mfu_zero
+	ply
+	iny
+	cpy #$0004
+	bne mfu_tile
+	sep #$20 : .as
+	lda #MN_FR_CG : sta @$002121
+	lda #$1f : sta @$002122                      // MN_FR_COLOUR low  ($001F = red)
+	lda #$00 : sta @$002122                      // MN_FR_COLOUR high
+	plp
+	rts
+
+// 1bpp masks, 8 rows each: horizontal edge, vertical edge, corner. A set bit is drawn.
+mn_frame_mask:
+	.byt $ff,$80,$80,$80,$80,$80,$80,$80         // quarter 0 (tile n)   : corner, arms both ways
+	.byt $ff,$00,$00,$00,$00,$00,$00,$00         // quarter 1 (tile n+1) : top arm continues
+	.byt $80,$80,$80,$80,$80,$80,$80,$80         // quarter 2 (tile n+16): side arm continues
+	.byt $00,$00,$00,$00,$00,$00,$00,$00         // quarter 3 (tile n+17): empty
+
+// ---- emit the zoom-area box as sprites, continuing from wherever the HUD left OAM. 56 sprites:
+//      16 per horizontal edge (well under the 32-per-scanline limit) and 12 per side. ----
+// The box owns fixed OAM slots (MN_FR_SPR0..+3), so "redraw" is just "draw" -- it re-addresses
+// OAM itself and never depends on where the HUD left off.
+man_frame_redraw:
+man_frame_draw:
+	php
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda #MN_FR_SPR0*2 : sta @$002102             // OAM word addr = sprite*2 (SPR0 is small)
+	lda #$00 : sta @$002103
+	rep #$30 : .al : .xl
+	lda #MN_FR_T_BASE : sta @man_t_slot
+	// top-left
+	lda @man_frx : sta @man_obj_x
+	lda @man_fry_scr : sta @man_t_row
+	lda #MN_FR_ATTR : sta @man_t_coff
+	jsr man_frame_put
+	// top-right (hflip)
+	lda @man_frx : clc : adc #MN_FR_W-16 : sta @man_obj_x
+	lda #MN_FR_ATTR_H : sta @man_t_coff
+	jsr man_frame_put
+	// bottom-right (h+v)
+	lda @man_fry_scr : clc : adc #MN_FR_H-16 : sta @man_t_row
+	lda #MN_FR_ATTR_HV : sta @man_t_coff
+	jsr man_frame_put
+	// bottom-left (vflip)
+	lda @man_frx : sta @man_obj_x
+	lda #MN_FR_ATTR_V : sta @man_t_coff
+	jsr man_frame_put
+	// mark all four as 16x16 in the OAM high table (one byte, since SPR0 is 4-aligned)
+	sep #$20 : .as
+	lda #MN_FR_HI_WORD : sta @$002102
+	lda #$01 : sta @$002103                      // high table starts at word $0100
+	lda #$aa : sta @$002104                      // byte 4: sprites 16-19 = size 16x16, X bit8 = 0
+	lda #$00 : sta @$002104                      // byte 5: sprites 20-23 stay small/hidden
+	plp
+	rts
+
+// ---- one frame sprite. Args in scratch (man_obj_x = X, man_t_row = Y, man_t_slot = tile,
+//      man_t_coff = attr) rather than registers, so the caller's loop counter stays in Y. ----
+man_frame_put:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	lda @man_obj_x    : sta @$002104
+	lda @man_t_row  : sta @$002104
+	lda @man_t_slot : sta @$002104
+	lda @man_t_coff : sta @$002104
+	rep #$30 : .al : .xl
+	lda @man_obj_n : inc : sta @man_obj_n
+	plp
+	rts
+
+// ---- program mode 1 for the 1x view. Forced blank. ----
+man_s1_setup:
+	php
+	sep #$20 : .as
+	lda #$00 : sta @$00420c                      // HDMA off (shell's BGMODE flip)
+	lda #$01 : sta @$002105                      // BGMODE 1
+	lda #$3c : sta @$002107                      // BG1SC: map word $3C00, 32x32
+	lda #$00 : sta @$00210b                      // BG12NBA: BG1 char word $0000
+	lda #MN_S1_OBJSEL : sta @$002101             // OBJ name base word $4000
+	lda #$00 : sta @$002133
+	sta @$002106
+	sta @$002130
+	sta @$002131
+	sta @$00212d
+	sta @$002123                                 // no windows at all in 1x
+	sta @$002124
+	sta @$002125
+	sta @$00212a
+	sta @$00212b
+	sta @$00212e
+	sta @$00212f
+	lda #$11 : sta @$00212c                      // main screen: BG1 + OBJ (the HUD)
+	lda #$00 : sta @$00210d : sta @$00210d       // H scroll 0 -- page is screen-width
+	rep #$30 : .al : .xl
+	lda #MN_S1_OBJ_VW : sta @man_obj_base
+	jsr man_obj_hide
+	lda #MN_HUD_NGLYPH_1X                        // 1x: whole font, legend glyphs included
+	jsr man_obj_glyphs
+	jsr man_frame_upload
+	plp
+	rts
+
+// ---- request scale-1 page A from the MCU (CMD_MANUAL_S1PAGE), bounded spin, read geometry. ----
+man_s1page_req:
+	php
+	rep #$30 : .al : .xl
+	sta @man_t_tmp
+	sep #$20 : .as
+	lda @man_sel_guide : sta @MCU_PARAM
+	lda @man_t_tmp       : sta @MCU_PARAM|$0001
+	xba
+	sta @MCU_PARAM|$0002
+	lda #$00 : sta @MCU_PARAM|$0003
+	lda #CMD_MANUAL_S1PAGE : sta @MCU_CMD
+	rep #$10 : .xl
+	ldx #MN_TIMEOUT_HI
+ms1q_outer:
+	ldy #$0000
+ms1q_inner:
+	lda @MCU_CMD
+	beq ms1q_ok
+	dey
+	bne ms1q_inner
+	dex
+	bne ms1q_outer
+	plp
+	sec
+	rts
+ms1q_ok:
+	lda @MANUAL_S1META
+	and #MAN_S1_F_READY
+	beq ms1q_err
+	rep #$30 : .al : .xl
+	lda @MAN_S1META_NROWS
+	and #$00ff : sta @man_s1nrows
+	lda @MAN_S1META_PIXH
+	sec : sbc #MN_Z_SCRN_H
+	bcs ms1q_maxok
+	lda #$0000
+ms1q_maxok:
+	sta @man_s1maxy
+	lda @man_t_tmp : sta @man_s1page
+	plp
+	clc
+	rts
+ms1q_err:
+	rep #$30 : .al : .xl
+	plp
+	sec
+	rts
+
+// ---- load scale-1 page A and show it from man_s1y. Forced blank around the stage. ----
+man_s1page_show:
+	php
+	rep #$30 : .al : .xl
+	pha
+	sep #$20 : .as
+	lda #$80 : sta @$002100
+	rep #$30 : .al : .xl
+	pla
+	jsr man_s1page_req
+	bcs ms1s_fail
+	lda @man_s1y
+	cmp @man_s1maxy
+	bcc ms1s_yok
+	lda @man_s1maxy
+ms1s_yok:
+	sta @man_s1y
+	lsr : lsr : lsr
+	sta @man_s1top
+	// --- Derive the box's screen position HERE, from the CLAMPED man_s1y. man_s1maxy only exists
+	//     after the request above, so anything the caller computed beforehand can be stale -- that
+	//     is exactly why the box appeared in the wrong spot after leaving 2x and then "teleported"
+	//     into place on the first d-pad nudge (the first input recomputed it). Clamp man_fry into
+	//     this page too, in case the new page is shorter than where the box was. ---
+	lda @man_s1maxy
+	clc : adc #MN_Z_SCRN_H-MN_FR_H               // fry_max = (pix_h-224) + 112
+	cmp @man_fry
+	bcs ms1s_fryok
+	sta @man_fry
+ms1s_fryok:
+	lda @man_fry
+	sec : sbc @man_s1y                           // box screen Y
+	bcs ms1s_scrok
+	lda #$0000
+ms1s_scrok:
+	sta @man_fry_scr
+	jsr man_s1pal_dma
+	jsr man_s1fill_ring
+	jsr man_s1scroll_apply
+	jsr man_obj_hud
+	sep #$20 : .as
+	lda #$0f : sta @$002100
+	rep #$30 : .al : .xl
+	plp
+	clc
+	rts
+ms1s_fail:
+	plp
+	sec
+	rts
+
+// ---- 1x pan input: vertical only, same held-state ramp as the 2x but with a HIGHER ceiling --
+//      a 1x row is 2 DMAs instead of 4, so two rows per frame fit here comfortably. ----
+man_s1_input:
+	php
+	rep #$30 : .al : .xl
+	lda @man_pad_cur
+	and #$0800                                   // Up
+	beq ms1i_no_u
+	lda #$ffff : bra ms1i_have
+ms1i_no_u:
+	lda @man_pad_cur
+	and #$0400                                   // Down
+	beq ms1i_idle
+	lda #$0001
+ms1i_have:
+	cmp @man_last_v
+	beq ms1i_ramp
+	sta @man_last_v
+	lda #$0000 : sta @man_hold_v
+	bra ms1i_move
+ms1i_ramp:
+	lda @man_hold_v
+	cmp #$7fff
+	bcs ms1i_move
+	inc : sta @man_hold_v
+ms1i_move:
+	lda @man_hold_v
+	jsr man_zspeed
+	asl                                          // 1x affords twice the 2x step (MN_S1_VMAX)
+	cmp #MN_S1_VMAX
+	bcc ms1i_step
+	lda #MN_S1_VMAX
+ms1i_step:
+	sta @man_t_tmp
+	// --- move the BOX in page coords, clamped to 0 .. pix_h-MN_FR_H (= man_s1maxy + 112) ---
+	lda @man_last_v
+	bmi ms1i_up
+	lda @man_fry
+	clc : adc @man_t_tmp
+	sta @man_t_entry
+	lda @man_s1maxy
+	clc : adc #MN_Z_SCRN_H-MN_FR_H               // fry_max = (pix_h-224) + 112
+	cmp @man_t_entry
+	bcs ms1i_vstore
+	bra ms1i_vstore_clamp
+ms1i_up:
+	lda @man_fry
+	sec : sbc @man_t_tmp
+	sta @man_t_entry
+	bcs ms1i_vstore2
+	lda #$0000 : sta @man_t_entry
+	bra ms1i_vstore2
+ms1i_vstore_clamp:
+	sta @man_t_entry
+ms1i_vstore:
+ms1i_vstore2:
+	lda @man_t_entry : sta @man_fry
+	jsr man_s1_follow_box
+	bra ms1i_horiz
+ms1i_idle:
+	lda #$0000
+	sta @man_hold_v
+	sta @man_last_v
+	// ---------------- Left/Right slide the zoom-area box ----------------
+	// The 1x page is exactly screen-width, so the d-pad's horizontal axis is otherwise idle --
+	// it picks WHICH 256px-wide slice of the 2x page A will magnify.
+ms1i_horiz:
+	lda @man_pad_cur
+	and #$0200                                   // Left
+	beq ms1i_no_l
+	lda #$ffff : bra ms1i_have_h
+ms1i_no_l:
+	lda @man_pad_cur
+	and #$0100                                   // Right
+	beq ms1i_h_idle
+	lda #$0001
+ms1i_have_h:
+	cmp @man_last_h
+	beq ms1i_h_ramp
+	sta @man_last_h
+	lda #$0000 : sta @man_hold_h
+	bra ms1i_h_move
+ms1i_h_ramp:
+	lda @man_hold_h
+	cmp #$7fff
+	bcs ms1i_h_move
+	inc : sta @man_hold_h
+ms1i_h_move:
+	lda @man_hold_h
+	jsr man_zspeed
+	sta @man_t_tmp
+	lda @man_last_h
+	bmi ms1i_h_left
+	lda @man_frx                                 // right: clamp at MN_FR_XMAX
+	clc : adc @man_t_tmp
+	cmp #MN_FR_XMAX
+	bcc ms1i_h_store
+	lda #MN_FR_XMAX
+	bra ms1i_h_store
+ms1i_h_left:
+	lda @man_frx                                 // left: clamp at 0
+	sec : sbc @man_t_tmp
+	bcs ms1i_h_store
+	lda #$0000
+ms1i_h_store:
+	cmp @man_frx
+	beq ms1i_h_done                              // unchanged -> no OAM traffic
+	sta @man_frx
+	jsr man_frame_redraw
+ms1i_h_done:
+	plp
+	rts
+
+// ---- put the box (and the view) at the top of a freshly turned page. ----
+man_s1_park_box:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @man_s1y
+	sta @man_fry
+	sta @man_fry_scr
+	plp
+	rts
+
+// ---- keep the box on screen by scrolling the PAGE under it, not the other way round. This is
+//      what makes every corner reachable: pinning the box to the screen centre meant the page's
+//      first MN_FR_Y0 pixels could never be the top of the 2x view. ----
+man_s1_follow_box:
+	php
+	rep #$30 : .al : .xl
+	lda @man_s1y : sta @man_t_slot             // remember, to see whether it moved
+	lda @man_fry
+	cmp @man_s1y
+	bcs ms1fb_chk_bot
+	sta @man_s1y                                 // box above the view -> pull the page up
+	bra ms1fb_clamp
+ms1fb_chk_bot:
+	clc : adc #MN_FR_H                           // box bottom in page coords
+	sec : sbc #MN_Z_SCRN_H                       // the s1y that would put it at the screen bottom
+	bcc ms1fb_clamp                              // negative -> box already fits
+	cmp @man_s1y
+	bcc ms1fb_clamp
+	sta @man_s1y
+ms1fb_clamp:
+	lda @man_s1y
+	cmp @man_s1maxy
+	bcc ms1fb_ok
+	lda @man_s1maxy : sta @man_s1y
+ms1fb_ok:
+	lda @man_s1y
+	cmp @man_t_slot
+	beq ms1fb_nosroll
+	// How far did the page move? One row per frame is the budget; anything bigger has to be a
+	// BLANKED full refill, because staging many rows in a single vblank overruns it and the
+	// dropped writes show up as bands of stale content.
+	sec : sbc @man_t_slot
+	bcs ms1fb_pos
+	eor #$ffff : inc                             // |delta|
+ms1fb_pos:
+	cmp #MN_S1_VMAX+1
+	bcc ms1fb_incr
+	sep #$20 : .as                               // big jump -> refill under forced blank
+	lda #$80 : sta @$002100
+	rep #$30 : .al : .xl
+	lda @man_s1y : lsr : lsr : lsr : sta @man_s1top
+	jsr man_s1fill_ring
+	jsr man_s1scroll_apply
+	sep #$20 : .as
+	lda #$0f : sta @$002100
+	rep #$30 : .al : .xl
+	bra ms1fb_nosroll
+ms1fb_incr:
+	jsr man_s1ring_follow                        // normal case: slide the ring one row at a time
+	jsr man_s1scroll_apply
+ms1fb_nosroll:
+	lda @man_fry
+	sec : sbc @man_s1y                           // box screen Y
+	cmp @man_fry_scr
+	beq ms1fb_done                               // box did not move on screen -> no OAM traffic
+	sta @man_fry_scr
+	jsr man_frame_redraw
+ms1fb_done:
+	plp
+	rts
+ms1i_h_idle:
+	lda #$0000
+	sta @man_hold_h
+	sta @man_last_h
+	plp
+	rts
+
+// ---- program mode 1 for the split-layer zoom view. Forced blank. ----
+man_setup_mode1_zoom:
+	php
+	sep #$20 : .as
+	lda #$00 : sta @$00420c                      // HDMA off (the shell's BGMODE flip)
+	lda #$01 : sta @$002105                      // BGMODE 1, 8x8 tiles
+	lda #$3c : sta @$002107                      // BG1SC: map word $3C00, 32x32
+	lda #$7c : sta @$002108                      // BG2SC: map word $7C00, 32x32
+	lda #$40 : sta @$00210b                      // BG12NBA: BG1 char $0000, BG2 char $4000
+	lda #$00 : sta @$002101                      // OBJSEL: 8x8/16x16, name base word $0000
+	lda #$00 : sta @$002133                      // no pseudo-hires / interlace
+	sta @$002106                                 // mosaic off
+	sta @$002130                                 // colour math off
+	sta @$002131
+	sta @$00212d                                 // sub screen off
+	sta @$002124                                 // BG3/BG4 window select off
+	sta @$002125                                 // OBJ/colour window select off
+	sta @$00212a                                 // window logic
+	sta @$00212b
+	sta @$00212f                                 // sub-screen window mask off
+	// window 1 splits the two halves: BG1 enabled non-inverted, BG2 enabled INVERTED, so the
+	// single [split,255] region clips BG1 on the right and BG2 everywhere else.
+	lda #$32 : sta @$002123                      // W12SEL: BG1 win1, BG2 win1+invert
+	lda #$03 : sta @$00212e                      // TMW: window-clip BG1 and BG2 (NOT OBJ)
+	lda #$13 : sta @$00212c                      // main screen: BG1 + BG2 + OBJ (the HUD)
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @man_obj_base               // 2x: OBJ tiles at word 0 (VRAM is full there)
+	jsr man_obj_hide                             // no stale sprites before the HUD is drawn
+	lda #MN_HUD_NGLYPH_2X                        // 2x: FIRST 15 ONLY -- tile 16 up is the BG1 image pool at word $0100 (MCU lockstep)
+	jsr man_obj_glyphs                           // HUD tiles + OBJ palette (once per zoom entry)
+	sep #$20 : .as                               // (source-order re-assert after the calls)
+	plp
+	rts
+
+// ---- write both layers' scroll + the window split. These MUST land together (same vblank) or
+//      the seam tears by a column, so they live in ONE routine and nothing separates them. ----
+man_zscroll_apply:
+	php
+	rep #$30 : .al : .xl
+	lda @man_zx
+	sep #$20 : .as
+	sta @$00210d : xba : sta @$00210d            // BG1HOFS (write twice: low then high)
+	rep #$20 : .al
+	lda @man_zx
+	sep #$20 : .as
+	sta @$00210f : xba : sta @$00210f            // BG2HOFS -- same X: BG2's map wraps at 256,
+	rep #$20 : .al                               //   which IS the cx-256 the right half needs
+	lda @man_zy
+	sec : sbc #MN_Z_VOFS_BIAS                    // VOFS = Y-1 (PPU shows VOFS+1 .. VOFS+224)
+	sep #$20 : .as
+	sta @$00210e : xba : sta @$00210e            // BG1VOFS
+	rep #$20 : .al
+	lda @man_zy
+	sec : sbc #MN_Z_VOFS_BIAS
+	sep #$20 : .as
+	sta @$002110 : xba : sta @$002110            // BG2VOFS
+	// --- window: split = 256 - X ---
+	rep #$20 : .al
+	lda @man_zx
+	bne mzsa_xnz
+	sep #$20 : .as                               // X=0: empty window (WH0>WH1) -> BG1 everywhere,
+	lda #$ff : sta @$002126                      //   BG2 (inverted) nowhere
+	lda #$00 : sta @$002127
+	bra mzsa_done
+mzsa_xnz:
+	rep #$20 : .al                               // A IS still 16-bit here (we branched over the
+	                                             //   sep above), but snescom leaks .as/.al in
+	                                             //   SOURCE order -- re-assert or the 16-bit
+	                                             //   immediates below fail to assemble
+	cmp #MN_Z_XMAX
+	bcc mzsa_xmid
+	sep #$20 : .as                               // X=256: whole screen -> BG1 nowhere, BG2 all
+	lda #$00 : sta @$002126
+	lda #$ff : sta @$002127
+	bra mzsa_done
+mzsa_xmid:
+	rep #$20 : .al                               // (same source-order re-assert)
+	eor #$ffff : inc                             // A = -X; low byte = 256-X for X in 1..255
+	sep #$20 : .as
+	sta @$002126                                 // WH0 = split
+	lda #$ff : sta @$002127                      // WH1 = 255
+mzsa_done:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- request zoom page A from the MCU (CMD_MANUAL_ZPAGE), spin for the ACK BOUNDED by
+//      MN_TIMEOUT_HI x 65536, then read back the page geometry. Carry CLEAR = ok, SET = failed.
+//      This is the ONLY MCU traffic the zoom view generates -- once per page turn, never per pan. ----
+man_zpage_req:
+	php
+	rep #$30 : .al : .xl
+	sta @man_t_tmp                                 // requested index (block or zoom page)
+	sep #$20 : .as
+	lda @man_sel_guide
+	sta @MCU_PARAM                               // [0] = compacted guide
+	lda @man_t_tmp
+	sta @MCU_PARAM|$0001                         // [1..2] = index u16 LE
+	xba
+	sta @MCU_PARAM|$0002
+	lda @man_zreqmode
+	sta @MCU_PARAM|$0003                         // [3] = mode (bit0: index is a zoom page)
+	lda #CMD_MANUAL_ZPAGE : sta @MCU_CMD
+	rep #$10 : .xl
+	ldx #MN_TIMEOUT_HI
+mzpr_outer:
+	ldy #$0000
+mzpr_inner:
+	lda @MCU_CMD
+	beq mzpr_ok
+	dey
+	bne mzpr_inner
+	dex
+	bne mzpr_outer
+	plp
+	sec
+	rts
+mzpr_ok:
+	lda @MANUAL_META                             // .as -- flags byte
+	and #MAN_META_F_ZREADY                       // staged AND valid? (the MCU sets this LAST)
+	beq mzpr_err
+	// --- geometry: nrows, and the vertical clamp from pix_h ---
+	rep #$30 : .al : .xl
+	lda @MAN_META_ZNROWS
+	and #$00ff : sta @man_znrows
+	lda @MAN_META_ZPIXH                          // u16 LE
+	sec : sbc #MN_Z_SCRN_H                       // maxY = pix_h - 224
+	bcs mzpr_maxok
+	lda #$0000                                   // page shorter than the screen -> no vertical pan
+mzpr_maxok:
+	sta @man_zmaxy
+	lda @MAN_META_ZFIRSTBLK
+	sta @man_zfirstblk
+	sep #$20 : .as
+	lda @MAN_META_ZPAGE
+	rep #$30 : .al : .xl
+	and #$00ff : sta @man_zpage                  // the MCU resolved it (block mode -> its page)
+	plp
+	clc
+	rts
+mzpr_err:
+	rep #$30 : .al : .xl
+	lda #$ffff : sta @man_zpage                  // nothing pannable is staged
+	plp
+	sec
+	rts
+
+// ---- load zoom page A and show it from (man_zx, man_zy). Forced blank around the whole thing:
+//      the page stage is a ~119KB SD read on the MCU side, so this is the one place the viewer
+//      goes black -- once per page turn instead of once per nav step. Carry SET = failed. ----
+man_zpage_show:
+	php
+	rep #$30 : .al : .xl
+	pha
+	sep #$20 : .as
+	lda #$80 : sta @$002100                      // force blank
+	rep #$30 : .al : .xl
+	pla
+	jsr man_zpage_req
+	bcs mzps_fail
+	// A block-mode request (entering zoom from 1x) starts at the Y the MCU resolved through the
+	// block map -- that is what puts the SECOND band of a page half-way down the SAME zoom page
+	// instead of at the top of a page of its own. man_zentry = $ffff means "keep my own Y".
+	lda @man_zentry
+	cmp #$ffff
+	beq mzps_keepy
+	lda @MAN_META_ZENTRYY : sta @man_zy
+mzps_keepy:
+	// clamp the incoming pan into the new page, then fill the ring around it
+	lda @man_zy
+	cmp @man_zmaxy
+	bcc mzps_yok
+	lda @man_zmaxy
+mzps_yok:
+	sta @man_zy
+	lsr : lsr : lsr                              // ring_top = Y >> 3 (tile row of the top line)
+	sta @man_ring_top
+	jsr man_zpal_dma
+	jsr man_zfill_ring
+	jsr man_zscroll_apply
+	jsr man_obj_hud                              // "Pg X/N 2X" (page number changed)
+	sep #$20 : .as
+	lda #$0f : sta @$002100                      // unblank into the page
+	rep #$30 : .al : .xl
+	plp
+	clc
+	rts
+mzps_fail:
+	plp
+	sec
+	rts
+
+// ---- Y toggle. A zoom PAGE IS the 1x block rendered at 2x, so there is no index arithmetic:
+//      block b <-> page b. Entering restores the remembered pan if we are returning to the same
+//      block, otherwise centres. No-op if the guide has no scrollable zoom section. ----
+man_zoom_toggle:
+	php
+	rep #$30 : .al : .xl
+	lda @man_zoom_mode
+	bne mzt_leave
+	jsr man_cur_zflag                            // A != 0 -> guide has a zoom section
+	beq mzt_done                                 // no zoom -> ignore Y entirely
+	// 1x page p -> 2x page p: the two scales cover the same content, so this is a pure doubling.
+	// It MUST land exactly on the box the 1x is showing, or A magnifies something other than what
+	// you selected -- the box sits 56px down the screen (its vertical centre) and at man_frx.
+	lda @man_fry
+	asl : sta @man_zy                            // the box's page position, doubled -- A must land
+	lda @man_frx                                 //   EXACTLY on the box or it magnifies elsewhere
+	asl : sta @man_zx
+	lda #$0001 : sta @man_zoom_mode
+	jsr man_zclear_hold
+	// FORCE BLANK FIRST: man_setup_mode1_zoom uploads HUD glyph tiles and writes OAM, and the
+	// PPU discards those with the screen live. We arrive here from the UNBLANKED 1x view.
+	sep #$20 : .as
+	lda #$80 : sta @$002100
+	rep #$30 : .al : .xl
+	jsr man_setup_mode1_zoom
+	lda #$0001 : sta @man_zreqmode               // index IS a zoom page (pages are 1:1 with 1x now)
+	lda #$ffff : sta @man_zentry                 // keep the Y we just derived
+	lda @man_s1page
+	jsr man_zpage_show
+	bcc mzt_done
+	lda #$0000 : sta @man_zoom_mode              // page load failed -> fall back to 1x
+	lda #$0001 : sta @man_error
+	jsr man_viewer_exit
+	bra mzt_done
+mzt_leave:
+	lda @man_zx : sta @man_sav_zx
+	lda @man_zy : sta @man_sav_zy
+	// 2x -> 1x: come back with the box around what you were reading, CENTRED on screen rather
+	// than jammed against the top -- the point of dropping to 1x is to see that region in context.
+	// man_sav_zx/zy (set just above) carry the 2x position; halving them gives the 1x equivalent.
+	lda @man_zpage : sta @man_s1page
+	lda @man_sav_zx : lsr : sta @man_frx         // the 1x equivalent of where the 2x was
+	lda @man_sav_zy : lsr : sta @man_fry
+	sec : sbc #(MN_Z_SCRN_H-MN_FR_H)/2           // view centred on the box, not jammed to the top
+	bcs mzt_s1ok
+	lda #$0000                                   // near the page top -> clamp
+mzt_s1ok:
+	sta @man_s1y                                 // man_s1page_show derives man_fry_scr from this
+	lda #$0000 : sta @man_zoom_mode              //   AFTER clamping it -- do not precompute it
+	lda #$ffff : sta @man_zpage
+	sep #$20 : .as
+	lda #$80 : sta @$002100                      // blank across the mode switch
+	rep #$30 : .al : .xl
+	jsr man_s1_setup
+	lda @man_s1page
+	jsr man_s1page_show                          // box position is already set, so the HUD+box
+	                                             //   draw happens INSIDE this call's forced blank.
+	                                             //   Doing it afterwards wrote OAM/VRAM with the
+	                                             //   screen live (the MCU request alone takes tens
+	                                             //   of ms) -> scattered sprite glitches.
+mzt_done:
+	plp
+	rts
+
+// ---- reset the pan acceleration state (on entry, page turn, or mode switch) so the first press
+//      after any of those is always a single pixel, never a carried-over fast repeat. ----
+man_zclear_hold:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @man_hold_h
+	sta @man_hold_v
+	sta @man_last_h
+	sta @man_last_v
+	plp
+	rts
+
+// ---- A = frames-held (man_hold_*) -> pixels/frame. Caller runs .al. ----
+man_zspeed:
+	php
+	rep #$30 : .al : .xl
+	cmp #MN_Z_ACC1
+	bcs mzs_1
+	lda #$0001
+	bra mzs_done
+mzs_1:
+	cmp #MN_Z_ACC2
+	bcs mzs_2
+	lda #$0002
+	bra mzs_done
+mzs_2:
+	cmp #MN_Z_ACC3
+	bcs mzs_3
+	lda #$0004
+	bra mzs_done
+mzs_3:
+	lda #MN_Z_VMAX
+mzs_done:
+	sta @man_t_tmp
+	plp
+	lda @man_t_tmp
+	rts
+
+// ---- 2x pan input. Uses HELD state (man_pad_cur), not edges: this is a pan, not a cursor, so it
+//      moves continuously from the very first frame with no repeat delay, and the two axes are
+//      independent so diagonals work. Releasing or reversing resets the ramp, which is what makes
+//      a quick tap always worth exactly one pixel.
+//      Horizontal is free (a scroll-register write). Vertical slides the ring, so it is capped at
+//      one tile row per frame -- see MN_Z_ACC3.
+//      Reaching the bottom/top turns the page (Y wraps to the other end, X preserved): a manual is
+//      a continuous document, so panning off the end should keep reading, not stick. ----
+man_zoom_input:
+	php
+	rep #$30 : .al : .xl
+	// ---------------- horizontal ----------------
+	lda @man_pad_cur
+	and #$0200                                   // Left
+	beq mzi_no_l
+	lda #$ffff : bra mzi_have_h
+mzi_no_l:
+	lda @man_pad_cur
+	and #$0100                                   // Right
+	beq mzi_h_idle
+	lda #$0001
+mzi_have_h:
+	cmp @man_last_h                              // same direction as last frame -> ramp up
+	beq mzi_h_ramp
+	sta @man_last_h
+	lda #$0000 : sta @man_hold_h                 // direction changed -> back to 1px
+	bra mzi_h_move
+mzi_h_ramp:
+	lda @man_hold_h
+	cmp #$7fff
+	bcs mzi_h_move
+	inc : sta @man_hold_h
+mzi_h_move:
+	lda @man_hold_h
+	jsr man_zspeed
+	asl                                          // horizontal costs nothing -> allow 2x the ramp
+	sta @man_t_tmp
+	lda @man_last_h
+	bmi mzi_h_left
+	lda @man_zx                                  // right: X = min(X + step, MN_Z_XMAX)
+	clc : adc @man_t_tmp
+	cmp #MN_Z_XMAX
+	bcc mzi_h_store
+	lda #MN_Z_XMAX
+	bra mzi_h_store
+mzi_h_left:
+	lda @man_zx                                  // left: X = max(X - step, 0)
+	sec : sbc @man_t_tmp
+	bcs mzi_h_store
+	lda #$0000
+mzi_h_store:
+	sta @man_zx
+	bra mzi_vert
+mzi_h_idle:
+	lda #$0000
+	sta @man_hold_h
+	sta @man_last_h
+
+	// ---------------- vertical ----------------
+mzi_vert:
+	lda @man_pad_cur
+	and #$0800                                   // Up
+	beq mzi_no_u
+	lda #$ffff : bra mzi_have_v
+mzi_no_u:
+	lda @man_pad_cur
+	and #$0400                                   // Down
+	beq mzi_v_idle
+	lda #$0001
+mzi_have_v:
+	cmp @man_last_v
+	beq mzi_v_ramp
+	sta @man_last_v
+	lda #$0000 : sta @man_hold_v
+	bra mzi_v_move
+mzi_v_ramp:
+	lda @man_hold_v
+	cmp #$7fff
+	bcs mzi_v_move
+	inc : sta @man_hold_v
+mzi_v_move:
+	lda @man_hold_v
+	jsr man_zspeed                               // capped at 8 = one tile row per frame
+	sta @man_t_tmp
+	lda @man_last_v
+	bmi mzi_v_up
+	lda @man_zy                                  // down
+	clc : adc @man_t_tmp
+	cmp @man_zmaxy
+	bcc mzi_v_store
+	beq mzi_v_store
+	lda @man_zmaxy                               // STICK at the bottom. Panning off the end must
+	bra mzi_v_store                              //   NOT turn the page on its own -- only L/R do.
+mzi_v_up:
+	lda @man_zy
+	sec : sbc @man_t_tmp
+	bcs mzi_v_store
+	lda #$0000                                   // stick at the top, same rule
+mzi_v_store:
+	sta @man_zy
+	jsr man_zring_follow                         // slide the ring if the top row changed
+	bra mzi_apply
+mzi_v_idle:
+	lda #$0000
+	sta @man_hold_v
+	sta @man_last_v
+mzi_apply:
+	jsr man_zscroll_apply
+	plp
+	rts
+
+// ---- keep the ring covering the visible window after a vertical move. ring_top must be Y>>3,
+//      and each row that enters the window is staged into its slot. Moves are <= 8px, so this
+//      stages at most one row per call -- the whole vertical bandwidth budget. ----
+man_zring_follow:
+	php
+	rep #$30 : .al : .xl
+mzrf_step:
+	lda @man_zy
+	lsr : lsr : lsr                              // wanted ring_top = Y >> 3
+	cmp @man_ring_top
+	beq mzrf_done                                // ring already covers the window
+	bcc mzrf_up
+	// scrolled DOWN: advance ONE row at a time -- a 16px step moves the window by two rows and
+	// both have to be staged, so this loops instead of assuming a single row per call.
+	lda @man_ring_top : inc : sta @man_ring_top
+	clc : adc #MN_Z_RING-1                       // the row entering at the bottom
+	cmp @man_znrows
+	bcs mzrf_step                                // past a short page's end -> nothing to load
+	sta @man_t_tmp
+	jsr man_zrow_dma
+	bra mzrf_step
+mzrf_up:
+	// scrolled UP: the row entering at the top is the new top row itself
+	lda @man_ring_top : dec : sta @man_ring_top
+	sta @man_t_tmp
+	jsr man_zrow_dma
+	bra mzrf_step
+mzrf_done:
+	plp
+	rts
+
+// ---- page turn while panning: next page from the top, previous from the bottom. X is preserved
+//      so a column of text stays put across the turn. Failure falls back to staying put. ----
+// load zoom page A directly (page turns stay in zoom-page space; a PDF page is ONE zoom page,
+// so turning is a real page turn, not a jump to the other half of the one you were reading).
+man_zload_page:
+	php
+	rep #$30 : .al : .xl
+	sta @man_t_entry
+	jsr man_zclear_hold
+	lda #$0001 : sta @man_zreqmode               // index IS a zoom page
+	lda #$ffff : sta @man_zentry                 // keep the Y the caller set
+	lda @man_t_entry
+	jsr man_zpage_show
+	bcs mzlc_fail
+	plp
+	rts
+mzlc_fail:
+	lda #$0001 : sta @man_error
+	jsr man_viewer_exit
+	plp
+	rts
+
+// next ZOOM PAGE, entered at the TOP. Used by R and by panning off the bottom.
+man_zturn_next:
+	php
+	rep #$30 : .al : .xl
+	lda @man_zpage
+	inc
+	sta @man_t_slot                            // candidate (man_t_tmp belongs to man_zpage_show)
+	jsr man_cur_zpages
+	cmp @man_t_slot
+	bcc mztn_clamp
+	beq mztn_clamp
+	lda #$0000 : sta @man_zy
+	lda @man_t_slot
+	jsr man_zload_page
+	plp
+	rts
+mztn_clamp:
+	lda @man_zmaxy : sta @man_zy                 // last page -> stick at the bottom
+	plp
+	rts
+
+// previous ZOOM PAGE entered at the TOP -- what L (an explicit page turn) should do.
+man_zturn_prev_top:
+	php
+	rep #$30 : .al : .xl
+	lda @man_zpage
+	beq mztpt_done
+	dec : sta @man_t_slot
+	lda #$0000 : sta @man_zy
+	lda @man_t_slot
+	jsr man_zload_page
+mztpt_done:
+	plp
+	rts
+
+// ---- read the active guide's 1x nblocks / zoom nblocks / npages from its MANUAL_GUIDES record
+//      (MAN_GD_REC0 + man_sel_guide*32 + field). Return in A. Caller runs .al. ----
+man_cur_nblocks:
+	php
+	rep #$30 : .al : .xl
+	lda @man_sel_guide
+	asl : asl : asl : asl : asl                 // *32
+	clc : adc #MAN_GD_R_NBLOCKS
+	tax
+	lda @MAN_GD_REC0, x                          // u16 LE
+	plp
+	rts
+// ---- A != 0 when the active guide carries a scrollable zoom section (record flags bit1).
+//      Deliberately tests ONLY bit1: bit0 is the retired quadrant scheme, and a stale asset must
+//      degrade to 1x-only rather than be panned as if it were the new format. Returns the flag in
+//      A with Z set accordingly -- the php/plp pair would discard Z, so the test is redone after. ----
+man_cur_zflag:
+	php
+	rep #$30 : .al : .xl
+	lda @man_sel_guide
+	asl : asl : asl : asl : asl
+	clc : adc #MAN_GD_R_FLAGS
+	tax
+	sep #$20 : .as
+	lda @MAN_GD_REC0, x                          // u8 flags
+	rep #$30 : .al : .xl
+	and #MAN_GD_F_ZOOM2
+	sta @man_t_tmp
+	plp
+	lda @man_t_tmp                                 // re-load so Z reflects the flag, not plp
+	rts
+// ---- A = the active guide's ZOOM PAGE count (record +6). A zoom page is a whole PDF page, so
+//      this is normally npages -- NOT nblocks. Page turns are clamped against it. ----
+man_cur_zpages:
+	php
+	rep #$30 : .al : .xl
+	lda @man_sel_guide
+	asl : asl : asl : asl : asl
+	clc : adc #MAN_GD_R_ZPAGES
+	tax
+	lda @MAN_GD_REC0, x                          // u16 LE
+	sta @man_t_tmp
+	plp
+	lda @man_t_tmp
+	rts
+
+man_cur_npages:
+	php
+	rep #$30 : .al : .xl
+	lda @man_sel_guide
+	asl : asl : asl : asl : asl
+	clc : adc #MAN_GD_R_NPAGES
+	tax
+	sep #$20 : .as
+	lda @MAN_GD_REC0, x                          // u8
+	rep #$30 : .al : .xl
+	and #$00ff
+	plp
+	rts
+
+// ---- reprogram the shell's mode-5 PPU register file (mirror of cheatoverlay.a65's
+//      setup). The ch1 BGMODE HDMA table ($4310-$4314 + the $7E0000 WRAM table) is
+//      INTACT (the viewer only disabled $420C, never touched ch1), so $420C is
+//      re-enabled by the caller (man_viewer_exit) after the tilemap rebuild. ----
+man_restore_mode5_regs:
+	php
+	sep #$20 : .as
+	lda #$03 : sta @$002105                        // base mode 3 (HDMA flips to mode 5)
+	lda #($58|$02) : sta @$002107                  // BG1 tilemap word $5800, SC 32x64
+	lda #($50|$02) : sta @$002108                  // BG2 tilemap word $5000, SC 32x64
+	lda #$40 : sta @$00210b                         // char base: BG1 $0000, BG2 $4000
+	lda #$08 : sta @$002133                         // pseudo-512
+	lda #$fc : sta @$00210d : lda #$00 : sta @$00210d   // BG1 H scroll = $00fc (write-twice)
+	sta @$00210e : sta @$00210e                     // BG1 V scroll = 0
+	sta @$00210f : sta @$00210f                     // BG2 H scroll = 0
+	sta @$002110 : sta @$002110                     // BG2 V scroll = 0
+	lda #$cc : sta @$002123                         // BG1+BG2 window-2 enable + invert. This also
+	                                                //   clears bits 0/1/4/5, i.e. de-selects the
+	                                                //   WINDOW 1 the 2x zoom used for its seam.
+	lda #$00 : sta @$002124                          // BG3/BG4 window select off
+	sta @$002126                                    // and blank window 1's bounds outright, so a
+	sta @$002127                                    //   future layer enabling win1 can't inherit
+	                                                //   the zoom viewer's split as a stale edge
+	lda #$00 : sta @$002125                          // OBJ/colour window off
+	sta @$00212a                                    // BG window logic = OR
+	lda #$01 : sta @$002128                          // window 2 left  = 1
+	lda #252 : sta @$002129                          // window 2 right = 252
+	lda #$03 : sta @$00212e                          // main: clip BG1+BG2 in their window area
+	sta @$00212f                                    // sub:  same
+	lda #$03 : sta @$00212c                          // main screen: BG1 + BG2
+	sta @$00212d                                    // sub screen:  BG1 + BG2
+	lda #$00 : sta @$002106                          // mosaic off
+	sta @$002130                                    // colour math off (clears DirectColor bit)
+	sta @$002131
+	plp
+	rts
+
+// ---- leave the viewer: force blank, restore both shell fonts + CGRAM (ch0), reprogram
+//      the mode-5 regs, rebuild the tilemaps (bar + footer + manual body), re-enable the
+//      BGMODE HDMA, unblank. Called on B (normal) and on a request timeout (man_error). ----
+man_viewer_exit:
+	php
+	sep #$20 : .as
+	lda #$80 : sta @$002100                        // force blank during restore
+	lda #$80 : sta @$002115                        // VMAIN word step
+	jsr man_host_restore_gfx                       // HOST: put its own fonts + CGRAM back
+	// --- park the HUD sprites again. The overlay's exit deliberately does NOT restore OAM (the
+	//     game repopulates it from its own NMI), so leaving our glyphs live would flash them over
+	//     the first resumed frames. This puts OAM back exactly as ss_ovl_oamclr left it. ---
+	jsr man_obj_hide
+	// --- reprogram the mode-5 regs ---
+	jsr man_restore_mode5_regs
+	// --- remember where we were reading, so re-opening the manual resumes here ---
+	rep #$30 : .al : .xl
+	lda @man_sel_guide : sta @man_pos_guide
+	lda @man_s1page    : sta @man_pos_block      // the saved "block" slot now holds a PAGE
+	lda @man_zoom_mode : sta @man_pos_zoom
+	lda @man_zx        : sta @man_pos_zx
+	lda @man_zy        : sta @man_pos_zy
+	lda @man_s1y       : sta @man_pos_s1y        // real 1x scroll (fixes the pure-1x resume)
+	lda @man_frx       : sta @man_pos_frx        // and the zoom-area box
+	lda @man_fry       : sta @man_pos_fry
+	lda #MN_POS_MAGIC  : sta @man_pos_magic
+	// --- drop the 2x state so a re-open never pans over a stale page ---
+	lda #$0000 : sta @man_zoom_mode
+	lda #$ffff : sta @man_zpage
+	// --- leave the viewer sub-mode ---
+	lda @man_modal : and #$fffe : sta @man_modal
+	// --- rebuild the shell chrome (the viewer's mode-3 tiles clobbered the tilemaps) ---
+	jsr man_host_chrome                                // HOST: repaint its chrome + unblank
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ======================================================================
+//  Data (never executed; emitted in the host's bank).
+// ======================================================================
+// HUD glyph font for the manual viewer. 19 glyphs x 8 bytes, 1bpp bitmap (bit clear = ink,
+// bit set = box). Slots: 0 space,1 '/',2 P,3 g,4 X,5..14 '0'..'9' -- uploaded in BOTH modes --
+// then 15 A,16 ':',17 L,18 R, the 1x legend set, which ONLY the 1x uploads (the 2x OBJ pool
+// stops at 16 tiles). Expanded into 4bpp OBJ tiles at runtime (man_obj_glyphs).
+mn_hud_font:
+	.byt $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff   // space
+	.byt $fd,$fb,$fb,$f7,$ef,$df,$df,$ff   // /
+	.byt $87,$bb,$bb,$87,$bf,$bf,$bf,$ff   // P
+	.byt $ff,$c3,$bb,$bb,$c3,$fb,$87,$ff   // g
+	.byt $bb,$bb,$d7,$ef,$d7,$bb,$bb,$ff   // X
+	.byt $c7,$bb,$b3,$ab,$9b,$bb,$c7,$ff   // 0
+	.byt $ef,$cf,$ef,$ef,$ef,$ef,$c7,$ff   // 1
+	.byt $c7,$bb,$fb,$e7,$df,$bf,$83,$ff   // 2
+	.byt $83,$fb,$f7,$e7,$fb,$bb,$c7,$ff   // 3
+	.byt $f3,$eb,$db,$bb,$83,$fb,$fb,$ff   // 4
+	.byt $83,$bf,$87,$fb,$fb,$bb,$c7,$ff   // 5
+	.byt $e7,$df,$bf,$87,$bb,$bb,$c7,$ff   // 6
+	.byt $83,$fb,$f7,$ef,$df,$df,$df,$ff   // 7
+	.byt $c7,$bb,$bb,$c7,$bb,$bb,$c7,$ff   // 8
+	.byt $c7,$bb,$bb,$c3,$fb,$f7,$cf,$ff   // 9
+	.byt $c7,$bb,$bb,$83,$bb,$bb,$bb,$ff   // A
+	.byt $ff,$ff,$ef,$ff,$ff,$ef,$ff,$ff   // :
+	.byt $bf,$bf,$bf,$bf,$bf,$bf,$83,$ff   // L
+	.byt $87,$bb,$bb,$87,$af,$b7,$bb,$ff   // R
+
+// 1x legend text: "A:2X  L/R:Pg" (12 glyphs). The two spaces are REAL glyph sprites --
+// the HUD style is a continuous dark box strip, so a gap of transparent pixels would read
+// as a hole. Language-neutral by design (the HUD has no i18n access; "2X" and "Pg" are
+// the HUD's own vocabulary, identical across all languages).
+mn_legend_txt:
+	.byt MN_G_A, MN_G_COLON, MN_G_DIG0+2, MN_G_X
+	.byt MN_G_SPACE, MN_G_SPACE
+	.byt MN_G_L, MN_G_SLASH, MN_G_R, MN_G_COLON, MN_G_P, MN_G_G

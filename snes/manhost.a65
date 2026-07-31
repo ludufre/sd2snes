@@ -1,0 +1,482 @@
+; MENU-side host for the shared MANUAL/GUIDES image viewer (snes/manviewer.i65).
+;
+; The viewer body is SHARED SOURCE with the in-game $C2 shell (snes/igmenu.a65): this file
+; is the second HOST of that contract.  It binds the man_* contract #defines, includes the
+; viewer into the menu's $C1 page, supplies the three man_host_* hooks, and adds the entry
+; point the game-info screen calls on X (manhost_from_gi).
+;
+; WHY $C1: the $C0 page has ~700 bytes left; the viewer is several KB.  $C1 (the localized
+; string pool page) has ~22 KB free.  Only tiny `jsr X : rtl` trampolines live in $C0
+; (gameinfo.a65) so this object can reach the menu routines it needs.
+;
+; SCRATCH: the man_* contract words are bound to the SAME PSRAM $F4 slots the in-game shell
+; uses.  Safe by construction -- the shell and the menu never run at the same time -- and
+; reachable here because the MENU MAPPER (7) maps banks $F0-$FF as the SNES-writable 8 Mbit
+; "SRAM" window straight onto PSRAM (verilog/sd2snes_base/address.v: "Menu mapper: 8Mbit
+; SRAM @ Bank 0xf0-0xff (entire banks!)", identity-mapped).
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+; '.link page' wins and they emit no bytes) so every byte of this object -- INCLUDING the
+; shared manviewer.i65 routines -- lands in $C1.  Same pattern as cheatoverlay.a65.
+.link page $c1
+
+; ---- viewer contract binding (see the header of manviewer.i65) -------------------------
+; Macro-to-macro: snescom expands these nested at the use site, so the lines stay
+; comment-free (a trailing `;` would ride into the expansion).
+#define man_t_tmp       $F4816E
+#define man_t_slot      $F48170
+#define man_t_coff      $F48172
+#define man_t_entry     $F48174
+#define man_t_row       $F4816C
+#define man_pad_cur     $F4810C
+#define man_pad_edge    $F4810E
+#define man_modal       $F4812C
+#include "manviewer_defs.i65"      ; viewer scratch map + MN_POS_MAGIC/MN_TIMEOUT_HI/MN_*
+
+; ---- host-only scratch, PSRAM $F4 ------------------------------------------------------
+; man_pad_prev is the shell's ovl_pprev slot (cheatlist.i65 $F4810A) -- the viewer never
+; names it, it belongs to whoever runs the input loop.  The mh_* block lives in the free
+; gap that starts at $F483AE (see memmap.i65's $F4 map: the in-game theme/BAR/window saves
+; end at $F483AD, OVL_TMBUF starts at $F49000).  Words, accessed @long, always written
+; before read (PSRAM is stale).
+#define man_pad_prev    $F4810A    ; previous pad word (edge detection)
+#define mh_pbak         $F483B0    ; 4B: MCU_PARAM[0..3] across the viewer + the restore READDIR
+#define mh_cursor       $F483B4    ; word: guide picker cursor 0..count-1
+#define mh_count        $F483B6    ; word: guide count, clamped to MH_MAX_GUIDES
+#define mh_k            $F483B8    ; word: picker draw-loop index
+#define mh_tmp          $F483BA    ; word: transient (title byte offset / slug index)
+
+; ---- guide picker layout (game-info body rows; see the layout note in gameinfo.a65) ----
+; MAN_GD_COUNT is 0..8 and the body has exactly 8 free rows (17..24), so one guide per row
+; with no scrolling.  Row 16 stays blank (the BGMODE seam) and the metadata/description/
+; footer rows are wiped by gi_clear_body_buf while the picker is up.
+#define MH_MAX_GUIDES   8
+#define MH_ROW0         17         ; first guide row
+#define MH_MARK_X       2          ; '>' cursor half-column
+#define MH_TITLE_X      5          ; title half-column
+#define MH_TITLE_MAX    24         ; MAN_GD_R_TITLE is char[24] NUL-term -- never read past it
+; Key legend on the ficha's own footer row. Lockstep with GIB_FOOT_ROW / GIB_DESC_X / GIB_FOOT_W
+; in gameinfo.a65: the row must be the one gi_build_body_normal repaints, or leaving the picker
+; would strand our legend next to the restored footer.
+#define MH_FOOT_ROW     26
+#define MH_FOOT_X       2
+#define MH_FOOT_W       56
+
+#include "manviewer.i65"           ; the shared viewer body (no .link: inherits $C1)
+
+; ======================================================================
+;  HOST HOOKS.  The menu rebuilds its whole screen AFTER the modal loop returns
+;  (manhost_from_gi's restore sequence), so the snapshot/repaint hooks the in-game shell
+;  needs are deliberately empty here: there is no shell font image to save and no chrome
+;  to rebuild, and the exit must LEAVE the screen force-blanked for that sequence.
+; ======================================================================
+
+; ---- called from manual_viewer_enter, BEFORE any PPU takeover (A/X/Y 16-bit). ----
+man_host_enter:
+	php
+	sep #$20 : .as
+	lda #$00 : sta @$00420c                    ; the ficha runs ch1|ch2|ch3 ($420c = $0e);
+	                                            ;   HDMA keeps firing in forced blank and its
+	                                            ;   ch1/ch2 pair drives $2121/$2122 every band,
+	                                            ;   which would fight the viewer's CGRAM uploads
+	lda #$80 : sta @$002100                    ; forced blank for the takeover
+	plp
+	.al : .xl                                  ; caller is rep #$30 (source-order width sync)
+	rts
+
+; ---- called from man_viewer_exit inside forced blank, $2115 already $80 (A 8-bit). ----
+man_host_restore_gfx:
+	php
+	sep #$20 : .as
+	; Nothing to put back: the menu's BG1/BG2 fonts are REGENERATED (ovl_call_genfonts) and
+	; the whole game-info screen is rebuilt (gi_dc_show) by manhost_from_gi's restore, which
+	; is also the only place that knows the MCU-side re-query has to happen first.
+	plp
+	.as : .xl
+	rts
+
+; ---- called from man_viewer_exit, still in forced blank (A/X/Y 16-bit). ----
+man_host_chrome:
+	php
+	rep #$30 : .al : .xl
+	; Deliberately does NOT unblank: manhost_from_gi's restore sequence runs next and needs
+	; the screen blanked for genfonts + the loading popups + gi_dc_show's own uploads.
+	; gi_dc_show is what finally puts $2100 back (pinned to CFG_BRIGHTNESS_LIMIT).
+	plp
+	.al : .xl
+	rts
+
+; ======================================================================
+;  manhost_from_gi -- X on the game-info screen: pick a guide (2+) and open the viewer.
+;  Entry: jsl from gi_input ($C0), A 8-bit / X,Y 16-bit.  Returns rtl with the caller's
+;  P/DBR/DP restored and the ficha repainted.  Every failed gate returns with no effect.
+; ======================================================================
+manhost_from_gi:
+	php
+	phb
+	phd
+	sep #$20 : .as
+	rep #$10 : .xl
+	lda #$00 : pha : plb                       ; DBR = 0 (the $C0 helpers all assume it)
+	pea $0000 : pld                            ; DP  = 0: the ficha reached from Menu >
+	                                            ;   Recents/Favorites still carries show_menu's
+	                                            ;   AllocStack frame, and gi_draw_desc reads
+	                                            ;   [longptr],y -- indirect-long only resolves
+	                                            ;   via the low-RAM mirror with DP=0
+	; ---- gate: feature off / stale-or-newer meta ABI / no guide -> do nothing.  The test
+	;      itself lives in $C0 (gi_man_avail) because the ficha's FOOTER picks its "X: Guides"
+	;      variant from the same predicate: one implementation, so the hint and this entry can
+	;      never disagree. ----
+	jsl @gi_call_man_avail                     ; carry SET = no guide
+	bcs mhg_out
+	lda @MAN_GD_COUNT
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #MH_MAX_GUIDES+1
+	bcc mhg_cnt_ok
+	lda #MH_MAX_GUIDES                         ; one row per guide, 8 rows available
+mhg_cnt_ok:
+	sta @mh_count
+	; ---- save MCU_PARAM[0..3].  The viewer writes them on every page request AND the
+	;      restore's CMD_READDIR overwrites 15 bytes of the region.  For Recents/Favorites
+	;      the low byte IS the list index the re-query needs -- and the one the later
+	;      LOADLAST/LOADFAVORITE boot reads, so losing it would boot a garbage entry. ----
+	sep #$20 : .as
+	ldx #$0000
+mhg_pbak:
+	lda @MCU_PARAM, x
+	sta @mh_pbak, x
+	inx
+	cpx #$0004
+	bne mhg_pbak
+	; ---- guide picker (only with 2+ guides).  Runs BEFORE the takeover, with the menu NMI
+	;      still on, drawing into the ficha's own body rows. ----
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @mh_cursor
+	lda @mh_count
+	cmp #$0002
+	bcc mhg_go                                 ; single guide -> open guide 0 straight away
+	sep #$20 : .as
+	jsr mh_select                              ; carry SET = B (cancelled)
+	bcc mhg_go
+	jsl @gi_call_body_repaint                  ; put the ficha body back (flash-free) and leave
+	bra mhg_out
+mhg_go:
+	; ---- PPU / input takeover ----
+	sep #$20 : .as
+	lda #$01 : sta @$004200                    ; NMI OFF: the menu's NMI rewrites $2126/$2127
+	                                            ;   (window 1) every frame and the 2x zoom OWNS
+	                                            ;   window 1.  Auto-joypad (bit0) stays on --
+	                                            ;   the modal loop below reads $4218 itself.
+	rep #$30 : .al : .xl
+	lda #$ffff : sta @man_pad_prev              ; seed the edge detector with "everything held"
+	                                            ;   so the FIRST frame produces no edge at all:
+	                                            ;   the X that opened us is still down, and we
+	                                            ;   are not vblank-synced yet, so sampling $4218
+	                                            ;   here could catch a half-latched auto-joypad
+	                                            ;   word and fake a press. Frame 2 onwards uses
+	                                            ;   the real previous sample.
+	; A remembered reading position belongs to whatever was open LAST -- in the menu that can
+	; be another game entirely (the MCU only clears the magic on a game LOAD).  Resuming a
+	; page the current guide does not have makes the MCU refuse the request, so the viewer
+	; would open and immediately error out.  Always start this guide at its first page.
+	; INVARIANT (other half in src/memory.c): man_viewer_exit WRITES this magic on the way
+	; out, so the game-load path must keep calling the NON-cached manual_stage_meta() -- it
+	; is the only thing that zeroes $F4819E and stops a position picked HERE from leaking
+	; into the in-game GUIDES tab of the next game booted.
+	lda #$0000 : sta @man_pos_magic
+	jsr man_state_reset                        ; NB: this also zeroes man_sel_guide...
+	lda @mh_cursor : sta @man_sel_guide         ; ...so publish the pick AFTER it
+	jsr manual_viewer_enter                    ; a request timeout exits the viewer in here
+	; ---- modal loop (structure copied from igmenu_loop): vblank sync + auto-joypad
+	;      START-then-DONE + edge detect, until the viewer clears man_modal bit0. ----
+mhg_loop:
+	rep #$20 : .al
+	lda @man_modal
+	and #$0001
+	beq mhg_restore                            ; viewer closed (B in 1x, or a timeout)
+	sep #$20 : .as
+	- lda @$004212 : bpl -                     ; wait until vblank
+	- lda @$004212 : and #$01 : beq -          ; auto-joypad read START (bit0 set)
+	- lda @$004212 : and #$01 : bne -          ; auto-joypad read DONE (bit0 clear)
+	rep #$20 : .al
+	lda @$004218
+	sta @man_pad_cur
+	eor @man_pad_prev
+	and @man_pad_cur                           ; (cur ^ prev) & cur = newly pressed
+	sta @man_pad_edge
+	lda @man_pad_cur
+	sta @man_pad_prev
+	jsr manual_viewer_input
+	sep #$20 : .as
+	- lda @$004212 : bmi -                     ; wait out of vblank
+	bra mhg_loop
+mhg_restore:
+	; The viewer left the screen in forced blank (man_host_chrome does NOT unblank), so the
+	; whole sequence below is invisible.  ORDER IS LOAD-BEARING -- each step depends on the
+	; one before it.
+	; (a) the viewer overwrote VRAM $0000-$4FFF: BOTH menu fonts are gone and gi_dc_show does
+	;     not rebuild them (only setup_gfx does, and that would kill the WRAM routines).
+	sep #$20 : .as
+	lda #$80 : sta @$002115                    ; VMAIN word step (genfonts assumes it)
+	phb                                        ; genfonts uses SHORT addressing for $2116/$43xx,
+	pea $0000 : plb : plb                      ;   so it needs DBR = 0. It IS 0 here, but the
+	jsl @ovl_call_genfonts                     ;   viewer between us is SHARED source -- a future
+	plb                                        ;   phb/plb in it would break this silently.
+	sep #$20 : .as
+	lda #$80 : sta @$002115                    ; re-assert after genfonts (it drives ch7)
+	; (b) the .man page staging overwrote PSRAM $C3..$C7 = the browser's file-STRING table
+	;     (scan_dir grows it from $C30000; the $C2 pointer table survives).  Re-scan the
+	;     current directory before anything reads a filename again.
+	jsl @fs_call_readdir
+	; (c) MCU_PARAM back (READDIR just wrote 15 bytes over it), then re-fire the SAME info
+	;     query: it re-derives file_lfn on the MCU (so a second X works), re-stages the guide
+	;     meta into MANUAL_GUIDES (a cache hit, so it is cheap) and re-arms the FMV.
+	ldx #$0000
+mhg_prst:
+	lda @mh_pbak, x
+	sta @MCU_PARAM, x
+	inx
+	cpx #$0004
+	bne mhg_prst
+	jsl @gi_call_query
+	; (d) OBSEL: the viewer repointed the OBJ name base ($2101) and only the .cov / chip-icon
+	;     paths inside gi_dc_show rewrite it -- a ficha with neither would keep the viewer's.
+	sep #$20 : .as
+	lda #COVER_OBSEL : sta @$002101
+	; (e) NMI back on BEFORE anything can wait on isr_done -- gin_syncread does, and the
+	;     ficha's input loop is the very next thing to run.
+	lda #$81 : sta @$004200
+	lda #$00 : sta @isr_done
+	; (f) repaint the ficha: band + body + OAM, and it re-arms $420c = $0e, the pinned
+	;     brightness and the window-2 edge mask.
+	jsl @gi_call_dc_show
+	; (g) a request timeout / unreadable .man got us here instead of B: there is no room on the
+	;     ficha for an error line, so signal it with the menu's error blip. Fired AFTER the
+	;     rebuild for the same reason gms_cancel fires its back blip after gi_dc_restore -- the
+	;     READDIR/query bursts would starve the FPGA SFX fetcher mid-blip.
+	lda @man_error
+	beq mhg_out
+	lda #$04 : sta @SFX_MAILBOX                ; = snd_fx_error
+mhg_out:
+	pld
+	plb
+	plp
+	rtl
+
+; ======================================================================
+;  Guide picker.  Draws one row per guide into the ficha's body buffer and runs the SAME
+;  debounced input the ficha uses (gin_syncread + read_pad edges/auto-repeat), so the feel
+;  matches the rest of the screen.  Returns carry CLEAR = mh_cursor chosen, SET = B.
+;  Entry/exit .as/.xl, DBR = 0, DP = 0.
+; ======================================================================
+mh_select:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	jsl @gi_call_chip_hide                     ; the 16x16 chip OBJ sits on rows 19-20, i.e. over
+	                                            ;   the list -- drop it exactly like Y mode does
+	                                            ;   (no-op on the .cov band path)
+	jsr mh_sel_draw
+mhs_loop:
+	jsl @gi_call_syncread
+	lda @pad_a
+	bne mhs_pick
+	lda @pad_b
+	bne mhs_cancel
+	lda @pad_up
+	bne mhs_up
+	lda @pad_down
+	bne mhs_down
+	bra mhs_loop
+mhs_up:
+	lda #$01 : sta @SFX_MAILBOX                ; = snd_fx_cursor, on the PRESS (wall included,
+	rep #$20 : .al                             ;   like gi_nav_next); inline because the mailbox
+	lda @mh_cursor                             ;   is a plain byte write -- no $C0 trampoline
+	beq mhs_nomove
+	dec : sta @mh_cursor
+	sep #$20 : .as
+	jsr mh_sel_draw
+	bra mhs_loop
+mhs_down:
+	lda #$01 : sta @SFX_MAILBOX                ; = snd_fx_cursor
+	rep #$20 : .al
+	lda @mh_cursor
+	inc
+	cmp @mh_count
+	bcs mhs_nomove
+	sta @mh_cursor
+	sep #$20 : .as
+	jsr mh_sel_draw
+	bra mhs_loop
+mhs_nomove:
+	sep #$20 : .as
+	bra mhs_loop
+mhs_pick:
+	lda #$02 : sta @SFX_MAILBOX                ; = snd_fx_confirm
+	plp                                        ; plp restores the ENTRY carry -> set ours after
+	.as : .xl
+	clc
+	rts
+mhs_cancel:
+	lda #$03 : sta @SFX_MAILBOX                ; = snd_fx_back
+	plp
+	.as : .xl
+	sec
+	rts
+
+; ---- repaint every guide row and flush it to VRAM.  .as/.xl in/out. ----
+mh_sel_draw:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	jsl @gi_call_clear_body                    ; wipes body rows 16..31 of BOTH tile buffers
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @mh_k
+mhd_loop:
+	lda @mh_k
+	cmp @mh_count
+	bcs mhd_flush
+	jsr mh_draw_row
+	rep #$30 : .al : .xl
+	lda @mh_k : inc : sta @mh_k
+	bra mhd_loop
+mhd_flush:
+	; Key legend on the footer row. gi_call_clear_body above wiped rows 16..31, so the ficha's
+	; own footer is already gone and this just fills the hole it left; leaving the picker puts
+	; the real one back (cancel -> gi_build_body_normal inside gi_call_body_repaint, confirm ->
+	; gi_dc_show after the viewer). Row 26 is inside the 16..31 span gi_dma_body uploads, so it
+	; rides the SAME flush as the list -- no extra DMA, no extra blank window.
+	sep #$20 : .as
+	lda #MH_FOOT_ROW : sta @print_y
+	lda #MH_FOOT_X : sta @print_x
+	lda #$00 : sta @print_pal
+	lda #MH_FOOT_W : sta @print_count
+	rep #$20 : .al
+	lda #!text_gi_footer_pick : sta @print_src
+	sep #$20 : .as
+	lda #^text_gi_footer_pick : sta @print_bank
+	jsl @gi_call_hiprint                       ; resolve_str localizes it, like the slugs
+	jsl @gi_call_sel_flush                     ; NMI off + vblank + blank -> gi_dma_body
+	plp
+	.as : .xl
+	rts
+
+; ---- draw guide mh_k.  The selected row gets the '>' cursor and the ficha's VALUE colour
+;      (print_pal 2); the others use the LABEL colour (0).
+;      WIDTHS: entry AND exit are .al/.xl -- mhd_loop calls this from its 16-bit compare, and
+;      the closing plp restores exactly that.  Declaring .as here would leak an 8-bit assembler
+;      state into mhd_loop's `lda @mh_k : inc`, sizing its operands wrong (the classic
+;      snescom source-order width leak). ----
+mh_draw_row:
+	php
+	rep #$30 : .al : .xl
+	lda @mh_k
+	clc : adc #MH_ROW0
+	sep #$20 : .as
+	sta @print_y
+	rep #$20 : .al
+	lda @mh_k
+	cmp @mh_cursor
+	sep #$20 : .as
+	bne mhw_unsel
+	lda #$02 : sta @print_pal
+	lda #MH_MARK_X : sta @print_x
+	lda #$01 : sta @print_count
+	rep #$20 : .al
+	lda #!mh_marker : sta @print_src
+	sep #$20 : .as
+	lda #^mh_marker : sta @print_bank
+	jsl @gi_call_hiprint
+	bra mhw_title
+mhw_unsel:
+	lda #$00 : sta @print_pal
+mhw_title:
+	lda #MH_TITLE_X : sta @print_x
+	lda #MH_TITLE_MAX : sta @print_count
+	; title[0] of guide k: 0 = no title, 1..5 = official document-type slug (translated),
+	; >= 6 = free-text title straight out of the .man record (real font codes are >= $20).
+	rep #$30 : .al : .xl
+	lda @mh_k
+	asl : asl : asl : asl : asl                ; k * MAN_GD_REC_STRIDE (32)
+	clc : adc #MAN_GD_R_TITLE
+	sta @mh_tmp                                ; title byte offset within MAN_GD_REC0
+	tax
+	sep #$20 : .as
+	lda @MAN_GD_REC0, x                        ; long,X (bank $FF)
+	rep #$30 : .al : .xl
+	and #$00ff
+	beq mhw_fallback
+	cmp #$0006
+	bcs mhw_raw
+	; --- 1..5: the translated type label.  hiprint runs resolve_str, so handing it the
+	;     dispatch-table pointer is all the localization this needs. ---
+	dec                                        ; slug 1..5 -> table index 0..4
+	sta @mh_tmp
+	asl
+	tax
+	lda @mh_slug_lo, x
+	sta @print_src
+	lda @mh_tmp
+	tax
+	sep #$20 : .as
+	lda @mh_slug_bk, x
+	sta @print_bank
+	jsl @gi_call_hiprint
+	bra mhw_done
+mhw_raw:
+	rep #$30 : .al : .xl
+	lda @mh_tmp
+	clc : adc #!MAN_GD_REC0
+	sta @print_src
+	sep #$20 : .as
+	lda #^MAN_GD_REC0 : sta @print_bank
+	jsl @gi_call_hiprint
+	bra mhw_done
+mhw_fallback:
+	; empty title -> "GUIDE n" (neutral: the five translated labels cover every guide that
+	; carries a document-type slug; an untitled one only happens on a hand-made .man).
+	rep #$20 : .al
+	lda #!mh_guide_txt : sta @print_src
+	sep #$20 : .as
+	lda #^mh_guide_txt : sta @print_bank
+	lda #6 : sta @print_count
+	jsl @gi_call_hiprint
+	rep #$30 : .al : .xl
+	lda @mh_k
+	asl                                        ; one 2-byte "n",0 string per guide
+	clc : adc #!mh_digits
+	sta @print_src
+	sep #$20 : .as
+	lda #^mh_digits : sta @print_bank
+	lda #MH_TITLE_X+6 : sta @print_x
+	lda #$01 : sta @print_count
+	jsl @gi_call_hiprint
+mhw_done:
+	plp
+	.al : .xl                                  ; caller (mhd_loop) is rep #$30 -- see header
+	rts
+
+; ======================================================================
+;  Data (never executed; emitted in this bank).
+; ======================================================================
+; Document-type labels, indexed by (guide record title[0] - 1).  Address AND bank are both
+; tabled: build_const.py emits a label as a $C1 dispatch table only when its translations
+; actually differ, and collapses a language-neutral one to a plain string in the $C0 block.
+mh_slug_lo
+	.word !text_gi_slug_manual
+	.word !text_gi_slug_guide
+	.word !text_gi_slug_map
+	.word !text_gi_slug_insert
+	.word !text_gi_slug_other
+mh_slug_bk
+	.byt ^text_gi_slug_manual
+	.byt ^text_gi_slug_guide
+	.byt ^text_gi_slug_map
+	.byt ^text_gi_slug_insert
+	.byt ^text_gi_slug_other
+mh_marker    .byt ">", 0
+mh_guide_txt .byt "GUIDE ", 0
+; one NUL-terminated digit per guide slot, so the fallback needs no writable buffer
+mh_digits    .byt "1", 0, "2", 0, "3", 0, "4", 0, "5", 0, "6", 0, "7", 0, "8", 0

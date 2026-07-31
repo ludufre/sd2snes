@@ -233,7 +233,6 @@
 #define MAN_GD_R_ZPAGES             6       /* u16 LE: number of scrollable zoom pages (0 = none). A zoom page is a whole PDF page at 2x, so this is normally npages -- NOT nblocks. */
 #define MAN_GD_F_ZOOM2              $02     /* MAN_GD_R_FLAGS bit1 */
 #define MAN_GD_R_TITLE              8       /* title[24] font-encoded NUL-term */
-#define MANUAL_BLOCK                $C30000 /* staged .man block: 512B palette (256x BGR555) + 896 tiles 8bpp tile-order (57344B), DMA-ready. Lockstep with SRAM_MANUAL_BLOCK_ADDR in src/memory.h. */
 #define MANUAL_SHELLSAVE            $C40000 /* viewer's save of the shell mode-5 state: VRAM $0000-$5FFF (24KB, $2139 readback) + CGRAM 512B at +$6000. Lockstep with SRAM_MANUAL_SHELLSAVE_ADDR in src/memory.h. */
 /* --- scrollable 2x zoom page, staged whole into PSRAM by CMD_MANUAL_ZPAGE. Panning costs NO MCU
    traffic: the viewer just DMAs from here. 512px does not fit one BG layer (10-bit character field
@@ -258,7 +257,6 @@
 #define MAN_Z_TILE0                 16      /* first image tile index; tiles 0..15 are the OBJ HUD glyphs (OBJ char base is only 16KB-alignable, so both pools start 512B in) */
 #define MAN_Z_TMAP_STRIDE           128     /* bytes per prebuilt tilemap row (64 entries) */
 #define MAN_Z_HALF_BYTES            1024    /* bytes per BG half of one tile row (32 tiles x 32B) */
-#define CMD_MANUAL_BLOCK            $43     /* SNES_CMD_MANUAL_BLOCK: stage a guide block into MANUAL_BLOCK. MCU_PARAM[0..1] = stream block index (LE), [2] = compacted guide (0..7), [3] = mode (bit0 = zoom). Lockstep with src/snes.h. */
 #define CMD_MANUAL_ZPAGE            $45     /* SNES_CMD_MANUAL_ZPAGE: stage one whole 2x zoom page into MANUAL_ZTILES_A/B + ZTMAP + ZPAL. MCU_PARAM[0] = compacted guide (0..7), [1..2] = index u16 LE, [3] = mode: 0 = index is a 1x BLOCK (resolved via the block map; entry Y published in MAN_META_ZENTRYY), 1 = index is a ZOOM PAGE directly (page turns). Re-staging an already-resident page is skipped. Publishes MAN_META_F_ZREADY + ZNROWS/ZPIXH/ZPAGE/ZENTRYY/ZFIRSTBLK. Lockstep with src/snes.h. */
 #define CMD_SET_SRM_SLOT           $44     /* SNES_CMD_SET_SRM_SLOT: persist the selected SRAM slot (MCU_PARAM low byte 0..3) to the <stem>.slot sidecar; refreshes SAVEINFO+42 / SRM_SLOT_STATUS. Applies on next game load (never changes the live slot). Lockstep with src/snes.h. */
 #define CFG_ENABLE_GAME_MANUAL      CFG_ADDR+$0145 /* EnableGameManual toggle (default ON); next free after CFG_BUS_COMPAT $0144. Lockstep with src/cfg.h. */

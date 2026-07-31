@@ -31,7 +31,7 @@
 #define GAMEINFO_MAGIC0     ('G')
 #define GAMEINFO_MAGIC1     ('I')
 
-#define GAMEINFO_STATUS_NONE  (0x00)   /* menu skips the screen (only mk2's parser-less stub) */
+#define GAMEINFO_STATUS_NONE  (0x00)   /* menu skips the screen. UNREACHABLE with current firmware: gameinfo_load reports OK unconditionally on every config (no mk2 stub any more); kept because the SNES side still guards on it */
 #define GAMEINFO_STATUS_OK    (0x01)   /* metadata staged; menu shows the screen. mk3 ALWAYS
                                         * reports OK now: a ROM with no .yml gets a filename
                                         * title + "-" fields + (if present) its .cov in the band */
@@ -132,11 +132,11 @@ void gameinfo_fmv_stop(void);
  * without a trailing command, e.g. returning to the Favorites/Recents list). No-op if idle. */
 void gameinfo_fmv_idle_check(void);
 
-/* "Full description" (Y) pump: re-open the last-loaded .yml, find the "description:" line
-   with a streaming reader (outside the YAML parser, which caps values at YAML_BUFLEN) and
-   stage the COMPLETE font-encoded text into SRAM_GAMEINFO_DESCEXT_ADDR. Bounded + fail-safe;
-   on ANY error the region is left invalid (1st byte 0) so the menu keeps the struct's
-   description[256]. */
+/* "Full description" (Y) pump: re-open the last-loaded .yml, find the description line for the
+   MENU language ("description_<code>:", else the canonical English "description:") with a
+   streaming reader (outside the YAML parser, which caps values at YAML_BUFLEN) and stage the
+   COMPLETE font-encoded text into SRAM_GAMEINFO_DESCEXT_ADDR. Bounded + fail-safe; on ANY error
+   the region is left invalid (1st byte 0) so the menu keeps the struct's description[256]. */
 void gameinfo_desc_full(void);
 
 #endif

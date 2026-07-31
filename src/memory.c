@@ -1194,7 +1194,12 @@ void init(uint8_t *filename) {
     /* Stage the SAVES-tab status block for the in-game menu (game load only). */
     saveinfo_stage(filename);
     /* Stage the in-game MANUAL-tab meta (<rom>.man header/index -> MANUAL_META $FF0760).
-       Bounded + fail-safe: absent/bad/CFG-off just leaves the tab "not found". */
+       Bounded + fail-safe: absent/bad/CFG-off just leaves the tab "not found".
+       INVARIANT -- the game load MUST keep calling the NON-cached manual_stage_meta():
+       it is the one that zeroes IGMENU_PERSIST_MAGIC_ADDR ($F4819E). The menu-side viewer
+       (snes/manhost.a65, X on the game-info screen) WRITES that magic when it closes, so
+       switching this call to manual_stage_meta_cached() would let a reading position picked
+       in the MENU leak into the in-game GUIDES tab of whatever game boots next. */
     manual_stage_meta(filename);
   }
   cheat_program();

@@ -69,11 +69,21 @@ filesel_contextmenu_file:
   sta window_x
   lda #$0b
   sta window_y
-  phb
-    lda #^menu_enttab_filesel_context_file
-    pha
+; ShowGameInfo == 2 (context) picks the $C1 table variant that carries the "Game info"
+; row; every other mode keeps the plain $C0 table, so the row is absent rather than greyed.
+  lda @CFG_SHOW_GAME_INFO
+  cmp #$02
+  beq fcf_gi_table
+  lda #^menu_enttab_filesel_context_file
+  ldx #!menu_enttab_filesel_context_file
+  bra fcf_show
+fcf_gi_table:
+  lda #^menu_enttab_filesel_context_file_gi
+  ldx #!menu_enttab_filesel_context_file_gi
+fcf_show:
+  phb                        ; A = table bank, X = table offset (show_menu takes the bank
+    pha                      ; from the DBR it is called with: `phb : pla : sta w_menu_bank`)
     plb
-    ldx #!menu_enttab_filesel_context_file
     jsr show_menu
   plb
   jsr pop_window
@@ -150,11 +160,21 @@ filesel_favorites_contextmenu:
   sta window_x
   lda #$0b
   sta window_y
-  phb
-    lda #^menu_enttab_filesel_favorites_context
-    pha
+; ShowGameInfo == 2 (context) picks the $C1 table variant that carries the "Game info"
+; row; every other mode keeps the plain $C0 table, so the row is absent rather than greyed.
+  lda @CFG_SHOW_GAME_INFO
+  cmp #$02
+  beq ffc_gi_table
+  lda #^menu_enttab_filesel_favorites_context
+  ldx #!menu_enttab_filesel_favorites_context
+  bra ffc_show
+ffc_gi_table:
+  lda #^menu_enttab_filesel_favorites_context_gi
+  ldx #!menu_enttab_filesel_favorites_context_gi
+ffc_show:
+  phb                        ; A = table bank, X = table offset (show_menu takes the bank
+    pha                      ; from the DBR it is called with: `phb : pla : sta w_menu_bank`)
     plb
-    ldx #!menu_enttab_filesel_favorites_context
     jsr show_menu
   plb
   jsr pop_window
@@ -177,11 +197,21 @@ filesel_recent_contextmenu:
   sta window_x
   lda #$0b
   sta window_y
-  phb
-    lda #^menu_enttab_recent_context
-    pha
+; ShowGameInfo == 2 (context) picks the $C1 table variant that carries the "Game info"
+; row; every other mode keeps the plain $C0 table, so the row is absent rather than greyed.
+  lda @CFG_SHOW_GAME_INFO
+  cmp #$02
+  beq frc_gi_table
+  lda #^menu_enttab_recent_context
+  ldx #!menu_enttab_recent_context
+  bra frc_show
+frc_gi_table:
+  lda #^menu_enttab_recent_context_gi
+  ldx #!menu_enttab_recent_context_gi
+frc_show:
+  phb                        ; A = table bank, X = table offset (show_menu takes the bank
+    pha                      ; from the DBR it is called with: `phb : pla : sta w_menu_bank`)
     plb
-    ldx #!menu_enttab_recent_context
     jsr show_menu
   plb
   jsr pop_window

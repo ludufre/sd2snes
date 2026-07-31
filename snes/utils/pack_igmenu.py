@@ -25,7 +25,9 @@ def main():
         sys.exit("pack_igmenu: IGMN magic not found in " + sys.argv[1])
     data = bytearray(raw[i:])
     # strip trailing linker padding ($00/$FF) so the shipped bin + crc are compact and
-    # deterministic (the real content ends at ig_footer_str = ASCII, no trailing 00/FF).
+    # deterministic. The strip is blind: it cannot tell padding from a real trailing $00 (it ATE
+    # ig_thm_math_def's HDMA-table terminator once), so igmenu.a65 emits ig_end_marker (.byt $5a,
+    # neither $00 nor $FF) as its LAST object -- the strip stops there. Lockstep with that label.
     end = len(data)
     while end > 12 and data[end - 1] in (0x00, 0xFF):
         end -= 1

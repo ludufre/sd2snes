@@ -1196,10 +1196,28 @@ filesel_key_x:
   rts
 
 filesel_key_y:
+  lda #$00              ; arm the context-request gate BEFORE the menu can raise it:
+  sta @gi_ctx_pending   ; clear_wram fills this segment with $55 (not 0) and the gate is
+                        ; read below before anything has ever written it. A is 8-bit here
+                        ; -- filesel_updates runs .as end to end -- so do it before the jsrs.
   jsr snd_fx_confirm    ; opening the context menu
   jsr cover_menu_off    ; hide the box-art cover behind the context menu
   jsr open_context_menu
-  rts
+  ; "Game info" picked in the context menu (only reachable when ShowGameInfo == 2, which is
+  ; the only mode whose table carries the row): dispatch it HERE, after show_menu closed and
+  ; unwound, so the ficha runs with exactly the DP / DBR / window-stack state of the normal
+  ; A-press path. A B-return out of the ficha repaints the browser on its own (gi_dc_restore
+  ; sets filesel_dirty). A is 8-bit on every open_context_menu exit -- all of its paths go
+  ; through a sep #$20 before returning.
+  lda @gi_ctx_pending
+  beq +
+  jsr hide_cursor            ; the NMI rewrites $2126/$2127 from bar_* every frame and
+                             ; pop_window does not restore them -- without this the
+                             ; context menu's selection bar sits over the list for the
+                             ; whole (blocking) gameinfo query. Same idiom as
+                             ; select_last_file_play / select_favorite_file_play.
+  jsr gameinfo_show_forced
++ rts
 
 open_context_menu:
   jsr cover_sync_before_cmd
@@ -2391,8 +2409,10 @@ select_last_file_play:
                                    ; window drawn by the NMI (bar_xl/yl/wl), NOT part of the popped
                                    ; window, so it would keep flashing over the gap until game info
                                    ; sets up. select_last_redraw restores it on the B-return.
-  lda @CFG_SHOW_GAME_INFO
-  beq slfp_load
+  lda @CFG_SHOW_GAME_INFO          ; tri-state: only 1 auto-shows. 0 = off, 2 = context
+  cmp #$01                         ; (info screen lives in the context menu) -> boot directly
+  bne slfp_load
+slfp_show:
   jsr gameinfo_maybe_show_recent   ; A -> carry clear (boot), B -> carry set (back to the list)
   bcc slfp_load                    ; A: boot the game
   ; B: game info tore down the screen and popped the list window above. Freeze the screen, repaint
@@ -2402,14 +2422,43 @@ select_last_file_play:
   jsr gi_repaint_browser
   jmp select_last_redraw
 slfp_load:
+  lda listsel_backup               ; make the boot index invariant LOCAL to the command:
+  sta @MCU_PARAM                   ; the info screen may have run the guide viewer (X),
+                                   ; whose restore traffic rewrites MCU_PARAM -- manhost
+                                   ; backs it up, but this re-arm survives any future path
   lda #CMD_LOADLAST
   jsr game_handshake               ; boots on success; on failure returns -> exit to browser
   jmp select_last_file_out
+; Context-menu entry point: "Game info" was picked in the recents context menu, which only
+; carries that row when ShowGameInfo == 2. Same teardown as the A path above -- the recents
+; window is still up (the context menu popped only its own) and the selection bar is an
+; NMI-drawn colour window that pop_window does not touch -- but NO mode gate: the user asked
+; for the ficha explicitly. Everything from slfp_show on is shared with the A path, so A
+; still boots through slfp_load and B still repaints into select_last_redraw.
+select_last_file_play_ctx:
+  sep #$20 : .as
+  jsr pop_window
+  jsr hide_cursor
+  bra slfp_show
 select_last_file_context_menu:
+  lda #$00                   ; arm the context-request gate BEFORE the menu can raise it:
+  sta @gi_ctx_pending        ; coldboot's zero only covers the first boot, and re-arming on
+                             ; every open also keeps a stale raise from leaking in here. A is
+                             ; 8-bit -- select_last_file's prologue is sep #$20 : .as.
   jsr cover_menu_off         ; hide the floating box-art cover so it doesn't
                              ; float over the context / cheat windows (it
                              ; reloads when we return to the recents list)
   jsr filesel_recent_contextmenu
+  lda @gi_ctx_pending        ; "Game info" picked? (only the mode-2 table has that row)
+  beq slfcm_normal
+  ; Re-arm the list index from listsel_backup (the snapshot select_last_file took).
+  ; Every row of this menu is FUNC_CLOSE, so nothing else ran in this opening and the
+  ; re-arm is a no-op today -- it is FAIL-SAFE against a future non-closing row (or any
+  ; indirect MCU_PARAM write) sneaking in between the snapshot and the info query.
+  lda listsel_backup
+  sta @MCU_PARAM
+  jmp select_last_file_play_ctx
+slfcm_normal:
   lda listsel_dirty
   bne +
   jmp select_last_choose
@@ -2540,8 +2589,10 @@ select_favorite_file_play
   ; holds the list index for both the info query and the LOADFAVORITE that follows.
   jsr pop_window
   jsr hide_cursor                  ; park the selection bar off-screen too (see select_last_file_play)
-  lda @CFG_SHOW_GAME_INFO
-  beq sffp_load
+  lda @CFG_SHOW_GAME_INFO          ; tri-state: only 1 auto-shows. 0 = off, 2 = context
+  cmp #$01                         ; (info screen lives in the context menu) -> boot directly
+  bne sffp_load
+sffp_show:
   jsr gameinfo_maybe_show_favorite ; A -> carry clear (boot), B -> carry set (back to the list)
   bcc sffp_load                    ; A: boot the game
   ; B: as in select_last_file_play -- freeze, repaint the browser file list behind (game info
@@ -2550,14 +2601,31 @@ select_favorite_file_play
   jsr gi_repaint_browser
   jmp select_favorite_redraw
 sffp_load:
+  lda listsel_backup               ; boot index re-armed locally -- see slfp_load
+  sta @MCU_PARAM
   lda #CMD_LOADFAVORITE
   jsr game_handshake               ; boots on success; on failure returns -> exit to browser
   jmp select_favorite_file_out
+; Context-menu entry point -- mirror of select_last_file_play_ctx; see the note there.
+select_favorite_file_play_ctx:
+  sep #$20 : .as
+  jsr pop_window
+  jsr hide_cursor
+  bra sffp_show
 select_favorite_file_context_menu
+  lda #$00                   ; arm the context-request gate BEFORE the menu can raise it
+  sta @gi_ctx_pending        ; (see select_last_file_context_menu). A is 8-bit --
+                             ; select_favorite_file's prologue is sep #$20 : .as.
   jsr cover_menu_off         ; hide the floating box-art cover so it doesn't
                              ; float over the context / cheat windows (it
                              ; reloads when we return to the favorites list)
   jsr filesel_favorites_contextmenu
+  lda @gi_ctx_pending        ; "Game info" picked? (only the mode-2 table has that row)
+  beq sffcm_normal
+  lda listsel_backup         ; re-arm the list index (fail-safe: every row here is
+  sta @MCU_PARAM             ; FUNC_CLOSE so nothing else ran -- see the recent-list twin)
+  jmp select_favorite_file_play_ctx
+sffcm_normal:
   lda listsel_dirty          ; need redraw?
   bne +
   jmp select_favorite_choose ; return to previous view

@@ -131,6 +131,20 @@ static void gi_field(const char *key, char *field, int size) {
   }
 }
 
+/* The `.yml` key that carries the description in the MENU language. English (CFG.language 0) is
+ * the canonical `description:`; every other language rides a sibling `description_<code>:` key
+ * written next to it. The index order MUST match cfg.h (0: English, 1: Portugues BR, 2: Spanish,
+ * 3: German, 4: French, 5: Italian) and the codes the info generator emits. NULL = use the plain
+ * `description:` (English, and any out-of-range value -- cfg_load clamps, but never trust it here).
+ * A missing/empty localized key falls back to English, so a card written before this existed (or a
+ * game with no translation) keeps working unchanged. */
+static const char *gi_desc_lang_key(void) {
+  static const char *const keys[] = {
+    NULL, "description_pt", "description_es", "description_de", "description_fr", "description_it",
+  };
+  return (CFG.language < sizeof(keys) / sizeof(keys[0])) ? keys[CFG.language] : NULL;
+}
+
 /* leave a single "-" placeholder for an empty metadata field (the SNES then
  * prints every field unconditionally - no empty check needed there). */
 static void gi_dash(char *field) {
@@ -369,6 +383,33 @@ static int gi_fmv_reopen(void) {
   if(nextf >= gi_fmv_frames) nextf = 0;
   if(f_lseek(&gi_fmv_fil, FMV_DATA_START + nextf * FMV_FRAME_STRIDE)) { f_close(&gi_fmv_fil); return 0; }
   gi_fmv_open = 1;
+  /* The idle watchdog's stop kills the clip AUDIO too, and this reopen used to bring back only
+   * the VIDEO -- any screen that holds the pump >300ms (e.g. the guide picker) resumed a silent
+   * clip. Restart the soundtrack under the same gate gameinfo_load uses; the pump then re-locks
+   * the video to the fresh audio position. Only the .fmv clip ever ships a .pcm, so the .gss
+   * snapshot path (no pump, no audio) never gets here with a non-.fmv suffix anyway. The
+   * extension is swapped IN PLACE in gi_fmv_path and restored right after: menu_music_play
+   * opens the file synchronously and keeps no pointer/name cache (menusfx_open_name = 0), and
+   * this avoids a 300-byte buffer (AHB is down to ~100B free; a stack copy would be a needless
+   * bite out of the ~2.5KB headroom). */
+  if(CFG.game_info_music && !menu_music_active()) {
+    size_t n = strlen(gi_fmv_path);
+    if(n > 4 && !strcmp(gi_fmv_path + n - 4, ".fmv")) {
+      int st;
+      memcpy(gi_fmv_path + n - 4, ".pcm", 4);
+      st = menu_music_play(gi_fmv_path);       /* silent + harmless if the .pcm is absent */
+      memcpy(gi_fmv_path + n - 4, ".fmv", 4);
+      /* The pump LOCKS video to audio: fresh audio starts at sample 0 while gi_fmv_cur still
+       * points at the frame where the watchdog struck, so the "video slightly ahead -> hold"
+       * arm would FREEZE the picture until the music caught back up to that frame. Restart the
+       * video too: parking cur on the LAST frame makes the very next pump take its loop-wrap
+       * arm (target ~0, gap >= half the clip) and seek+stage frame 0 -- both tracks restart
+       * together. Audio absent/failed -> leave cur alone (silent clips keep free-running from
+       * where they stopped, the pre-fix behaviour). */
+      if(st == 0xA0 && gi_fmv_frames)
+        gi_fmv_cur = (uint16_t)(gi_fmv_frames - 1u);
+    }
+  }
   return 1;
 }
 
@@ -469,7 +510,15 @@ void gameinfo_load(uint8_t *rom_path) {
     gi_field("players",      meta.players,      sizeof(meta.players));
     gi_field("genre",        meta.genre,        sizeof(meta.genre));
     gi_field("special_chip", meta.special_chip, sizeof(meta.special_chip));
-    gi_field("description",  meta.description,  sizeof(meta.description));
+    /* description: the MENU language first (description_<code>), English (description) as the
+     * fallback -- for a missing key AND for a present-but-empty one. Both are plain keys in the
+     * same file, so the language can change without re-syncing the card. The localized keys are
+     * written LAST in the file, so this is the only lookup that can scan the whole `.yml`. */
+    {
+      const char *lkey = gi_desc_lang_key();
+      if(lkey) gi_field(lkey, meta.description, sizeof(meta.description));
+      if(!meta.description[0]) gi_field("description", meta.description, sizeof(meta.description));
+    }
     { yaml_token_t tok; fmv_eligible = yaml_get_itemvalue("fmv", &tok) ? 1 : 0; }
     yaml_file_close();
   } else {
@@ -534,15 +583,13 @@ void gameinfo_load(uint8_t *rom_path) {
   sram_writeblock(&meta, SRAM_GAMEINFO_ADDR, sizeof(meta));
 }
 
-/* "Full description" (Y) pump. The YAML parser caps a value at YAML_BUFLEN (256), so the
- * struct's description[256] is truncated. Here we re-open the last-loaded .yml and scan it
- * with a STREAMING line reader (outside the YAML parser) to stage the COMPLETE description,
- * font-encoded, into SRAM_GAMEINFO_DESCEXT_ADDR. Bounded + fail-safe (never hangs the menu
- * loop): on ANY error the region is left invalid (1st byte 0) so the menu keeps the 256-char
- * copy. Matches the generator's format -- one physical line per field, the value is either
- * double-quoted (terminates at the next '"', which is always the closer since inner quotes
- * were rewritten to ''') or bare (terminates at end-of-line / EOF). */
-void gameinfo_desc_full(void) {
+/* Scan the last-loaded .yml for `key:` and stage its COMPLETE value, font-encoded, into
+ * SRAM_GAMEINFO_DESCEXT_ADDR. Returns the number of font bytes staged (0 = key absent, empty, or
+ * any error -- the region is then left invalid, 1st byte 0). Bounded + fail-safe: never hangs the
+ * menu loop. Matches the generator's format -- one physical line per field, the value is either
+ * double-quoted (terminates at the next '"', which is always the closer since inner quotes were
+ * rewritten to ''') or bare (terminates at end-of-line / EOF). */
+static unsigned gi_descext_scan(const char *key) {
   /* IN_AHBRAM scratch: off the tight main SRAM (growing .bss can silently corrupt a global).
      Fully written before read; touched only here (menu-loop, never from an IRQ), so the
      NOLOAD/no-zero-init of .ahbram is fine. */
@@ -560,18 +607,19 @@ void gameinfo_desc_full(void) {
 
   /* 1) invalidate first: if we find nothing, the menu falls back to description[256]. */
   sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
-  if(!gi_yml_path[0]) return;
+  if(!gi_yml_path[0]) return 0;
 
   /* 2) open the last-loaded .yml with the shared handle (free during the info screen; the
    *    FMV has its own gi_fmv_fil). Any error -> return (region stays invalid). */
   file_open((const uint8_t *)gi_yml_path, FA_READ);
-  if(file_res) return;
+  if(file_res) return 0;
 
   /* 3) scan lines. A chunk begins a physical line only if the previous chunk ended in '\n';
    *    a value that overflows one f_gets buffer continues in the next chunk, and the key must
-   *    NOT be matched against such a continuation. Bounded by a 32 KB scan cap on top of EOF
-   *    so a pathological file can never spin the loop. */
-  while(!done && scanned < 32u * 1024u
+   *    NOT be matched against such a continuation. Bounded by a 64 KB scan cap on top of EOF
+   *    so a pathological file can never spin the loop (the cap has to clear a `.yml` carrying
+   *    one description per menu language, with the localized ones written last). */
+  while(!done && scanned < 64u * 1024u
         && f_gets(chunk, sizeof(chunk), &file_handle)) {
     int this_start = at_line_start;
     const char *p = chunk;
@@ -580,11 +628,14 @@ void gameinfo_desc_full(void) {
     at_line_start = (len && chunk[len - 1] == '\n');   /* else the line continues */
 
     if(!in_value) {
-      const char *kk = "description:";
+      const char *kk = key;
       if(!this_start) continue;                        /* continuation of a long line */
       while(*p == ' ' || *p == '\t') p++;              /* optional leading indent */
       while(*kk && *p == *kk) { p++; kk++; }
-      if(*kk) continue;                                /* not the description line */
+      /* the ':' is part of the match: without it "description" would also swallow the
+       * "description_pt:" line (one key is a prefix of the other). */
+      if(*kk || *p != ':') continue;                   /* not the line we want */
+      p++;                                             /* eat the ':' */
       while(*p == ' ' || *p == '\t') p++;              /* skip spaces before the value */
       in_value = 1;
       if(*p == '"') { quoted = 1; p++; }               /* quoted -> closes at next '"' */
@@ -622,4 +673,16 @@ void gameinfo_desc_full(void) {
   if(ob) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; }
   sram_writebyte(0, out_addr);           /* NUL terminator (re-zeroes byte 0 if empty) */
   file_close();
+  return out_total;
+}
+
+/* "Full description" (Y) pump. The YAML parser caps a value at YAML_BUFLEN (256), so the struct's
+ * description[256] is truncated; this stages the whole text. Same language choice as
+ * gameinfo_load: the menu language first, English as the fallback -- so what Y opens is always the
+ * text the screen was already showing. Two passes at worst (one per key), each bounded and
+ * fail-safe; on failure the region stays invalid and the menu keeps the 256-char copy. */
+void gameinfo_desc_full(void) {
+  const char *lkey = gi_desc_lang_key();
+  if(lkey && gi_descext_scan(lkey)) return;   /* localized text staged */
+  gi_descext_scan("description");             /* English (also re-invalidates on failure) */
 }

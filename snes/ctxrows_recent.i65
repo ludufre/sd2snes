@@ -1,0 +1,100 @@
+// ctxrows_recent.i65 -- entry rows of the RECENT GAMES list context menu (Y on a row).
+// 6 entries: Add to favorites / Set as autoboot / Remove from recent games / Cheats /
+// Delete / Delete save file. All of them act on the list INDEX in MCU_PARAM, not on a
+// browser direntry -- hence the _recent_ routine variants.
+//
+// Shared by the plain table in snes/menudata.a65 (bank $C0) and by the
+// ShowGameInfo == 2 variant in snes/contextdata.a65 (bank $C1), which prepends the
+// "Game info" row and is otherwise identical. Extracting the rows is what makes the two
+// tables impossible to drift apart: before this file they were a hand-kept byte-for-byte
+// copy, and every row added to one of them had to be mirrored into the other by memory.
+//
+// Contains ENTRIES ONLY -- no 4-byte header and no terminating `.byt 0`. Each including
+// table supplies its own, because the header's window title is per-table and the variants
+// insert their extra row between the header and this file.
+//
+// NO .link directive: like cheatlist.i65 / manviewer.i65 this file inherits the bank of
+// whoever includes it, which is the whole point ($C0 for the original, $C1 for the variant).
+//
+// DIALECT: inside an #include'd file snescom accepts only `//` comments -- the usual .a65
+// comment character cannot open a comment here and dies with "Error: What is". (It is fine
+// as ordinary prose INSIDE a `//` comment, which is what cheatlist.i65 does.) The extracted
+// rows carried no comments at all, so nothing was lost in the move. Keep it that way.
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_add_to_favorites
+ .byt  ^text_filesel_context_add_to_favorites
+ .word !add_recent_file_to_favorites-1
+ .byt  ^add_recent_file_to_favorites-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_add_to_favorites
+ .byt  ^mdesc_filesel_context_add_to_favorites
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_set_as_autoboot
+ .byt  ^text_filesel_set_as_autoboot
+ .word !set_recent_as_autoboot_rom-1
+ .byt  ^set_recent_as_autoboot_rom-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_set_as_autoboot
+ .byt  ^mdesc_filesel_set_as_autoboot
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_recent_context_remove_from_recent
+ .byt  ^text_recent_context_remove_from_recent
+ .word !remove_selected_recent_file-1
+ .byt  ^remove_selected_recent_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_recent_context_remove_from_recent
+ .byt  ^mdesc_recent_context_remove_from_recent
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_cheats
+ .byt  ^text_filesel_context_cheats
+ .word !cheat_menu_for_recent_file-1
+ .byt  ^cheat_menu_for_recent_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_cheats
+ .byt  ^mdesc_filesel_context_cheats
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_file
+ .byt  ^text_filesel_context_delete_file
+ .word !delete_recent_file-1
+ .byt  ^delete_recent_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_file
+ .byt  ^mdesc_filesel_context_delete_file
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_delete_srm
+ .byt  ^text_filesel_context_delete_srm
+ .word !delete_recent_srm-1
+ .byt  ^delete_recent_srm-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_delete_srm
+ .byt  ^mdesc_filesel_context_delete_srm
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0

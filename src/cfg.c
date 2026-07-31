@@ -217,8 +217,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
   f_printf(&file_handle, "%s: %s\n", CFG_MENU_MUSIC_FILE, (char*)CFG.bgm_name);
-  f_printf(&file_handle, "\n#  %s: Show the game info screen (cover/screenshot/metadata) before booting a ROM that has a /sd2snes/info entry\n", CFG_SHOW_GAME_INFO);
-  f_printf(&file_handle, "%s: %s\n", CFG_SHOW_GAME_INFO, CFG.show_game_info ? "true" : "false");
+  f_printf(&file_handle, "\n#  %s: Show the game info screen (cover/screenshot/metadata) before booting a ROM that has a /sd2snes/info entry (0: off, 1: on, 2: context menu only)\n", CFG_SHOW_GAME_INFO);
+  f_printf(&file_handle, "%s: %d\n", CFG_SHOW_GAME_INFO, CFG.show_game_info);
   f_printf(&file_handle, "#  %s: Play the animated video clip on the game info screen (false: show a static snapshot instead)\n", CFG_GAME_INFO_VIDEO);
   f_printf(&file_handle, "%s: %s\n", CFG_GAME_INFO_VIDEO, CFG.game_info_video ? "true" : "false");
   f_printf(&file_handle, "#  %s: Play the video's soundtrack while the clip is showing (requires %s)\n", CFG_GAME_INFO_MUSIC, CFG_GAME_INFO_VIDEO);
@@ -408,7 +408,14 @@ int cfg_load() {
       CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
     }
     if(yaml_get_itemvalue(CFG_SHOW_GAME_INFO, &tok)) {
-      CFG.show_game_info = tok.boolvalue ? 1 : 0;
+      /* Type check is MANDATORY: yaml_detect_value only writes boolvalue in its
+         BOOL branches and the token is reused across keys, so reading boolvalue
+         for a numeric value would pick up a stale flag from an earlier key. */
+      if(tok.type == YAML_BOOL) {
+        CFG.show_game_info = tok.boolvalue ? 1 : 0;   /* legacy true -> on, false -> off */
+      } else {
+        CFG.show_game_info = tok.longvalue > 2 ? 1 : (uint8_t)tok.longvalue;  /* 0: off, 1: on, 2: context */
+      }
     }
     if(yaml_get_itemvalue(CFG_GAME_INFO_VIDEO, &tok)) {
       CFG.game_info_video = tok.boolvalue ? 1 : 0;

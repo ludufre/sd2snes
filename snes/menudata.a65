@@ -305,8 +305,8 @@ menu_enttab_gameinfo:
  .byt  MTYPE_VALUE
  .word !mtext_gameinfo_enable
  .byt  ^mtext_gameinfo_enable
- .word !kv_onoff
- .byt  ^kv_onoff
+ .word !kv_gameinfo_mode
+ .byt  ^kv_gameinfo_mode
  .byt  OPTTYPE_KVBYTE
  .word !CFG_SHOW_GAME_INFO
  .byt  ^CFG_SHOW_GAME_INFO
@@ -1064,70 +1064,10 @@ menu_enttab_filesel_context_file:
  .word !text_filesel_selected_file ; window title
  .byt  ^text_filesel_selected_file ; for this menu
 ; ENTRIES
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_add_to_favorites
- .byt  ^text_filesel_context_add_to_favorites
- .word !add_selected_file_to_favorites-1
- .byt  ^add_selected_file_to_favorites-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_add_to_favorites
- .byt  ^mdesc_filesel_context_add_to_favorites
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_cheats
- .byt  ^text_filesel_context_cheats
- .word !cheat_menu_for_selected_file-1
- .byt  ^cheat_menu_for_selected_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_cheats
- .byt  ^mdesc_filesel_context_cheats
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_set_as_autoboot
- .byt  ^text_filesel_set_as_autoboot
- .word !set_selected_as_autoboot_rom-1
- .byt  ^set_selected_as_autoboot_rom-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_set_as_autoboot
- .byt  ^mdesc_filesel_set_as_autoboot
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_delete_file
- .byt  ^text_filesel_context_delete_file
- .word !delete_selected_file-1
- .byt  ^delete_selected_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_delete_file
- .byt  ^mdesc_filesel_context_delete_file
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_delete_srm
- .byt  ^text_filesel_context_delete_srm
- .word !delete_selected_srm-1
- .byt  ^delete_selected_srm-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_delete_srm
- .byt  ^mdesc_filesel_context_delete_srm
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
+; The 5 entry rows live in ctxrows_file.i65 so the ShowGameInfo == 2 variant in
+; contextdata.a65 ($C1) can include the SAME source instead of copying them.
+; Add/remove a row THERE, not here -- both tables pick it up automatically.
+#include "ctxrows_file.i65"
 
  .byt  0
 
@@ -1137,83 +1077,9 @@ menu_enttab_recent_context:
  .word !text_filesel_selected_file ; window title
  .byt  ^text_filesel_selected_file ; for this menu
 ; ENTRIES
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_add_to_favorites
- .byt  ^text_filesel_context_add_to_favorites
- .word !add_recent_file_to_favorites-1
- .byt  ^add_recent_file_to_favorites-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_add_to_favorites
- .byt  ^mdesc_filesel_context_add_to_favorites
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_set_as_autoboot
- .byt  ^text_filesel_set_as_autoboot
- .word !set_recent_as_autoboot_rom-1
- .byt  ^set_recent_as_autoboot_rom-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_set_as_autoboot
- .byt  ^mdesc_filesel_set_as_autoboot
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_recent_context_remove_from_recent
- .byt  ^text_recent_context_remove_from_recent
- .word !remove_selected_recent_file-1
- .byt  ^remove_selected_recent_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_recent_context_remove_from_recent
- .byt  ^mdesc_recent_context_remove_from_recent
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_cheats
- .byt  ^text_filesel_context_cheats
- .word !cheat_menu_for_recent_file-1
- .byt  ^cheat_menu_for_recent_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_cheats
- .byt  ^mdesc_filesel_context_cheats
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_delete_file
- .byt  ^text_filesel_context_delete_file
- .word !delete_recent_file-1
- .byt  ^delete_recent_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_delete_file
- .byt  ^mdesc_filesel_context_delete_file
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_delete_srm
- .byt  ^text_filesel_context_delete_srm
- .word !delete_recent_srm-1
- .byt  ^delete_recent_srm-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_delete_srm
- .byt  ^mdesc_filesel_context_delete_srm
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
+; The 6 entry rows live in ctxrows_recent.i65 -- shared with the ShowGameInfo == 2
+; variant in contextdata.a65 ($C1). Edit the rows there.
+#include "ctxrows_recent.i65"
 
  .byt  0
 
@@ -1319,70 +1185,9 @@ menu_enttab_filesel_favorites_context:
  .word !text_filesel_selected_file ; window title
  .byt  ^text_filesel_selected_file ; for this menu
 ; ENTRIES
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_remove_from_favorites
- .byt  ^text_filesel_context_remove_from_favorites
- .word !remove_selected_favorite_file-1
- .byt  ^remove_selected_favorite_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_remove_from_favorites
- .byt  ^mdesc_filesel_context_remove_from_favorites
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_cheats
- .byt  ^text_filesel_context_cheats
- .word !cheat_menu_for_favorite_file-1
- .byt  ^cheat_menu_for_favorite_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_cheats
- .byt  ^mdesc_filesel_context_cheats
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_set_as_autoboot
- .byt  ^text_filesel_set_as_autoboot
- .word !set_favorite_as_autoboot_rom-1
- .byt  ^set_favorite_as_autoboot_rom-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_set_as_autoboot
- .byt  ^mdesc_filesel_set_as_autoboot
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_delete_file
- .byt  ^text_filesel_context_delete_file
- .word !delete_favorite_file-1
- .byt  ^delete_favorite_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_delete_file
- .byt  ^mdesc_filesel_context_delete_file
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC_CLOSE
- .word !text_filesel_context_delete_srm
- .byt  ^text_filesel_context_delete_srm
- .word !delete_favorite_srm-1
- .byt  ^delete_favorite_srm-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_filesel_context_delete_srm
- .byt  ^mdesc_filesel_context_delete_srm
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
+; The 5 entry rows live in ctxrows_favorites.i65 -- shared with the ShowGameInfo == 2
+; variant in contextdata.a65 ($C1). Edit the rows there.
+#include "ctxrows_favorites.i65"
 
  .byt  0
 
@@ -1406,26 +1211,33 @@ mfunc_isenabled_hooks:
   ror
   rtl
 
-; Grey the Game Info video sub-option whenever Game Info is off (0/1 -> eor/ror).
+; Game Info sub-option greying. ShowGameInfo is now 0/1/2 (off / on / context), so
+; the eor/ror trick used by the 0/1 toggles above would flag value 2 as OFF -> branch
+; on != 0 instead, like mfunc_isenabled_covers below. Note that "context" still opens
+; the info screen (from the file context menu), it only drops the auto-show before
+; boot, so the Video/Music children stay enabled in that mode.
+; Carry set = drawn disabled.
+;
+; The music child needs Game Info != 0 AND Show video != 0 (the .pcm only plays
+; alongside the clip), so it tests the video flag and then FALLS THROUGH into the
+; ShowGameInfo test, sharing both epilogues with mfunc_isenabled_gameinfo.
+mfunc_isenabled_gameinfo_music:
+  lda @CFG_GAME_INFO_VIDEO
+  beq mfunc_isenabled_gi_grey  ; no video -> no video music
 mfunc_isenabled_gameinfo:
   lda @CFG_SHOW_GAME_INFO
-  eor #$ff
-  ror
+  bne mfunc_isenabled_gi_on    ; on (1) or context (2) -> the info screen exists
+mfunc_isenabled_gi_grey:
+  sec                          ; game info off -> grey the sub-option
   rtl
-
-; Grey the "play video music" sub-option whenever Game Info OR Show video is off
-; (the .pcm only plays alongside the clip). AND of two 0/1 flags, like
-; mfunc_isenabled_savestate below. Carry set = drawn disabled.
-mfunc_isenabled_gameinfo_music:
-  lda @CFG_SHOW_GAME_INFO
-  and @CFG_GAME_INFO_VIDEO
-  eor #$ff
-  ror
+mfunc_isenabled_gi_on:
+  clc
   rtl
 
 ; dead code removed: mfunc_isdisabled_hooks was an unreferenced inverse of
-; mfunc_isenabled_hooks.  8 bytes zero-filled to keep menu-binary alignment.
- .byt 0,0,0,0,0,0,0,0   ; 8 bytes total
+; mfunc_isenabled_hooks.  4 bytes zero-filled to keep menu-binary alignment
+; (was 8; the pair of predicates above grew when they stopped using eor/ror).
+ .byt 0,0,0,0           ; 4 bytes total
 
 ; Grey the "Favorites/Recents" sub-option whenever Show covers is Off. ShowCovers
 ; holds 0/1/2 (off/large/small), so the eor/ror trick used above (assumes 0/1)
@@ -1512,6 +1324,20 @@ kv_cover_size:
 .word $0001, !text_cover_large : .byt ^text_cover_large
 .word $0002, !text_cover_small : .byt ^text_cover_small
 .word $0000, !text_off : .byt ^text_off
+.word $ffff
+
+; ShowGameInfo is tri-state: 0 = off, 1 = on (auto-show before boot), 2 = context
+; (no auto-show; the info screen is reachable from the file context menu instead).
+; Listed in NUMERIC order, unlike kv_cover_size above: that one is reordered so the
+; "value not in the table -> fall back to the first row" sanitize lands on a sane
+; default, but here cfg_load clamps ShowGameInfo into 0..2, so every stored value is
+; always present in the table and that fallback is unreachable. With nothing to gain
+; from reordering, keep the shape of kv_onoff / kv_patch_hdrmode and let the scroll
+; order read Off -> On -> Context.
+kv_gameinfo_mode:
+.word $0000, !text_off : .byt ^text_off
+.word $0001, !text_on : .byt ^text_on
+.word $0002, !text_gameinfo_context : .byt ^text_gameinfo_context
 .word $ffff
 
 kv_rst_to_menu:

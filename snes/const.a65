@@ -330,7 +330,7 @@ mtext_ingame_cheats               .byt "Start with cheats enabled", 0
 mtext_ingame_shortreset           .byt "Reset to menu", 0
 mtext_ingame_enable               .byt "In-game hook", 0
 mtext_ingame_buttons              .byt " ",129,"In-game buttons", 0
-mtext_ingame_cheat_overlay        .byt " ",129,"Cheat menu", 0
+mtext_ingame_cheat_overlay        .byt " ",129,"In-game menu", 0
 mtext_ingame_game_manual          .byt " ",129,"Game manual", 0
 mtext_ingame_holdoff              .byt " ",129,"Initial holdoff", 0
 mtext_ingame_savestate            .byt "In-game savestates", 0
@@ -396,7 +396,7 @@ mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled
 mdesc_ingame_shortreset           .byt "Go back to menu on short reset (Off/On/Folder/ROM). Folder: return to last game folder. ROM: also pre-select the ROM.", 0
 mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
 mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
-mdesc_ingame_cheat_overlay        .byt "In-game cheat menu (hold L+R+Y+Left) to toggle cheats live. Requires in-game hook. Does not work on special-chip games.", 0
+mdesc_ingame_cheat_overlay        .byt "In-game menu (hold L+R+Y+Left): cheats, savestates, saves and guides. Requires in-game hook. Not available on a few special-chip games.", 0
 mdesc_ingame_game_manual          .byt "Show the game manual in the in-game menu (Manual tab). Needs a <rom>.man file in /sd2snes/info (same place as the game-info assets).", 0
 mdesc_ingame_holdoff              .byt "Wait 10 seconds before enabling hook (helps some games boot with hook enabled)", 0
 mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+R / Load - Start+L", 0
@@ -447,6 +447,9 @@ mdesc_filesel_context_delete_srm .byt "Delete the SRM save file for this ROM", 0
 text_filesel_context_cheats .byt "Cheats", 0
 mdesc_filesel_context_cheats .byt "View, enable or disable cheats from this ROM's YAML file", 0
 
+text_filesel_context_gameinfo .byt "Game info", 0
+mdesc_filesel_context_gameinfo .byt "Show this ROM's info screen (cover, screenshot and metadata) before playing", 0
+
 text_cheat_yes  .byt "Yes ", 0
 text_cheat_no   .byt "No  ", 0
 text_cheat_none_title .byt "Cheats", 0
@@ -485,6 +488,7 @@ text_on         .byt "On", 0
 text_off        .byt "Off", 0
 text_cover_large .byt "Large", 0
 text_cover_small .byt "Small", 0
+text_gameinfo_context .byt "Context", 0
 text_nav_folder .byt "Folder", 0
 text_nav_rom    .byt "ROM", 0
 text_enabled    .byt "Enabled", 0
@@ -607,6 +611,23 @@ text_gi_chip      .byt "Chip", 0
 text_gi_footer    .byt "A: Play   B: Back   Y: Description", 0
 text_gi_footer_nav .byt "A:Play B:Back Y:Desc Up/Down:Game", 0
 text_gi_footer_full .byt "B: Back   Up/Down: Scroll", 0
+; Footer variants shown when the game HAS a readable guide, i.e. when X opens the viewer
+; (gi_man_avail in gameinfo.a65 is the single gate both these and the handler answer to).
+; "Guides" tracks the in-game GUIDES tab label per language, not the document-type slug.
+; Plus the key legend the guide PICKER puts on the same row while it owns the body.
+text_gi_footer_man .byt "A: Play   B: Back   Y: Description   X: Guides", 0
+text_gi_footer_nav_man .byt "A:Play B:Back Y:Desc X:Guides Up/Down:Game", 0
+text_gi_footer_pick .byt "A: Open   B: Back", 0
+; Document-type labels for the GUIDES picker on the game-info screen (X). Same five slugs
+; as the in-game shell's text_igm_mn_slug_*, but build_const.py DROPS every text_igm_*
+; label from the m3nu link (they are emitted into igmenu.bin's own bank instead), so the
+; menu needs its own copies. Chosen by the .man header slug (guide record title[0] = 1..5);
+; lockstep with MANUAL_TYPE_SLUG_ID in the gamedb.
+text_gi_slug_manual .byt "Manual", 0
+text_gi_slug_guide  .byt "Guide", 0
+text_gi_slug_map    .byt "Map", 0
+text_gi_slug_insert .byt "Insert", 0
+text_gi_slug_other  .byt "Other", 0
 cheat_win_x     .byt 6
 cheat_win_y     .byt 11
 cheat_win_w     .byt 52

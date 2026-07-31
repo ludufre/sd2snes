@@ -271,6 +271,12 @@ printf("path=%s tgt=%06lx types=", path, tgt_addr);
 uart_puts_hex((char*)filetypes);
 uart_putc('\n');
   uint16_t n = scan_dir(path, tgt_addr, filetypes);
+  /* scan_dir grows the file-STRING table from SRAM_MANUAL_S1TILES_ADDR ($C30000) up to $C80000,
+     i.e. straight through BOTH manual staging regions. Drop the "page already resident" memo or
+     the next SNES_CMD_MANUAL_S1PAGE/_ZPAGE for the same page takes its skip branch and the viewer
+     DMAs these filenames into VRAM as tiles. (The menu-side viewer's exit fires exactly this
+     READDIR to rebuild the table -- see snes/manhost.a65.) */
+  manual_invalidate_resident();
   /* Hand the authoritative entry count back to the menu through the snescmd
      param region (BRAM-backed, reliable to read from the SNES immediately).
      The menu sets dirend_addr = n*4 from this instead of scanning the SDRAM dir
@@ -374,6 +380,25 @@ static uint8_t patch_export_command(uint8_t xidx) {
   return result;
 }
 #endif /* !CONFIG_MK2 */
+
+/* Commands issued FROM the pre-boot info screen, i.e. the ones that must NOT stop a running FMV.
+   Everything else means the SNES left that screen (see the call site in the menu loop).
+     - FMV_NEXT                        : the pump itself
+     - GAME_INFO / _RECENT / _FAVORITE : a different game selected while the screen stays up
+     - GI_DESC_FULL                    : Y = full description, drawn OVER the still-playing clip.
+                                         Stopping here killed the video AND its audio for good
+                                         (nothing ever re-opens the .fmv) -- that was the bug.
+     - MANUAL_S1PAGE / MANUAL_ZPAGE    : the manual viewer opened from the info screen; the same
+                                         reasoning applies on the way back out of it. */
+static int cmd_keeps_fmv(uint8_t cmd) {
+  return cmd == SNES_CMD_FMV_NEXT
+      || cmd == SNES_CMD_GAME_INFO
+      || cmd == SNES_CMD_GAME_INFO_RECENT
+      || cmd == SNES_CMD_GAME_INFO_FAVORITE
+      || cmd == SNES_CMD_GI_DESC_FULL
+      || cmd == SNES_CMD_MANUAL_S1PAGE
+      || cmd == SNES_CMD_MANUAL_ZPAGE;
+}
 
 int main(void) {
   power_init();
@@ -654,12 +679,12 @@ int main(void) {
       printf("cmd: %d\n", cmd);
       status_save_from_menu();
       uart_putc('-');
-      /* FMV plays only while the info screen is up. Any command other than the FMV pump or a
-         new info query means the SNES left the screen -> stop it (close the file + the DAC clip)
-         so the DAC frees up for the browser's nav SFX. No-op if no FMV is active. (Returning to
-         the Favorites/Recents list issues NO command -> the idle watchdog in snes.c covers it.) */
-      if(cmd != SNES_CMD_FMV_NEXT && cmd != SNES_CMD_GAME_INFO
-         && cmd != SNES_CMD_GAME_INFO_RECENT && cmd != SNES_CMD_GAME_INFO_FAVORITE)
+      /* FMV plays only while the info screen is up. Any command the info screen itself does NOT
+         issue (see cmd_keeps_fmv) means the SNES left the screen -> stop it (close the file + the
+         DAC clip) so the DAC frees up for the browser's nav SFX. No-op if no FMV is active.
+         (Returning to the Favorites/Recents list issues NO command -> the idle watchdog in snes.c
+         covers it.) */
+      if(!cmd_keeps_fmv(cmd))
         gameinfo_fmv_stop();
       switch(cmd) {
         case SNES_CMD_LOADROM:
@@ -1068,6 +1093,10 @@ int main(void) {
              boot, so no NACK -- the menu polls GAMEINFO status in $FF6000. */
           get_selected_name(file_lfn);
           gameinfo_load(file_lfn);
+          /* publish MANUAL_GUIDES/MANUAL_META for this game so the info screen can show the
+             "X: Guides" footer and open the viewer before booting. Cached on the path: the
+             screen restages on every Up/Down and a full probe is a directory pass. */
+          manual_stage_meta_cached(file_lfn);
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_GAME_INFO_RECENT:
@@ -1075,6 +1104,7 @@ int main(void) {
              via LAST_FILE, like LOAD_COVER_RECENT). Non-booting; menu polls $FF6000. */
           cfg_get_listed_game(LAST_FILE, file_lfn, snes_get_mcu_param() & 0xff);
           gameinfo_load(file_lfn);
+          manual_stage_meta_cached(file_lfn);   /* guides list/meta for the footer + viewer */
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_GAME_INFO_FAVORITE:
@@ -1083,6 +1113,7 @@ int main(void) {
           cfg_get_listed_game(FAVORITES_FILE, file_lfn,
                               listed_game_resolve_index(FAVORITES_FILE, snes_get_mcu_param() & 0xff));
           gameinfo_load(file_lfn);
+          manual_stage_meta_cached(file_lfn);   /* guides list/meta for the footer + viewer */
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_FMV_NEXT:
@@ -1096,6 +1127,35 @@ int main(void) {
              stage the COMPLETE (untruncated) description into $FF7600. Bounded + fail-safe
              (on any error the region stays invalid -> menu keeps the 256-char copy); no boot. */
           gameinfo_desc_full();
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_MANUAL_ZPAGE:
+          /* manual viewer opened from the PRE-BOOT info screen -- the very same command the
+             in-game GUIDES tab uses. Scrollable 2x zoom: stage ONE WHOLE 2x page (<=119KB) into
+             PSRAM $C5/$C6. MCU_PARAM: [0] = compacted guide (0..7), [1] = zoom page (== the 1x
+             block index), [3] = mode. After this the viewer pans with pure PSRAM->VRAM DMA and
+             issues NO further commands until it turns the page, which is exactly why the pan
+             cannot stall. Bounded + fail-safe; does NOT boot.
+             ACK: unlike the in-game path there is no snes_set_mcu_cmd(0) here -- in the menu the
+             ACK is the MCU_CMD clear menu_main_loop() does at the TOP of the next iteration, which
+             is what the viewer's bounded "spin until MCU_CMD == 0" waits for. So this case must
+             just drop back into the menu loop (cmd = 0). */
+          { uint32_t p = snes_get_mcu_param();
+            manual_stage_zpage((uint8_t)(p & 0xff),              /* guide (compacted) */
+                               (uint16_t)((p >> 8) & 0xffff),    /* block or zoom page */
+                               (uint8_t)((p >> 24) & 0xff));     /* mode: bit0 = page */
+          }
+          cmd=0; /* stay in menu loop */
+          break;
+        case SNES_CMD_MANUAL_S1PAGE:
+          /* same viewer, scale-1 view: stage one whole 1x page so it pans over the page instead
+             of jumping band to band. Its PSRAM region is separate from the 2x page, so both stay
+             resident and toggling is instant. MCU_PARAM: [0] = guide, [1..2] = page. Bounded +
+             fail-safe; does NOT boot. Same ACK contract as MANUAL_ZPAGE above. */
+          { uint32_t p = snes_get_mcu_param();
+            manual_stage_s1page((uint8_t)(p & 0xff),
+                                (uint16_t)((p >> 8) & 0xffff));
+          }
           cmd=0; /* stay in menu loop */
           break;
         case SNES_CMD_SET_THEME:
@@ -1314,18 +1374,6 @@ int main(void) {
                 usb_cmd = 0;
                 CFG.enable_cheats = (cmd == SNES_CMD_ENABLE_CHEATS) ? 1 : 0;
                 sram_writebyte(CFG.enable_cheats ? 1 : 0, SRAM_CHEAT_MASTER_ADDR);
-                break;
-              case SNES_CMD_MANUAL_BLOCK:
-                /* in-game guides viewer: stage the requested block into PSRAM for the frozen SNES
-                   to DMA. MCU_PARAM: [0..1] = stream block index (LE), [2] = compacted guide
-                   (0..7), [3] = mode (bit0 = zoom). Bounded + fail-safe; the snes_set_mcu_cmd(0)
-                   below is the ACK the viewer spins on. */
-                usb_cmd = 0;
-                { uint32_t p = snes_get_mcu_param();
-                  manual_stage_block((uint8_t)((p >> 16) & 0xff),   /* guide (compacted) */
-                                     (uint16_t)(p & 0xffff),        /* index within stream */
-                                     (uint8_t)((p >> 24) & 0xff));  /* mode (vestigial) */
-                }
                 break;
               case SNES_CMD_MANUAL_ZPAGE:
                 /* in-game guides viewer, scrollable 2x zoom: stage ONE WHOLE 2x page (<=119KB)

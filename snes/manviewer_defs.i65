@@ -1,0 +1,257 @@
+// manviewer.i65 companion -- MANUAL viewer #defines ONLY (no code, no data, no .link).
+//
+// Split out of igmenu.a65 so the SAME viewer source (manviewer.i65) can be assembled into the
+// in-game $C2 shell AND, later, into the $C0/$C1 menu. Everything here is layout/PPU/scratch
+// that belongs to the VIEWER; anything the tab level owns stayed behind in igmenu.a65
+// (IGM_MN_* i18n indices, MN_TITLE_ROW/MN_PAGES_ROW/..., MN_BG1_BYTES/MN_BG2_*/MN_BUF_*
+// -- the host snapshot spans, used only by the host's own save/restore hooks --
+// and the GD_* guide-list rows).
+//
+// The scratch addresses below are PSRAM bank $F4, which is the in-game map. A future menu-side
+// host may need to re-point them; they are all @long word slots, so only these #defines move.
+//
+// The HOST must additionally define, BEFORE including this file (see igmenu.a65):
+//   man_t_tmp / man_t_slot / man_t_coff / man_t_entry / man_t_row  -- shared transients
+//   man_pad_cur / man_pad_edge                                      -- held / newly-pressed pad
+//   man_modal                                                       -- flags word, bit0 = viewer
+
+// --- MANUAL viewer scratch (PSRAM bank $F4, the FREE gap between the in-game snapshot
+//     scratch -- which ends $F48144 -- and the reserved i18n gap $F48160). Zeroed by
+//     man_state_reset (manviewer.i65): PSRAM is stale from the previous open, so a gate read
+//     before its first write would come up garbage. Accessed @long. Words. The viewer is a
+//     modal sub-loop (man_modal bit0), so it never runs concurrently with the host's other
+//     screens; its transients are the host's, reached through the man_t_* contract names. ---
+#define man_error       $F48148    // 1 = last block request timed out -> manual_enter shows
+                                   //   the i18n error message (cleared when consumed)
+// CICLO 2 GUIDES scratch (free gap $F4814A..$F4815F; zeroed by man_state_reset -- PSRAM stale). Words.
+#define man_sel_guide   $F4814A    // active compacted guide 0..count-1 (list pick / viewer request)
+                                   // ($F4814C is the HOST's guide-list cursor -- see man_list_cursor
+                                   //  in igmenu.a65. Not the viewer's; do NOT reuse the address.)
+#define man_zoom_mode   $F4814E    // 0 = 1x view, 1 = 2x scrollable zoom
+// --- scrollable 2x zoom state. ($F48150..$F4815F, then a second run in the free gap
+//     $F48180..$F481FF -- the reserved i18n gap ends $F4817F and OVL_RB starts $F48200.)
+//     ALL of these are zeroed by man_state_reset: PSRAM is stale from the previous open, so a gate
+//     read before its first write would come up garbage. ---
+#define man_zx          $F48150    // horizontal pan, 0..MN_Z_XMAX
+#define man_zy          $F48152    // vertical pan, 0..man_zmaxy
+#define man_ring_top    $F48154    // content tile row currently in the ring's top slot
+#define man_zmaxy       $F48156    // vertical clamp = max(0, pix_h - 224)
+#define man_znrows      $F48158    // tile rows in the staged page (1..MAN_Z_MAX_ROWS)
+#define man_zpage       $F4815A    // page staged in PSRAM ($ffff = none)
+#define man_zblk        $F4815C    // block whose saved pan (man_sav_z*) is valid ($ffff = none)
+#define man_zslot       $F4815E    // scratch: ring slot of the row being staged
+#define man_hold_h      $F48180    // frames the current H direction has been held
+#define man_hold_v      $F48182    // ...and V
+#define man_last_h      $F48184    // last H direction ($ffff left / 0 none / 1 right)
+#define man_last_v      $F48186    // last V direction
+#define man_sav_zx      $F48188    // pan position remembered across the 1x<->2x toggle
+#define man_sav_zy      $F4818A
+#define man_dma_srcl    $F4818C    // man_vdma args: source low 16 bits...
+#define man_dma_srcb    $F4818E    // ...source bank (low byte)...
+#define man_dma_vw      $F48190    // ...destination VRAM word...
+#define man_dma_len     $F48192    // ...byte count
+#define man_obj_x       $F48194    // OBJ HUD: X of the next glyph sprite
+#define man_obj_n       $F48196    // OBJ HUD: sprites emitted so far
+#define man_zreqmode    $F48198    // 0 = request by 1x BLOCK, 1 = by ZOOM PAGE (see CMD_MANUAL_ZPAGE)
+#define man_zfirstblk   $F4819A    // 1x block to return to when leaving zoom from the staged page
+#define man_zentry      $F4819C    // 0 = take the MCU's published entry Y, $ffff = keep man_zy
+// --- reading position, REMEMBERED across viewer exits and overlay opens. This lives in PSRAM
+//     bank $F4, which survives closing the overlay (it is only lost on game load / power), so a
+//     magic word gates it: PSRAM comes up STALE, and "0" is a perfectly valid page, so a plain
+//     zero-init would be indistinguishable from a real saved position. Matching magic => keep. ---
+#define man_pos_magic   $F4819E    // MN_POS_MAGIC when man_pos_* hold a real saved position
+#define man_pos_guide   $F481A0    // guide the saved position belongs to
+#define man_pos_block   $F481A2    // 1x block
+#define man_pos_zoom    $F481A4    // 1 = was reading zoomed
+#define man_pos_zx      $F481A6    // pan X within the zoom page
+#define man_pos_zy      $F481A8    // pan Y
+#define man_s1page      $F481AA    // scale-1 page currently staged/shown
+#define man_s1y         $F481AC    // vertical pan within the 1x page
+#define man_s1nrows     $F481AE    // tile rows in the staged 1x page
+#define man_s1maxy      $F481B0    // vertical clamp = max(0, pix_h - 224)
+#define man_s1top       $F481B2    // content row in the ring's top slot (1x)
+#define man_obj_base    $F481B4    // VMADD word of the OBJ char base for the current mode
+#define man_frx         $F481B6    // zoom-area box: left edge in 1x screen px, 0..MN_FR_XMAX.
+                                   //   This is the HORIZONTAL half of choosing what A magnifies
+                                   //   (the vertical half is just scrolling the 1x page).
+#define man_fry         $F481B8    // box top in 1x PAGE coords. The box moves freely and the page
+                                   //   scrolls only when it pushes an edge -- pinning the box to
+                                   //   the screen centre made the page's top 56px unreachable.
+#define man_fry_scr     $F481BA    // = man_fry - man_s1y, the box's screen Y (cached to detect
+                                   //   when a redraw is actually needed)
+// --- 1x reading position ALSO remembered across viewer exits (extends man_pos_*). The real 1x
+//     vertical scroll and the zoom-area box: the old restore derived man_s1y from man_pos_zy>>1,
+//     which is stale for a pure-1x session (man_zy is never written in 1x) -> it snapped back to
+//     the top. Free gap $F481BC..$F481FF (before OVL_RB $F48200). Words. ---
+#define man_pos_frx     $F481BC    // saved zoom-area box left  (man_frx)
+#define man_pos_fry     $F481BE    // saved zoom-area box top   (man_fry)
+#define man_pos_s1y     $F481C0    // saved 1x vertical scroll  (man_s1y)
+// Session magic for the man_pos_* block. The value lives in memmap.i65 (the $C0 hook tests it
+// too); it was bumped 5A32->5A33 when the tab order changed (3=Guides 4=Help), so a stale
+// active_tab saved by an older firmware reads invalid.
+// Include dialect (proven by minimal test): inside an #include'd file a trailing `;` on a
+// #define rides INTO the expansion and breaks every use site; `//` is stripped fine. The main
+// .a65 tolerates `;` -- included files do not. Hence `//`-only comments in this whole file.
+#define MN_POS_MAGIC    IGM_POS_MAGIC
+
+// MANUAL viewer MCU handshake bound. (The igmenu SAVES tab borrows it for its own ACK spin.)
+#define MN_TIMEOUT_HI   $0010      // page-request spin: outer count x 65536 inner ~ a few s
+
+// --- Scrollable 2x zoom (mode 1: BG1 = content cols 0-31, BG2 = cols 32-63) --------------------
+// 512px of content does NOT fit one BG layer: a tilemap entry's character field is 10 bits, so a
+// layer addresses at most 1024 tiles, and a 29-row ring of 64-wide rows is 1856. The width is
+// therefore SPLIT across two layers at the SAME H scroll, joined by ONE window cutting the screen
+// at split = 256-X. Screen pixel sx shows content cx = sx+X: for cx<256 that is BG1 map pixel cx;
+// for cx>=256, BG2 with the same HOFS gives map pixel (sx+X) mod 256 = cx-256. Both halves index
+// tiles 16..943 against their OWN char base, so one tile formula serves both.
+//
+// The whole 2x page is resident in PSRAM ($C5/$C6, staged by CMD_MANUAL_ZPAGE), so panning is pure
+// PSRAM->VRAM DMA: no MCU traffic, nothing to stall on, no prefetch pipeline.
+//
+// VRAM (exactly fills 64KB):
+//   $0000-$00FF  OBJ HUD tiles 0..15 (4bpp)   OBJSEL base is only 16KB-alignable, so OBJ takes
+//   $0100-$3AFF  BG1 tiles 16..943 (29 slots)   word 0 and BOTH image pools start at tile 16
+//   $3C00-$3FFF  BG1 tilemap 32x32
+//   $4100-$7AFF  BG2 tiles 16..943 (29 slots)
+//   $7C00-$7FFF  BG2 tilemap 32x32
+// MN_Z_RING = 29 -- LOCKSTEP with manual.c (the MCU bakes slot = r%29 into the tilemap words
+// it stages). Used INSIDE expressions (`adc #MN_Z_RING-1`) -- a `;` comment here would ride
+// into the expansion (include dialect, see MN_POS_MAGIC above).
+#define MN_Z_RING       MAN_Z_RING_ROWS
+#define MN_Z_BG1_TILEW  $0100      // VRAM word of BG1 tile 16; ring slot s at +s*MN_Z_SLOTW
+#define MN_Z_BG2_TILEW  $4100      // VRAM word of BG2 tile 16
+#define MN_Z_SLOTW      $0200      // words per ring slot (32 tiles x 32B = 1024B = 512 words)
+#define MN_Z_BG1_MAPW   $3C00      // BG1 tilemap word base  -> $2107 = $3C (32x32)
+#define MN_Z_BG2_MAPW   $7C00      // BG2 tilemap word base  -> $2108 = $7C (32x32)
+#define MN_Z_MAPROWW    $0020      // words per tilemap row (32 entries)
+#define MN_Z_XMAX       $0100      // horizontal pan limit: 512 content - 256 screen
+#define MN_Z_VIS_ROWS   28         // tile rows on screen (224px)
+#define MN_Z_SCRN_H     224        // visible height, for the vertical clamp
+#define MN_Z_BAND2X     448        // a 1x band (BAND_H=224) measured in 2x pixels
+// BGnVOFS shows lines VOFS+1..VOFS+224, so displaying content line Y needs VOFS = Y-1 (Y=0 ->
+// $FFFF, which wraps to the last map line and reads back as line 0). If hardware shows the image
+// one line off, this bias is the single place to correct it.
+#define MN_Z_VOFS_BIAS  1
+// Pan acceleration: frames held -> pixels/frame.
+// VERTICAL IS CAPPED AT ONE TILE ROW (8px) PER FRAME, and this is a hard hardware limit, not a
+// preference. A row costs 4 DMAs (2176 B ~ 0.81ms). Two rows is ~1.62ms of DMA, which LOOKS like
+// it fits the ~2.13ms of vblank left after auto-joypad -- but adding the 65816 work between the
+// DMAs (the r%29 subtract loop, the address shifts, ~12 register writes per DMA, the scroll
+// apply) lands at ~2.0ms, a ~6% margin. When it overruns, the DMA runs on into active display
+// and the PPU DISCARDS those writes: the second row of each pair never lands, leaving permanent
+// alternating 8px stripes of stale content. Tried it, it stripes. Do not raise MN_Z_VMAX.
+// Speed comes from the RAMP instead -- reaching full speed in ~12 frames rather than 40 is what
+// actually makes panning feel fast. Horizontal is free (a scroll register) and doubles on top.
+#define MN_Z_ACC1       3          // <3 frames  -> 1 px
+#define MN_Z_ACC2       7          // <7         -> 2 px
+#define MN_Z_ACC3       12         // <12        -> 4 px; beyond -> MN_Z_VMAX (H: doubled)
+#define MN_Z_VMAX       8          // vertical ceiling = ONE tile row/frame (see above)
+#define MN_Z_PALBYTES   $0100      // 8 palettes x 16 BGR555 = 256 bytes -> CGRAM 0..127
+// PSRAM source addresses, split into bank + low word because a DMA needs them apart. These MUST
+// track MANUAL_Z* in memmap.i65 -- hardcoding them once cost a screen of garbage when the layout
+// moved. MANUAL_ZTILES_B is MANUAL_ZTILES_A + MAN_Z_MAX_ROWS*1024, i.e. the two halves share one
+// linear space, so a single "q = row (+96 for the B half)" formula addresses both.
+#define MN_Z_TILES_BANK $00c5      // bank of MANUAL_ZTILES_A ($C50000)
+// MN_Z_B_ROWOFS = the row bias that turns the A formula into the B half. Macro-to-macro:
+// comment-free line.
+#define MN_Z_B_ROWOFS   MAN_Z_MAX_ROWS
+#define MN_Z_TMAP_LO    $7000      // MANUAL_ZTMAP low word  ($C47000)
+#define MN_Z_TMAP_BANK  $00c4
+#define MN_Z_PAL_LO     $a000      // MANUAL_ZPAL low word   ($C4A000)
+#define MN_Z_PAL_BANK   $c4
+// --- 2x HUD. BG1 now SCROLLS, so the HUD cannot live on it: it moves to OBJ, which by
+//     construction does not scroll, needs no tilemap, and draws from CGRAM 128-255 -- entirely
+//     free here, since a mode-1 4bpp BG only reaches 0..127. OAM is ours: the cheat overlay's
+//     ss_ovl_oamclr already destroys the game's sprites on entry and the exit path deliberately
+//     does NOT restore them (the game repopulates from its own NMI), so nothing is being trampled.
+#define MN_Z_HUD_Y      208        // scanline of the HUD row
+#define MN_Z_HUD_X0     8          // X of the first glyph
+#define MN_Z_OBJ_ATTR   $30        // priority 3, palette 0, name bit8 = 0
+#define MN_Z_OBJ_CG_INK 129        // OBJ palette 0 entry 1 -> glyph ink (white)
+#define MN_Z_OBJ_CG_BOX 130        // OBJ palette 0 entry 2 -> glyph box (dark)
+#define MN_Z_OBJ_COUNT  128        // sprites in the OAM main table
+// --- Scale-1 (1x) scrollable view: mode 1, BG1 4bpp, 256px = 32 tiles/row. A 29-row ring is 928
+//     tiles, so it fits ONE layer -- no split, no window, and no horizontal pan (the page is
+//     exactly screen-width). Only 2 DMAs per row (1088 B ~ 0.41ms) instead of the 2x's 4, so the
+//     vertical step CAN be two rows here where the 2x cannot afford it.
+//     VRAM: BG1 tiles 16..943 @ word $0100-$3AFF | map $3C00-$3FFF | OBJ @ word $4000 (byte $8000).
+//     Putting OBJ at $8000 is what finally kills the CGRAM 254/255 theft: the 1x HUD lives in OBJ
+//     palettes (CGRAM 128+) like the 2x, so it can no longer repaint image colours. ---
+#define MN_S1_TILEW     $0100      // VRAM word of BG1 tile 16
+#define MN_S1_SLOTW     $0200      // words per ring slot (32 tiles x 32B = 1024B)
+#define MN_S1_MAPW      $3C00      // BG1 tilemap word base -> $2107 = $3C
+#define MN_S1_OBJSEL    $02        // $2101: OBJ name base word $4000 (byte $8000)
+#define MN_S1_OBJ_VW    $4000      // ...the same base, as a VMADD word for the glyph upload
+#define MN_S1_TILES_LO  $0000      // MANUAL_S1TILES ($C30000) -- one bank, no crossing
+#define MN_S1_TILES_BK  $00c3
+#define MN_S1_TMAP_LO   $b000      // MANUAL_S1TMAP  ($C4B000)
+#define MN_S1_TMAP_BK   $00c4
+#define MN_S1_PAL_LO    $c000      // MANUAL_S1PAL   ($C4C000)
+#define MN_S1_PAL_BK    $c4
+#define MN_S1_VMAX      16         // 1x may do two rows/frame: 2*1088 B ~ 0.82ms, plenty of room
+// --- zoom-area frame drawn over the 1x view. A always magnifies the CENTRE of what you are
+//     looking at (see man_zoom_toggle), and that mapping never clamps, so the box sits at a FIXED
+//     screen position: 128x112 at (64,56) -- exactly the 256x224 the 2x will show. Drawn with
+//     sprites, so it floats over the page instead of replacing image tiles. ---
+#define MN_FR_XMAX      128        // 256 screen - 128 box: the range man_frx may take
+#define MN_FR_X0        64         // INITIAL left edge (centred); man_frx holds the live value
+#define MN_FR_Y0        56         // top edge
+#define MN_FR_COLS      16         // 128px / 8
+#define MN_FR_ROWS      14         // 112px / 8
+// The box is FOUR 16x16 corner brackets, not a full outline. A 56-sprite outline costs ~1.53ms to
+// rewrite, and the 1x vblank has ~1.7ms left after the row DMA -- it overran, and $2104 writes that
+// land outside vblank CORRUPT OAM (the PPU is reading it), which scattered sprites all over the
+// screen. Four sprites cost ~0.15ms. A 16x16 sprite draws tiles n,n+1,n+16,n+17, so one bracket
+// shape plus H/V flips gives all four corners.
+#define MN_FR_T_BASE    32         // OBJ tile n of the bracket -> uses 32,33,48,49. 1x-ONLY (the
+                                   //   2x never calls man_frame_upload), moved up from 16 so the
+                                   //   legend glyph tiles 15..18 stay CONTIGUOUS with the rest of
+                                   //   the font; headroom now runs to tile 31 before it collides
+#define MN_FR_SPR0      16         // first OAM sprite of the box; 4-aligned so ONE high-table byte
+                                   //   ($AA = size 16x16, X bit8 = 0) covers all four
+#define MN_FR_HI_BYTE   4          // = MN_FR_SPR0/4, the high-table BYTE index...
+#define MN_FR_HI_WORD   2          // ...and its WORD address ($2102/$2103 address OAM in WORDS,
+                                   //    so byte b lives at word $0100 + b/2 -- writing the byte
+                                   //    index straight into $2102 aimed at sprites 32-39 and left
+                                   //    the box 8x8, i.e. only the top-left quarter of each bracket)
+#define MN_FR_W         128        // box size in 1x px (= the 256x224 the 2x will show)
+#define MN_FR_H         112
+#define MN_FR_CG        131        // OBJ palette 0 entry 3 -> frame colour
+#define MN_FR_COLOUR    $001f      // BGR555 red: reads on both light and dark pages
+#define MN_FR_ATTR      $30        // priority 3, palette 0
+#define MN_FR_ATTR_H    $70        // + hflip
+#define MN_FR_ATTR_V    $b0        // + vflip
+#define MN_FR_ATTR_HV   $f0        // + both
+
+// --- HUD "Pg X/N" overlay. The glyphs are built at runtime from a compact 1bpp font
+//     (mn_hud_font, 8 bytes/glyph) expanded into 4bpp OBJ tiles by man_obj_glyphs; OBJ
+//     lives in CGRAM 128-255, which is what keeps the HUD from stealing image colours. ---
+//     TWO counts, because the 2x MUST stop at 15: its OBJ pool is exactly 16 tiles (VRAM word
+//     $0000-$00FF), tile 16 being the floor of the BG1 image pool -- LOCKSTEP with the MCU
+//     (MAN_Z_TILE0 = 16 in src/manual.c). One extra glyph uploaded in 2x would overwrite staged
+//     page image. The 1x has OBJ at word $4000 with room to spare, so it uploads the whole font,
+//     legend glyphs included. man_obj_glyphs takes the count in A(16). ---
+#define MN_HUD_NGLYPH_2X  15       // space,'/','P','g','X','0'..'9' -- the "Pg X/N 2X" set
+#define MN_HUD_NGLYPH_1X  19       // + A,':',L,R -- the 1x legend set
+// glyph slots in mn_hud_font: 0=space 1='/' 2='P' 3='g' 4='X' 5..14='0'..'9'
+#define MN_G_SPACE      0
+#define MN_G_SLASH      1
+#define MN_G_P          2
+#define MN_G_G          3
+#define MN_G_X          4
+#define MN_G_DIG0       5
+// 15..18 are 1x-ONLY. They sit past the 2x's 16-tile OBJ pool and are NEVER uploaded there, so
+// emitting a sprite with one of these tiles in 2x would draw page image data instead of a glyph.
+#define MN_G_A          15
+#define MN_G_COLON      16
+#define MN_G_L          17
+#define MN_G_R          18
+// --- 1x controls legend "A:2X  L/R:Pg". FIXED OAM slots, in the man_frame_draw style, so it
+//     never depends on how long "Pg X/N" came out: the 1x HUD uses sprites 0..9 worst case
+//     ("Pg " + 3 digits + '/' + 3 digits), the box owns 16..19, the legend 20..31. That split is
+//     also what makes the box redraw harmless -- man_frame_redraw writes $00 to high-table byte 5
+//     (sprites 20-23) in vblank, and $00 IS what those legend sprites want: 8x8, X bit8 = 0. ---
+#define MN_LG_SPR0      20         // first OAM sprite of the legend
+#define MN_LG_LEN       12         // glyph count: A : 2 X sp sp L / R : P g
+#define MN_LG_X0        152        // = 248 - MN_LG_LEN*8 -> last glyph ends at X=248 (8px
+                                   //   right margin, mirroring MN_Z_HUD_X0=8 on the left)

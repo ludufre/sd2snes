@@ -35,8 +35,6 @@
 #define GI_BAND_TMAP_B   $0400     ; 32*16*2 bytes
 #define GI_BODY_ROW0     16        ; first body (text) row
 #define GI_COVER_X0      8         ; .cov-in-band: left X of the OBJ cover (the .gd cover spot)
-#define GI_BAND_BLANK_VRAM $6000   ; .cov-in-band: a zeroed 8bpp tile (#$300) for the blank band fill
-#define GI_BAND_BLANK_CHAR $0300   ; band BG1 tilemap entry pointing at GI_BAND_BLANK_VRAM
 
 ; ---- animated screenshot (FMV) band, the .fmv alternative to the static .gd. ----
 ; The cover floats as OBJ (the .cov path, window-0 $2000); the SCREENSHOT box is a
@@ -102,12 +100,28 @@
                                    ; the normal screen's gap; footer on row 26, always fixed below)
 #define GIB_FULL_ROWS    8         ; rows 17..24 -> the full-description scroll window height
 #define GIB_FOOT_ROW     26        ; footer row: aligns with the browser status bar (see layout note)
+#define GIB_FOOT_W       56        ; normal-screen footer print_count. The "+ X: Guides" variants
+                                   ; run to 47 encoded bytes in the widest language (DE), so the
+                                   ; old 40 would have clipped them; 56 is build_const.py's
+                                   ; WIDTH_DEFAULT for text_gi_*, i.e. the enforced ceiling.
 #define GIB_SB_X         62        ; scrollbar column: last usable half-col (edge mask clips px > 252)
 
 ; -- gameinfo_select_file: drop-in for the `jsr ips_select_file` in filesel.a65.
+; ShowGameInfo is tri-state: only 1 auto-shows the screen here. 0 = off and 2 =
+; context (the info screen is opened from the file context menu instead) both fall
+; straight through to the patch/boot path. Callers enter with A 8-bit (select_item
+; does `sep #$20` before dispatching on the entry type), which the `cmp #$01` below
+; needs -- this is the first code in the file, so declare it instead of inheriting
+; whatever width snescom defaults to.
 gameinfo_select_file:
+  .as
   lda @CFG_SHOW_GAME_INFO
-  beq gisf_to_ips
+  cmp #$01
+  bne gisf_to_ips
+; The context-menu request (filesel_key_y, mode 2) jumps in HERE, past the mode gate: it
+; already decided to show the ficha. Everything downstream -- carry clear = play, so fall
+; into the patch selector / boot; carry set = back -- is shared with the A-press path.
+gameinfo_show_forced:
   jsr gameinfo_maybe_show
   bcc gisf_to_ips
   rts
@@ -147,6 +161,9 @@ gms_common:
   lda @GI_STATUS
   cmp #GI_STATUS_OK
   bne gms_noinfo
+  lda #$00                  ; the request (if this came from the context menu) is now being
+  sta @gi_ctx_pending       ; served -- consume the gate so gms_noinfo below and the next Y
+                            ; press both see a clean flag. A is 8-bit (.as from gms_common).
   jsr gi_dc_show
   jsr gi_input
   lda gi_result
@@ -169,7 +186,24 @@ gms_cancel:
                             ; by the sec below regardless.
   sec
   rts
+; No info to show. On the auto-show paths this is the "nothing to display, just boot"
+; exit, and carry CLEAR means exactly that: PLAY. A context-menu request must never take
+; that branch -- the user asked to look at the ficha, and booting the game instead would
+; be the worst possible surprise -- so it blips the error and returns carry SET (cancel),
+; landing back in the browser.
+; INVARIANT: GI_STATUS_NONE is unreachable in this firmware (gameinfo_load reports OK on
+; every config; a ROM with no /sd2snes/info entry still gets a filename title and "-"
+; fields). The guard exists because the cost of being wrong here is asymmetric, not
+; because the branch is expected to be taken.
 gms_noinfo:
+  lda @gi_ctx_pending
+  beq gms_noinfo_play
+  lda #$00
+  sta @gi_ctx_pending
+  jsr snd_fx_error
+  sec                       ; snd_fx_error is self-contained (php/plp) but set the carry
+  rts                       ; after it regardless -- cancel, do NOT boot
+gms_noinfo_play:
   clc
   rts
 
@@ -233,6 +267,8 @@ gin_loop:
   bne gin_back
   lda pad_y
   bne gin_to_full
+  lda pad_x                  ; X -> the guide/manual viewer (normal screen only; in Y mode
+  bne gin_manual             ; the scroll owns the text area, so X stays inert there)
   lda gi_query_fill          ; Up/Down jump games -- FILE BROWSER only (Recents/Favorites
   beq gin_loop               ; carry a list index in MCU_PARAM, not filesel_sel)
   lda pad_up
@@ -243,6 +279,13 @@ gin_loop:
 gin_to_full:
   jsr gi_desc_full_enter     ; switch the text area to the scrollable full description
   bra gin_loop
+gin_manual:
+  ; manhost_from_gi ($C1) picks a guide, runs the image viewer modally and rebuilds this
+  ; whole screen before returning -- including the NMI, so gin_syncread works again. Re-enter
+  ; at gin_drain, not gin_loop: the A that confirmed the picker (or the B that closed the
+  ; viewer) is still HELD and would otherwise read as a fresh Play/Back edge.
+  jsl @manhost_from_gi
+  jmp gin_drain
 gin_full:
   ; --- full-description (Y) mode ---
   lda pad_b
@@ -603,43 +646,11 @@ gi_upload_band:
   ; The DECOUPLED paletted band: cover (.gcv, left) + screenshot/FMV (.fmv, right), each region
   ; optional (gated by GI_FLAG_COVER / GI_FLAG_FMV inside gi_fmv_band_v3). When there is NO .gcv,
   ; gi_fmv_band_v3 floats the browser <rom>.cov as OBJ box-art in the .gcv cover spot (GI_FLAG_COVER_OBJ
-  ; -> gi_cover_float). The legacy DirectColor (.gd / gi_remap_tilemap) path below is DEAD CODE
-  ; (kept in place to avoid churn; never reached).
+  ; -> gi_cover_float).
   php
   sep #$20 : .as
   rep #$10 : .xl
   jsr gi_fmv_band_v3
-  plp
-  rts
-
-; -- gi_remap_tilemap: GI_TMAP (32x16 entries, tile #0..511) -> GI_TMAP_BUF, remapping each
-;    entry to its VRAM window (#<256 -> +256 = window 0 $2000; #>=256 -> +512 = window 1 $6000).
-gi_remap_tilemap:
-  php
-  rep #$30 : .al : .xl
-  ldx #$0000
-grt_loop:
-  lda @GI_TMAP, x
-  pha                         ; keep the original entry (DirectColor palette bits 10-12)
-  and #$03ff                  ; tile number (bits 0-9)
-  cmp #$0100
-  bcc grt_lo
-  clc
-  adc #$0200                  ; #>=256 -> +512 (window 1, tile #768..)
-  bra grt_store
-grt_lo:
-  clc
-  adc #$0100                  ; #<256 -> +256 (window 0, tile #256..)
-grt_store:
-  sta @GI_TMAP_BUF, x         ; remapped tile (<=$3ff, so bits 10-12 are clear)
-  pla                         ; original entry
-  and #$1c00                  ; keep only the palette bits (10-12)
-  ora @GI_TMAP_BUF, x         ; OR them onto the remapped tile number
-  sta @GI_TMAP_BUF, x
-  inx
-  inx
-  cpx #GI_BAND_TMAP_B
-  bcc grt_loop
   plp
   rts
 
@@ -652,22 +663,12 @@ grt_store:
 ; .cov into bank C9 (load_cover) -- the SAME C9 layout the browser cover uses -- so we reuse
 ; cover.a65's geometry helper and OAM format, only repositioning the grid. Runs inside
 ; gi_dc_show's forced blank, so a single (un-split) tile DMA is safe (no VBlank budget to
-; honour, unlike the live browser cover). gi_cover_float is called from gi_fmv_band_v3.
-; (gi_cover_show below is the legacy .gd-era entry; DEAD CODE, kept to avoid churn.) .as/.xl in.
+; honour, unlike the live browser cover). gi_cover_float is called from gi_fmv_band_v3. .as/.xl in.
 ; ===========================================================================
-gi_cover_show:
-  php
-  sep #$20 : .as
-  rep #$10 : .xl
-  jsr gi_clear_band            ; band BG -> transparent so the gradient shows through
-  jsr gi_cover_float           ; float the staged .cov as OBJ (no-op if none)
-  plp
-  rts
-
 ; -- gi_cover_float: float the staged <rom>.cov as OBJ box-art in the band WITHOUT touching
-;    the band BG. The caller owns the BG: gi_clear_band for the .cov-only path, gi_fmv_band
-;    for the FMV path (that is why the cover+FMV combo coexists -- OBJ cover in window-0
-;    $2000, FMV BG in window-1 $6000). No .cov staged / bad meta -> no-op. .as/.xl in.
+;    the band BG. The caller (gi_fmv_band_v3) owns the BG -- that is why the cover+FMV combo
+;    coexists: OBJ cover in window-0 $2000, FMV BG in window-1 $6000.
+;    No .cov staged / bad meta -> no-op. .as/.xl in.
 gi_cover_float:
   php
   sep #$20 : .as
@@ -806,35 +807,13 @@ gcbo_done:
   plp
   rts
 
-; -- gi_clear_band: blank the band BG so the menu gradient (CGRAM[0] ch1/ch2 HDMA)
-;    shows through. Mode-3 BG1 (8bpp, DirectColor) needs a transparent tile: zero one
-;    8bpp tile in the image-free window-0 spillover VRAM ($6000) and point every band
-;    BG1 entry at it; clear the band BG2 rows too. Rows 0..15 only (the body owns rows
-;    16..27 of the same two tilemaps). .as/.xl in.
-gi_clear_band:
-  php
-  sep #$20 : .as
-  rep #$10 : .xl
-  ; zero one 8bpp tile (#$300 @ VRAM $6000) -> the band's transparent fill tile
-  ldx #GI_BAND_BLANK_VRAM : stx $2116
-  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
-  ; band BG1 tilemap rows 0..15 -> that blank tile (value-0 pixels = transparent)
-  ldx #GI_BG1_TMAP : stx $2116
-  DMA7(#$09, #GI_BAND_TMAP_B, #^gi_blank_tref, #!gi_blank_tref, #$18)
-  ; band BG2 tilemap rows 0..15 -> 0 (transparent)
-  ldx #GI_BG2_TMAP : stx $2116
-  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
-  plp
-  rts
-gi_blank_tref .word GI_BAND_BLANK_CHAR       ; fixed DMA source: BG1 entry -> blank tile
-
 ; ===========================================================================
 ; Animated screenshot (.fmv): the box plays as DirectColor BG1 tiles in window 1 while the
 ; cover floats as OBJ (gi_cover_float, window 0). The MCU streams one 6912-byte frame per
 ; CMD_FMV_NEXT into GI_TILES ($CA0000). 6912 B overruns a single VBlank, so playback is
 ; DOUBLE-BUFFERED: two tile sets (A,B) in window 1. gi_fmv_advance writes the new frame into
 ; the OFF-SCREEN set across TWO cover_blank_begin/end windows, then flips the band tilemap
-; to it -- the visible box only ever shows a COMPLETE frame (no tear, no flash). gi_fmv_band
+; to it -- the visible box only ever shows a COMPLETE frame (no tear, no flash). gi_fmv_band_v3
 ; builds the screen in gi_dc_show's forced blank; gi_fmv_tick (one call/frame) paces the MCU
 ; pump at the .fmv's fps. The MCU streams frames into GI_TILES; see src/gameinfo.c.
 ; ===========================================================================
@@ -941,87 +920,6 @@ gtv3_no_cover:
   beq gtv3_done
   jsr gi_fmv_box_tmap          ; overlay the FMV box on top of the blank fill
 gtv3_done:
-  rts
-
-; -- gi_fmv_band: blank fill tile + frame-0 tiles into set A, the band tilemap (box -> set A
-;    chars, the rest -> blank), clear the BG2 band, then float the .cov cover as OBJ. Runs in
-;    gi_dc_show's forced blank, so frame 0 is ONE un-split 6912-byte DMA (no VBlank budget). .as/.xl.
-;    (LEGACY DirectColor path; the v3 paletted path gi_fmv_band_v3 above supersedes it.)
-gi_fmv_band:
-  php
-  sep #$20 : .as
-  rep #$10 : .xl
-  ; zero the band fill tile (#984 @ $7B00): value-0 pixels = transparent -> gradient
-  ldx #GI_FMV_BLANK_VRAM : stx $2116
-  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
-  ; stage FMV frame 0 (staged by the MCU at GI_TILES) -> tile set A ($6000)
-  ldx #GI_FMV_VRAM_A : stx $2116
-  DMA7(#$01, #GI_FMV_FRAME_B, #^GI_TILES, #!GI_TILES, #$18)
-  ; band BG1 tilemap: box -> set A chars, the rest -> blank. A is the active (shown) set.
-  rep #$20 : .al
-  lda #GI_FMV_TILE0_CHAR_A : sta gi_fmv_dst_char
-  sep #$20 : .as
-  stz gi_fmv_buf               ; 0 = set A active
-  jsr gi_fmv_build_tmap
-  ldx #GI_BG1_TMAP : stx $2116
-  DMA7(#$01, #GI_BAND_TMAP_B, #^GI_TMAP_BUF, #!GI_TMAP_BUF, #$18)
-  ; clear the BG2 band rows 0..15 (transparent)
-  ldx #GI_BG2_TMAP : stx $2116
-  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
-  ; float the .cov cover as OBJ next to the box (window-0 $2000; no-op if no .cov)
-  jsr gi_cover_float
-  plp
-  rts
-
-; -- gi_fmv_band_gd: .fmv WITH a .gd cover. The cover bank (staged by gi_load_cover_bank in bank
-;    C9) goes to window-0 as BG (no OBJ); frame 0 -> window-1 set A; band tilemap = the .gd cover
-;    region (remapped) + the FMV box (set A chars). Runs in gi_dc_show's forced blank (frame 0 is
-;    one un-split 6912-byte DMA). .as/.xl.
-gi_fmv_band_gd:
-  php
-  sep #$20 : .as
-  rep #$10 : .xl
-  ; cover bank (C9 $C90000) -> window-0 ($2000): 256 tiles ($4000 bytes)
-  ldx #GI_IMG_VRAM0 : stx $2116
-  DMA7(#$01, #$4000, #^COVER_C9_TILES, #!COVER_C9_TILES, #$18)
-  ; zero the FMV band fill tile (#984 @ $7B00): value-0 pixels = transparent -> gradient
-  ldx #GI_FMV_BLANK_VRAM : stx $2116
-  DMA7(#$09, #$0040, #^zero, #!zero, #$18)
-  ; FMV frame 0 (staged by the MCU at GI_TILES $CA0000) -> tile set A ($6000, window-1)
-  ldx #GI_FMV_VRAM_A : stx $2116
-  DMA7(#$01, #GI_FMV_FRAME_B, #^GI_TILES, #!GI_TILES, #$18)
-  ; band tilemap: the .gd cover region (remapped) then overwrite the box with set A chars.
-  jsr gi_remap_tilemap        ; GI_TMAP ($CB0000) -> GI_TMAP_BUF (cover -> window-0 chars)
-  rep #$20 : .al
-  lda #GI_FMV_TILE0_CHAR_A : sta gi_fmv_dst_char
-  sep #$20 : .as
-  stz gi_fmv_buf              ; set A active
-  jsr gi_fmv_box_tmap         ; box cells (= the snapshot cells) -> set A; cover region preserved
-  ldx #GI_BG1_TMAP : stx $2116
-  DMA7(#$01, #GI_BAND_TMAP_B, #^GI_TMAP_BUF, #!GI_TMAP_BUF, #$18)
-  ; clear the BG2 band rows 0..15 (transparent)
-  ldx #GI_BG2_TMAP : stx $2116
-  DMA7(#$09, #GI_BAND_TMAP_B, #^zero, #!zero, #$18)
-  ; (no gi_cover_float -- the cover is BG now)
-  plp
-  rts
-
-; -- gi_fmv_build_tmap: OBJ path -- fill GI_TMAP_BUF (32x16) with the blank char, then draw the
-;    FMV box (via gi_fmv_box_tmap). Used when there is no .gd cover (capa = OBJ).
-gi_fmv_build_tmap:
-  php
-  rep #$30 : .al : .xl
-  lda #GI_FMV_BLANK_CHAR
-  ldx #$0000
-gfbt_fill:
-  sta @GI_TMAP_BUF, x
-  inx
-  inx
-  cpx #GI_BAND_TMAP_B
-  bcc gfbt_fill
-  plp
-  .as                          ; keep the assembler in step (see gi_fmv_box_tmap note)
-  jsr gi_fmv_box_tmap
   rts
 
 ; -- gi_fmv_box_tmap: overwrite ONLY the FMV box cells in GI_TMAP_BUF with sequential tile chars
@@ -1249,13 +1147,25 @@ gi_build_body_normal:
   stz gi_desc_skip
   sep #$20 : .as
   jsr gi_draw_desc
-  ; footer: the file browser shows the Up/Down game-nav hint; Recents/Favorites (which
-  ; don't navigate -- they carry a list index, not filesel_sel) keep the plain hint.
+  ; footer, 2x2 variants. Columns: the file browser shows the Up/Down game-nav hint,
+  ; Recents/Favorites (which don't navigate -- they carry a list index, not filesel_sel) keep
+  ; the plain one. Rows: a game WITH a readable guide gets the "X: Guides" variant. The guide
+  ; test is gi_man_avail, the very predicate manhost_from_gi gates on, so the footer can never
+  ; advertise a key that does nothing (or hide one that works).
   lda #GIB_FOOT_ROW : sta print_y
   lda #GIB_DESC_X : sta print_x
   stz print_pal
-  lda #40 : sta print_count
-  lda gi_query_fill
+  lda #GIB_FOOT_W : sta print_count
+  jsr gi_man_avail           ; carry: CLEAR = guide available
+  lda gi_query_fill          ; LDA touches N/Z only -> the carry above survives into the bcs
+  bcs gif_noman
+  beq gif_plain_man
+  ldx #!text_gi_footer_nav_man : lda #^text_gi_footer_nav_man
+  bra gif_put
+gif_plain_man:
+  ldx #!text_gi_footer_man : lda #^text_gi_footer_man
+  bra gif_put
+gif_noman:
   beq gif_plain
   ldx #!text_gi_footer_nav : lda #^text_gi_footer_nav
   bra gif_put
@@ -1994,3 +1904,94 @@ gi_dc_restore:
   plb
   plp
   rts
+
+; ===========================================================================
+; Cross-bank trampolines for snes/manhost.a65 ($C1, the MENU host of the shared manual
+; viewer). Everything it needs lives in this $C0 page and ends in rts, so it cannot be
+; reached with jsl directly: run the target same-bank (jsr) and rtl back. DBR/DP are the
+; caller's and are left intact -- manhost_from_gi sets both to 0, which is what every
+; target here assumes. Kept as thin as possible: the $C0 page has ~700 bytes left.
+; (ovl_call_genfonts, the genfonts trampoline, already exists in savestate.a65.)
+; ===========================================================================
+
+; -- gi_man_avail: carry CLEAR = this game has at least one readable guide, i.e. X opens the
+;    viewer. THE single source of truth for that condition -- the footer variant chosen in
+;    gi_build_body_normal and manhost_from_gi's entry gate both answer to this one routine, so
+;    they cannot drift into advertising a dead key. Reads only the $FF staging bytes the MCU
+;    published at query time, so it is free to call on every body rebuild. .as in; A clobbered.
+gi_man_avail:
+  lda @CFG_ENABLE_GAME_MANUAL
+  beq gma_no
+  lda @MANUAL_META|$0002       ; meta_abi: a firmware/menu mismatch degrades to "no guides"
+  cmp #MANUAL_META_ABI
+  bne gma_no
+  lda @MANUAL_META
+  and #MAN_META_F_PRESENT
+  beq gma_no
+  lda @MAN_GD_COUNT
+  beq gma_no
+  clc
+  rts
+gma_no:
+  sec
+  rts
+
+gi_call_man_avail:
+  jsr gi_man_avail
+  rtl
+
+; -- gi_sel_flush: body buffer -> VRAM with no visible flash (NMI off, sync to VBlank,
+;    forced blank), the same three-call sandwich gi_desc_full_redraw uses. .as/.xl in.
+gi_sel_flush:
+  jsr cover_blank_begin
+  jsr gi_dma_body
+  jsr cover_blank_end
+  rts
+
+gi_call_sel_flush:
+  jsr gi_sel_flush
+  rtl
+
+; -- rebuild + flush the NORMAL body: the cheap, flash-free way back from the guide picker
+;    (no band/OAM/palette work, unlike gi_dc_show). Byte-for-byte the same sequence as
+;    gi_desc_full_exit, chip icon included -- the picker hides it for the same reason Y mode
+;    does (it floats over the rows the list occupies). .as/.xl in.
+gi_call_body_repaint:
+  jsr gi_build_body_normal
+  jsr gi_sel_flush
+  jsr gi_chip_obj_show
+  rtl
+
+; -- drop the chip OBJ icon while the guide picker owns rows 17..24 (no-op on the .cov band
+;    path, where gi_chip_has early-outs and OBJ belongs to the cover).
+gi_call_chip_hide:
+  jsr gi_chip_obj_hide
+  rtl
+
+gi_call_clear_body:
+  jsr gi_clear_body_buf
+  rtl
+
+gi_call_hiprint:
+  jsr hiprint
+  rtl
+
+; -- gin_syncread has no php: A must be 8-bit and X/Y 16-bit on entry (NMI must be ON --
+;    it waits on isr_done).
+gi_call_syncread:
+  jsr gin_syncread
+  rtl
+
+gi_call_dc_show:
+  jsr gi_dc_show
+  rtl
+
+gi_call_query:
+  jsr gameinfo_query
+  rtl
+
+; -- re-scan the current browser directory: the manual page staging overwrites the file
+;    STRING table in PSRAM $C3..$C7 (scan_dir grows it from $C30000).
+fs_call_readdir:
+  jsr filesel_request_filelist
+  rtl

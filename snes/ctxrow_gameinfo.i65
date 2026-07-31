@@ -1,0 +1,18 @@
+// ctxrow_gameinfo.i65 -- the ONE "Game info" context-menu row (23 bytes), shared by the
+// three _gi variant tables in contextdata.a65 so the row can never drift between them.
+// No .link: inherits the including file's bank. Included-file comment dialect: a `;` may
+// never START a comment here (only the main .a65 accepts it) -- `//` only.
+// MTYPE_FUNC_CLOSE row: label / long ptr to (gi_ctx_request-1) / no opttype / mdesc /
+// no change hook / padding / no isEnabled (the variant table itself is the mode gate).
+ .byt  MTYPE_FUNC_CLOSE
+ .word !text_filesel_context_gameinfo
+ .byt  ^text_filesel_context_gameinfo
+ .word !(gi_ctx_request-1)
+ .byt  ^(gi_ctx_request-1)
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_filesel_context_gameinfo
+ .byt  ^mdesc_filesel_context_gameinfo
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0

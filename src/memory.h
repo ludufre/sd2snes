@@ -66,10 +66,9 @@ extern char current_filename[];
  * window, unlike the 2x. A whole page (<=MAN_S1_MAX_ROWS=64 rows = 512px at 1x) fits in bank C3,
  * which is exactly the space the retired 8bpp block used to occupy; 1024 divides 65536, so no row
  * ever straddles a bank. 1x and 2x are BOTH resident, so toggling between them is instant. */
-#define SRAM_MANUAL_S1TILES_ADDR     (0xC30000L) /* scale-1 tile row r at +r*1024 */
+#define SRAM_MANUAL_S1TILES_ADDR     (0xC30000L) /* scale-1 tile row r at +r*1024. Bank C3 is menu dir-cache territory, dormant in-game (same rationale as igmenu.bin @ C2). Lockstep with MANUAL_S1TILES in snes/memmap.i65. */
 #define SRAM_MANUAL_S1TMAP_ADDR      (0xC4B000L) /* prebuilt tilemap, row r at +r*64 (32 entries) */
 #define SRAM_MANUAL_S1PAL_ADDR       (0xC4C000L) /* 8 palettes x 16 BGR555 -> CGRAM 0..127 */
-#define SRAM_MANUAL_BLOCK_ADDR       (0xC30000L) /* LEGACY 8bpp block staging (superseded by the scale-1 scrollable page above, which reuses this bank). Kept for the old path: one .man block (57856B = 512B palette + 896*64B 8bpp tiles, sector-aligned) staged here by manual.c on SNES_CMD_MANUAL_BLOCK. Bank C3 is menu dir-cache territory, dormant in-game (same rationale as igmenu.bin @ C2). Lockstep with MANUAL_BLOCK in snes/memmap.i65. */
 #define SRAM_MANUAL_SHELLSAVE_ADDR   (0xC40000L) /* in-game manual viewer: the $C2 shell saves its mode-5 state here before taking the PPU ($2139/$213B readback: VRAM $0000-$5FFF words + CGRAM 512B) and restores from it on viewer exit. Bank C4, dormant in-game. Lockstep with MANUAL_SHELLSAVE in snes/memmap.i65. */
 /* --- in-game manual viewer, SCROLLABLE 2x zoom page (banks C5/C6, dormant in-game like C2/C3/C4).
  * ONE whole 2x page (512 x up-to-448, 4bpp, <=56 tile rows) is staged here by manual_stage_zpage on
