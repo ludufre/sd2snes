@@ -4,11 +4,19 @@
 ; cheat list with live ON/OFF toggles, then restores the COMPLETE PPU/VRAM/CGRAM
 ; state and resumes. The combo *probe* still lives in savestate.a65's in-game input
 ; flow (it runs every NMI as part of the savestate handler) and reaches here with a
-; plain `jmp ss_overlay`.
+; long `jml ss_overlay` (this object lives in $C1, the savestate handler in $C0).
 
-.link page $c0
+.link page $c1
 #include "memmap.i65"
 #include "savestate.i65"
+; This object was moved $C0 -> $C1 to free space in the (previously full) $C0 page.
+; memmap.i65 re-asserts '.link page $c0' on include, so re-declare $c1 here AFTER
+; the includes (last '.link page' wins, and they emit no bytes) so every byte of
+; this object -- INCLUDING the shared cheatlist.i65 routines -- lands in $C1.  The
+; cheatlist.i65 routines are self-contained (jsr among themselves, @long for data),
+; so they run same-bank in $C1; only THIS file's own calls to $C0 symbols
+; (genfonts / ss_exit / ss_overlay_restore) cross the bank -- those use jml/jsl.
+.link page $c1
 #include "cheatlist.i65"    ; shared list layout defines + render/input routines
 
 ; --- Cheat overlay (Phase 2): pause the running game, take over the PPU to draw
@@ -110,6 +118,17 @@ ss_ovl_dmasave_done:
 	lda #$00 : sta @$00420b                ; GP-DMA off
 	sta @$00420c                           ; HDMA off
 
+	; ---- the resident savestate image dies here ----
+	; Our backups live at $F20000 (VRAM), $F40000 (CGRAM) and $F45000/$F45080
+	; (registers) -- all inside $F00000..$F4FFFF, which is exactly where the MCU
+	; stages the .state that an in-game load replays. Snapshotting therefore
+	; OVERWRITES the resident image with the CURRENT frame, and a later Start+L
+	; would restore WRAM from the staged slot but VRAM/CGRAM from the moment this
+	; overlay opened -- which is precisely the "animated tiles are wrong until the
+	; camera reloads them" corruption. Declare the image invalid so load_state
+	; re-stages it from the SD instead of replaying the wreckage.
+	lda #$00 : sta @SS_STAGED_SLOT         ; (A is already 8-bit here; flags untouched)
+
 ; ---- snapshot VRAM + CGRAM: REAL readback via $2139/$213B -> $F2/$F4 ----
 	; We are in forced blank with the game's DMA regs already saved, so read the
 	; actual PPU memories back instead of trusting the FPGA's ctx mirror (exact
@@ -177,7 +196,9 @@ ss_ovl_ch7save:
 	lda #$80 : sta @$002115               ; VRAM incr after high byte
 	phb
 	pea $0000 : plb : plb                 ; DBR = 0 for genfonts' short addressing
-	jsr genfonts
+	jsl @ovl_call_genfonts                ; genfonts lives in $C0 (main.a65) and ends in rts;
+	                                       ; this object is $C1, so call the $C0 trampoline
+	                                       ; (jsr genfonts : rtl) in savestate.a65 cross-bank.
 	plb                                    ; restore the game's DBR
 	lda #$80 : sta @$002115               ; re-assert increment mode after genfonts
 	ldx #$0000
@@ -608,7 +629,7 @@ ss_ovl_vsync2:
 	lda #$0000
 	sta @CS_INPUT_CUR
 	sta @CS_INPUT_PREV
-	jmp ss_exit
+	jmp @ss_exit                           ; ss_exit is in $C0 (savestate.a65); @ forces long jump cross-bank
 
 ; ======================================================================
 ;  In-game cheat overlay helpers (Phase 3, mode 5). Rows are built as 64
@@ -619,7 +640,9 @@ ss_ovl_vsync2:
 ;  ovl_flush_abs / ss_ovl_draw_full_row ASSUME DBR=$F4 (caller-set), the
 ;  main flow keeps the game's DBR. CHEAT_* and VRAM stay long-addressed.
 ;  VRAM increment stays $80 (word, after-high) from the draw setup. PBR =
-;  $C0 (handler bank) so jsr/rts reach here. Only run while we own the screen.
+;  $C1 (this object's bank) so the internal jsr/rts reach here; cross-bank refs
+;  to the $C0 handler (ss_exit) and to genfonts use jml/jsl. Only run while we
+;  own the screen.
 ; ======================================================================
 
 ; ---- close: apply the cheat changes (if any) and resume the game ----

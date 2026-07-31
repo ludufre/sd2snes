@@ -531,4 +531,4 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # yield under snescmd_unlock were the real fixes).  The validated hardware build was
 # produced with this seed; do not remove without re-validating IGR + overlay on Star
 # Fox hardware.
-set_global_assignment -name SEED 2
+set_global_assignment -name SEED 3

@@ -49,6 +49,34 @@ void savestate_program() {
      fresh even on overlay-only / unsupported cores, and it never goes stale because
      savestate_program runs on every load. */
   savestate_slot_status_stage();
+  /* Zero the handler's CS_STATE ($FE100C) on EVERY game load: it lives in PSRAM,
+     which survives resets and short power-cycles, and a stale nonzero value
+     (the resume cooldown of a previous session) silently swallows every
+     save/load combo until it happens to clear.  Pre-existing on all cores;
+     first observed on CX4 after a mid-session power-cycle. */
+  sram_writebyte(0, 0xFE100CL);
+  /* Overlay scene gate.  The NMI/IRQ hook fires from the vector, which some engines
+     take even when their frame loop is NOT running -- Super Mario RPG parks the S-CPU
+     mid-RPC across a scene transition and runs a stub vblank handler there.  The
+     software probe in snes/savestate.a65 had no scene gate on ANY platform (cheat.v's
+     overlay_combo only gates the IRQ redirect), so opening the overlay in that window
+     hung the game on resume (proven in hardware on Mk.II).  For the games that need it
+     the probe additionally requires the FPGA's scene_fresh bit at $F90720 (cheat.v:
+     pad forwarded to SA-1 IRAM $3010/$3011, or $4218/$4219 polled, within ~49-73ms).
+     Keyed by core + header checksum, not by chip flags: an engine that does NEITHER of
+     those two accesses (its own pad path, its own registers) would look permanently
+     dead to the FPGA and lose the overlay entirely, so the gate stays opt-in per game
+     rather than defaulting on for the whole SA-1 library.
+     Written on EVERY load -- even 0, even on cores that never install the handler --
+     for the same reason as the two writes above: nothing here may go stale. */
+  uint8_t scene_gate = 0;
+  if(romprops.fpga_conf == FPGA_SA1) {
+    switch(romprops.header.chk) {
+      case 0x3BB4: /* Super Mario RPG (US) */ scene_gate = 1; break;
+      default: break;
+    }
+  }
+  sram_writebyte(scene_gate, SS_SCENE_GATE_ADDR);
   /* The cheat overlay needs, on the FPGA core: the NMI/IRQ savestate hook + the $C0-FF
      IS_PATCH identity window (so the handler executes from menu PSRAM) + a shadow of the
      write-only $21xx/$42xx registers read back at $F90500/$F90700.  VRAM/CGRAM it reads
@@ -61,10 +89,10 @@ void savestate_program() {
      GSU the coprocessor is auto-paused and the ROM arbiter yields to the SNES for the
      duration of the hook (the handler runs from PSRAM, which the GSU would otherwise
      starve under RON).
-     Full in-game SAVESTATES still require the base ctx copier (kept base-only below); the
-     coprocessor cores are overlay-only.  Cores still WITHOUT the overlay machinery:
-     SPC7110, SGB.  Key the gate on the core, not the chip flags. (Pointer
-     compare against the FPGA_* path literals -- same idiom as FPGA_BASE.) */
+     Full in-game SAVESTATES work on base, DSP1-4, (Mk.III only) SA-1, GSU, OBC1,
+     S-DD1 and CX4.  Cores still WITHOUT the overlay machinery: SPC7110, SGB.  Key
+     the gate on the core, not the chip flags. (Pointer compare against the FPGA_*
+     path literals -- same idiom as FPGA_BASE.) */
   int core_has_snapshot = (romprops.fpga_conf == NULL)
                        || (romprops.fpga_conf == FPGA_BASE)
                        || (romprops.fpga_conf == FPGA_DSP)
@@ -83,15 +111,60 @@ void savestate_program() {
  * 2C00 "EXE" hook is now left alone so it doesn't clash with USB hook features
  */
 
-  /* In-game savestates stay OFF on the DSP and SA-1 cores: a save/load resumes later with
-     the coprocessor's internal state unrestored. The overlay resumes immediately and never
-     restores the coprocessor, so it is fine there. Hence savestates require a plain base
-     core, while the overlay just needs the in-game hook (matches the menu greying via
-     mfunc_isenabled_hooks) plus its own toggle. The overlay probe (L+R+Y+Left) lives inside
-     this handler, so the handler must be installed whenever the overlay is usable -- even
-     with savestates OFF. */
+  /* In-game savestates need the coprocessor's state restored on load, so they stay OFF
+     on cores where that state is not reachable.
+     DSP1-4 (uPD7725), SA-1, GSU and CX4 expose a halt + scan window ($E8 bank) over their
+     internal state, so the handler can capture and restore the chip -- full savestates
+     work there. OBC1 needs no window at all: it is purely reactive, so the handler just
+     snapshots/restores its SNES-visible $7800-$7FFF window over the bus (see obc1_ok).
+     S-DD1 likewise needs no window: its decompressor FSM is never mid-transfer at an
+     NMI boundary (the GP-DMA that drives it is atomic), so the handler just snapshots/
+     restores the bus-visible config block $4800-$4807 (see sdd1_ok; $4801 is left alone
+     on restore -- rewriting it would re-arm the FSM).
+     For SA-1 the handler additionally reads back IRAM
+     ($00:3000) and BW-RAM ($40:0000) through the SNES bus. ST0010 (uPD96050, 2KB data RAM)
+     is not covered yet (its RAM collides with the DSP scan register-file gap), so it stays
+     overlay-only. The SA-1 window only exists on Mk.III: it was MEASURED to be impossible
+     on Mk.II's Spartan-3, not just assumed -- synthesizing the full machinery (gated
+     SA1_SS_MK2 in the sa1 core) overmaps the xc3s400 by ~2,200 logic LUTs (8,842/7,168
+     = 123%), with no recoverable lever (MSU-1 was already cut from the mk2 sa1 build by
+     upstream in 2019). So sa1_ok stays gated under !CONFIG_MK2.
+     The overlay probe (L+R+Y+Left) lives inside this handler, so the handler must be
+     installed whenever the overlay is usable -- even with savestates OFF. */
+  int dsp_ok = (romprops.fpga_conf == FPGA_DSP) && !romprops.has_st0010;
+#ifndef CONFIG_MK2
+  int sa1_ok = (romprops.fpga_conf == FPGA_SA1);
+#else
+  int sa1_ok = 0;
+#endif
+  /* Unlike SA-1, the GSU savestate window works on Mk.II too: its freeze FSM,
+     $E8 scan window and PIXBUF/CBR restore were un-gated from ifdef MK3 (with an
+     mk2-only single-driver write restructure so XST accepts the shared array
+     write ports), and the ROM-cheat comparators were cut to make room -- so ROM
+     cheats move to patch-PSRAM on this core (see cheat_rom_psram_mode). */
+  int gsu_ok = (romprops.fpga_conf == FPGA_GSU);
+  /* The OBC1 is purely reactive (no autonomous FSM to halt or scan): the handler
+     captures/restores the SNES-visible $7800-$7FFF window directly over the bus, so
+     this works on Mk.II and Mk.III alike (cheat.v only gained flip-flops). */
+  int obc1_ok = (romprops.fpga_conf == FPGA_OBC1);
+  /* The S-DD1 decompressor FSM is never mid-transfer at an NMI boundary (the GP-DMA
+     that feeds it is atomic), so the handler captures/restores the bus-visible config
+     block ($4800-$4807) directly over the bus -- no chip halt/scan window.  Works on
+     Mk.II and Mk.III alike (cheat.v only gained flip-flops). */
+  int sdd1_ok = (romprops.fpga_conf == FPGA_SDD1);
+  /* The CX4 is the coprocessor with the most state already bus-visible (3 KB data RAM,
+     the $7F4x MMIO, vectors and GPR all live in $00:6000-$7FFF), so its $E8 window only
+     has to cover the CPU core that survives between programs plus the freeze protocol.
+     Halt is requested EARLY and the core runs to its next clean boundary (run-to-stop,
+     saturating timeout), then a $F0 normalize parks it at a canonical boundary before
+     anything is read.  The program cache is not captured at all: on restore it is
+     REPLAYED through the native $7F48-$7F4E MMIO, whose FSM is not pause-gated and so
+     runs under the freeze.  Works on Mk.II and Mk.III alike (the ROM-cheat comparators
+     were cut on Mk.II to make room -- see cheat_rom_psram_mode). */
+  int cx4_ok = (romprops.fpga_conf == FPGA_CX4);
   int savestate_ok = CFG.enable_ingame_savestate
-                  && (romprops.fpga_conf == NULL || romprops.fpga_conf == FPGA_BASE);
+                  && (romprops.fpga_conf == NULL || romprops.fpga_conf == FPGA_BASE
+                      || dsp_ok || sa1_ok || gsu_ok || obc1_ok || sdd1_ok || cx4_ok);
   int overlay_only = !savestate_ok
                   && CFG.enable_ingame_hook && CFG.enable_cheat_overlay;
 
@@ -101,6 +174,12 @@ void savestate_program() {
     sram_writebyte(CFG.loadstate_delay, SS_DELAY_ADDR);
     sram_writebyte(CFG.enable_savestate_slots, SS_SLOTS_ADDR);
     sram_writebyte(CFG.enable_ingame_savestate, SS_CTRL_ADDR);
+    sram_writebyte(dsp_ok ? 1 : 0, SS_DSP_GATE_ADDR);
+    sram_writebyte(sa1_ok ? 1 : 0, SS_SA1_GATE_ADDR);
+    sram_writebyte(gsu_ok ? 1 : 0, SS_GSU_GATE_ADDR);
+    sram_writebyte(obc1_ok ? 1 : 0, SS_OBC1_GATE_ADDR);
+    sram_writebyte(sdd1_ok ? 1 : 0, SS_SDD1_GATE_ADDR);
+    sram_writebyte(cx4_ok ? 1 : 0, SS_CX4_GATE_ADDR);
     savestate_set_inputs();
     savestate_set_fixes();
     load_backup_state();
@@ -110,6 +189,12 @@ void savestate_program() {
        save/load inputs are unconfigured here and would otherwise match every frame) --
        see snes/savestate.a65 at ss_probe_done.  The probe stays gated by CHEAT_OVL_GATE. */
     sram_writebyte(0, SS_CTRL_ADDR);
+    sram_writebyte(0, SS_DSP_GATE_ADDR);
+    sram_writebyte(0, SS_SA1_GATE_ADDR);
+    sram_writebyte(0, SS_GSU_GATE_ADDR);
+    sram_writebyte(0, SS_OBC1_GATE_ADDR);
+    sram_writebyte(0, SS_SDD1_GATE_ADDR);
+    sram_writebyte(0, SS_CX4_GATE_ADDR);
   }
 }
 
@@ -325,7 +410,17 @@ void load_backup_state() {
   snprintf(extend, sizeof(extend), "%02d.state", slot);
   append_file_basename(line, ssbase, extend, sizeof(line));
 
-  load_sram((uint8_t*) line, 0xF00000L);
+  /* Publish which slot's image is resident ONLY when the file is really there. A
+     failed load leaves the PREVIOUS slot's image in PSRAM, and claiming it as this
+     slot would make the next in-game load replay the wrong state under the right
+     name -- worse than not loading at all. */
+  int staged = (f_stat(line, NULL) == FR_OK);
+  if(staged) {
+    load_sram((uint8_t*) line, 0xF00000L);
+    sram_writebyte(slot, SRAM_SS_STAGED_SLOT_ADDR);
+  } else {
+    printf("load_backup_state: %s missing, keeping resident image\n", line);
+  }
   file_res = FR_OK;
   // clear the busy bit in the slot
   sram_writebyte(slot, SS_SLOTS_ADDR);
@@ -353,6 +448,9 @@ void save_backup_state() {
     st |= (uint8_t)(1 << (slot - 1));
     sram_writebyte(st, SRAM_SS_SLOT_STATUS_ADDR);
   }
+  /* The image we just wrote out IS this slot's, and it is still resident -- record
+     that so an immediate load of the same slot skips a pointless 320KB re-read. */
+  sram_writebyte(slot, SRAM_SS_STAGED_SLOT_ADDR);
   // clear the busy bit in the slot
   sram_writebyte(slot, SS_SLOTS_ADDR);
 }

@@ -102,6 +102,17 @@ module main(
 `define REGSHADOW_ACTIVE
 `endif
 
+// SA-1 savestate machinery gate ($E8 scan window, sa1.v freeze FSM, cheat.v
+// force-entry, mcu_cmd $fb).  Always on for mk3 (as before); on mk2 it is opt-in
+// via SA1_SS_MK2 so an experimental Spartan-3 build can carry it.  Every file
+// that needs the gate derives it locally (the repo uses no include files):
+// address.v, sa1.v, cheat.v, mcu_cmd.v.
+`ifdef MK3
+`define SA1_SS_ACTIVE
+`elsif SA1_SS_MK2
+`define SA1_SS_ACTIVE
+`endif
+
 wire CLK2;
 
 wire dspx_dp_enable;
@@ -161,6 +172,14 @@ wire dma_enable;
 // address instance drives it.  Read only by the overlay register shadow
 // (REGSHADOW_ACTIVE); driven-but-unread otherwise -> trimmed (like dma_enable).
 wire IS_PATCH;
+
+// Savestate scan window ($E8:0000-07FF while unlocked; 0 on mk2 -> folds out).
+// From address.v; gives the SA-1 state block priority in the SNES_DATA read mux.
+wire sa1_ss_enable;
+wire [7:0] SA1_SS_DATA_OUT;
+wire [15:0] sa1_iram_pad;
+// MCU-debug halt request for the SA-1 savestate freeze (mcu_cmd 0xfb; 0 on mk2).
+wire sa1_ss_halt;
 
 // FPGA-side SA-1 pause for clean savestate/cheat-overlay snapshots.  Declared
 // here (ahead of the sa1 instance that reads it).  Real reg on both configs now:
@@ -592,6 +611,12 @@ sa1 snes_sa1 (
   .snapshot_pause(snapshot_pause),
   .bs_slot_en(bs_slot_en_w),   // BS Memory Pack slot: SA-1-side reads of block>=4 -> pack (0 on mk2)
 
+  // Savestate scan window (mk3; tied off on mk2)
+  .ss_window_en(sa1_ss_enable),
+  .ss_halt(sa1_ss_halt),
+  .ss_dout(SA1_SS_DATA_OUT),
+  .ss_iram_pad(sa1_iram_pad),
+
   // State debug read interface
   .PGM_ADDR(SA1_PGM_ADDR), // [11:0]
   .PGM_DATA(SA1_PGM_DATA), // [7:0]
@@ -769,6 +794,7 @@ mcu_cmd snes_mcu_cmd(
   .mcu_wrq(MCU_WRQ),
   .mcu_rq_rdy(MCU_RDY),
   .region_out(mcu_region),
+  .sa1_ss_halt_out(sa1_ss_halt),
   .snescmd_addr_out(snescmd_addr_mcu),
   .snescmd_we_out(snescmd_we_mcu),
   .snescmd_data_out(snescmd_data_out_mcu),
@@ -842,6 +868,7 @@ address snes_addr(
   .IS_ROM(IS_ROM),
   .IS_WRITABLE(IS_WRITABLE),
   .IS_PATCH(IS_PATCH),
+  .sa1_ss_enable(sa1_ss_enable),
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
   .snescmd_unlock(snescmd_unlock),
@@ -877,7 +904,8 @@ address snes_addr(
 // In-game cheat-overlay register shadow (regshadow.v) -- mk2, or an mk3
 // REGSHADOW_TEST validation build.  The overlay restores the PPU/CPU registers
 // by reading a shadow of the last value written to each, through the hook's
-// identity window: $F90500-$F9057F (PPU regs, stride-2 words; high byte $00) and
+// identity window: $F90500-$F9057F (PPU regs, stride-2 words = the (1st write,
+// 2nd write) PAIR -- see the double-write note in regshadow.v) and
 // $F90700-$F9071F (CPU $42xx regs, stride-1 bytes).  On mk3 that shadow is
 // produced by ctx.v ($F90500 + PA*2 / $F90700 + addr[8:0]); ctx is far too large
 // for the Spartan-3, so on mk2 a single RAMB16 shadow replaces just this piece.
@@ -888,12 +916,31 @@ address snes_addr(
 wire shadow_ppu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF905) & ~SNES_ADDR[7];        // $F90500-7F
 wire shadow_cpu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:5] == 3'b000); // $F90700-1F
 wire [7:0] regshadow_dout;
-// Live read index: PPU reg = mem[0x00-0x3F] via SNES_ADDR[6:1] (stride-2); CPU
-// reg = mem[0x40-0x5F] via SNES_ADDR[4:0].  The shadow BRAM registers this read
-// (1-cycle latency, exactly like snescmd_buf); the address is stable for the
-// whole ROM cycle so the value settles well before the CPU samples the bus.
+// Live read index: PPU pair = mem[0x00-0x7F] indexed STRAIGHT by SNES_ADDR[6:0]
+// -- the even byte of a stride-2 entry is the 1st write, the odd byte the 2nd
+// (double-write regs are reconstructed ctx.v-style inside regshadow.v).  CPU reg
+// = mem[0x80-0x9F] via SNES_ADDR[4:0].  The shadow BRAM registers this read
+// (1-cycle latency, exactly like snescmd_buf); the address is stable for the whole
+// ROM cycle so the value settles well before the CPU samples the bus.
+//
+// The serve MUST match the BRAM layout regshadow.v actually built, so it carries
+// the SAME REGSHADOW_1DEEP gate (pattern copied from sd2snes_cx4/main.v): under
+// that macro regshadow.v falls back to the pre-fix 1-deep shadow, where the PPU
+// regs live at mem[0x00-0x3F] with the stride-2 address halved and the CPU regs at
+// mem[0x40-0x5F].  Getting the two out of step reads uninitialised cells with NO
+// build error at all -- the whole shadow silently returns garbage.
+//
+// NB the SNES side needs no change either way: dropping SNES_ADDR[0] folds both
+// bytes of a stride-2 word onto the same cell, so under 1DEEP a word read serves
+// (v,v) -- exactly the pre-fix behaviour the overlay's double-writing restore loop
+// was written against.  The overlay keeps reading $F90500 + 2*reg in both builds.
+`ifdef REGSHADOW_1DEEP
 wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0010, SNES_ADDR[4:0]}
                                             : {3'b000,  SNES_ADDR[6:1]};
+`else
+wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0100, SNES_ADDR[4:0]}
+                                            : {2'b00,  SNES_ADDR[6:0]};
+`endif
 regshadow snes_regshadow(
   .clk(CLK2),
   .pawr_end(SNES_PAWR_end),
@@ -910,6 +957,17 @@ reg pad_latch = 0;
 reg [4:0] pad_cnt = 0;
 
 reg snes_ajr = 0;
+
+// overlay_combo is declared HERE (before its use in the instance below) and assigned
+// per mk2/mk3 further down. XST (mk2) otherwise makes the port connection an implicit
+// net and rejects the later declaration as an illegal redeclaration (Quartus tolerates it).
+wire overlay_combo;
+
+// Scene-liveness bit produced by cheat.v (1 = the game's frame loop ran in the last
+// ~24-49ms) and served to the overlay probe at $F90720 below.  Declared HERE for the
+// same XST reason as overlay_combo above: the port connection would otherwise create
+// an implicit net and make a later declaration an illegal redeclaration.
+wire scene_fresh;
 
 cheat snes_cheat(
   .clk(CLK2),
@@ -934,8 +992,19 @@ cheat snes_cheat(
   .pgm_in(cheat_pgm_data),
   .data_out(cheat_data_out),
   .cheat_hit(cheat_hit),
-  .snescmd_unlock(snescmd_unlock)
+  .snescmd_unlock(snescmd_unlock),
+  .scene_fresh(scene_fresh)
 );
+
+// Overlay scene gate, served at $F90720 as {7'b0, scene_fresh}.  UNCONDITIONAL on
+// both platforms (mk3 needs the gate as much as mk2 -- the software probe in the NMI
+// hook had no scene gate anywhere).  $F90720 sits one byte ABOVE the regshadow CPU
+// window ($F90700-$F9071F, selected by SNES_ADDR[7:5]==000), so the two decodes are
+// disjoint and this arm is safe to place ahead of them.  It is inside the IS_PATCH
+// identity window -> IS_WRITABLE -> ROM_HIT, so SNES_DATABUS_OE/DIR already drive the
+// read: no new bus terms are needed.  Today that address reads never-written PSRAM,
+// so nothing else observes the change.
+wire scene_gate_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:0] == 8'h20);
 
 wire [7:0] snescmd_dout;
 
@@ -964,6 +1033,17 @@ wire r2100_enable = r2100_hit & (r2100_patch | ~(&r2100_limit));
 wire snoop_4200_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04200;
 wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 
+`ifdef MK2
+// regshadow write-snoop windows (see SNES_DATABUS_OE/DIR below).  mk2 ONLY: on mk3
+// the ctx engine owns the shifter for snooped accesses (SNES_SNOOP*_DATA_OE), and
+// an mk3 REGSHADOW_TEST build rides on that same ctx plumbing -- which is exactly
+// why the mk2 gap went unnoticed there.  Without these terms the shifter stays
+// disabled for B-bus writes and for $42xx A-bus writes to non-cart addresses, so
+// the snoop captures bus float (the gsu/cx4/obc1/sdd1 audit lesson).
+wire snoop_42xx_enable = ~SNES_ADDR[22] & (SNES_ADDR[15:5] == 11'b01000010000);
+wire rs_snoop_pawr_oe  = ~SNES_PAWR & (SNES_PA < 8'h40);
+`endif
+
 // Overlay combo detect: reads of $4218/$4219 pulse address+/RD on the cart bus
 // but the DATA of a CPU-internal register read is NOT driven externally, so a
 // plain read snoop captures garbage (verified in hardware). ctx.v's CPUREG FSM
@@ -971,12 +1051,29 @@ wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 // LDA $4218(/19) -> STA idiom and captures the value from the STORE (writes ARE
 // bus-visible), with stale-value expiry. r421x[8]/[9] therefore hold live JOY1.
 `ifndef MK2
-wire overlay_combo = ((ctx_pad1 & 16'h4230) == 16'h4230);
+// Hook-arming combos for IRQ scenes (SMRPG field runs vblank on IRQ with NMI
+// off, and the IRQ redirect is combo-gated as the anti-freeze defense): the
+// overlay combo L+R+Y+Left, plus the savestate DEFAULT inputs so save/load
+// work in the field too -- Start+R (save), Start+L (load), Select+dpad (slot
+// load).  Custom inputs from savestate_inputs.yml are NOT known to the FPGA;
+// those only trigger in NMI scenes.  Same safety property: the redirect only
+// exists while a combo is physically held.
+// Two pad sources, matched independently: the ctx $4218 store-sniff (scene
+// dependent: some SMRPG areas/world map never use the LDA/STA idiom) and the
+// IRAM $3010 forwarding snoop from sa1.v (works in every SMRPG scene).
+assign overlay_combo = ((ctx_pad1 & 16'h4230) == 16'h4230)
+                   | ((ctx_pad1 & 16'h1010) == 16'h1010)
+                   | ((ctx_pad1 & 16'h1020) == 16'h1020)
+                   | (ctx_pad1[13] & |ctx_pad1[11:8])
+                   | ((sa1_iram_pad & 16'h4230) == 16'h4230)
+                   | ((sa1_iram_pad & 16'h1010) == 16'h1010)
+                   | ((sa1_iram_pad & 16'h1020) == 16'h1020)
+                   | (sa1_iram_pad[13] & |sa1_iram_pad[11:8]);
 `else
 // mk2 has no ctx: no FPGA-side combo detect; the NMI-scene hook still opens the
 // overlay (battles/menus). IRQ/field opening on mk2 would need a standalone
 // CPUREG mini-FSM (LUT budget pending).
-wire overlay_combo = 1'b0;
+assign overlay_combo = 1'b0;
 `endif
 
 always @(posedge CLK2) begin
@@ -1013,22 +1110,37 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                    :((~SNES_READ ^ (r213f_forceread & r213f_enable & ~SNES_PARD))
                                 & ~(r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE & ~sa1_data_enable))
                                 ? ( msu_enable ? MSU_SNES_DATA_OUT
+`ifdef SA1_SS_ACTIVE
+                                  // SA-1 savestate scan window ($E8:0000-07FF): must
+                                  // win over the IS_PATCH/PSRAM fall-through and the
+                                  // cheat/regshadow arms below (address.v aliases $E8
+                                  // under unlock).  Registered byte from sa1.v.
+                                  : sa1_ss_enable ? SA1_SS_DATA_OUT
+`endif
 `ifndef MK2
                                   : dma_enable ? DMA_SNES_DATA_OUT  // $2020 copier read-back (mk3)
 `endif
                                   : sa1_data_enable ? SA1_SNES_DATA_OUT  // SA1 MMIO read
                                   : (cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
                                   : ((snescmd_unlock | feat_cmd_unlock) & snescmd_enable) ? snescmd_dout
+                                  // overlay scene gate (both platforms): 1 = the game's
+                                  // frame loop is alive, so the probe may open.  Disjoint
+                                  // from the regshadow windows below (see scene_gate_hit).
+                                  : scene_gate_hit ? {7'b0, scene_fresh}
 `ifdef REGSHADOW_ACTIVE
                                   // in-game overlay register shadow: $F90500 (PPU,
-                                  // stride-2) / $F90700 (CPU) read-backs.  BOTH bytes of a
-                                  // stride-2 PPU entry serve the same shadow value: the
-                                  // restore loop writes every register twice (double-write
-                                  // emulation), so serving $00 as the high byte would zero
-                                  // every single-write register on the second write
-                                  // (BGMODE/TM/INIDISP -> backdrop-only screen, seen in
-                                  // hardware).  Double-write regs (scrolls) restore with
-                                  // high=low for one frame until the game rewrites them.
+                                  // stride-2) / $F90700 (CPU) read-backs.  A stride-2
+                                  // entry is a PAIR, not a duplicate -- even byte = 1st
+                                  // write (prev), odd byte = 2nd write (current),
+                                  // reconstructed ctx.v-style in regshadow.v.  The restore
+                                  // loop writes every register twice (double-write
+                                  // emulation), so single-write regs still store
+                                  // (value, value) and the high byte is never $00 --
+                                  // serving $00 there zeroed BGMODE/TM/INIDISP on the
+                                  // second write (backdrop-only screen, seen in hardware).
+                                  // Double-write regs (scroll $210D-$2114, mode-7
+                                  // $211B-$2120) now restore their true 16-bit value
+                                  // instead of (high,high).
                                   : shadow_ppu_hit ? regshadow_dout
                                   : shadow_cpu_hit ? regshadow_dout
 `endif
@@ -1624,10 +1736,20 @@ assign MCU_RDY = RQ_MCU_RDYr & RQ_RAM_MCU_RDYr;
 //--------------
 
 assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
+`ifdef SA1_SS_ACTIVE
+                         sa1_ss_enable ? 1'b0 : // savestate window read/write
+`endif
                          sa1_data_enable ? 1'b0 : // accounts for read/write
                          snescmd_enable & ~(SNES_READ_narrow & SNES_WRITE) ? ~(snescmd_unlock | feat_cmd_unlock) :
                          (r213f_enable & ~SNES_PARD) ? 1'b0 :
                          (r2100_enable & ~SNES_PAWR) ? 1'b0 :
+`ifdef MK2
+                         // regshadow write snoop: enable the shifter (receive) during
+                         // PPU B-bus writes and $42xx A-bus writes, else the snoop
+                         // reads float (mk3 does this via the ctx SNOOP*_DATA_OE terms).
+                         rs_snoop_pawr_oe ? 1'b0 :
+                         (snoop_42xx_enable & ~SNES_WRITE) ? 1'b0 :
+`endif
                          snoop_4200_enable & ~SNES_WRITE ? 1'b0 :
 `ifndef MK2
                          // mk3 snapshot: enable the level shifter for the $2020 copier
@@ -1647,12 +1769,41 @@ assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
  *  a) the SNES wants to read
  *  b) we want to force a value on the bus
  */
-// Keep the bus SNES -> FPGA (DIR=0) while the ctx engine snoops a PA read/write,
-// so the FPGA captures the byte instead of driving it (else it would fight the
-// PPU/APU on a snooped PARD, e.g. an $2140 APU-port read).  The two SNOOP*_DATA_OE
-// signals are 0 on mk2, collapsing this back to the original (~SNES_READ | ...)
-// condition.  sa1_data_enable is folded in so SA-1 MMIO reads always drive.
-assign SNES_DATABUS_DIR = ((~SNES_READ & ((~SNES_SNOOPPAWR_DATA_OE & ~SNES_SNOOPPARD_DATA_OE) | ROM_HIT | sa1_data_enable)) | (~SNES_PARD & (r213f_enable)))
+// Keep the bus SNES -> FPGA (DIR=0) while a PA read/write is being snooped, so the
+// FPGA captures the byte instead of driving it (else it would fight the PPU/APU on
+// a snooped PARD, e.g. an $2140 APU-port read).  mk3 takes that condition from the
+// ctx engine (SNOOP*_DATA_OE); mk2 has no ctx, so it uses the regshadow snoop
+// window rs_snoop_pawr_oe directly.  sa1_data_enable is folded in so SA-1 MMIO
+// reads always drive.
+//
+// The served-source terms are what makes this safe (gsu/Star Fox lesson): during a
+// snooped B-bus write the concurrent A-bus read (/RD low on DMA/HDMA) must NOT flip
+// the shifter to drive -- UNLESS the DMA source is served by the FPGA itself.  On
+// this core that is ROM and BW-RAM via ROM_HIT (BW-RAM reads are ROM_HIT &
+// IS_SAVERAM -> RAM_DATA) and MMIO/IRAM via sa1_data_enable.  A WRAM ($7E) source
+// is driven by the SNES, so it correctly stays in receive (DIR=0) and the snoop
+// captures the byte -- same as gsu.  Missing a served-source term makes those DMAs
+// read float (garbled graphics in normal gameplay -- the CX4 audit lesson).
+//
+// KNOWN GAP, deliberately NOT fixed here: msu_enable and snescmd_enable are also
+// FPGA-served sources but are absent from the guard, so a DMA whose source is the
+// MSU data port ($2001) or snescmd, running concurrently with a snooped B-bus
+// write, would read float.  This patch is kept byte-for-byte the shape already
+// hardware-validated on the other four cores (gsu/cx4/obc1/sdd1), which carry the
+// exact same omission -- it is a fleet-wide follow-up, not a regression introduced
+// by the mk2 snoop terms above.
+// (The whole assign head is duplicated per platform rather than splitting just the
+// snoop term inline, so the mk3 preprocessed output stays BYTE-identical to the
+// pre-fix source -- the mk3 netlist is provably untouched by this change.)
+`ifdef MK2
+assign SNES_DATABUS_DIR = ((~SNES_READ & ((~rs_snoop_pawr_oe) | ROM_HIT | sa1_data_enable
+`else
+assign SNES_DATABUS_DIR = ((~SNES_READ & ((~SNES_SNOOPPAWR_DATA_OE & ~SNES_SNOOPPARD_DATA_OE) | ROM_HIT | sa1_data_enable
+`endif
+`ifdef SA1_SS_ACTIVE
+                                          | sa1_ss_enable  // savestate window read -> drive FPGA->SNES; write falls through (DIR=0)
+`endif
+                                          )) | (~SNES_PARD & (r213f_enable)))
                            ? (1'b1 ^ (r213f_forceread & r213f_enable & ~SNES_PARD)
                                    ^ (r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE & ~sa1_data_enable))
                            : ((~SNES_PAWR & r2100_enable) ? r2100_forcewrite

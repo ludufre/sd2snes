@@ -18,6 +18,17 @@
 // Additional Comments:
 //
 //////////////////////////////////////////////////////////////////////////////////
+
+// SA-1 savestate machinery gate.  Always on for mk3 (as before); on mk2 it is
+// opt-in via SA1_SS_MK2 so an experimental Spartan-3 build can carry it.  Same
+// derived-macro pattern as REGSHADOW_ACTIVE in main.v; the repo uses no include
+// files, so every file that needs the gate derives it locally.
+`ifdef MK3
+`define SA1_SS_ACTIVE
+`elsif SA1_SS_MK2
+`define SA1_SS_ACTIVE
+`endif
+
 module mcu_cmd(
   input clk,
   input cmd_ready,
@@ -94,6 +105,11 @@ module mcu_cmd(
   output reg [15:0] featurebits_out,
 
   output reg region_out,
+
+  // savestate halt (MCU debug; SNES side uses the $E8:07FF scan-window control
+  // byte).  0 on mk2 -- never written there, so it constant-folds away.
+  output reg sa1_ss_halt_out = 1'b0,
+
   // SNES sync/clk
   input snes_sysclk,
 
@@ -381,6 +397,10 @@ always @(posedge clk) begin
         endcase
       8'hee:
         region_out <= param_data[0];
+`ifdef SA1_SS_ACTIVE
+      8'hfb: // control SA-1 savestate halt (MCU debug; SNES side uses $E8:07FF)
+        sa1_ss_halt_out <= param_data[0];
+`endif
 `ifdef DEBUG
       8'hfa: // handles all group, index, value, invmask writes.  unit is responsible for decoding group for match
         case (spi_byte_cnt)

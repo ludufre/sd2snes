@@ -38,7 +38,6 @@ module cheat(
   input [2:0] pgm_idx,
   input pgm_we,
   input [31:0] pgm_in,
-  input gsu_vec_enable,
   output [7:0] data_out,
   output cheat_hit,
   output snescmd_unlock
@@ -55,12 +54,28 @@ reg irq_enable = 0;
 reg holdoff_enable = 0; // temp disable hooks after reset
 reg buttons_enable = 0;
 reg wram_present = 0;
-// In-game cheat overlay: route the NMI/IRQ hook to the savestate handler
-// (nmi_savestate) so the overlay probe (L+R+Y+Left) can run.  The overlay never
-// loadstates, so savestate_force_entry is a constant 0 (mirrors sd2snes_sa1); the
-// full force-entry latch machinery of the base core is unneeded here.
+// In-game hooks: route the NMI/IRQ hook to the savestate handler (nmi_savestate)
+// for the overlay probe (L+R+Y+Left) AND the full savestate combos -- the GSU
+// supports full save/load states (mk2 and mk3), so the complete force-entry
+// latch machinery is required here (see below), same as the base core.
 reg savestate_enable = 0;
-wire savestate_force_entry = 1'b0;
+// savestate_force_entry keeps the nmi_savestate branch routed while a savestate
+// is in flight with the buttons RELEASED (the resume-wait protocol requires the
+// NEXT hook entry to bump CS_STATE after the saveinputloop forced a release --
+// without it the stub branches to nmi_exit and the game parks black forever;
+// same lesson as the SA-1 port).  Pulse-latched: set at a branch1 fetch with
+// buttons held, cleared at the unlock-drop.
+reg savestate_force_entry_enable_strobe = 0;
+reg savestate_force_entry_disable_strobe = 0;
+reg savestate_force_entry = 0;
+
+always @(posedge clk) begin
+  if(savestate_force_entry_enable_strobe) begin
+    savestate_force_entry <= 1'b1;
+  end else if(savestate_force_entry_disable_strobe) begin
+    savestate_force_entry <= 1'b0;
+  end
+end
 wire branch_wram = cheat_enable & wram_present;
 
 reg auto_nmi_enable = 1;
@@ -100,12 +115,18 @@ reg [7:0] branch3_offset;
 
 reg [15:0] pad_data = 0;
 
+`ifdef MK2
+// MEASUREMENT: cut the FPGA ROM-cheat comparators (ROM cheats move to
+// patch-PSRAM in the MCU, as on SA-1 mk2); frees the SLICEs for savestate.
+wire [5:0] cheat_match_bits = 6'b0;
+`else
 wire [5:0] cheat_match_bits ={(cheat_enable_mask[5] & (SNES_ADDR == cheat_addr[5])),
                               (cheat_enable_mask[4] & (SNES_ADDR == cheat_addr[4])),
                               (cheat_enable_mask[3] & (SNES_ADDR == cheat_addr[3])),
                               (cheat_enable_mask[2] & (SNES_ADDR == cheat_addr[2])),
                               (cheat_enable_mask[1] & (SNES_ADDR == cheat_addr[1])),
                               (cheat_enable_mask[0] & (SNES_ADDR == cheat_addr[0]))};
+`endif
 wire cheat_addr_match = |cheat_match_bits;
 
 wire [1:0] nmi_match_bits = {SNES_ADDR == 24'h00FFEA, SNES_ADDR == 24'h00FFEB};
@@ -206,6 +227,8 @@ always @(posedge clk) begin
     snescmd_unlock_r <= 0;
     snescmd_unlock_disable <= 0;
   end else begin
+    savestate_force_entry_enable_strobe <= 0;
+    savestate_force_entry_disable_strobe <= 0;
     if(SNES_rd_strobe) begin
       // *** GAME -> INGAME HOOK ***
       if(hook_enable_sync
@@ -225,6 +248,9 @@ always @(posedge clk) begin
         snescmd_unlock_disable <= 0;
         snescmd_unlock_disable_countdown <= 0;
       end
+      if(branch1_enable & savestate_enable & |pad_data) begin
+        savestate_force_entry_enable_strobe <= 1;
+      end
     end
     // give some time to exit snescmd memory and jump to original vector
     // sta @NMI_VECT_DISABLE    1-2 (after effective write)
@@ -240,6 +266,7 @@ always @(posedge clk) begin
         end else if(snescmd_unlock_disable_countdown == 0) begin
           snescmd_unlock_r <= 0;
           snescmd_unlock_disable <= 0;
+          savestate_force_entry_disable_strobe <= 1;
         end
       end
     end

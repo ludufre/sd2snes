@@ -17,6 +17,17 @@
 // Additional Comments:
 //
 //////////////////////////////////////////////////////////////////////////////////
+
+// SA-1 savestate machinery gate.  Always on for mk3 (as before); on mk2 it is
+// opt-in via SA1_SS_MK2 so an experimental Spartan-3 build can carry it.  Same
+// derived-macro pattern as REGSHADOW_ACTIVE in main.v; the repo uses no include
+// files, so every file that needs the gate derives it locally.
+`ifdef MK3
+`define SA1_SS_ACTIVE
+`elsif SA1_SS_MK2
+`define SA1_SS_ACTIVE
+`endif
+
 module address(
   input CLK,
   input [15:0] featurebits,  // peripheral enable/disable
@@ -30,6 +41,7 @@ module address(
   output IS_ROM,            // address mapped as ROM?
   output IS_WRITABLE,       // address somehow mapped as writable area?
   output IS_PATCH,          // hook identity window active ($C0-FF while unlocked)
+  output sa1_ss_enable,     // savestate scan window ($E8:0000-07FF while unlocked; 0 on mk2)
   input [23:0] SAVERAM_MASK,
   input [23:0] ROM_MASK,
   input  snescmd_unlock,    // snescmd region unlocked (gates the $2020 copier)
@@ -127,6 +139,20 @@ assign IS_SAVERAM = SAVERAM_MASK_r[0]
 assign IS_PATCH = snescmd_unlock & &SNES_ADDR[23:22];
 
 assign IS_WRITABLE = IS_SAVERAM | IS_PATCH;
+
+// Savestate scan window (SA1_SS_ACTIVE): $E8:0000-$E8:07FF, live only while the
+// handler holds the snescmd region unlocked.  Offsets $000-$0FF are the 256-byte
+// SA-1 state block, $7FF is the halt-control byte.  $E8 is INSIDE the IS_PATCH
+// identity window ($C0-$FF under unlock), so window accesses also hit PSRAM
+// $E80000 through the identity mapping: main.v gives this window priority in the
+// SNES_DATA read mux so the state block wins the read, and the parallel PSRAM
+// write is harmless (unused save-region space, BW-RAM caps at 256 KB).
+// Tied to 0 when the savestate machinery is out (stock mk2) so it folds out.
+`ifdef SA1_SS_ACTIVE
+assign sa1_ss_enable = snescmd_unlock & (SNES_ADDR[23:16] == 8'hE8) & (SNES_ADDR[15:11] == 5'b00000);
+`else
+assign sa1_ss_enable = 1'b0;
+`endif
 
 // ROM address before the BS-pack redirect / ROM_MASK.  SA-1 SuperMMC: $C0-$FF use
 // xxb[bank]; $00-3F/$80-BF use the default {A23,A21} block unless xxb_en selects one.

@@ -221,6 +221,8 @@ wire free_slot = (SNES_PULSE_end | free_strobe) & ~SD_DMA_TO_ROM;
 
 wire ROM_HIT;
 wire IS_PATCH;
+wire gsu_ss_enable;
+wire gsu_hook_pause;
 
 assign DCM_RST=0;
 
@@ -406,10 +408,11 @@ gsu snes_gsu (
   .RST(SNES_reset_strobe),
   .CLK(CLK2),
   .pause(gsu_hook_pause),
-  
+  .SS_EN(gsu_ss_enable),
+
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
-  
+
   // MMIO interface
   .ENABLE(gsu_enable),
   .SNES_RD_start(SNES_RD_start),
@@ -554,6 +557,7 @@ address snes_addr(
   .IS_ROM(IS_ROM),
   .IS_WRITABLE(IS_WRITABLE),
   .IS_PATCH(IS_PATCH),
+  .gsu_ss_enable(gsu_ss_enable),
   .snescmd_unlock(snescmd_unlock),
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
@@ -596,7 +600,6 @@ cheat snes_cheat(
   .pgm_idx(cheat_pgm_idx),
   .pgm_we(cheat_pgm_we),
   .pgm_in(cheat_pgm_data),
-  .gsu_vec_enable(ROM_HIT & ~IS_SAVERAM & GSU_RONr),
   .data_out(cheat_data_out),
   .cheat_hit(cheat_hit),
   .snescmd_unlock(snescmd_unlock)
@@ -651,7 +654,7 @@ end
 // this because they run entirely from snescmd BRAM.  RON stays asserted while
 // paused, so vector fetches still serve the RON stub and the game's RON-wait
 // resolves normally once the unlock countdown releases the pause.
-wire gsu_hook_pause = snapshot_pause | snescmd_unlock;
+assign gsu_hook_pause = snapshot_pause | snescmd_unlock;
 wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 
 always @(posedge CLK2) begin
@@ -698,13 +701,17 @@ always @(posedge CLK2) begin
 end
 wire [7:0] rs_data = rs_pawr_end_r ? rs_data_r : SNES_DATA;
 
-// In-game cheat-overlay register shadow (regshadow.v): $F90500 (PPU, stride-2) /
-// $F90700 (CPU $42xx), read through the hook identity window only.
+// In-game cheat-overlay register shadow (regshadow.v): $F90500 (PPU, stride-2 words
+// = the (1st write, 2nd write) pair) / $F90700 (CPU $42xx), read through the hook
+// identity window only.
 wire shadow_ppu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF905) & ~SNES_ADDR[7];
 wire shadow_cpu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:5] == 3'b000);
 wire [7:0] regshadow_dout;
-wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0010, SNES_ADDR[4:0]}
-                                            : {3'b000,  SNES_ADDR[6:1]};
+// PPU pair = mem[0x00-0x7F] indexed straight by SNES_ADDR[6:0]: the even byte of a
+// stride-2 entry is the 1st write, the odd byte the 2nd (double-write regs are
+// reconstructed ctx.v-style inside regshadow.v).  CPU reg = mem[0x80-0x9F].
+wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0100, SNES_ADDR[4:0]}
+                                            : {2'b00,  SNES_ADDR[6:0]};
 regshadow snes_regshadow(
   .clk(CLK2),
   .pawr_end(rs_pawr_end_r),
@@ -724,8 +731,12 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                                   : gsu_data_enable ? GSU_SNES_DATA_OUT  // GSU MMIO read
                                   : (cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
                                   : ((snescmd_unlock | feat_cmd_unlock) & snescmd_enable) ? snescmd_dout
-                                  // in-game overlay register shadow read-backs (both
-                                  // bytes of a stride-2 entry serve the same value)
+                                  // in-game overlay register shadow read-backs: a
+                                  // stride-2 entry is a PAIR, not a duplicate -- even
+                                  // byte = 1st write (prev), odd byte = 2nd write
+                                  // (current), reconstructed ctx.v-style in
+                                  // regshadow.v.  Single-write regs store (value,
+                                  // value), so the high byte is never $00.
                                   : shadow_ppu_hit ? regshadow_dout
                                   : shadow_cpu_hit ? regshadow_dout
                                   : (ROM_HIT & IS_SAVERAM) ? RAM_DATA

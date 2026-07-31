@@ -147,6 +147,10 @@ wire dspx_dat_we;
 wire [15:0] featurebits;
 wire feat_cmd_unlock = featurebits[5];
 
+wire dspx_ss_halt;
+wire dspx_ss_halted;
+wire dspx_ss_window_en = featurebits[0]; // FEAT_DSPX: 1 = DSP1-4 (scan overlay), 0 = ST0010
+
 wire r213f_enable;
 
 wire [23:0] MAPPED_SNES_ADDR;
@@ -501,6 +505,7 @@ dma snes_dma (
   .clkin(CLK2),
   .reset(SNES_reset_strobe),
   .enable(dma_enable),
+  .busy(),  // 1-trigger queue status; only the MCU BPS path reads it (unused here)
 
   .reg_addr(SNES_ADDR[3:0]),
   .reg_data_in(DMA_SNES_DATA_IN),
@@ -558,6 +563,9 @@ upd77c25 snes_dspx (
   .DAT_WR_ADDR(dspx_dat_addr),
   .DP_enable(dspx_dp_enable),
   .DP_ADDR(SNES_ADDR[10:0]),
+  .ss_halt(dspx_ss_halt),
+  .ss_window_en(dspx_ss_window_en),
+  .ss_halted(dspx_ss_halted),
   .dsp_feat(dsp_feat)
 );
 `endif
@@ -628,6 +636,7 @@ mcu_cmd snes_mcu_cmd(
   .dspx_dat_addr_out(dspx_dat_addr),
   .dspx_dat_we_out(dspx_dat_we),
   .dspx_reset_out(dspx_reset),
+  .dspx_ss_halt_out(dspx_ss_halt),
   .featurebits_out(featurebits),
   .mcu_rrq(MCU_RRQ),
   .mcu_wrq(MCU_WRQ),

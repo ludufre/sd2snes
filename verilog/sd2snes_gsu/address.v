@@ -30,6 +30,7 @@ module address(
   output IS_ROM,            // address mapped as ROM?
   output IS_WRITABLE,       // address somehow mapped as writable area?
   output IS_PATCH,          // hook identity window active ($C0-FF while unlocked)
+  output gsu_ss_enable,     // savestate scan window ($E8:00xx while unlocked; active on mk2 AND mk3)
   input [23:0] SAVERAM_MASK,
   input [23:0] ROM_MASK,
   output msu_enable,
@@ -61,6 +62,12 @@ assign IS_ROM = ~SNES_ROMSEL;
 // In-game hook identity window: while the snescmd region is unlocked, map all of
 // $C0-$FF 1:1 to PSRAM (handler code at $C0xxxx, scratch/shadows in $F2-$FF).
 assign IS_PATCH = snescmd_unlock & &SNES_ADDR[23:22];
+
+// Savestate scan window: $E8:0000-00FF while unlocked (inside IS_PATCH; the
+// main.v data mux gives the window priority over the PSRAM serve, mirroring
+// the SA-1 core's sa1_ss_enable).
+// MEASUREMENT: scan window active on mk2 too (fit probe for full savestate)
+assign gsu_ss_enable = snescmd_unlock & (SNES_ADDR[23:16] == 8'hE8) & ~|SNES_ADDR[15:8];
 
 // ~IS_PATCH: the GSU map places SAVERAM at 60-7D/E0-FF -- banks $E0-$FF overlap the
 // hook window, and without the gate the overlay's PSRAM scratch reads/writes would

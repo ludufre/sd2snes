@@ -72,7 +72,18 @@ module tb_regshadow_dh;
 
   task check(input [7:0] pa, input [7:0] expect_);
     begin
-      rd_addr = pa; @(posedge clk); @(posedge clk);
+      // Read index must track whichever layout regshadow.v built (same gate as
+      // main.v's regshadow_raddr).  Every PA exercised here is a NON-double reg, so
+      // the expected byte is the same in both modes -- only the address moves.
+`ifdef REGSHADOW_1DEEP
+      rd_addr = {2'b00, pa[6:0]};                  // 1-deep: mem[PA]
+`else
+      // stride-2 pair layout: mem[{pa,1'b1}] = 2nd (current) write byte,
+      // mem[{pa,1'b0}] = 1st write byte.  Non-double regs hold (v,v) in both
+      // halves; check the current-byte half.
+      rd_addr = {1'b0, pa[6:0], 1'b1};
+`endif
+      @(posedge clk); @(posedge clk);
       if(rd_data !== expect_) begin
         errors = errors + 1;
         $display("  FAIL mem[$%02h]=$%02h exp $%02h", pa, rd_data, expect_);

@@ -18,6 +18,17 @@
 // Additional Comments:
 //
 //////////////////////////////////////////////////////////////////////////////////
+
+// SA-1 savestate machinery gate.  Always on for mk3 (as before); on mk2 it is
+// opt-in via SA1_SS_MK2 so an experimental Spartan-3 build can carry it.  Same
+// derived-macro pattern as REGSHADOW_ACTIVE in main.v; the repo uses no include
+// files, so every file that needs the gate derives it locally.
+`ifdef MK3
+`define SA1_SS_ACTIVE
+`elsif SA1_SS_MK2
+`define SA1_SS_ACTIVE
+`endif
+
 module cheat(
   input clk,
   input [7:0] SNES_PA,
@@ -41,7 +52,8 @@ module cheat(
   input [31:0] pgm_in,
   output [7:0] data_out,
   output cheat_hit,
-  output snescmd_unlock
+  output snescmd_unlock,
+  output scene_fresh      // 1 = the game's frame loop ran recently (see below); served at $F90720
 );
 
 // IRQ hook: required for games that run their vblank logic on IRQ with NMI
@@ -72,7 +84,29 @@ wire branch_wram = cheat_enable & wram_present;
 // driven purely by |pad_data).  Real reg on both configs now (mk2 runs the
 // overlay too, gated by pgm reg 7 bit 6 from the MCU).
 reg savestate_enable = 0;
+// Force savestate-handler entry until the handler returns on its own (the
+// in-game hook must keep jumping into the savestate handler until its logic
+// has finished).  Required by the full-savestate resume protocol: after a
+// save/load completes, the handler parks waiting for the NEXT hook entry to
+// bump CS_STATE past the wait loop -- with the trigger buttons long released,
+// so |pad_data alone would never re-enter and the game would hang blanked
+// (seen in hardware).  Ported verbatim from the base core.  On mk2 savestates
+// stay disabled (MCU gate), so the wire folds to 0 there.
+`ifdef SA1_SS_ACTIVE
+reg savestate_force_entry_enable_strobe = 0;
+reg savestate_force_entry_disable_strobe = 0;
+reg savestate_force_entry = 0;
+
+always @(posedge clk) begin
+  if(savestate_force_entry_enable_strobe) begin
+    savestate_force_entry <= 1'b1;
+  end else if(savestate_force_entry_disable_strobe) begin
+    savestate_force_entry <= 1'b0;
+  end
+end
+`else
 wire savestate_force_entry = 1'b0;
+`endif
 
 reg auto_nmi_enable = 1;
 reg auto_nmi_enable_sync = 0;
@@ -218,7 +252,16 @@ end
 `ifdef IRQ_HOOK_ENABLE
 reg [19:0] irq_hold = 0;
 wire irq_hold_ok = ~|irq_hold;
-wire irq_arm = auto_irq_enable_sync & irq_enable & irq_match_bits[1] & irq_hold_ok & overlay_combo;
+// overlay_combo covers physical combos (incl. the savestate default inputs, see
+// main.v); savestate_force_entry keeps the redirect armed while a savestate is
+// in flight (buttons long released), so the resume-wait IRQ can re-enter the
+// handler in IRQ-driven scenes.  It clears at the unlock-drop on handler exit.
+// force_entry must also BYPASS the auto_nmi/auto_irq usage heuristic: the
+// ~1.7s frozen save has zero vector fetches, so the usage window rolls over
+// and flips auto_irq off -- which would unarm the very IRQ the resume waits
+// for (seen in hardware as CS_STATE parked at 1 after a field save).
+wire irq_arm = irq_enable & irq_match_bits[1] & irq_hold_ok
+             & ((auto_irq_enable_sync & overlay_combo) | savestate_force_entry);
 always @(posedge clk) begin
   if(SNES_reset_strobe) irq_hold <= 0;
   else if(SNES_rd_strobe & hook_enable_sync & irq_arm & (cpu_push_cnt == 4))
@@ -265,6 +308,15 @@ reg [6:0] snescmd_unlock_disable_countdown = 0;
 reg snescmd_unlock_disable = 0;
 
 always @(posedge clk) begin
+`ifdef SA1_SS_ACTIVE
+  savestate_force_entry_disable_strobe <= 0;
+  // Pulse (unlike the base core, where the enable strobe latches forever): on
+  // the SA-1 core force_entry must actually CLEAR at the unlock-drop, because
+  // it also arms the IRQ redirect below -- a permanently-latched force_entry
+  // would re-introduce the per-frame IRQ redirect the combo gate exists to
+  // prevent (the SMRPG raster-IRQ freeze class).
+  savestate_force_entry_enable_strobe <= 0;
+`endif
   if(SNES_reset_strobe) begin
     snescmd_unlock_r <= 0;
     snescmd_unlock_disable <= 0;
@@ -285,6 +337,11 @@ always @(posedge clk) begin
       if(rst_match_bits[1] & |reset_unlock_r) begin
         snescmd_unlock_r <= 1;
       end
+`ifdef SA1_SS_ACTIVE
+      if(branch1_enable & savestate_enable & |pad_data) begin
+        savestate_force_entry_enable_strobe <= 1;
+      end
+`endif
     end
     // give some time to exit snescmd memory and jump to original vector
     // sta @NMI_VECT_DISABLE    1-2 (after effective write)
@@ -297,6 +354,9 @@ always @(posedge clk) begin
         end else if(snescmd_unlock_disable_countdown == 0) begin
           snescmd_unlock_r <= 0;
           snescmd_unlock_disable <= 0;
+`ifdef SA1_SS_ACTIVE
+          savestate_force_entry_disable_strobe <= 1;
+`endif
         end
       end
     end
@@ -309,6 +369,49 @@ end
 
 
 always @(posedge clk) usage_count <= usage_count - 1;
+
+// Scene liveness for the in-game overlay probe (served to the SNES at $F90720 by
+// main.v).  The NMI/IRQ hook can fire while the game's frame loop is NOT running --
+// e.g. a Super Mario RPG scene transition, where the S-CPU is parked mid-RPC waiting
+// on the SA-1 and the vblank handler is a stub.  Opening the overlay there hangs the
+// game on resume (proven in hardware on mk2).  Unlike overlay_combo (which only gates
+// the IRQ redirect) this is a pure liveness observation, available on BOTH platforms:
+// the frame loop is alive if the S-CPU either forwarded the pad word to SA-1 IRAM
+// $3010/$3011 (the SMRPG world/field convention, see the ss_iram_pad snoop in sa1.v)
+// or polled the auto-joypad registers $4218/$4219 (every normal menu/battle loop)
+// recently.  Both are plain SNES-bus accesses, so no ctx/SA-1 internals are needed.
+//
+// Compare values are SNES_ADDR[15:1] (bit 0 dropped so each pair matches with one
+// comparator): $3010>>1 = $1808, $4218>>1 = $210C.  ~SNES_ADDR[22] restricts the
+// match to banks $00-$3F/$80-$BF, where both windows live (same idiom as
+// snoop_4200_enable/r4016_enable in main.v, and the same bank half address.v uses
+// for its own IRAM decode).
+//
+// ~snescmd_unlock_r IS LOAD-BEARING, NOT HYGIENE: the hook stub itself reads $4218
+// on EVERY entry (snes/nmihook.a65 "lda @$004218", before branch1, on the only path
+// that reaches the probe), and it runs under the unlock.  Without this mask the
+// probe's own hook would re-arm the bit microseconds before the probe samples it and
+// the gate could never close -- it would read fresh=1 in a dead scene, which is the
+// exact failure this whole feature exists to prevent.  The overlay and igmenu read
+// $4218 under the unlock too, and the SA-1 savestate restore writes IRAM $3000-$37FF
+// over the bus, so BOTH terms are masked.  ctx.v:431-435 already ignores $421x reads
+// "during NMI hook" with the same !snescmd_unlock test.  (snescmd_unlock_r is the reg
+// behind the snescmd_unlock output; using it directly keeps this self-contained.)
+//
+// Expiry rides the free-running usage_count rollover (2^21 CLK2 ~ 24.4ms @85.87MHz):
+// an event reloads all three bits, each rollover shifts one out, so the bit survives
+// 3 rollovers = a 48.8-73.2ms window.  THREE bits, not two: with two the worst case
+// is 24.4ms, SHORTER than one frame of an engine that only touches the pad every
+// other frame (~33ms), so a legitimate press could land in a dead window.  At three
+// bits a missed frame genuinely cannot close the gate; a parked frame loop still does.
+wire scene_pad_wr = SNES_wr_strobe & ~snescmd_unlock_r & ~SNES_ADDR[22] & (SNES_ADDR[15:1] == 15'h1808); // IRAM $3010/$3011
+wire scene_joy_rd = SNES_rd_strobe & ~snescmd_unlock_r & ~SNES_ADDR[22] & (SNES_ADDR[15:1] == 15'h210c); // $4218/$4219
+reg [2:0] scene_fresh_r = 3'b000;
+always @(posedge clk) begin
+  if(scene_pad_wr | scene_joy_rd) scene_fresh_r <= 3'b111;
+  else if(usage_count == 21'd0)   scene_fresh_r <= {1'b0, scene_fresh_r[2:1]};
+end
+assign scene_fresh = |scene_fresh_r;
 
 // Try and autoselect NMI or IRQ hook
 always @(posedge clk) begin

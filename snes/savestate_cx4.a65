@@ -1,0 +1,306 @@
+; CX4 in-game savestate: capture / restore of the coprocessor state.
+;
+; Split out of savestate.a65 into its OWN object because the $C0 page is full
+; (222 free bytes in two holes, the largest 118 B) and this handler costs ~1.3 KB.
+; savestate.a65 is `.link page $c0` directly, so the routines live here in $C1
+; (~22.9 KB free, covered by the same IS_PATCH window -- address.v) and are
+; reached with `jsl @<routine>`; each of the six call sites in savestate.a65 is
+; then only 4 bytes of $C0.  Precedent: cheatoverlay.a65.
+;
+; MODEL: run-to-stop.  The handler asks the core to halt EARLY (ss_cx4_early, at
+; the same instant the SNES CPU is cut) and the FPGA lets the CX4 CPU run to its
+; next clean boundary (CPU/cache/DMA idle) before reporting frozen; a saturating
+; ~46 ms timeout latches "dirty" instead of hanging.  Everything is then reached
+; through the $E8:00xx scan window (offsets $00-$27 = state block, $E0-$E2 stage
+; cpu_idb, $E3 commit, $E4 readback index, $F0 normalize, $FE halt ctl, $FF magic
+; $5C) plus the NATIVE $00:6000-$7FFF space (3 KB data RAM, MMIO, vectors, GPR),
+; which stays bus-visible while frozen.  The program cache is NOT captured: it is
+; REPLAYED on restore through the native $7F48-$7F4E MMIO, whose cache FSM is not
+; pause-gated and so runs under the freeze.  The core is left FROZEN after both
+; capture and restore; ss_cx4_release runs at the real game resume (return_align).
+
+.link page $c1
+#include "memmap.i65"
+#include "savestate.i65"
+; memmap.i65 re-asserts '.link page $c0' on include, so re-declare $c1 here AFTER
+; the includes (last '.link page' wins, and they emit no bytes) -- same trap the
+; cheat overlay documents.  Every byte of this object must land in $C1.
+.link page $c1
+
+; --- early halt request (save AND load paths) -------------------------------
+;     Requested at the CPU cut so the core has the whole capture phase to
+;     converge on a boundary.  Idempotent; the capture re-asserts it.
+ss_cx4_early:
+	.as : .xl
+	lda @SS_CX4_GATE
+	beq ss_cx4_early_x
+	lda #$01
+	sta @SS_CX4_WINDOW|$00FE
+ss_cx4_early_x:
+	rtl
+
+; --- halt release, at the REAL game resume ----------------------------------
+;     Called from both return_align exits (direct-IRQ resume and the NMI path
+;     after the CS_STATE==2 wait) so the CX4 wakes in lockstep with the SNES.
+ss_cx4_release:
+	.as : .xl
+	lda @SS_CX4_GATE
+	beq ss_cx4_rel_x
+	lda #$00
+	sta @SS_CX4_WINDOW|$00FE
+ss_cx4_rel_x:
+	rtl
+
+; --- capture ----------------------------------------------------------------
+;     NORMALIZE-FIRST: $F0 is written BEFORE any read, so (a) a capture that
+;     timed out dirty cannot keep hammering the bus (a stuck cpu_cache_en fires
+;     spurious fills) during the ~15-18 ms copy, and (b) the image we take is
+;     already the clean boundary the restore reproduces.  Bounded spin.
+ss_cx4_capture:
+	.as : .xl
+	lda @SS_CX4_GATE
+	bne ss_cx4_cap_go
+	rtl
+ss_cx4_cap_go:
+	lda #$01
+	sta @SS_CX4_WINDOW|$00FE               ; ensure halt requested
+	jsr ss_cx4_wait_frozen                 ; C=1 -> escape counter blew
+	php                                    ; keep the carry across the copy
+	lda #$01
+	sta @SS_CX4_WINDOW|$00F0               ; NORMALIZE-FIRST
+	; --- core registers via the $E4 readback mux -> $00-$02 ---
+	lda #$00 : sta @SS_CX4_WINDOW|$00E4
+	lda @SS_CX4_WINDOW|$0000 : sta @SS_CX4_CORE_SCRATCH+0
+	lda @SS_CX4_WINDOW|$0001 : sta @SS_CX4_CORE_SCRATCH+1
+	lda @SS_CX4_WINDOW|$0002 : sta @SS_CX4_CORE_SCRATCH+2
+	lda #$08 : sta @SS_CX4_WINDOW|$00E4
+	lda @SS_CX4_WINDOW|$0000 : sta @SS_CX4_CORE_SCRATCH+3
+	lda @SS_CX4_WINDOW|$0001 : sta @SS_CX4_CORE_SCRATCH+4
+	lda @SS_CX4_WINDOW|$0002 : sta @SS_CX4_CORE_SCRATCH+5
+	lda #$0C : sta @SS_CX4_WINDOW|$00E4
+	lda @SS_CX4_WINDOW|$0000 : sta @SS_CX4_CORE_SCRATCH+6
+	lda @SS_CX4_WINDOW|$0001 : sta @SS_CX4_CORE_SCRATCH+7
+	lda @SS_CX4_WINDOW|$0002 : sta @SS_CX4_CORE_SCRATCH+8
+	lda #$13 : sta @SS_CX4_WINDOW|$00E4
+	lda @SS_CX4_WINDOW|$0000 : sta @SS_CX4_CORE_SCRATCH+9
+	lda @SS_CX4_WINDOW|$0001 : sta @SS_CX4_CORE_SCRATCH+10
+	lda @SS_CX4_WINDOW|$0002 : sta @SS_CX4_CORE_SCRATCH+11
+	lda #$1C : sta @SS_CX4_WINDOW|$00E4
+	lda @SS_CX4_WINDOW|$0000 : sta @SS_CX4_CORE_SCRATCH+12
+	lda @SS_CX4_WINDOW|$0001 : sta @SS_CX4_CORE_SCRATCH+13
+	lda @SS_CX4_WINDOW|$0002 : sta @SS_CX4_CORE_SCRATCH+14
+	; --- linear image of window $04-$27 (36 B) ---
+	ldx #$0004
+ss_cx4_cap_win:
+	lda @SS_CX4_WINDOW, x
+	sta @SS_CX4_WIN_SCRATCH, x
+	inx
+	cpx #$0028
+	bne ss_cx4_cap_win
+	; --- flag "captured without a clean freeze" in bit4 of the diag byte ---
+	plp
+	bcc ss_cx4_cap_nat
+	lda @SS_CX4_WIN_SCRATCH+$1A
+	ora #$10                               ; bit4 = dirty
+	sta @SS_CX4_WIN_SCRATCH+$1A
+ss_cx4_cap_nat:
+	; --- native page $00:7F40-$7FAF (112 B: MMIO + status + vectors + GPR) ---
+	ldx #$0040
+ss_cx4_cap_nl:
+	lda @$007F00, x
+	sta @SS_CX4_NAT_SCRATCH, x
+	inx
+	cpx #$00B0
+	bne ss_cx4_cap_nl
+	; --- data RAM 3 KB, 16-bit words ---
+	rep #$20 : .al
+	ldx #$0000
+ss_cx4_cap_dr:
+	lda @$006000, x
+	sta @SS_CX4_DATRAM_SCRATCH, x
+	inx : inx
+	cpx #$0C00
+	bne ss_cx4_cap_dr
+	sep #$20 : .as
+	; NOTE: the CX4 is deliberately left FROZEN here (same reason as SA-1/GSU):
+	; releasing it now would let it free-run and drift while the SNES stays
+	; frozen through the MCU save and the resume wait.  return_align releases it.
+	rtl
+
+; --- restore ----------------------------------------------------------------
+;     LOAD path only (CS_SA1_LOAD != 0): on a SAVE the core never left the frozen
+;     capture state, so rewriting it would only risk a capture/restore asymmetry.
+;     ORDER MATTERS: (1) cache replay first -- the fill consumes pgmoff/pgmpage
+;     and WRITES cachetag/cachevalid; (2) pagemem before the final pgmpage,
+;     because the $7F4C latch copies the current pgmpage; (3) DMA before the data
+;     RAM, since arming $7F47 inevitably fires a transfer that dirties one byte
+;     (neutralised to dmalen=$0001 -- $0000 would underflow to 65536 transfers);
+;     (4) data RAM, overwriting that byte; (5) GPR, which only accepts writes
+;     while frozen; (6) $7F4F after pgmpage; (7) window-only fixups after every
+;     side effect; (8) the core registers last; (9) $F0 closes.
+;     INVARIANT: every wait has an escape counter.
+ss_cx4_restore:
+	.as : .xl
+	lda @SS_CX4_GATE
+	bne ss_cx4_rst_g1
+	rtl
+ss_cx4_rst_g1:
+	lda @CS_SA1_LOAD
+	bne ss_cx4_rst_go
+	rtl                                    ; SAVE path: no write-back
+ss_cx4_rst_go:
+	lda #$01 : sta @SS_CX4_WINDOW|$00FE    ; ensure halt requested
+	jsr ss_cx4_wait_frozen                 ; carry ignored: proceed either way
+	lda #$01 : sta @SS_CX4_WINDOW|$00F0    ; NORMALIZE-FIRST (kills a stuck
+	                                       ; cpu_cache_en / BUSY_CPU /
+	                                       ; cx4_cpu_datram_we)
+	; ---- 1. program-cache replay through the NATIVE MMIO ----
+	lda @SS_CX4_NAT_SCRATCH+$49 : sta @$007F49
+	lda @SS_CX4_NAT_SCRATCH+$4A : sta @$007F4A
+	lda @SS_CX4_NAT_SCRATCH+$4B : sta @$007F4B
+	lda #$00 : sta @SS_CX4_WINDOW|$0017    ; cachevalid = 00 -> force the fills
+	lda @SS_CX4_WIN_SCRATCH+$17
+	and #$01
+	beq ss_cx4_rst_p1
+	lda @SS_CX4_WIN_SCRATCH+$0C : sta @$007F4D
+	lda @SS_CX4_WIN_SCRATCH+$0D : sta @$007F4E
+	lda #$00 : sta @$007F48
+	jsr ss_cx4_busywait
+ss_cx4_rst_p1:
+	lda @SS_CX4_WIN_SCRATCH+$17
+	and #$02
+	beq ss_cx4_rst_pm
+	lda @SS_CX4_WIN_SCRATCH+$0E : sta @$007F4D
+	lda @SS_CX4_WIN_SCRATCH+$0F : sta @$007F4E
+	lda #$01 : sta @$007F48
+	jsr ss_cx4_busywait
+ss_cx4_rst_pm:
+	; ---- 2. pagemem[] via the NATIVE $7F4C side effect ----
+	lda @SS_CX4_WIN_SCRATCH+$10 : sta @$007F4D
+	lda @SS_CX4_WIN_SCRATCH+$11 : sta @$007F4E
+	lda #$01 : sta @$007F4C
+	lda @SS_CX4_WIN_SCRATCH+$12 : sta @$007F4D
+	lda @SS_CX4_WIN_SCRATCH+$13 : sta @$007F4E
+	lda #$02 : sta @$007F4C
+	; ---- 3. DMA with the trigger neutralised ----
+	lda @SS_CX4_NAT_SCRATCH+$40 : sta @$007F40
+	lda @SS_CX4_NAT_SCRATCH+$41 : sta @$007F41
+	lda @SS_CX4_NAT_SCRATCH+$42 : sta @$007F42
+	lda #$01 : sta @$007F43                ; dmalen = $0001 (NEVER $0000: the
+	lda #$00 : sta @$007F44                ; counter underflows to 65536 bytes)
+	lda @SS_CX4_NAT_SCRATCH+$45 : sta @$007F45
+	lda @SS_CX4_NAT_SCRATCH+$46 : sta @$007F46
+	lda @SS_CX4_NAT_SCRATCH+$47 : sta @$007F47   ; fires the 1-byte DMA
+	jsr ss_cx4_busywait
+	lda @SS_CX4_NAT_SCRATCH+$43 : sta @$007F43
+	lda @SS_CX4_NAT_SCRATCH+$44 : sta @$007F44
+	; ---- 4. data RAM 3 KB (overwrites the byte the DMA dirtied) ----
+	rep #$20 : .al
+	ldx #$0000
+ss_cx4_rst_dr:
+	lda @SS_CX4_DATRAM_SCRATCH, x
+	sta @$006000, x
+	inx : inx
+	cpx #$0C00
+	bne ss_cx4_rst_dr
+	sep #$20 : .as
+	; ---- 5. vectors + GPR ($7F60-$7FAF; GPR only accepts writes while frozen) ----
+	ldx #$0060
+ss_cx4_rst_vg:
+	lda @SS_CX4_NAT_SCRATCH, x
+	sta @$007F00, x
+	inx
+	cpx #$00B0
+	bne ss_cx4_rst_vg
+	; ---- 6. remaining MMIO + final pgmpage/pc ----
+	;      Writing $7F4F pulses cpu_go_en_r for one cycle, but both of its
+	;      consumers sit under cx4_cpu_en == 0 while frozen, so the pulse dies
+	;      with no effect; the cachepage side effect is undone by step 7 ($18).
+	;      That is what saves a window offset for the program counter.
+	lda @SS_CX4_NAT_SCRATCH+$50 : sta @$007F50
+	lda @SS_CX4_NAT_SCRATCH+$51 : sta @$007F51
+	lda @SS_CX4_NAT_SCRATCH+$52 : sta @$007F52
+	lda @SS_CX4_NAT_SCRATCH+$4D : sta @$007F4D
+	lda @SS_CX4_NAT_SCRATCH+$4E : sta @$007F4E
+	lda @SS_CX4_NAT_SCRATCH+$4F : sta @$007F4F
+	; ---- 7. window-only fixups ----
+	ldx #$0014
+ss_cx4_rst_sc:
+	lda @SS_CX4_WIN_SCRATCH, x             ; $14 page_stack, $15 sp, $16 flags,
+	sta @SS_CX4_WINDOW, x                  ; $17 cachevalid, $18 cachepage, $19 savepage
+	inx
+	cpx #$001A
+	bne ss_cx4_rst_sc
+	ldx #$0020
+ss_cx4_rst_ps:
+	lda @SS_CX4_WIN_SCRATCH, x             ; $20-$27 cpu_pc_stack[0..7]
+	sta @SS_CX4_WINDOW, x
+	inx
+	cpx #$0028
+	bne ss_cx4_rst_ps
+	; ---- 8. core registers (UNROLLED: no txa/adc/tax) ----
+	; 8a. multiplier -- cpu_a is the vehicle for mul_a
+	lda @SS_CX4_WIN_SCRATCH+$04 : sta @SS_CX4_WINDOW|$00E0
+	lda @SS_CX4_WIN_SCRATCH+$05 : sta @SS_CX4_WINDOW|$00E1
+	lda @SS_CX4_WIN_SCRATCH+$06 : sta @SS_CX4_WINDOW|$00E2
+	lda #$00 : sta @SS_CX4_WINDOW|$00E3     ; commit 0: cpu_a = mul_a
+	lda @SS_CX4_WIN_SCRATCH+$08 : sta @SS_CX4_WINDOW|$00E0
+	lda @SS_CX4_WIN_SCRATCH+$09 : sta @SS_CX4_WINDOW|$00E1
+	lda @SS_CX4_WIN_SCRATCH+$0A : sta @SS_CX4_WINDOW|$00E2
+	lda #$05 : sta @SS_CX4_WINDOW|$00E3     ; commit 5: mul_a<=cpu_a, mul_b<=idb
+	; 8b. romdata / ramdata / busaddr / ramaddr
+	lda @SS_CX4_CORE_SCRATCH+3  : sta @SS_CX4_WINDOW|$00E0
+	lda @SS_CX4_CORE_SCRATCH+4  : sta @SS_CX4_WINDOW|$00E1
+	lda @SS_CX4_CORE_SCRATCH+5  : sta @SS_CX4_WINDOW|$00E2
+	lda #$01 : sta @SS_CX4_WINDOW|$00E3
+	lda @SS_CX4_CORE_SCRATCH+6  : sta @SS_CX4_WINDOW|$00E0
+	lda @SS_CX4_CORE_SCRATCH+7  : sta @SS_CX4_WINDOW|$00E1
+	lda @SS_CX4_CORE_SCRATCH+8  : sta @SS_CX4_WINDOW|$00E2
+	lda #$02 : sta @SS_CX4_WINDOW|$00E3
+	lda @SS_CX4_CORE_SCRATCH+9  : sta @SS_CX4_WINDOW|$00E0
+	lda @SS_CX4_CORE_SCRATCH+10 : sta @SS_CX4_WINDOW|$00E1
+	lda @SS_CX4_CORE_SCRATCH+11 : sta @SS_CX4_WINDOW|$00E2
+	lda #$03 : sta @SS_CX4_WINDOW|$00E3
+	lda @SS_CX4_CORE_SCRATCH+12 : sta @SS_CX4_WINDOW|$00E0
+	lda @SS_CX4_CORE_SCRATCH+13 : sta @SS_CX4_WINDOW|$00E1
+	lda @SS_CX4_CORE_SCRATCH+14 : sta @SS_CX4_WINDOW|$00E2
+	lda #$04 : sta @SS_CX4_WINDOW|$00E3
+	; 8c. the REAL cpu_a last (step 8a used it as the mul_a vehicle)
+	lda @SS_CX4_CORE_SCRATCH+0  : sta @SS_CX4_WINDOW|$00E0
+	lda @SS_CX4_CORE_SCRATCH+1  : sta @SS_CX4_WINDOW|$00E1
+	lda @SS_CX4_CORE_SCRATCH+2  : sta @SS_CX4_WINDOW|$00E2
+	lda #$00 : sta @SS_CX4_WINDOW|$00E3
+	; ---- 9. final normalize ----
+	lda #$01 : sta @SS_CX4_WINDOW|$00F0
+	rtl                                    ; stays FROZEN until return_align
+
+; --- bounded wait for the freeze ack ($FE bit0). Exits with C=1 on timeout. ---
+ss_cx4_wait_frozen:
+	.as : .xl
+	ldx #$0000
+ss_cx4_wf_l:
+	lda @SS_CX4_WINDOW|$00FE
+	and #$01
+	bne ss_cx4_wf_ok
+	inx
+	cpx #$4000
+	bne ss_cx4_wf_l
+	sec
+	rts
+ss_cx4_wf_ok:
+	clc
+	rts
+
+; --- bounded wait for cx4_active ($00:7F53 bit6) to drop -------------------
+ss_cx4_busywait:
+	.as : .xl
+	ldx #$0000
+ss_cx4_bw_l:
+	lda @$007F53
+	and #$40
+	beq ss_cx4_bw_out
+	inx
+	cpx #$2000
+	bne ss_cx4_bw_l
+ss_cx4_bw_out:
+	rts

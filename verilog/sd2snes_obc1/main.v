@@ -493,18 +493,20 @@ end
 wire [7:0] rs_data = rs_pawr_end_r ? rs_data_r : SNES_DATA;
 
 // In-game cheat-overlay register shadow (regshadow.v).  The overlay restores the
-// PPU/CPU registers by reading a shadow of the last value written to each, through
-// the hook's identity window: $F90500-$F9057F (PPU regs, stride-2 words; high byte
-// $00) and $F90700-$F9071F (CPU $42xx regs, stride-1 bytes).  IS_PATCH gates the
-// reads to the active hook window only.
+// PPU/CPU registers by reading a shadow of the last value(s) written to each, through
+// the hook's identity window: $F90500-$F9057F (PPU regs, stride-2 words holding the
+// (1st write, 2nd write) pair) and $F90700-$F9071F (CPU $42xx regs, stride-1 bytes).
+// IS_PATCH gates the reads to the active hook window only.
 wire shadow_ppu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF905) & ~SNES_ADDR[7];         // $F90500-7F
 wire shadow_cpu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:5] == 3'b000); // $F90700-1F
 wire [7:0] regshadow_dout;
-// PPU reg = mem[0x00-0x3F] via SNES_ADDR[6:1] (stride-2); CPU reg = mem[0x40-0x5F]
-// via SNES_ADDR[4:0].  1-cycle BRAM read latency (like snescmd_buf); the address is
+// PPU pair = mem[0x00-0x7F] indexed straight by SNES_ADDR[6:0]: the even byte of a
+// stride-2 entry is the 1st write, the odd byte the 2nd (double-write regs are
+// reconstructed ctx.v-style inside regshadow.v).  CPU reg = mem[0x80-0x9F] via
+// SNES_ADDR[4:0].  1-cycle BRAM read latency (like snescmd_buf); the address is
 // stable for the whole ROM cycle so the value settles before the CPU samples it.
-wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0010, SNES_ADDR[4:0]}
-                                            : {3'b000,  SNES_ADDR[6:1]};
+wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0100, SNES_ADDR[4:0]}
+                                            : {2'b00,  SNES_ADDR[6:0]};
 regshadow snes_regshadow(
   .clk(CLK2),
   // PPU strobe = the ctx-style counter end (count==4 from write start).
@@ -581,10 +583,13 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                      :(cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
                      :((snescmd_unlock | feat_cmd_unlock) & snescmd_enable) ? snescmd_dout
                      // in-game overlay register shadow: $F90500 (PPU, stride-2) /
-                     // $F90700 (CPU $42xx) read-backs.  BOTH bytes of a stride-2 PPU
-                     // entry serve the same value: the restore loop double-writes each
-                     // register, so a $00 high byte would zero single-write regs
-                     // (BGMODE/TM/INIDISP -> backdrop-only screen, seen on SA-1 hw).
+                     // $F90700 (CPU $42xx) read-backs.  A stride-2 PPU entry is a PAIR,
+                     // not a duplicate: even byte = 1st write (prev), odd byte = 2nd
+                     // write (current), so the double-writing restore loop replays
+                     // scroll/mode-7 in the right order (ctx.v-style, see regshadow.v).
+                     // Single-write regs store (value, value), so the high byte is
+                     // never $00 (that zeroed BGMODE/TM/INIDISP -> backdrop-only
+                     // screen, seen on SA-1 hw).
                      :shadow_ppu_hit ? regshadow_dout
                      :shadow_cpu_hit ? regshadow_dout
                      :(ROM_ADDR0 ? ROM_DATA[7:0] : ROM_DATA[15:8])) : 8'bZ;

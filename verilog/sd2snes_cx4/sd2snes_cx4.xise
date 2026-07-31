@@ -35,6 +35,10 @@
       <association xil_pn:name="BehavioralSimulation" xil_pn:seqID="0"/>
       <association xil_pn:name="Implementation" xil_pn:seqID="13"/>
     </file>
+    <file xil_pn:name="dcm96.v" xil_pn:type="FILE_VERILOG">
+      <association xil_pn:name="BehavioralSimulation" xil_pn:seqID="0"/>
+      <association xil_pn:name="Implementation" xil_pn:seqID="13"/>
+    </file>
     <file xil_pn:name="main.v" xil_pn:type="FILE_VERILOG">
       <association xil_pn:name="BehavioralSimulation" xil_pn:seqID="0"/>
       <association xil_pn:name="Implementation" xil_pn:seqID="18"/>
@@ -512,7 +516,7 @@
     <property xil_pn:name="Variables window" xil_pn:value="false" xil_pn:valueState="default"/>
     <property xil_pn:name="Verilog" xil_pn:value="false" xil_pn:valueState="default"/>
     <property xil_pn:name="Verilog 2001 Xst" xil_pn:value="true" xil_pn:valueState="default"/>
-    <property xil_pn:name="Verilog Macros" xil_pn:value="MK2" xil_pn:valueState="non-default"/>
+    <property xil_pn:name="Verilog Macros" xil_pn:value="MK2 | REGSHADOW_1DEEP" xil_pn:valueState="non-default"/>
     <property xil_pn:name="Verilog Standard" xil_pn:value="Verilog 2001" xil_pn:valueState="default"/>
     <property xil_pn:name="Wait for DCI Match (Output Events) virtex2" xil_pn:value="Auto" xil_pn:valueState="default"/>
     <property xil_pn:name="Wait for DLL Lock (Output Events)" xil_pn:value="Default (NoWait)" xil_pn:valueState="default"/>

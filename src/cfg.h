@@ -132,7 +132,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_menu_sfx;         /* CFG @ $BB: menu navigation sound effects (MSU-1 DAC, /sd2snes/sfx_*.pcm) */
   uint8_t  bgm_name[128];           /* CFG @ $BC: full SD path of the chosen background-music .spc ("" = use /sd2snes/menu.spc fallback) */
   uint8_t  sort_favorites;          /* CFG @ $13C: show the Favorites list alphabetically (display-only; the .cfg keeps recency order) */
-  uint8_t  enable_cheat_overlay;    /* CFG @ $13D: in-game cheat overlay (pause via L+R+Y+Left to toggle cheats live). Forced off on special-chip games — the savestate machinery it reuses is unsupported there. */
+  uint8_t  enable_cheat_overlay;    /* CFG @ $13D: in-game cheat overlay (pause via L+R+Y+Left to toggle cheats live). This byte carries the user toggle only; the per-core gate is core_has_snapshot in savestate.c, which installs the handler carrying the probe. It runs on base, DSP1-4, SA-1, GSU, OBC1, S-DD1 and CX4 -- only SPC7110 and SGB still lack the machinery it reuses. */
   uint8_t  show_game_info;          /* CFG @ $13E: show the pre-boot game info screen (auto-skips when the ROM has no /sd2snes/info entry) */
   uint8_t  enable_wifi;             /* CFG @ $13F: RESERVED WiFi companion master switch (0=off). No ESP link in this branch; placed here (NOT $BD: that overlapped bgm_name @ $BC) so the future Companion port has no cfg-offset drift. */
   uint8_t  game_info_video;         /* CFG @ $140: play the animated .fmv clip on the game info screen (off -> static .gss snapshot) */

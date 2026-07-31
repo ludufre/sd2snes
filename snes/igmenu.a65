@@ -1641,6 +1641,13 @@ sc_write:
 	lda @sst_active
 	and #$7f                                   ; pure byte 1..4, NEVER bit7 (MCU busy flag)
 	sta @CS_SLOT                               ; $FE100F
+	; Writing CS_SLOT is the WHOLE job: it picks the slot the next save writes AND the
+	; one the next load restores. The load side used to ignore it because load_state
+	; replays whatever image the MCU last staged in PSRAM; load_state now compares
+	; CS_SLOT against SS_STAGED_SLOT and asks the MCU to stage the file if they differ
+	; (see snes/savestate.a65). We must NOT stage it from here: the overlay is open, and
+	; a .state load writes $F00000..$F4FFFF, i.e. straight over the overlay's own
+	; VRAM/CGRAM/register backups -- the exit restore would then paint that into the PPU.
 	rep #$30 : .al : .xl
 	plp
 	rts

@@ -205,7 +205,12 @@ void cheat_program_ram_cheat(int index, cheat_patch_record_t *cheat) {
 
 uint8_t cheat_rom_psram_mode(void) {
 #if defined(CONFIG_MK2)
-  return romprops.fpga_conf == FPGA_SA1;
+  /* Mk.II SA-1, GSU and CX4 cut their FPGA ROM-cheat comparators to fit (SA-1 for
+     the overlay, GSU and CX4 for the full savestate), so ROM cheats are applied to
+     the PSRAM image here instead. */
+  return romprops.fpga_conf == FPGA_SA1
+      || romprops.fpga_conf == FPGA_GSU
+      || romprops.fpga_conf == FPGA_CX4;
 #elif defined(CHEAT_PSRAM_FORCE_SA1)
   /* mk3 validation build: exercise the PSRAM path with the comparators idle */
   return romprops.fpga_conf == FPGA_SA1;
@@ -231,14 +236,29 @@ static int32_t cheat_rom_code_offset(uint32_t addr) {
       uint32_t blk = ((bank & 0x80) >> 6) | ((bank & 0x20) >> 5);
       off = (blk << 20) | ((bank & 0x1f) << 15) | (ofs & 0x7fff);
     } else return -1;
-  } else if(romprops.mapper_id == 1) {          /* HiROM */
+  } else if(romprops.fpga_conf == FPGA_GSU) {   /* GSU hybrid Lo/Hi map (address.v) */
+    if(bank & 0x40) {
+      /* $40-5F/$C0-DF:0000-FFFF -> SNES_ADDR[21:0]; $60-7D/$E0-FF are SAVERAM */
+      if((bank & 0x60) == 0x60) return -1;
+      off = addr & 0x3fffff;
+    } else {
+      /* $00-3F/$80-BF -> SNES_ADDR[14:0] (both halves); $6000-7FFF is SAVERAM */
+      if((ofs & 0xe000) == 0x6000) return -1;
+      off = ((bank & 0x7f) << 15) | (ofs & 0x7fff);
+    }
+  } else if(romprops.fpga_conf == FPGA_CX4) {   /* CX4: plain LoROM (cx4/address.v:79-80) */
+    /* offsets < $8000 are never ROM in this map: $6000-$7FFF is the CX4 MMIO
+       (address.v:91) and $70-$77:0000-$7FFF is SAVERAM (address.v:65). */
+    if(!(ofs & 0x8000)) return -1;
+    off = ((bank & 0x7f) << 15) | (ofs & 0x7fff);
+  } else if(romprops.mapper_id == 1) {          /* LoROM (smc.c sets mapper_id=1 for (Ex)LoROM) */
+    if(!(ofs & 0x8000)) return -1;
+    off = ((bank & 0x7f) << 15) | (ofs & 0x7fff);
+  } else if(romprops.mapper_id == 0) {          /* HiROM (smc.c sets mapper_id=0 for HiROM) */
     if(bank >= 0x40 && bank <= 0x7d) off = addr & 0x3fffff;
     else if(bank >= 0xc0)            off = addr & 0x3fffff;
     else if(!(bank & 0x40) && (ofs & 0x8000)) off = ((bank & 0x3f) << 16) | ofs;
     else return -1;
-  } else if(romprops.mapper_id == 0) {          /* LoROM */
-    if(!(ofs & 0x8000)) return -1;
-    off = ((bank & 0x7f) << 15) | (ofs & 0x7fff);
   } else return -1;                             /* ExHiROM/BSX: unsupported */
   return (int32_t)(off & mask);
 }

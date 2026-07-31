@@ -30,6 +30,8 @@ module cx4(
                       // FSMs) so it neither drifts nor contends the bus while the SNES
                       // CPU is frozen in the overlay.  Transparent -- state is held,
                       // resumes exactly on release ($202C, driven from main.v).
+  input SS_EN,        // savestate scan window active ($E8:00xx, offset = ADDR[7:0])
+  input RST,          // SNES reset strobe: drop any pending savestate halt/freeze
   input [7:0] BUS_DI,
   output [23:0] BUS_ADDR,
   output BUS_RRQ,
@@ -44,6 +46,39 @@ parameter BUSY_CACHE = 2'b00;
 parameter BUSY_DMA   = 2'b01;
 parameter BUSY_CPU   = 2'b10;
 assign cx4_busy_out = cx4_busy;
+
+/* ---------------------------------------------------------------------------
+   Savestate window ($E8:00xx) and freeze control.
+   Declared up here (before the first use, which is the CPU busy latch below)
+   because XST on mk2 requires declaration before use.  The freeze FSM itself
+   lives further down, where CPU_STATE/CACHE_ST/DMA_ST are already declared.
+   --------------------------------------------------------------------------- */
+reg        ss_halt_r;    initial ss_halt_r   = 1'b0;
+reg        ss_frozen_r;  initial ss_frozen_r = 1'b0;
+reg        ss_dirty_r;   initial ss_dirty_r  = 1'b0;
+reg  [7:0] ss_pre_r;     initial ss_pre_r    = 8'h00;    // timeout prescaler
+reg [13:0] ss_wait_r;    initial ss_wait_r   = 14'h0000;
+reg  [3:0] ss_settle_r;  initial ss_settle_r = 4'h0;
+reg  [7:0] ss_ridx_r;    initial ss_ridx_r   = 8'h00;    // $E4 readback index
+reg        ss_rd_r;      initial ss_rd_r     = 1'b0;
+reg  [7:0] SS_DOr;
+
+// The single CPU-core gate.  The overlay pause freezes the core exactly as
+// before; a REQUESTED but not yet reached savestate halt overrides the pause so
+// a mid-program CX4 can run to its stop point; once frozen the core is held
+// unconditionally.  Model: gsu.v:359-373.
+wire cx4_cpu_en = ~((pause & ~(ss_halt_r & ~ss_frozen_r)) | ss_frozen_r);
+
+wire ss_win     = SS_EN;
+wire SS_WR_EN   = ss_win & reg_we_rising;
+wire ss_norm    = SS_WR_EN & (ADDR[7:0] == 8'hf0);   // normalize pulse
+wire ss_commit  = SS_WR_EN & (ADDR[7:0] == 8'he3);   // commit staged cpu_idb
+wire [2:0] ss_cidx = DI[2:0];
+wire ss_pcs_wr  = SS_WR_EN & (ADDR[7:3] == 5'b00100);   // $20-$27 pc stack
+wire ss_core_wr = SS_WR_EN & ((ADDR[7:0] == 8'h14) | (ADDR[7:0] == 8'h15)
+                             |(ADDR[7:0] == 8'h16) | (ADDR[7:0] == 8'he0)
+                             |(ADDR[7:0] == 8'he1) | (ADDR[7:0] == 8'he2));
+wire ss_core_act = ss_rd_r | ss_norm | ss_commit | ss_pcs_wr | ss_core_wr;
 
 wire datram_enable = CS & (ADDR[11:0] < 12'hc00);
 wire mmio_enable = CS & (ADDR[12:5] == 8'b11111010) & (ADDR[4:0] < 5'b10011);
@@ -64,6 +99,10 @@ assign DO = datram_enable ? DATRAM_DO
             : status_enable ? STATUS_DO
             : vector_enable ? VECTOR_DOr
             : gpr_enable ? GPR_DOr
+            // savestate window LAST: every enable above needs CS (0 in $E8), so
+            // this is functionally the same as putting it first, but it keeps the
+            // DATRAM_DO path (the CX4 sprite DMA source) one mux level shorter.
+            : ss_win ? SS_DOr
             : 8'h00;
 
 /* 0x1f40 - 0x1f52: MMIO
@@ -279,6 +318,17 @@ always @(posedge CLK) begin
     CACHE_TRIG_ENr <= 1'b0;
     DMA_TRIG_ENr <= 1'b0;
     cpu_go_en_r <= 1'b0;
+    // savestate window restore, in the else arm on purpose: the three clears
+    // above are one-shot strobes that MUST keep firing every non-MMIO clock.
+    // MMIO_WR_EN ($00:7F4x) and SS_WR_EN ($E8:00xx) are different SNES cycles
+    // and never coincide.  Both writes are side-effect free: $18 does NOT kick a
+    // cache fill and $19 does NOT latch pagemem (those are replayed natively).
+    if(SS_WR_EN) begin
+      case(ADDR[7:0])
+        8'h18: cx4_mmio_cachepage <= DI[0];
+        8'h19: cx4_mmio_savepage <= DI[1:0];
+      endcase
+    end
   end
 end
 
@@ -374,6 +424,10 @@ always @(posedge CLK) begin
       end
     end
   endcase
+  // savestate window ($17): invalidate the cache so the restore's native replay
+  // actually refills both pages.  Runs last in this block so it overrides the
+  // chain above -- stalling this FSM for a cycle mid-fill would corrupt the burst.
+  if(SS_WR_EN & (ADDR[7:0] == 8'h17)) cachevalid <= DI[1:0];
 end
 
 reg cx4_dma_datram_we;
@@ -498,12 +552,18 @@ reg op_jump;
 reg condtrue;
 reg mul_strobe = 0;
 
-always @(posedge CLK) if(~pause) begin
-  if(cpu_go_en_r) cx4_busy[BUSY_CPU] <= 1'b1;
-  else if(op == OP_HLT) cx4_busy[BUSY_CPU] <= 1'b0;
+// savestate normalize ($F0): a dirty freeze can leave BUSY_CPU stuck at 1, which
+// saturates every busywait the handler does afterwards.  Only this bit, and only
+// in its owning block.
+always @(posedge CLK) begin
+  if(ss_norm) cx4_busy[BUSY_CPU] <= 1'b0;
+  else if(cx4_cpu_en) begin
+    if(cpu_go_en_r) cx4_busy[BUSY_CPU] <= 1'b1;
+    else if(op == OP_HLT) cx4_busy[BUSY_CPU] <= 1'b0;
+  end
 end
 
-always @(posedge CLK) if(~pause) begin
+always @(posedge CLK) if(cx4_cpu_en) begin
   case(op_sa)
     2'b00: cpu_sa <= cpu_a;
     2'b01: cpu_sa <= cpu_a << 1;
@@ -515,7 +575,74 @@ end
 reg jp_docache;
 initial jp_docache = 1'b0;
 
-always @(posedge CLK) if(~pause) begin
+// cpu_pc_stack keeps ONE write port and ONE read port, both address-muxed with the
+// savestate window, so the distributed-RAM inference survives (8 scalar wires would
+// cost +64 FF and a decoder/mux).  Safe because the window only reads while frozen,
+// when the native consumer (OP_RT in ST_CPU_1) is stopped.
+wire [2:0] pcs_waddr = ss_pcs_wr ? ADDR[2:0] : cpu_sp;
+wire [7:0] pcs_wdata = ss_pcs_wr ? DI        : (cpu_pc + 8'd1);
+wire [2:0] pcs_raddr = ss_frozen_r ? ADDR[2:0] : (cpu_sp - 3'd1);
+wire [7:0] pcs_rdata = cpu_pc_stack[pcs_raddr];
+
+// Savestate readback mux ($E4).  DEDICATED and small on purpose: it carries only
+// the 5 registers the handler asks for, and deliberately does NOT reuse the native
+// register-file read.  Hoisting that read out of the clocked body turned the
+// variable-index gpr[]/constrom[] lookups into a huge ASYNCHRONOUS logic mux --
+// measured +834 LUTs in MAP on mk2 (106% overmapped) plus register duplication
+// under the congestion.  Inside the clocked case the same reads fold into the case
+// structure and cost nothing.  gpr and constrom are never readback targets anyway:
+// the handler reads them through their native $00:7F80-$7FAF / ISA space.
+wire [23:0] ss_idb_rd = (ss_ridx_r == 8'h00) ? cpu_a
+                      : (ss_ridx_r == 8'h08) ? cpu_romdata
+                      : (ss_ridx_r == 8'h0c) ? cpu_ramdata
+                      : (ss_ridx_r == 8'h13) ? cpu_busaddr
+                      : (ss_ridx_r == 8'h1c) ? cpu_ramaddr
+                      : 24'b0;
+
+always @(posedge CLK) begin
+  if(ss_core_act) begin
+    /* ---- savestate window arm: runs while the core is FROZEN, so it has to
+       SUPPRESS the native body rather than live inside it (cx4_cpu_en is 0
+       there).  Every register touched here is owned by this block. ---- */
+    if(ss_rd_r) cpu_idb <= ss_idb_rd;                     // $E4 readback select
+    if(ss_pcs_wr) cpu_pc_stack[pcs_waddr] <= pcs_wdata;   // $20-$27
+    if(ss_core_wr) begin
+      case(ADDR[7:0])
+        8'h14: cpu_page_stack <= DI;
+        8'h15: cpu_sp <= DI[2:0];
+        8'h16: begin fl_n <= DI[0]; fl_z <= DI[1]; fl_c <= DI[2]; end
+        8'he0: cpu_idb[7:0] <= DI;                        // staging lanes
+        8'he1: cpu_idb[15:8] <= DI;
+        8'he2: cpu_idb[23:16] <= DI;
+      endcase
+    end
+    if(ss_commit) begin
+      case(ss_cidx)
+        3'd0: cpu_a <= cpu_idb;
+        3'd1: cpu_romdata <= cpu_idb;
+        3'd2: cpu_ramdata <= cpu_idb;
+        3'd3: cpu_busaddr <= cpu_idb;
+        3'd4: cpu_ramaddr <= cpu_idb;
+        default: ;                  // 5 = multiplier latch, owned by the mul block
+      endcase
+    end
+    if(ss_norm) begin
+      // park the core at the canonical boundary: with op != OP_HLT the busy bit
+      // sticks, cpu_cache_en kicks spurious fills (the cache FSM is not frozen),
+      // cpu_bus_rq starves the handler at the arbiter and cx4_cpu_datram_we
+      // rewrites a data RAM byte every clock.
+      CPU_STATE <= ST_CPU_IDLE;
+      op <= OP_HLT;
+      cpu_wait <= 8'h00;
+      condtrue <= 1'b0;
+      jp_docache <= 1'b0;
+      cpu_cache_en <= 1'b0;
+      mul_strobe <= 1'b0;
+      cpu_bus_rq <= 1'b0;
+      cx4_cpu_datram_we <= 1'b0;
+    end
+  end
+  else if(cx4_cpu_en) begin
   mul_strobe <= 1'b0;
   case(CPU_STATE)
     ST_CPU_IDLE: begin
@@ -631,7 +758,7 @@ always @(posedge CLK) if(~pause) begin
             if(condtrue) begin
               if(op_call) begin
                 cpu_page_stack[cpu_sp] <= cpu_page;
-                cpu_pc_stack[cpu_sp] <= cpu_pc + 1;
+                cpu_pc_stack[pcs_waddr] <= pcs_wdata;
                 cpu_sp <= cpu_sp + 1;
               end
               cpu_pc <= op_param;
@@ -645,7 +772,7 @@ always @(posedge CLK) if(~pause) begin
         end
         OP_RT: begin
           cpu_page <= cpu_page_stack[cpu_sp - 1];
-          cpu_pc <= cpu_pc_stack[cpu_sp - 1];
+          cpu_pc <= pcs_rdata;
           cpu_sp <= cpu_sp - 1;
         end
         OP_WAI: if(BUS_RDY) cpu_pc <= cpu_pc + 1;
@@ -838,6 +965,7 @@ always @(posedge CLK) if(~pause) begin
       else CPU_STATE <= ST_CPU_0;
     end
   endcase
+  end
 end
 
 reg[2:0] BUSRD_STATE;
@@ -848,7 +976,12 @@ initial BUSRD_STATE = ST_BUSRD_IDLE;
 reg cpu_bus_rq2;
 always @(posedge CLK) cpu_bus_rq2 <= cpu_bus_rq;
 
-always @(posedge CLK) if(~pause) begin
+// No savestate arm here: BUSRD_STATE is stuck-at-END by construction (nothing ever
+// leaves ST_BUSRD_END), so cpu_busdata is reloaded from BUS_DI on every enabled
+// clock and restoring it would be a no-op.  For the same reason BUSRD_STATE is kept
+// OUT of the freeze predicate -- including it would stop the freeze from ever
+// converging after the game's first OP_BUS.
+always @(posedge CLK) if(cx4_cpu_en) begin
   if(CPU_STATE == ST_CPU_2
      && (op == OP_ST || op == OP_SWP)
      && op_param == 8'h03)
@@ -872,24 +1005,145 @@ always @(posedge CLK) if(~pause) begin
   end
 end
 
-// gpr write, either by CPU or by MMIO
-always @(posedge CLK) if(~pause) begin
-  if(CPU_STATE == ST_CPU_2
+// gpr write, either by CPU or by MMIO.  The MMIO arm relaxes the gate so the
+// savestate restore can write the 48 GPR bytes while frozen -- it uses the NATIVE
+// $00:7F80-$7FAF addresses ($E8 does not decode GPR, CS is 0 there), so no second
+// write port is needed.
+always @(posedge CLK) begin
+  if(cx4_cpu_en & CPU_STATE == ST_CPU_2
           && (op == OP_ST || op == OP_SWP)
           && (op_param[7:4] == 4'h6)) begin
     gpr[op_param[3:0]*3+2] <= cpu_idb[23:16];
     gpr[op_param[3:0]*3+1] <= cpu_idb[15:8];
     gpr[op_param[3:0]*3] <= cpu_idb[7:0];
   end
-  else if(GPR_WR_EN) gpr[ADDR[5:0]] <= DI;
+  else if(GPR_WR_EN & (cx4_cpu_en | ss_frozen_r)) gpr[ADDR[5:0]] <= DI;
 end
 
 // external multiplier
-always @(posedge CLK) if(~pause) begin
-  if(mul_strobe) begin
+always @(posedge CLK) begin
+  // savestate commit 5 ($E3): this IS the native mul_strobe path, so restoring
+  // cpu_mul_a/cpu_mul_b costs enable terms only.
+  if(ss_commit & (ss_cidx == 3'd5)) begin
     cpu_mul_a <= cpu_a;
     cpu_mul_b <= cpu_idb;
   end
+  else if(cx4_cpu_en) begin
+    if(mul_strobe) begin
+      cpu_mul_a <= cpu_a;
+      cpu_mul_b <= cpu_idb;
+    end
+  end
+end
+
+/***************************
+ ======== SAVESTATE ========
+ ***************************/
+// $E4: latch the readback index and pulse ss_rd_r for one clock; the CPU block
+// loads cpu_idb from ss_idb_rd on the next edge, where the SNES then reads it back
+// through $00-$02.  The index is the NATIVE op_param encoding (see the handler).
+always @(posedge CLK) begin
+  ss_rd_r <= 1'b0;
+  if(SS_WR_EN & (ADDR[7:0] == 8'he4)) begin
+    ss_ridx_r <= DI;
+    ss_rd_r <= 1'b1;
+  end
+end
+
+// Freeze predicate.  Compared with == on purpose: XST/Quartus re-encode FSMs by
+// default, so a one-hot bit test would survive compilation while silently meaning
+// something else.  BUSRD_STATE is deliberately absent (stuck-at-END, see above).
+wire ss_idle_w = ~|cx4_busy
+               & (CPU_STATE == ST_CPU_IDLE)
+               & (CACHE_ST  == ST_CACHE_IDLE)
+               & (DMA_ST    == ST_DMA_IDLE)
+               & ~CACHE_TRIG_ENr & ~CACHE_TRIG_EN2r & ~DMA_TRIG_ENr & ~cpu_go_en_r;
+
+// Halt protocol (window $FE bit0, same semantics as the GSU/SA-1 cores): on a halt
+// request let the CX4 run to its stop point, then hold it frozen after a 16-cycle
+// settle (covers both CACHE_TRIG stages).  A saturating timeout -- prescaler 8 bits
+// + counter 14 bits = ~45.9ms @80MHz, split in two short carry chains to help
+// placement on the nearly full mk2 -- freezes anyway and latches ss_dirty_r (sticky
+// until the next halt request): a dirty capture may lose one in-flight CX4 program.
+// ss_frozen_r is monotonic while halted, so the restore's cache replay (which wakes
+// CACHE_ST again) does not thaw the core.
+always @(posedge CLK) begin
+  if(RST) begin
+    ss_halt_r <= 1'b0; ss_frozen_r <= 1'b0; ss_dirty_r <= 1'b0;
+    ss_pre_r <= 8'h00; ss_wait_r <= 14'h0000; ss_settle_r <= 4'h0;
+  end
+  else begin
+    // halt control write: this block is not pause-gated, so the request lands
+    // while the core still runs
+    if(SS_WR_EN & (ADDR[7:0] == 8'hfe)) begin
+      ss_halt_r <= DI[0];
+      if(DI[0]) begin
+        ss_dirty_r <= 1'b0; ss_pre_r <= 8'h00; ss_wait_r <= 14'h0000; ss_settle_r <= 4'h0;
+      end
+    end
+    if(~ss_halt_r) begin
+      ss_frozen_r <= 1'b0; ss_pre_r <= 8'h00; ss_wait_r <= 14'h0000; ss_settle_r <= 4'h0;
+    end else if(~ss_frozen_r) begin
+      if(ss_idle_w) begin
+        if(&ss_settle_r) ss_frozen_r <= 1'b1;
+        else             ss_settle_r <= ss_settle_r + 1'b1;
+      end else begin
+        ss_settle_r <= 4'h0;
+        if(&ss_wait_r[13:11]) begin
+          ss_frozen_r <= 1'b1;
+          ss_dirty_r <= 1'b1;
+        end else begin
+          ss_pre_r <= ss_pre_r + 1'b1;
+          if(&ss_pre_r) ss_wait_r <= ss_wait_r + 1'b1;
+        end
+      end
+    end
+  end
+end
+
+// Read the arrays through scalar wires so the window mux never indexes a 2D array
+// where XST (mk2) chokes; cpu_pc_stack is NOT unrolled this way -- it goes through
+// the single pcs_rdata port to keep its RAM inference.
+wire [14:0] ss_ctag0 = cachetag[0];
+wire [14:0] ss_ctag1 = cachetag[1];
+wire [14:0] ss_pmem0 = cx4_mmio_pagemem[0];
+wire [14:0] ss_pmem1 = cx4_mmio_pagemem[1];
+
+// Window read mux.  Registered like MMIO_DOr/VECTOR_DOr/GPR_DOr: SNES_ADDR is
+// stable for many CLK cycles before the read strobe, so no new combinational path
+// reaches SNES_DATA.  Offsets not listed read $00 and ignore writes.
+always @(posedge CLK) begin
+  casex(ADDR[7:0])
+    8'h00: SS_DOr <= cpu_idb[7:0];        // readback of the register picked by $E4
+    8'h01: SS_DOr <= cpu_idb[15:8];
+    8'h02: SS_DOr <= cpu_idb[23:16];
+    8'h04: SS_DOr <= cpu_mul_a[7:0];
+    8'h05: SS_DOr <= cpu_mul_a[15:8];
+    8'h06: SS_DOr <= cpu_mul_a[23:16];
+    8'h08: SS_DOr <= cpu_mul_b[7:0];
+    8'h09: SS_DOr <= cpu_mul_b[15:8];
+    8'h0a: SS_DOr <= cpu_mul_b[23:16];
+    8'h0c: SS_DOr <= ss_ctag0[7:0];
+    8'h0d: SS_DOr <= {1'b0, ss_ctag0[14:8]};
+    8'h0e: SS_DOr <= ss_ctag1[7:0];
+    8'h0f: SS_DOr <= {1'b0, ss_ctag1[14:8]};
+    8'h10: SS_DOr <= ss_pmem0[7:0];
+    8'h11: SS_DOr <= {1'b0, ss_pmem0[14:8]};
+    8'h12: SS_DOr <= ss_pmem1[7:0];
+    8'h13: SS_DOr <= {1'b0, ss_pmem1[14:8]};
+    8'h14: SS_DOr <= cpu_page_stack;
+    8'h15: SS_DOr <= {5'b0, cpu_sp};
+    8'h16: SS_DOr <= {5'b0, fl_c, fl_z, fl_n};
+    8'h17: SS_DOr <= {6'b0, cachevalid};
+    8'h18: SS_DOr <= {7'b0, cx4_mmio_cachepage};
+    8'h19: SS_DOr <= {6'b0, cx4_mmio_savepage};
+    // diag: bit4 = dirty capture, bits 3:1 = cx4_busy, bit0 = frozen
+    8'h1a: SS_DOr <= {3'b0, ss_dirty_r, cx4_busy[2], cx4_busy[1], cx4_busy[0], ss_frozen_r};
+    8'b00100xxx: SS_DOr <= pcs_rdata;     // $20-$27 cpu_pc_stack, single port
+    8'hfe: SS_DOr <= {7'b0, ss_frozen_r}; // halt status
+    8'hff: SS_DOr <= 8'h5c;               // magic
+    default: SS_DOr <= 8'h00;             // incl. the $03/$07/$0B/$1B-$1F pad lanes
+  endcase
 end
 
 /***************************

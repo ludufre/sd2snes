@@ -1027,6 +1027,12 @@ void assert_reset() {
 
 void init(uint8_t *filename) {
   snescmd_prepare_nmihook();
+  /* ResetPatch coexists with in-game savestates: the "resume lands on the
+     title" bug once blamed on the live reset-hook body was really a STALE
+     CS_STATE ($FE100C, PSRAM survives resets/power-cycles) making the resume
+     wait fall through early -- fixed by zeroing it on every game load in
+     savestate_program().  Probed on hardware: with the body live, 5/5 clean
+     resumes and the reset-loop path never fires during a resume. */
   if (CFG.reset_patch) snescmd_writebyte(0, SNESCMD_RESET_HOOK+1);
   cheat_yaml_load(filename);
 // XXX    cheat_yaml_save(filename);

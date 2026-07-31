@@ -193,3 +193,4 @@ A608: 0000F6,2140 # Wayne's World (US)
 FF49: 0000D4,2143 # Wings 2 - Aces High (US)
 1B63: 000200,2143 # Wolf Child (US)
 788C: 001E84,2140 # Chrono Trigger (US)
+3BB4: 7E1D15,2141 # super mario rpg (US) - resync the sound dispatcher's expected-echo counter (DP $1D00+$15) with the live APU port so the CMP/BNE wait at CODE_C4003E can't deadlock after a load

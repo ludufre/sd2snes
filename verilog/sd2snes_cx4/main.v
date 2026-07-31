@@ -193,6 +193,7 @@ wire free_slot = (SNES_PULSE_end | free_strobe) & ~SD_DMA_TO_ROM;
 
 wire ROM_HIT;
 wire IS_PATCH;   // hook identity window ($C0-FF while snescmd unlocked) -- overlay
+wire cx4_ss_enable;  // savestate scan window ($E8:00xx while snescmd unlocked)
 
 assign DCM_RST=0;
 
@@ -422,6 +423,7 @@ address snes_addr(
   //CX4
   .cx4_enable(cx4_enable),
   .cx4_vect_enable(cx4_vect_enable),
+  .cx4_ss_enable(cx4_ss_enable),
   //region
   .r213f_enable(r213f_enable),
   //brightness fix
@@ -465,6 +467,8 @@ cx4 snes_cx4 (
   .reg_we_rising(SNES_WR_end),
   .CLK(CLK2),
   .pause(snapshot_pause),
+  .SS_EN(cx4_ss_enable),
+  .RST(SNES_reset_strobe),
   .BUS_DI(CX4_DINr),
   .BUS_ADDR(CX4_ADDR),
   .BUS_RRQ(CX4_RRQ),
@@ -555,18 +559,37 @@ end
 wire [7:0] rs_data = rs96_pawr_end_r ? rs96_data_r : SNES_DATA;
 
 // In-game cheat-overlay register shadow (regshadow.v).  The overlay restores the
-// PPU/CPU registers by reading a shadow of the last value written to each, through
-// the hook's identity window: $F90500-$F9057F (PPU regs, stride-2 words; high byte
-// $00) and $F90700-$F9071F (CPU $42xx regs, stride-1 bytes).  IS_PATCH gates the
-// reads to the active hook window only.
+// PPU/CPU registers by reading a shadow of the last value(s) written to each, through
+// the hook's identity window: $F90500-$F9057F (PPU regs, stride-2 words holding the
+// (1st write, 2nd write) pair) and $F90700-$F9071F (CPU $42xx regs, stride-1 bytes).
+// IS_PATCH gates the reads to the active hook window only.
 wire shadow_ppu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF905) & ~SNES_ADDR[7];         // $F90500-7F
 wire shadow_cpu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:5] == 3'b000); // $F90700-1F
 wire [7:0] regshadow_dout;
-// PPU reg = mem[0x00-0x3F] via SNES_ADDR[6:1] (stride-2); CPU reg = mem[0x40-0x5F]
-// via SNES_ADDR[4:0].  1-cycle BRAM read latency (like snescmd_buf); the address is
+// PPU pair = mem[0x00-0x7F] indexed straight by SNES_ADDR[6:0]: the even byte of a
+// stride-2 entry is the 1st write, the odd byte the 2nd (double-write regs are
+// reconstructed ctx.v-style inside regshadow.v).  CPU reg = mem[0x80-0x9F] via
+// SNES_ADDR[4:0].  1-cycle BRAM read latency (like snescmd_buf); the address is
 // stable for the whole ROM cycle so the value settles before the CPU samples it.
+//
+// The serve MUST match the BRAM layout regshadow.v actually built, so it carries the
+// same REGSHADOW_1DEEP gate: this core's mk2 build falls back to the pre-fix 1-deep
+// shadow (the 2-deep netlist misses timing on the Spartan-3 and parks the savestate
+// load -- full story at the gate in regshadow.v), and there the PPU regs live at
+// mem[0x00-0x3F] with stride-2 addresses halved, CPU at mem[0x40-0x5F].  Getting
+// these two out of step reads the wrong cells with no build error at all.
+//
+// NB the SNES side needs no change either way: dropping SNES_ADDR[0] folds both
+// bytes of a stride-2 word onto the same cell, so under 1DEEP a word read serves
+// (v,v) -- exactly the pre-fix behaviour the overlay's double-writing restore loop
+// was written against.  The overlay keeps reading $F90500 + 2*reg in both builds.
+`ifdef REGSHADOW_1DEEP
 wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0010, SNES_ADDR[4:0]}
                                             : {3'b000,  SNES_ADDR[6:1]};
+`else
+wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0100, SNES_ADDR[4:0]}
+                                            : {2'b00,  SNES_ADDR[6:0]};
+`endif
 regshadow snes_regshadow(
   // Entirely in the 96 MHz snoop domain (see above): the write snoop needs the
   // base-calibrated sampling; the read side's address is quasi-static during the
@@ -641,6 +664,9 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                                 & ~(r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE))
                      ? (msu_enable ? MSU_SNES_DATA_OUT
                        :cx4_enable ? CX4_SNES_DATA_OUT
+                       // savestate scan window ($E8:00xx while unlocked): served by
+                       // the CX4 window mux, ahead of the PSRAM identity serve.
+                       :cx4_ss_enable ? CX4_SNES_DATA_OUT
                        // Overlay vector redirect wins over the CX4 vector override
                        // ($FFE0-$FFFF): suppress CX4 while the cheat provides the
                        // redirected vector (~cheat_hit) or the hook executes from the
@@ -650,8 +676,13 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
                        :(cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
                        :(snescmd_unlock | feat_cmd_unlock) & snescmd_enable ? snescmd_dout
                        // in-game overlay register shadow: $F90500 (PPU, stride-2) /
-                       // $F90700 (CPU $42xx) read-backs (both bytes serve the same
-                       // value; the restore loop double-writes each register).
+                       // $F90700 (CPU $42xx) read-backs.  A stride-2 PPU entry is a
+                       // PAIR, not a duplicate: even byte = 1st write (prev), odd byte
+                       // = 2nd write (current), so the overlay's double-writing restore
+                       // replays scroll/mode-7 in the right order (ctx.v-style, see
+                       // regshadow.v).  Single-write regs store (value, value), so the
+                       // high byte is never $00 (that zeroed BGMODE/TM/INIDISP ->
+                       // backdrop-only screen, seen on SA-1 hw).
                        :shadow_ppu_hit ? regshadow_dout
                        :shadow_cpu_hit ? regshadow_dout
                        :(ROM_ADDR0 ? ROM_DATA[7:0] : ROM_DATA[15:8])
@@ -684,6 +715,18 @@ my_dcm snes_dcm(
   .CLKIN(CLKIN),
   .CLKFX(CLK2),
   .LOCKED(DCM_LOCKED),
+  .RST(DCM_RST)
+);
+// Second DCM (Mk.II only) drives the 96 MHz snoop clock for the overlay register
+// shadow.  CLK2 runs at 80 MHz for CX4 cycle fidelity, but the bus-snoop shift
+// patterns and the count==4 write-capture point are calibrated for 96 MHz; without
+// this the rs96_* machinery and regshadow would be clocked by a dead net and the
+// shadow would restore garbage into the PPU/CPU registers on overlay exit.  On the
+// Mk.III this same 96 MHz comes from the PLL's .c1 output (see the pll instance).
+my_dcm96 snes_dcm96(
+  .CLKIN(CLKIN),
+  .CLKFX(CLK96),
+  .LOCKED(),
   .RST(DCM_RST)
 );
 assign ROM_ADDR  = (SD_DMA_TO_ROM) ? MCU_ADDR[23:1] : MCU_HIT ? ROM_ADDRr[23:1] : CX4_HIT ? CX4_ADDRr[23:1] : MAPPED_SNES_ADDR[23:1];
@@ -802,8 +845,24 @@ always @(posedge CLK2) begin
       // has nothing pending (its CPU is frozen and can't issue new fetches), fall
       // through to the MCU/SNES path so USB/MCU PSRAM access doesn't starve for the
       // whole overlay session behind a frozen-busy cx4_active.
+      //
+      // Hook window (snescmd_unlock): the CX4 grant MUST be free_slot-gated.
+      // ST_CX4_RD_ADDR takes the PSRAM address bus away from the SNES for 17 CLK2
+      // (CX4_HIT muxes ROM_ADDR/ROM_ADDR0 -- and ROM_1CE/ROM_2CE on mk3 -- to
+      // CX4_ADDRr, :687/:745-747/:708-709) while SNES_DATA is combinational off
+      // ROM_DATA (:664).  A page fill spends ~17 of every ~20 clocks in that state,
+      // so ~85% of the SNES read windows return the CX4's fill byte instead of the
+      // opcode.  Games survive it because they wait out cx4_active from WRAM and
+      // never touch the cart while a fill runs; the savestate/overlay handler
+      // CANNOT -- it executes from PSRAM through the IS_PATCH window ($C0-$FF), so
+      // the restore's cache replay corrupted its own instruction stream and the
+      // S-CPU derailed on the very next fetch after `sta $7F48` (seen in HW).
+      // Same class as the GSU's RON starvation (gsu/main.v:249,:657,:888): grant
+      // only in a free slot while unlocked, i.e. at SNES_PULSE_end, the same phase
+      // the MCU path has always used.  Outside the hook this is bit-for-bit the old
+      // behaviour, so gameplay fills and the overlay-pause drain are untouched.
       if(cx4_active & (CX4_RD_PENDr | ~snapshot_pause)) begin
-        if (CX4_RD_PENDr) begin
+        if (CX4_RD_PENDr & (~snescmd_unlock | free_slot | SNES_DEADr)) begin
           STATE <= ST_CX4_RD_ADDR;
           ST_MEM_DELAYr <= 16;
         end

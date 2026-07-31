@@ -18,9 +18,14 @@ D17C: XR,XL     #dkc1 v1.1 (US)
 35CE: XR,XL     #dkc2 (JP)
 B28C: XR,XL     #dkc3 (US)
 E545: XR,XL     #dkc3 (JP)
+5E32: XR,XL     #yoshi's island (US rev 1) - Start pauses the game, so the default combo saves a paused state
 F8DF: sYR,sYL   #super metroid (*)
 #A0DA: XR,XL    #smw (US)
 #8C80: XR,XL    #smw (JP)
 33C2: SR,SL     #soe (US)
-0C17: AR,AL     #super valis (US)
+E4CC: AR,AL     #super valis IV (US) - was 0C17, which collided with dkc1 v1.0 (JP) and never matched
 5B4C: AR,AL     #super valis (JP)
+4CC2: XR,XL     #mega man x v1.1 (US) - Start opens the pause/weapon menu, so the default combo pauses on every save
+09B7: XR,XL     #mega man x2 (US) - same
+4055: XR,XL     #mega man x3 (US) - same
+F930: XR,XL     #star fox (US rev 2) - Start pauses (and quits training), so the default combo leaked; X only toggles the camera view

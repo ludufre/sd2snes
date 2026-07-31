@@ -51,12 +51,27 @@ reg irq_enable = 0;
 reg holdoff_enable = 0; // temp disable hooks after reset
 reg buttons_enable = 0;
 reg wram_present = 0;
-// In-game cheat overlay: route the NMI/IRQ hook to the savestate handler
-// (nmi_savestate) so the overlay probe (L+R+Y+Left) can run.  The overlay never
-// loadstates, so savestate_force_entry is a constant 0 (mirrors sd2snes_sa1); the
-// full force-entry latch machinery of the base core is unneeded here.
+// Full in-game save/load states run on this core (Mk.II and Mk.III): the CX4 is
+// halted through the $E8:00xx savestate window while the handler captures/restores
+// it.  That needs the base core's force-entry latch: the resume-wait protocol
+// requires the NEXT hook entry to bump CS_STATE after the saveinputloop forced a
+// button release -- without it the stub branches to nmi_exit and the game parks
+// black forever (same lesson as the SA-1/GSU/OBC1 ports).  savestate_force_entry
+// keeps the nmi_savestate branch routed while a savestate is in flight with the
+// buttons RELEASED.  Pulse-latched: set at a branch1 fetch with buttons held,
+// cleared at the unlock-drop.  Only flip-flops, so it builds the same on mk2/mk3.
 reg savestate_enable = 0;
-wire savestate_force_entry = 1'b0;
+reg savestate_force_entry_enable_strobe = 0;
+reg savestate_force_entry_disable_strobe = 0;
+reg savestate_force_entry = 0;
+
+always @(posedge clk) begin
+  if(savestate_force_entry_enable_strobe) begin
+    savestate_force_entry <= 1'b1;
+  end else if(savestate_force_entry_disable_strobe) begin
+    savestate_force_entry <= 1'b0;
+  end
+end
 wire branch_wram = cheat_enable & wram_present;
 
 reg auto_nmi_enable = 1;
@@ -80,8 +95,12 @@ wire vector_unlock = |vector_unlock_r;
 reg [1:0] reset_unlock_r = 2'b10;
 wire reset_unlock = |reset_unlock_r;
 
+// ROM-cheat comparators: mk3 only.  On mk2 ROM cheats are patched into PSRAM by
+// the MCU, so these 6 comparators (-131 LUTs) are dropped to fit the savestate.
+`ifndef MK2
 reg [23:0] cheat_addr[5:0];
 reg [7:0] cheat_data[5:0];
+`endif
 reg [5:0] cheat_enable_mask;
 
 reg snescmd_unlock_r = 0;
@@ -96,12 +115,17 @@ reg [7:0] branch3_offset = 8'h04;
 
 reg [15:0] pad_data = 0;
 
+`ifndef MK2
 wire [5:0] cheat_match_bits ={(cheat_enable_mask[5] & (SNES_ADDR == cheat_addr[5])),
                               (cheat_enable_mask[4] & (SNES_ADDR == cheat_addr[4])),
                               (cheat_enable_mask[3] & (SNES_ADDR == cheat_addr[3])),
                               (cheat_enable_mask[2] & (SNES_ADDR == cheat_addr[2])),
                               (cheat_enable_mask[1] & (SNES_ADDR == cheat_addr[1])),
                               (cheat_enable_mask[0] & (SNES_ADDR == cheat_addr[0]))};
+`else
+// mk2: no ROM-cheat comparators (MCU patches ROM cheats into PSRAM) -> fold away.
+wire [5:0] cheat_match_bits = 6'h00;
+`endif
 wire cheat_addr_match = |cheat_match_bits;
 
 wire [1:0] nmi_match_bits = {SNES_ADDR == 24'h00FFEA, SNES_ADDR == 24'h00FFEB};
@@ -114,13 +138,17 @@ wire rst_addr_match = |rst_match_bits;
 
 wire hook_enable = ~|hook_enable_count;
 
-assign data_out = cheat_match_bits[0] ? cheat_data[0]
+assign data_out =
+`ifndef MK2
+                  cheat_match_bits[0] ? cheat_data[0]
                 : cheat_match_bits[1] ? cheat_data[1]
                 : cheat_match_bits[2] ? cheat_data[2]
                 : cheat_match_bits[3] ? cheat_data[3]
                 : cheat_match_bits[4] ? cheat_data[4]
                 : cheat_match_bits[5] ? cheat_data[5]
-                : nmi_match_bits[1] ? 8'h10
+                :
+`endif
+                  nmi_match_bits[1] ? 8'h10
                 : irq_match_bits[1] ? 8'h10
                 : rst_match_bits[1] ? 8'h7D
                 : nmicmd_enable ? nmicmd
@@ -202,6 +230,8 @@ always @(posedge clk) begin
     snescmd_unlock_r <= 0;
     snescmd_unlock_disable <= 0;
   end else begin
+    savestate_force_entry_enable_strobe <= 0;
+    savestate_force_entry_disable_strobe <= 0;
     if(SNES_rd_strobe) begin
       // *** GAME -> INGAME HOOK ***
       if(hook_enable_sync
@@ -211,9 +241,20 @@ always @(posedge clk) begin
         // remember where we came from (IRQ/NMI) for hook exit
         return_vector <= SNES_ADDR[7:0];
         snescmd_unlock_r <= 1;
+        // clear unlock countdown if we are entering the snescmd region.  this is to
+        // avoid a prior snescmd lock countdown re-locking before we are done
+        snescmd_unlock_disable <= 0;
+        snescmd_unlock_disable_countdown <= 0;
       end
-      if(rst_match_bits[1] & |reset_unlock_r) begin
+      else if(rst_match_bits[1] & |reset_unlock_r) begin
         snescmd_unlock_r <= 1;
+        snescmd_unlock_disable <= 0;
+        snescmd_unlock_disable_countdown <= 0;
+      end
+      // arm the savestate force-entry latch when the hook redirect is taken with
+      // buttons held; it holds the nmi_savestate route through the button release.
+      if(branch1_enable & savestate_enable & |pad_data) begin
+        savestate_force_entry_enable_strobe <= 1;
       end
     end
     // give some time to exit snescmd memory and jump to original vector
@@ -227,6 +268,8 @@ always @(posedge clk) begin
         end else if(snescmd_unlock_disable_countdown == 0) begin
           snescmd_unlock_r <= 0;
           snescmd_unlock_disable <= 0;
+          // drop the force-entry latch at the same unlock-drop point
+          savestate_force_entry_disable_strobe <= 1;
         end
       end
     end
@@ -302,10 +345,13 @@ always @(posedge clk) begin
         snescmd_unlock_disable_strobe <= 1'b1;
       end
     end else if(pgm_we) begin
-      if(pgm_idx < 6) begin
+`ifndef MK2
+      if(pgm_idx < 6) begin // mk3 ROM-cheat comparators (dropped on mk2)
         cheat_addr[pgm_idx] <= pgm_in[31:8];
         cheat_data[pgm_idx] <= pgm_in[7:0];
-      end else if(pgm_idx == 6) begin // set rom patch enable
+      end else
+`endif
+      if(pgm_idx == 6) begin // set rom patch enable
         cheat_enable_mask <= pgm_in[5:0];
       end else if(pgm_idx == 7) begin // set/reset global enable / hooks
       // pgm_in[14:8] are reset bit flags

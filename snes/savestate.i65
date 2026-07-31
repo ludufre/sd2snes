@@ -12,11 +12,18 @@
 #define CS_INPUT_CUR  $FE1008
 #define CS_INPUT_PREV $FE100A
 #define CS_STATE      $FE100C
+#define SS_DIAG_REJECT $FF0C00
 #define CS_DELAY      $FE100E
 #define CS_SLOT       $FE100F
 #define CS_SLOT_INPUT $FE1010
 #define CS_CTRL       $FE1012
 #define CS_FIXES      $FE1014
+// CS_SA1_LOAD: nonzero = the SA-1 restore block below load_dma_regs_start runs
+// (LOAD path only; on SAVE the SA-1 never left the frozen capture state, so
+// rewriting it is pure risk).  Lives in the free byte after CS_CTRL: the fix
+// CODE from savestate_fixes.yml is emitted from $FE1014 (CS_FIXES) upward, so
+// anything at/above $FE1014 gets clobbered by it (learned the hard way).
+#define CS_SA1_LOAD   $FE1013
 
 #define SS_CODE       $FC0000 ; should be unused
 #define SS_DATA       $FC2000 ; should be unused
