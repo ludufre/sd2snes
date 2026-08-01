@@ -1269,7 +1269,7 @@ show_menu_editvalue:
     ; CFG_LANGUAGE so show_menu_cont's relang check fires only on a real commit.
     sep #$20 : .as
     lda @CFG_LANGUAGE
-    cmp #$05
+    cmp #$06
     bcc +
     lda #$00
 +   sta cur_lang

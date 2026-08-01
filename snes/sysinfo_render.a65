@@ -1,0 +1,983 @@
+; Renderer for the System Information screen, plus the two cheat-list strings that
+; used to be composed by the firmware.
+;
+; WHY THIS EXISTS: the MCU used to carry a full table of localized sysinfo lines (five
+; languages) and print them into SYSINFO_BLK as finished text.  That table cost more
+; program flash than the Mk.II has to spare.  Now the MCU publishes a small BINARY
+; block (SI2, see memmap.i65) and the MENU formats the 13 lines from templates that
+; live in the language pool it already ships.  A template is an ordinary localized
+; string in which the bytes $02..$16 are PLACEHOLDERS: si_fmt_tbl maps each one to a
+; formatter plus the field it reads.  Placeholders start at $02 because hiprint (and
+; strlen) treat BOTH $00 and $01 as end-of-string.
+;
+; WHY $C1: the $C0 page has a few hundred bytes left and this object is several KB.
+; Only tiny `jsr X : rtl` trampolines live in $C0 so we can reach the menu routines we
+; need (gi_call_hiprint in gameinfo.a65, ui_call_resolve in ui.a65).
+;
+; ENTRY POINTS (all jsl, all self-contained -- they force DP=0 and DB=$7E because a
+; menu FUNC runs with DP != 0 and every [ptr],y read here depends on DP=0):
+;   si_render_reset  - clear the "no magic yet" grace counter (screen entry)
+;   si_render_all    - draw the whole screen from SYSINFO_BLK
+;   cm_compose_title - build the cheat-menu window title into cm_title_buf
+;   ovl_fill_noname  - stage the localized "(no name)" for the IN-GAME cheat list
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+; '.link page' wins and they emit no bytes).  Same pattern as manhost.a65.
+.link page $c1
+
+#define SI_COLS         40
+#define SI_FMT_N        21
+#define SI_MODEL_ROW    13
+#define CM_TITLE_MAX    46
+
+; ======================================================================
+;  si_render_reset -- called once when the screen opens.
+; ======================================================================
+si_render_reset:
+  php
+  phb
+  sep #$20 : .as
+  lda #$7e
+  pha
+  plb
+  stz si_nomagic
+  plb
+  plp
+  .as : .xl
+  rtl
+
+; ======================================================================
+;  si_render_all -- draw all 13 lines.  Called once per refresh pass from
+;  show_sysinfo, right after the MCU has acknowledged CMD_SYSINFO.
+; ======================================================================
+si_render_all:
+  php
+  phb
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb
+  ; si_line borrows longptr, the menu's general-purpose direct-page long pointer, so
+  ; save and put back whatever the caller had in it: this entry point has to be a black
+  ; box for every screen that ever calls it, not just for today's caller.
+  lda longptr+2
+  pha
+  rep #$20 : .al
+  lda longptr
+  pha
+  sep #$20 : .as
+  ; The magic is re-checked on EVERY pass and BEFORE any field is read: an older
+  ; firmware writes 13 lines of legacy TEXT into this same region, and rendering that
+  ; as binary values would put garbage on screen.
+  lda @SYSINFO_BLK+SI2_MAGIC0
+  cmp #$53
+  bne si_ra_nomagic
+  lda @SYSINFO_BLK+SI2_MAGIC1
+  cmp #$49
+  bne si_ra_nomagic
+  lda @SYSINFO_BLK+SI2_VERSION
+  cmp #$01
+  bcc si_ra_nomagic
+  stz si_nomagic
+  lda @SYSINFO_BLK+SI2_FLAGS
+  sta si_flags
+  jsr si_draw_block
+  bra si_ra_out
+si_ra_nomagic:
+  ; The block only appears after the first command round trip, so stay blank for a
+  ; moment before concluding that the firmware is too old to publish it at all.
+  lda si_nomagic
+  cmp #SI_GRACE_FRAMES
+  bcs si_ra_oldfw
+  inc si_nomagic
+  jsr si_draw_empty
+  bra si_ra_out
+si_ra_oldfw:
+  jsr si_draw_oldfw
+si_ra_out:
+  ; longptr first (it is direct-page, so DP must still be 0 and DB still $7E here),
+  ; then unwind php/phb/phd in LIFO order: pld, plb, plp.
+  rep #$20 : .al
+  pla
+  sta longptr
+  sep #$20 : .as
+  pla
+  sta longptr+2
+  pld
+  plb
+  plp
+  .as : .xl
+  rtl
+
+; ----------------------------------------------------------------------
+;  si_draw_block -- the real layout.  Fixed rows, so a branch never shifts
+;  the lines below it (the old renderer's "SD removed" path wrote one line
+;  fewer than the normal one and pushed everything up a row).
+;  Entry/exit .as/.xl, DB=$7E, DP=0, si_flags already cached.
+; ----------------------------------------------------------------------
+si_draw_block:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz si_row
+  ; row 0: firmware version, or the notice that the card usage is still being computed
+  lda si_flags
+  and #SI2_F_FS_BUSY
+  beq si_db_fw
+  lda #^text_si_busy
+  ldx #!text_si_busy
+  bra si_db_row0
+si_db_fw:
+  lda #^text_si_fw
+  ldx #!text_si_fw
+si_db_row0:
+  jsr si_line
+  jsr si_flush
+  ; row 1: blank
+  jsr si_blank
+  jsr si_flush
+  ; rows 2-7: the SD card block, the "removed" notice on row 4, or six blank rows.
+  ; SI2_F_FS_BUSY means the MCU published the block BEFORE counting the free space, so
+  ; every card field is still zero -- and zeros here read as real data (a 0 MB card,
+  ; serial 00000000), not as an obvious placeholder. Row 0 already says what is going on.
+  lda si_flags
+  and #SI2_F_SD_GONE
+  bne si_db_gone
+  lda si_flags
+  and #SI2_F_FS_BUSY
+  beq si_db_sd
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jmp si_db_tail
+si_db_gone:
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  lda #^text_si_removed
+  ldx #!text_si_removed
+  jsr si_line
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jsr si_blank
+  jsr si_flush
+  jmp si_db_tail
+si_db_sd:
+  lda #^text_si_maker
+  ldx #!text_si_maker
+  jsr si_line
+  jsr si_flush
+  lda #^text_si_product
+  ldx #!text_si_product
+  jsr si_line
+  jsr si_flush
+  lda #^text_si_serial
+  ldx #!text_si_serial
+  jsr si_line
+  jsr si_flush
+  lda si_flags
+  and #SI2_F_ACC_MEAS
+  beq si_db_acc
+  lda #^text_si_accmeas
+  ldx #!text_si_accmeas
+  bra si_db_acc_go
+si_db_acc:
+  lda #^text_si_acc
+  ldx #!text_si_acc
+si_db_acc_go:
+  jsr si_line
+  jsr si_flush
+  lda #^text_si_usage
+  ldx #!text_si_usage
+  jsr si_line
+  jsr si_flush
+  lda #^text_si_sgb
+  ldx #!text_si_sgb
+  jsr si_line
+  jsr si_flush
+si_db_tail:
+  ; row 8: blank
+  jsr si_blank
+  jsr si_flush
+  ; row 9: CIC state (the MCU sends the state name as a ready-made English string)
+  lda #^text_si_cic
+  ldx #!text_si_cic
+  jsr si_line
+  jsr si_flush
+  ; row 10: SNES master clock
+  lda si_flags
+  and #SI2_F_CLK_MEAS
+  beq si_db_clk
+  lda #^text_si_clkmeas
+  ldx #!text_si_clkmeas
+  bra si_db_clk_go
+si_db_clk:
+  lda #^text_si_clk
+  ldx #!text_si_clk
+si_db_clk_go:
+  jsr si_line
+  jsr si_flush
+  ; row 11: Ultra16, only when one answered
+  lda si_flags
+  and #SI2_F_U16
+  beq si_db_nou16
+  lda si_flags
+  and #SI2_F_U16_BOOT
+  beq si_db_u16off
+  lda #^text_si_u16on
+  ldx #!text_si_u16on
+  bra si_db_u16_go
+si_db_u16off:
+  lda #^text_si_u16off
+  ldx #!text_si_u16off
+si_db_u16_go:
+  jsr si_line
+  bra si_db_u16_flush
+si_db_nou16:
+  jsr si_blank
+si_db_u16_flush:
+  jsr si_flush
+  ; the hardware model sits one row LOWER than the block would put it, because
+  ; show_sysinfo prints the CPU/PPU line in between (that is where it has always been)
+  lda #SI_MODEL_ROW
+  sta si_row
+  lda #^text_si_model
+  ldx #!text_si_model
+  jsr si_line
+  jsr si_flush
+  plp
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  si_draw_empty -- 12 blank rows plus the model row.  Used while waiting
+;  for the firmware's first publish.
+; ----------------------------------------------------------------------
+si_draw_empty:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz si_row
+si_de_loop:
+  jsr si_blank
+  jsr si_flush
+  lda si_row
+  cmp #$0c
+  bcc si_de_loop
+  lda #SI_MODEL_ROW
+  sta si_row
+  jsr si_blank
+  jsr si_flush
+  plp
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  si_draw_oldfw -- same, but row 4 says the firmware is too old to feed
+;  this screen.  That line is localized, which is the whole point of the
+;  grace period: the message only makes sense once we are sure.
+; ----------------------------------------------------------------------
+si_draw_oldfw:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz si_row
+si_do_loop:
+  lda si_row
+  cmp #$04
+  beq si_do_msg
+  jsr si_blank
+  bra si_do_flush
+si_do_msg:
+  lda #^text_si_updatefw
+  ldx #!text_si_updatefw
+  jsr si_line
+si_do_flush:
+  jsr si_flush
+  lda si_row
+  cmp #$0c
+  bcc si_do_loop
+  lda #SI_MODEL_ROW
+  sta si_row
+  jsr si_blank
+  jsr si_flush
+  plp
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  si_blank -- fill si_linebuf with SI_COLS spaces.
+;  Entry/exit .as/.xl, DB=$7E.
+; ----------------------------------------------------------------------
+si_blank:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+  lda #$20
+si_blank_loop:
+  sta !si_linebuf, x
+  inx
+  cpx #SI_COLS
+  bne si_blank_loop
+  plp
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  si_flush -- print si_linebuf at layout row si_row, then advance si_row.
+;  Rows land at (sysinfo_win_x+2, sysinfo_win_y+2+si_row).
+;  Entry/exit .as/.xl, DB=$7E, DP=0.
+; ----------------------------------------------------------------------
+si_flush:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  sta print_bank
+  ldx #!si_linebuf
+  stx print_src
+  stz print_pal
+  lda #SI_COLS
+  sta print_count
+  lda @sysinfo_win_x
+  clc
+  adc #$02
+  sta print_x
+  lda @sysinfo_win_y
+  clc
+  adc #$02
+  clc
+  adc si_row
+  sta print_y
+  jsl @gi_call_hiprint
+  inc si_row
+  plp
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  si_line -- compose one line from a localized TEMPLATE.
+;  Entry: A (8-bit) = template bank, X (16-bit) = template address.
+;         DB=$7E, DP=0, .as/.xl.  Exit .as/.xl.
+;  The line starts as SI_COLS spaces, so whatever the template does not fill stays
+;  blank and anything that would run past the last column is simply dropped.
+; ----------------------------------------------------------------------
+si_line:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  sta print_bank
+  stx print_src
+  jsl @ui_call_resolve
+  jsr si_blank
+  rep #$20 : .al
+  lda #$0000
+  sta si_col
+  ; [longptr],y needs a pointer in the DIRECT page, and DP is 0 here, so use longptr --
+  ; the menu's general-purpose one.  The jsl entry point saved the caller's value and
+  ; puts it back, and the one formatter that needs a pointer of its own (si_f_word)
+  ; saves ours across its own use.
+  lda print_src
+  sta longptr
+  sep #$20 : .as
+  lda print_bank
+  sta longptr+2
+  ldy #$0000
+si_line_loop:
+  lda [longptr], y
+  beq si_line_done
+  iny
+  cmp #$20
+  bcs si_line_lit
+  phy
+  jsr si_dispatch
+  ply
+  bra si_line_loop
+si_line_lit:
+  jsr si_emit
+  bra si_line_loop
+si_line_done:
+  plp
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  si_emit -- append the glyph in A to si_linebuf while there is room.
+;  Entry/exit .as/.xl, DB=$7E.  Preserves X and Y.
+; ----------------------------------------------------------------------
+si_emit:
+  phx
+  pha
+  rep #$20 : .al
+  lda si_col
+  cmp #SI_COLS
+  bcs si_emit_full
+  tax
+  inc
+  sta si_col
+  sep #$20 : .as
+  pla
+  sta !si_linebuf, x
+  plx
+  rts
+si_emit_full:
+  sep #$20 : .as
+  pla
+  plx
+  rts
+
+; ----------------------------------------------------------------------
+;  si_dispatch -- run the formatter for placeholder code A ($02..$16).
+;  Entry/exit .as/.xl, DB=$7E, DP=0.  An unknown code emits nothing (that also
+;  covers $01, which can never appear because hiprint would stop there anyway).
+;  Table entry: .word routine : .word SYSINFO_BLK offset : .byt parameter.
+; ----------------------------------------------------------------------
+si_dispatch:
+  php
+  rep #$30 : .al : .xl
+  and #$00ff
+  sec
+  sbc #$0002
+  cmp #SI_FMT_N
+  bcs si_dispatch_out
+  sta si_off
+  asl
+  asl
+  clc
+  adc si_off
+  tax
+  lda @si_fmt_tbl+2, x
+  sta si_off
+  lda @si_fmt_tbl+4, x
+  and #$00ff
+  sta si_param
+  ; (abs,X) indirect reads the routine address out of the PROGRAM bank, which is ours.
+  jsr (si_fmt_tbl, x)
+si_dispatch_out:
+  plp
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  Formatters.  All run .al/.xl, read the field at SYSINFO_BLK+si_off with the
+;  parameter in si_param, and append through si_emit.
+; ----------------------------------------------------------------------
+
+; si_f_str: NUL-terminated string, at most si_param characters.
+si_f_str:
+  php
+  rep #$30 : .al : .xl
+  ldx si_off
+  ldy #$0000
+si_f_str_loop:
+  cpy si_param
+  bcs si_f_str_done
+  sep #$20 : .as
+  lda @SYSINFO_BLK, x
+  beq si_f_str_end
+  jsr si_emit
+  rep #$30 : .al : .xl
+  inx
+  iny
+  bra si_f_str_loop
+si_f_str_end:
+  rep #$30 : .al : .xl
+si_f_str_done:
+  plp
+  .al : .xl
+  rts
+
+; si_f_chars: EXACTLY si_param characters; a control byte becomes '.' (the CID fields
+; are raw bytes from the card and may hold anything).
+si_f_chars:
+  php
+  rep #$30 : .al : .xl
+  ldx si_off
+  ldy #$0000
+si_f_chars_loop:
+  cpy si_param
+  bcs si_f_chars_done
+  sep #$20 : .as
+  lda @SYSINFO_BLK, x
+  cmp #$20
+  bcs si_f_chars_ok
+  lda #$2e
+si_f_chars_ok:
+  jsr si_emit
+  rep #$30 : .al : .xl
+  inx
+  iny
+  bra si_f_chars_loop
+si_f_chars_done:
+  plp
+  .al : .xl
+  rts
+
+; si_f_hex: si_param BYTES as two lowercase hex digits each, in ascending address
+; order.  A digit table, not "adc #$30": that only covers 0-9.
+si_f_hex:
+  php
+  rep #$30 : .al : .xl
+  ldx si_off
+  ldy #$0000
+si_f_hex_loop:
+  cpy si_param
+  bcs si_f_hex_done
+  sep #$20 : .as
+  lda @SYSINFO_BLK, x
+  pha
+  lsr
+  lsr
+  lsr
+  lsr
+  jsr si_hexdig
+  pla
+  jsr si_hexdig
+  rep #$30 : .al : .xl
+  inx
+  iny
+  bra si_f_hex_loop
+si_f_hex_done:
+  plp
+  .al : .xl
+  rts
+
+; si_hexdig: append the low nibble of A as a hex digit.  Entry/exit .as/.xl.
+; The 16-bit `and` before the tax is the standard guard: with X 16 bits wide, tax
+; would otherwise carry the hidden high byte of A into the index.
+si_hexdig:
+  phx
+  rep #$20 : .al
+  and #$000f
+  tax
+  sep #$20 : .as
+  lda @si_hextab, x
+  jsr si_emit
+  plx
+  rts
+
+; si_f_dec: decimal number.  si_param high nibble = field width in BYTES (1, 2 or 4),
+; low nibble = minimum digit count (zero padded; 0 = natural).  Done with a software
+; divide by ten: bin2dec16 in $C0 is 16-bit only and the SNES master clock needs 8
+; digits.
+si_f_dec:
+  php
+  rep #$30 : .al : .xl
+  lda #$0000
+  sta si_acc
+  sta si_acc+2
+  ldx si_off
+  lda si_param
+  and #$00f0
+  cmp #$0010
+  bne si_f_dec_w2
+  sep #$20 : .as
+  lda @SYSINFO_BLK, x
+  rep #$30 : .al : .xl
+  and #$00ff
+  sta si_acc
+  bra si_f_dec_conv
+si_f_dec_w2:
+  cmp #$0040
+  beq si_f_dec_w4
+  lda @SYSINFO_BLK, x
+  sta si_acc
+  bra si_f_dec_conv
+si_f_dec_w4:
+  lda @SYSINFO_BLK, x
+  sta si_acc
+  lda @SYSINFO_BLK+2, x
+  sta si_acc+2
+si_f_dec_conv:
+  lda #$0000
+  sta si_nd
+si_f_dec_digit:
+  jsr si_div10
+  lda si_rem
+  clc
+  adc #$0030
+  ldx si_nd
+  sep #$20 : .as
+  sta !si_dig, x
+  rep #$30 : .al : .xl
+  inc si_nd
+  lda si_acc
+  ora si_acc+2
+  bne si_f_dec_digit
+si_f_dec_pad:
+  lda si_nd
+  cmp #$000c
+  bcs si_f_dec_emit
+  lda si_param
+  and #$000f
+  cmp si_nd
+  bcc si_f_dec_emit
+  beq si_f_dec_emit
+  ldx si_nd
+  sep #$20 : .as
+  lda #$30
+  sta !si_dig, x
+  rep #$30 : .al : .xl
+  inc si_nd
+  bra si_f_dec_pad
+si_f_dec_emit:
+  ldx si_nd
+si_f_dec_out:
+  dex
+  sep #$20 : .as
+  lda !si_dig, x
+  jsr si_emit
+  rep #$30 : .al : .xl
+  cpx #$0000
+  bne si_f_dec_out
+  plp
+  .al : .xl
+  rts
+
+; si_div10: si_acc (32-bit) /= 10, remainder -> si_rem.  Restoring long division; the
+; quotient bits shift into the low end of si_acc as the dividend leaves it.
+si_div10:
+  php
+  rep #$30 : .al : .xl
+  lda #$0000
+  sta si_rem
+  ldx #$0020
+si_div10_loop:
+  asl si_acc
+  rol si_acc+2
+  rol si_rem
+  lda si_rem
+  cmp #$000a
+  bcc si_div10_next
+  sbc #$000a
+  sta si_rem
+  inc si_acc
+si_div10_next:
+  dex
+  bne si_div10_loop
+  plp
+  .al : .xl
+  rts
+
+; si_f_word: the localized SGB BIOS state word, chosen by the canonical state byte.
+; The four labels are reached through LONG pointers rather than plain addresses: a
+; label whose translations all collapse onto English is emitted as a language-NEUTRAL
+; string in bank $C0, outside the $C1 pool, so its bank is not known here.
+; si_line's template cursor lives in longptr while a formatter runs, so save it.
+si_f_word:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda longptr+2
+  pha
+  rep #$20 : .al
+  lda longptr
+  pha
+  sep #$20 : .as
+  lda @SYSINFO_BLK+SI2_SGB_STATE
+  cmp #$04
+  bcc si_f_word_ok
+  lda #$00
+si_f_word_ok:
+  rep #$30 : .al : .xl
+  and #$00ff
+  asl
+  asl
+  tax
+  lda @si_sgb_tbl, x
+  sta print_src
+  lda @si_sgb_tbl+2, x
+  sep #$20 : .as
+  sta print_bank
+  jsl @ui_call_resolve
+  jsr si_copy_str
+  rep #$20 : .al
+  pla
+  sta longptr
+  sep #$20 : .as
+  pla
+  sta longptr+2
+  plp
+  .al : .xl
+  rts
+
+; si_copy_str: append the NUL-terminated string at print_bank:print_src to the line.
+; Entry/exit .as/.xl, DB=$7E, DP=0.  Clobbers longptr (the caller saved it).
+si_copy_str:
+  php
+  rep #$30 : .al : .xl
+  lda print_src
+  sta longptr
+  sep #$20 : .as
+  lda print_bank
+  sta longptr+2
+  ldy #$0000
+si_copy_str_loop:
+  lda [longptr], y
+  beq si_copy_str_done
+  jsr si_emit
+  iny
+  cpy #SI_COLS
+  bne si_copy_str_loop
+si_copy_str_done:
+  plp
+  .as : .xl
+  rts
+
+; ======================================================================
+;  cm_compose_title -- cheat-menu window title.
+;  A v2 firmware writes CHEAT_TITLE as $02 + the bare ROM basename, with no prefix and
+;  no clipping, and the menu owns both the localized "Cheats for " and the clip.  An
+;  older firmware left a ready-made printable title there, which is used as is.
+;  jsl from cheatmenu_open_window ($C0); sets window_tbank / window_taddr.
+; ======================================================================
+cm_compose_title:
+  php
+  phb
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb
+  ; same black-box rule as si_render_all: the compose path below borrows longptr.
+  lda longptr+2
+  pha
+  rep #$20 : .al
+  lda longptr
+  pha
+  sep #$20 : .as
+  lda @CHEAT_TITLE
+  cmp #$02
+  beq cm_ct_compose
+  lda #$d8
+  sta window_tbank
+  ldx #$0000
+  stx window_taddr
+  bra cm_ct_out
+cm_ct_compose:
+  rep #$20 : .al
+  lda #$0000
+  sta si_col
+  sep #$20 : .as
+  lda #^text_cheat
+  sta print_bank
+  ldx #!text_cheat
+  stx print_src
+  jsl @ui_call_resolve
+  rep #$20 : .al
+  lda print_src
+  sta longptr
+  sep #$20 : .as
+  lda print_bank
+  sta longptr+2
+  ldy #$0000
+cm_ct_prefix:
+  lda [longptr], y
+  beq cm_ct_name
+  jsr cm_put
+  iny
+  cpy #CM_TITLE_MAX
+  bne cm_ct_prefix
+cm_ct_name:
+  ldx #$0000
+cm_ct_name_loop:
+  lda @CHEAT_TITLE+1, x
+  beq cm_ct_name_done
+  jsr cm_put
+  inx
+  rep #$20 : .al
+  lda si_col
+  cmp #CM_TITLE_MAX
+  sep #$20 : .as
+  bcc cm_ct_name_loop
+  ; out of room with characters still to come -> end with the two ellipsis glyphs
+  ldx #(CM_TITLE_MAX-2)
+  lda #127
+  sta !cm_title_buf, x
+  inx
+  lda #128
+  sta !cm_title_buf, x
+  inx
+  bra cm_ct_term
+cm_ct_name_done:
+  rep #$30 : .al : .xl
+  ldx si_col
+  sep #$20 : .as
+cm_ct_term:
+  lda #$00
+  sta !cm_title_buf, x
+  lda #$7e
+  sta window_tbank
+  ldx #!cm_title_buf
+  stx window_taddr
+cm_ct_out:
+  ; longptr first (direct-page: DP still 0, DB still $7E), then php/phb/phd in LIFO
+  ; order -- pld, plb, plp. The legacy path branches here without having touched
+  ; longptr, which just restores the same value.
+  rep #$20 : .al
+  pla
+  sta longptr
+  sep #$20 : .as
+  pla
+  sta longptr+2
+  pld
+  plb
+  plp
+  .as : .xl
+  rtl
+
+; cm_put: append A to cm_title_buf while there is room.  Entry/exit .as/.xl, DB=$7E.
+; Preserves X and Y.
+cm_put:
+  phx
+  pha
+  rep #$20 : .al
+  lda si_col
+  cmp #CM_TITLE_MAX
+  bcs cm_put_full
+  tax
+  inc
+  sta si_col
+  sep #$20 : .as
+  pla
+  sta !cm_title_buf, x
+  plx
+  rts
+cm_put_full:
+  sep #$20 : .as
+  pla
+  plx
+  rts
+
+; ======================================================================
+;  ovl_fill_noname -- stage the localized "(no name)" placeholder into
+;  OVL_NONAME_BUF for the in-game cheat list (cheatlist.i65 only reads it).
+;
+;  This runs IN GAME, so it must not touch WRAM: $7E belongs to the running game.
+;  That rules out resolve_str (which works through print_src/print_bank in WRAM), so
+;  the dispatch table is indexed here by hand, exactly the way resolve_str does it.
+;  Registers only: X is the destination index (long,X reaches PSRAM from any DB) and Y
+;  walks the source under DB = the source bank.
+;  jsl from cheatoverlay.a65's init, before the first list paint.
+; ======================================================================
+ovl_fill_noname:
+  php
+  phb
+  rep #$30 : .al : .xl
+  ldy #!text_cheat_noname
+  sep #$20 : .as
+  lda #^text_cheat_noname
+  cmp #^strtab_lo
+  bne ovl_fnn_have
+  ; a dispatch table: pick the column for CFG.language, clamped to the columns the
+  ; build actually emitted (past the last one means English, like resolve_str)
+  lda @CFG_LANGUAGE
+  cmp @strtab_nlang
+  bcc ovl_fnn_lang_ok
+  lda #$00
+ovl_fnn_lang_ok:
+  rep #$30 : .al : .xl
+  and #$00ff
+  asl
+  clc
+  adc #!text_cheat_noname
+  tax
+  sep #$20 : .as
+  lda #^strtab_lo
+  pha
+  plb
+  rep #$20 : .al
+  lda !0, x
+  tay
+  sep #$20 : .as
+  bra ovl_fnn_copy_init
+ovl_fnn_have:
+  pha
+  plb
+ovl_fnn_copy_init:
+  ldx #$0000
+ovl_fnn_copy:
+  lda !0, y
+  beq ovl_fnn_term
+  sta @OVL_NONAME_BUF, x
+  iny
+  inx
+  cpx #(OVL_NONAME_MAX-1)
+  bne ovl_fnn_copy
+ovl_fnn_term:
+  lda #$00
+  sta @OVL_NONAME_BUF, x
+  plb
+  plp
+  .as : .xl
+  rtl
+
+; ======================================================================
+;  Tables.  Data only -- never fallen into (every routine above returns).
+; ======================================================================
+
+si_hextab .byt "0123456789abcdef"
+
+; si_fmt_tbl[code - $02] = routine, SYSINFO_BLK offset, parameter.
+; The parameter is a character count for si_f_str / si_f_chars, a BYTE count for
+; si_f_hex, and for si_f_dec the field width in bytes (high nibble) plus the minimum
+; digit count (low nibble).  KEEP IN SYNC with the placeholder bytes used by the
+; text_si_* templates in const.a65 -- build_const.py enforces that every translation
+; carries the same multiset of placeholders as the English base, but nothing checks
+; that a template's placeholder means what this table says it does.
+si_fmt_tbl:
+  .word si_f_str   : .word SI2_FW_STR         : .byt 24   ; $02 firmware version
+  .word si_f_hex   : .word SI2_SD_MAKER       : .byt 1    ; $03 card manufacturer id
+  .word si_f_chars : .word SI2_SD_OEM         : .byt 2    ; $04 OEM id
+  .word si_f_chars : .word SI2_SD_PRODUCT     : .byt 5    ; $05 product name
+  .word si_f_dec   : .word SI2_SD_REV_MAJ     : .byt $10  ; $06 revision, major
+  .word si_f_dec   : .word SI2_SD_REV_MIN     : .byt $10  ; $07 revision, minor
+  .word si_f_hex   : .word SI2_SD_SERIAL      : .byt 4    ; $08 serial number
+  .word si_f_dec   : .word SI2_SD_MFD_YEAR    : .byt $20  ; $09 manufacturing year
+  .word si_f_dec   : .word SI2_SD_MFD_MONTH   : .byt $12  ; $0a ...month, two digits
+  .word si_f_dec   : .word SI2_TACC_AVG_INT   : .byt $20  ; $0b access time, avg ms
+  .word si_f_dec   : .word SI2_TACC_AVG_FRAC  : .byt $23  ; $0c ...fraction, three digits
+  .word si_f_dec   : .word SI2_TACC_MAX_INT   : .byt $20  ; $0d access time, max ms
+  .word si_f_dec   : .word SI2_TACC_MAX_FRAC  : .byt $23  ; $0e ...fraction, three digits
+  .word si_f_dec   : .word SI2_CARD_USED_MB   : .byt $40  ; $0f card usage, used MB
+  .word si_f_dec   : .word SI2_CARD_TOTAL_MB  : .byt $40  ; $10 ...total MB
+  .word si_f_dec   : .word SI2_SGB_VER        : .byt $10  ; $11 SGB BIOS version
+  .word si_f_word  : .word SI2_SGB_STATE      : .byt 0    ; $12 SGB BIOS state word
+  .word si_f_str   : .word SI2_CIC_STR        : .byt 28   ; $13 CIC state name
+  .word si_f_dec   : .word SI2_SNES_CLK_HZ    : .byt $40  ; $14 SNES master clock
+  .word si_f_dec   : .word SI2_U16_SERIAL     : .byt $20  ; $15 Ultra16 serial number
+  .word si_f_str   : .word SI2_MODEL_STR      : .byt 28   ; $16 hardware model
+  ; si_dispatch reads the parameter with a 16-bit load, so the last entry needs one
+  ; byte of padding after it.
+  .byt 0
+
+; si_sgb_tbl[state] = 24-bit pointer, padded to four bytes so the index is two shifts.
+si_sgb_tbl:
+  .word !text_si_sgb_checking : .byt ^text_si_sgb_checking, 0
+  .word !text_si_sgb_missing  : .byt ^text_si_sgb_missing,  0
+  .word !text_si_sgb_mismatch : .byt ^text_si_sgb_mismatch, 0
+  .word !text_si_sgb_ok       : .byt ^text_si_sgb_ok,       0

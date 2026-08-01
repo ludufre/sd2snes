@@ -70,7 +70,9 @@ igmenu_header:
 #define sst_scr_slot    $F48170    ; transient: slot 1..4 being drawn/recoloured (locates the row)
 #define sst_scr_coff    $F48172    ; transient: generic 2nd arg (i18n token index / SAVEINFO offset)
 #define sst_scr_entry   $F48174    ; transient: generic 3rd arg (end column / guide count)
-#define sst_idx         $F48176    ; transient: string index scratch (sst_copy/sst_strlen)
+#define sst_idx         $F48176    ; FREE. Was the string-index scratch the old `*5` row
+                                   ; arithmetic needed; the power-of-two stride indexes
+                                   ; with shifts alone, so nothing writes here anymore.
                                    ; (all within the reserved $F48160-7F gap, ends $F48177)
 
 ; --- tab bar i18n scratch (same reserved gap, AFTER sst_idx; transient, only live during
@@ -368,6 +370,10 @@ igm_pos_kept:
 	;     zeroes it on every open BEFORE its first list paint, so this must be set before ours.
 	;     A BYTE store: $F482E9 is deliberately unallocated (the reader does a 16-bit lda). ---
 	lda #$01 : sta @OVL_CUR_OFF
+	; --- restage the localized "(no name)" in OUR language table: the $C1 overlay
+	;     already staged its own copy, but the shell owns every list paint from here on
+	;     and must not depend on which host ran first. ---
+	jsr igm_fill_noname
 	rep #$30 : .al : .xl
 	jsr ig_theme_init                        ; THEME: menu gradient/palettes + the BAR infrastructure
 	                                         ;   (falls back to ig_init_palettes' baked palettes when
@@ -990,6 +996,45 @@ ig_master_clear:
 	plp
 	rts
 
+; ---- stage the localized "(no name)" the shared cheat list draws for a cheat whose
+;      YAML carries no name. The firmware sends an EMPTY CHEAT_NAMES entry for those and
+;      cheatlist.i65 (shared source, no host symbols) reads the string from
+;      OVL_NONAME_BUF, so each host stages it in its own language before the first paint.
+;      Same shape as help_enter: CFG.language from the CFG BSRAM mirror, clamped, then
+;      one NUL-terminated font-encoded run out of igmenu_lang.i65 (bank $C2). ----
+igm_fill_noname:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb                       ; DBR=$F4 (OVL_NONAME_A abs,Y stores)
+	lda @CFG_LANGUAGE                           ; CFG.language 0=EN..4=FR ($FF01B7)
+	cmp #IGM_LANG_COUNT
+	bcc ifn_lang_ok
+	lda #$00                                    ; out of range -> English (column 0)
+ifn_lang_ok:
+	rep #$30 : .al : .xl
+	and #$00ff
+	asl                                        ; igm_cheats_tbl has ONE line -> lang*2
+	tax
+	lda @igm_cheats_tbl, x                      ; A = string offset within bank $C2
+	tax
+	ldy #$0000
+	sep #$20 : .as
+ifn_copy:
+	lda @$c20000, x                             ; long,X source byte (bank $C2)
+	beq ifn_done
+	sta OVL_NONAME_A, y                        ; abs,Y (DBR=$F4)
+	inx
+	iny
+	cpy #(OVL_NONAME_MAX-1)
+	bne ifn_copy
+ifn_done:
+	lda #$00
+	sta OVL_NONAME_A, y
+	plb
+	plp
+	rts
+
 cheats_tick:
 	jsr ss_ovl_marquee
 	rts
@@ -1038,11 +1083,12 @@ he_body:
 	rep #$30 : .al : .xl
 	and #$00ff
 	tay                                        ; Y = dest column in OVL_RB
-	; --- source offset = igm_help_tbl[(lineno*IGM_LANG_COUNT + lang)*2] ---
-	;     the *5 below is IGM_LANG_COUNT (5 languages); update if a language is added
+	; --- source offset = igm_help_tbl[(lineno*IGM_LANG_STRIDE + lang)*2] ---
+	;     IGM_LANG_SHIFT asl == *IGM_LANG_STRIDE. The row stride is a power of two
+	;     precisely so adding a language never touches this arithmetic; the generator
+	;     hard-fails the build if the language count ever outgrows the stride.
 	lda @help_lineno
-	asl : asl                                  ; lineno*4
-	clc : adc @help_lineno                     ; lineno*5 (IGM_LANG_COUNT)
+	asl : asl : asl                            ; lineno*8 (IGM_LANG_STRIDE)
 	clc : adc @help_lang                       ; + lang column
 	asl                                        ; *2 (word index)
 	tax
@@ -1261,13 +1307,11 @@ sst_draw_centered:
 
 ; ---- copy a NUL-terminated font-encoded STATES string into OVL_RB. A(16)=string index,
 ;      Y(16)=dest column; DBR=$F4. Returns Y = column after the last char. Bounded by
-;      IG_HELP_MAXCOL. Uses sst_idx/sst_lang; leaves sst_tmp alone. ----
+;      IG_HELP_MAXCOL. Uses sst_lang; leaves sst_tmp alone. ----
 sst_copy:
 	php
 	rep #$30 : .al : .xl
-	sta @sst_idx
-	asl : asl                                  ; index*4
-	clc : adc @sst_idx                         ; index*5 (IGM_LANG_COUNT=5)
+	asl : asl : asl                            ; index*8 (IGM_LANG_STRIDE, see he_copy)
 	clc : adc @sst_lang                        ; + lang column
 	asl                                        ; *2 (word index)
 	tax
@@ -1288,13 +1332,11 @@ sst_copy_d:
 	rts
 
 ; ---- encoded length of a STATES string. A(16)=string index -> A(16)=length (cap 60).
-;      Uses sst_idx/sst_lang. ----
+;      Uses sst_lang. ----
 sst_strlen:
 	php
 	rep #$30 : .al : .xl
-	sta @sst_idx
-	asl : asl
-	clc : adc @sst_idx
+	asl : asl : asl                            ; index*8 (IGM_LANG_STRIDE, see he_copy)
 	clc : adc @sst_lang
 	asl
 	tax
@@ -1446,7 +1488,7 @@ sc_write:
 ;  after autosave): +0 flags (bit0 game-has-sram, bit1 srm-exists, bit2 autosave-on),
 ;  +1 size string (16B ASCII NUL), +17 datetime string (24B ASCII NUL). Flags are
 ;  re-read straight from BSRAM per test (stable during the draw) -- no shell var needed.
-;  Reuses the STATES transients (sst_lang/sst_idx/sst_tmp/sst_row/sst_scr_*) since SAVES
+;  Reuses the STATES transients (sst_lang/sst_tmp/sst_row/sst_scr_*) since SAVES
 ;  is never the active tab at the same time as STATES.
 ; ======================================================================
 saves_enter:                                    ; forced blank (ig_switch_to)
@@ -1642,13 +1684,11 @@ svs_draw_centered:
 	rts
 
 ; ---- copy a NUL-terminated font-encoded SAVES string into OVL_RB. A(16)=string index,
-;      Y(16)=dest column; DBR=$F4. Bounded by IG_HELP_MAXCOL. Uses sst_idx/sst_lang. ----
+;      Y(16)=dest column; DBR=$F4. Bounded by IG_HELP_MAXCOL. Uses sst_lang. ----
 svs_copy:
 	php
 	rep #$30 : .al : .xl
-	sta @sst_idx
-	asl : asl                                  ; index*4
-	clc : adc @sst_idx                          ; index*5 (IGM_LANG_COUNT=5)
+	asl : asl : asl                            ; index*8 (IGM_LANG_STRIDE, see he_copy)
 	clc : adc @sst_lang                         ; + lang column
 	asl                                        ; *2 (word index)
 	tax
@@ -1669,13 +1709,11 @@ svs_copy_d:
 	rts
 
 ; ---- encoded length of a SAVES string. A(16)=string index -> A(16)=length (cap 60).
-;      Uses sst_idx/sst_lang. ----
+;      Uses sst_lang. ----
 svs_strlen:
 	php
 	rep #$30 : .al : .xl
-	sta @sst_idx
-	asl : asl
-	clc : adc @sst_idx
+	asl : asl : asl                            ; index*8 (IGM_LANG_STRIDE, see he_copy)
 	clc : adc @sst_lang
 	asl
 	tax
@@ -2241,13 +2279,11 @@ mn_draw_centered:
 	rts
 
 ; ---- copy a NUL-terminated font-encoded MANUAL string into OVL_RB. A(16)=index,
-;      Y(16)=dest column; DBR=$F4. Bounded by IG_HELP_MAXCOL. Uses sst_idx/sst_lang. ----
+;      Y(16)=dest column; DBR=$F4. Bounded by IG_HELP_MAXCOL. Uses sst_lang. ----
 mn_copy:
 	php
 	rep #$30 : .al : .xl
-	sta @sst_idx
-	asl : asl                                  ; index*4
-	clc : adc @sst_idx                          ; index*5 (IGM_LANG_COUNT=5)
+	asl : asl : asl                            ; index*8 (IGM_LANG_STRIDE, see he_copy)
 	clc : adc @sst_lang                         ; + lang column
 	asl                                        ; *2 (word index)
 	tax
@@ -2271,9 +2307,7 @@ mn_copy_d:
 mn_strlen:
 	php
 	rep #$30 : .al : .xl
-	sta @sst_idx
-	asl : asl
-	clc : adc @sst_idx
+	asl : asl : asl                            ; index*8 (IGM_LANG_STRIDE, see he_copy)
 	clc : adc @sst_lang
 	asl
 	tax
@@ -2608,11 +2642,10 @@ ig_tb_loop:
 	sec : sbc @ovl_rowoff                     ; *15 (= TABBAR_SLOT)
 	clc : adc #TABBAR_COL0
 	sta @ovl_idx                              ; base col
-	; --- source offset = igm_tab_tbl[(tab*IGM_LANG_COUNT + lang)*2] ---
-	;     the *5 below is IGM_LANG_COUNT (5 languages); update if a language is added
+	; --- source offset = igm_tab_tbl[(tab*IGM_LANG_STRIDE + lang)*2] ---
+	;     IGM_LANG_SHIFT asl == *IGM_LANG_STRIDE (see he_copy).
 	lda @ovl_rowoff
-	asl : asl                                 ; tab*4
-	clc : adc @ovl_rowoff                     ; tab*5 (IGM_LANG_COUNT)
+	asl : asl : asl                           ; tab*8 (IGM_LANG_STRIDE)
 	clc : adc @igm_tab_lang                   ; + lang column
 	asl                                       ; *2 (word index)
 	tax
@@ -3512,9 +3545,7 @@ iwt_lang_ok:
 	sta @igm_tab_lang
 	lda @active_tab
 	and #$00ff
-	sta @igm_tab_len                              ; temp: active_tab
-	asl : asl                                     ; *4
-	clc : adc @igm_tab_len                         ; *5 (IGM_LANG_COUNT)
+	asl : asl : asl                               ; tab*8 (IGM_LANG_STRIDE, see he_copy)
 	clc : adc @igm_tab_lang                         ; + lang column
 	asl                                           ; *2 (word index)
 	tax

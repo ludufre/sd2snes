@@ -496,6 +496,22 @@ ss_ovl_dfr_off:
 	tax                                     // X = name source byte offset
 	ldy #OVL_NAME_COL                       // Y = OVL_RB dest column
 	sep #$20 : .as
+	lda @CHEAT_NAMES, x
+	bne ss_ovl_dfr_name                     // a real name -> copy it
+	// EMPTY entry: the firmware no longer stages a placeholder for a cheat whose YAML
+	// carries no name, so draw the localized one the HOST staged in OVL_NONAME_BUF
+	// before its first list paint. Restarting the source index at 0 is safe: an empty
+	// name has ovl_mq_len 0, so the marquee is idle and X carries no shift.
+	ldx #$0000
+ss_ovl_dfr_noname:
+	lda @OVL_NONAME_BUF, x
+	beq ss_ovl_dfr_name_done
+	sta OVL_RB, y                           // abs,Y (DBR=$F4)
+	inx
+	iny
+	cpy #(OVL_NAME_COL+OVL_NAME_MAX)
+	bne ss_ovl_dfr_noname
+	bra ss_ovl_dfr_name_done
 ss_ovl_dfr_name:
 	lda @CHEAT_NAMES, x
 	beq ss_ovl_dfr_name_done

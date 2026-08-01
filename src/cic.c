@@ -2,16 +2,24 @@
 #include "config.h"
 #include "uart.h"
 #include "cic.h"
-#include "lang.h"
 
 char *cicstatenames[4] = { "CIC_OK", "CIC_FAIL", "CIC_PAIR", "CIC_SCIC" };
+
+/* Human-readable CIC state, English only: it is handed to the SNES as a finished string in
+   sysinfo_blk_t.cic_str, and localizing the System Information screen is the menu's job.
+   The longest entry is 27 chars, which is what sizes that field at 28 (memory.h).
+   File-scope like its cicstatenames[] neighbour above, for consistency; the linkage costs
+   nothing in flash either way. */
+const char *const cicstatefriendly[4] = {
+  "Original or no CIC", "Original CIC (failed)", "SuperCIC enhanced", "SuperCIC detected, not used"
+};
 
 void print_cic_state() {
   printf("CIC state: %s\n", get_cic_statename(get_cic_state()));
 }
 
 inline char *get_cic_statefriendlyname(enum cicstates state) {
-  return (char *)cicstatefriendly_l[lang_idx()][state];
+  return (char *)cicstatefriendly[state];
 }
 
 inline char *get_cic_statename(enum cicstates state) {

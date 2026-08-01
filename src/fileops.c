@@ -29,7 +29,6 @@
 #include "ff.h"
 #include "fileops.h"
 #include "diskio.h"
-#include "lang.h"
 
 #include <string.h>
 #include <stdarg.h>
@@ -51,6 +50,17 @@ char *fresult_names[] = { "FR_OK", "FR_DISK_ERR", "FR_INT_ERR",
   "FR_INVALID_DRIVE", "FR_NOT_ENABLED", "FR_NO_FILESYSTEM", "FR_MKFS_ABORTED",
   "FR_TIMEOUT", "FR_LOCKED", "FR_NOT_ENOUGH_CORE", "FR_TOO_MANY_OPEN_FILES",
   "FR_INVALID_PARAMETER" };
+
+/* Same FRESULT order as fresult_names above, but worded for the user instead of the log.
+   English only: the one screen that shows these is the early boot "Could not load menu ROM!"
+   failure, drawn by the firmware itself long before a menu exists to localize anything. */
+static const char *const fresult_friendly_names[20] = {
+  "No error", "Card I/O error", "Internal FS driver error",
+  "Drive not ready", "File not found", "Directory not found", "Invalid path name",
+  "Access denied", "Access denied (exists)", "Invalid file object", "Write protected",
+  "Invalid drive specified", "No work area", "Not a valid file system", "mkfs() aborted",
+  "Drive access timeout", "Shared access locked", "Not enough memory", "Too many open files",
+  "Invalid parameter" };
 
 void file_init() {
   file_res=f_mount(&fatfs, "/", 1);
@@ -273,7 +283,7 @@ char *get_fresult_name(FRESULT res) {
 }
 
 char *get_fresult_friendlyname(FRESULT res) {
-  return (char *)fresult_friendly_names_l[lang_idx()][res];
+  return (char *)fresult_friendly_names[res];
 }
 
 void vprint_fresult(FRESULT res, const char *fmt, va_list arglist) {

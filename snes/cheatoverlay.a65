@@ -256,6 +256,10 @@ ss_ovl_clr1:
 	rep #$20 : .al
 	lda #$2000 : sta @ovl_pal
 	sep #$20 : .as
+	; --- the localized "(no name)" the shared list draws for a cheat with an empty
+	;     name MUST be staged before the first list paint (cheatlist.i65 only reads
+	;     OVL_NONAME_BUF, and $F4 PSRAM comes up stale). ---
+	jsl @ovl_fill_noname
 	; --- title "CHEATS" (row 1) ---
 	jsr ss_ovl_draw_title
 

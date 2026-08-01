@@ -1,7 +1,7 @@
 IPS = header.ips
 # const_lang.o65 is generated from the English base const.a65 + the per-language
 # dicts (utils/lang_*.py) by utils/build_const.py -> multilingual const_lang.a65.
-O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 cheatmenu.o65 iris.o65 # gfx.o65 # vars.o65
+O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 cheatmenu.o65 iris.o65 # gfx.o65 # vars.o65
 
 OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
@@ -23,16 +23,16 @@ all: $(OUT) $(IGMENU) $(MAP)
 # Generate the const source from the English base + language dicts. One run
 # emits both files: const_lang.a65 (bank $C0: neutral data) and const_lang_str.a65
 # (bank $C1: the localized string pool + dispatch tables) -> m3nu.bin spans 2 banks.
-const_lang.a65 const_lang_str.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py
-	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py -o const_lang.a65
+const_lang.a65 const_lang_str.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py
+	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py -o const_lang.a65
 
 # igmenu_lang.i65: the in-game HELP tab's font-encoded i18n string tables, generated
 # from the English base (const.a65) + the SAME language dicts as const_lang, by
 # utils/gen_igmenu_lang.py. Included by igmenu.a65 -> linked into igmenu.bin (bank $C2),
 # SEPARATE from m3nu.bin (which can't reach it). Explicit prereq of igmenu.o65 so it
 # exists before cpp scans igmenu.a65's #include for dependencies.
-igmenu_lang.i65: const.a65 utils/gen_igmenu_lang.py utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py
-	python3 utils/gen_igmenu_lang.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py -o igmenu_lang.i65
+igmenu_lang.i65: const.a65 utils/gen_igmenu_lang.py utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py
+	python3 utils/gen_igmenu_lang.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py -o igmenu_lang.i65
 
 igmenu.o65: igmenu_lang.i65
 

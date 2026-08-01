@@ -298,12 +298,11 @@ cheatmenu_open_window:
   sta window_w
   lda @cheat_win_h
   sta window_h
-; Window title at PSRAM CHEAT_TITLE ($D80000), set by firmware during
-; CMD_LOAD_CHT.
-  lda #$d8
-  sta window_tbank
-  ldx #$0000
-  stx window_taddr
+; Window title.  With a current firmware CHEAT_TITLE ($D80000) holds $02 followed by
+; the bare ROM basename, and the menu owns the localized "Cheats for " prefix and the
+; clipping (cm_compose_title, bank $C1).  An older firmware left a ready-made
+; printable title there and cm_compose_title points the window straight at it.
+  jsl @cm_compose_title
   jsr push_window
   jsr draw_window
 
@@ -489,6 +488,26 @@ cheatmenu_draw_row:
   inc                            ; +1 to skip the flags byte
   sta print_src                  ; default: no horizontal offset
   sep #$20 : .as
+; A cheat whose YAML carries no name arrives EMPTY (the firmware no longer substitutes
+; a placeholder of its own), so show the localized one instead.  Peeking the first byte
+; needs the record's bank in DB, and xba carries the flag across the plb - same idiom
+; draw_window uses to test a window title.
+  lda print_bank
+  ldx print_src
+  phb
+  pha
+  plb
+  lda !0, x
+  xba
+  plb
+  xba
+  bne cheatmenu_draw_row_named
+  lda #^text_cheat_noname
+  sta print_bank
+  ldx #!text_cheat_noname
+  stx print_src
+  bra cheatmenu_draw_row_descprint   ; no marquee: the placeholder always fits
+cheatmenu_draw_row_named:
   lda cm_tmp
   cmp cm_sel
   bne cheatmenu_draw_row_descprint

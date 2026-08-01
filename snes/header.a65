@@ -14,6 +14,16 @@
 ; Begin assembling to this address.
 *= $C0FF00
 .word nmihook
+; Menu capability marker at $C0FF02 (MENU_CAP_MARKER in memmap.i65). The MCU reads
+; these 4 bytes once per System Information entry, with
+; sram_readblock(SRAM_MENU_ADDR + 0xFF02), to tell this menu from an older one:
+;   'S','2' + MENU_CAP_VER + reserved.
+; Version 1 means the menu (a) formats the System Information screen from the binary
+; SI2 block, (b) understands the $02-prefixed CHEAT_TITLE, (c) tolerates an empty
+; cheat description and (d) an empty CHEAT_NAMES entry. A menu without the marker has
+; the start of RESET here (sei/clc = $78/$18), which can never match 'S','2'.
+; Only the reset VECTOR ($C0FFFC) references RESET, so shifting it by 4 bytes is safe.
+  .byt $53, $32, $01, $00
 RESET:
   sei
   clc

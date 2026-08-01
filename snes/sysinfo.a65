@@ -19,15 +19,9 @@ show_sysinfo:
   stx window_taddr
   lda @sysinfo_win_x
   sta window_x
-  inc
-  inc
-  pha
   stz print_x+1
   lda @sysinfo_win_y
   sta window_y
-  inc
-  inc
-  pha
   stz print_y+1
   lda @sysinfo_win_w
   sta window_w
@@ -44,6 +38,12 @@ copy_snes_system_text:
   dex
   bpl copy_snes_system_text
 
+  ; The screen is composed by si_render_all (snes/sysinfo_render.a65, bank $C1) out of
+  ; the BINARY block the MCU publishes in SYSINFO_BLK plus localized templates. This
+  ; clears the grace counter it uses to decide when a firmware is too old to publish
+  ; that block at all.
+  jsl @si_render_reset
+
 sysinfo_printloop:
   sep #$20 : .as
   rep #$10 : .xl
@@ -52,30 +52,7 @@ sysinfo_printloop:
 - lda @SNES_CMD
   cmp #CMD_SYSINFO
   bne -
-  lda #^SYSINFO_BLK
-  ldx #!SYSINFO_BLK
-  sta print_bank
-  stx print_src
-  stz print_pal
-  pla
-  sta print_y
-  pla
-  sta print_x
-  lda #40
-  sta print_count
-  lda #12
-- pha
-  jsr hiprint
-  inc print_y
-  rep #$20 : .al
-  lda print_src
-  clc
-  adc #40
-  sta print_src
-  sep #$20 : .as
-  pla
-  dec
-  bne -
+  jsl @si_render_all
 
   ldx #17
   lda $213e
@@ -119,20 +96,7 @@ sysinfo_printloop:
   lda #12
   sta print_x
   jsr hiprint
-
-  ; --- hardware model: SYSINFO_BLK line 12 (12*40=480), one row below the CPU/PPU line ---
-  lda #^SYSINFO_BLK
-  ldx #!SYSINFO_BLK+480
-  sta print_bank
-  stx print_src
-  stz print_pal
-  lda #40
-  sta print_count
-  lda #24
-  sta print_y
-  lda #12
-  sta print_x
-  jsr hiprint
+  ; (the hardware model line below this one is drawn by si_render_all)
 
 - lda isr_done
   lsr
@@ -142,14 +106,6 @@ sysinfo_printloop:
   lda pad_b
   ora pad_a
   bne +
-  lda @sysinfo_win_x
-  inc
-  inc
-  pha
-  lda @sysinfo_win_y
-  inc
-  inc
-  pha
   jmp sysinfo_printloop
 + plp
   jsr snd_fx_back       ; leaving the System Information screen

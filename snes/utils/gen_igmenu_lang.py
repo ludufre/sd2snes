@@ -66,6 +66,12 @@ STATES_LABELS = [
 # so the slot word must stay <= 8 columns; guard it here (build fails otherwise).
 STATES_LABEL_MAX = {"text_igm_st_slot": 8}
 
+# Words per table row. MUST be a power of two and MUST match the number of `asl`
+# in the nine row-index sites of snes/igmenu.a65 (search IGM_LANG_SHIFT there).
+# See the stride note in main() for why this is fixed rather than derived.
+IGM_LANG_STRIDE = 8
+IGM_LANG_SHIFT = 3   # log2(IGM_LANG_STRIDE)
+
 # The SAVES tab (Phase 4) strings, IN INDEX ORDER. Lockstep with the IGM_SV_* indices in
 # snes/igmenu.a65 (SAME count + order) and with the EN base labels in const.a65.
 SAVES_LABELS = [
@@ -133,6 +139,17 @@ MANUAL_LABELS = [
     "text_igm_mn_slug_other",   # 13 slug 5 -> Other
 ]
 
+# The CHEATS tab strings, IN INDEX ORDER. Unlike the other tabs there is no index enum
+# in snes/igmenu.a65: igm_fill_noname indexes line 0 directly (igm_cheats_tbl[lang]), so
+# a second entry here would need that routine to take a line index first.
+CHEATS_LABELS = [
+    "text_igm_cheat_noname",  # 0 placeholder for a cheat whose YAML carries no name
+]
+
+# The placeholder is copied into OVL_NONAME_BUF (32 B, see memmap.i65) and drawn in the
+# list's name column; cap it well inside both.
+CHEATS_LABEL_MAX = {"text_igm_cheat_noname": 24}
+
 # The tab bar centers each label in a 10-column field (IGM_TAB_FIELD in igmenu.a65), so
 # every translated tab label must stay <= 10 encoded columns; guard it here.
 TAB_LABEL_MAX = 10
@@ -144,6 +161,8 @@ def cap_for(label):
         return TAB_LABEL_MAX
     if label in SAVES_LABEL_MAX:
         return SAVES_LABEL_MAX[label]
+    if label in CHEATS_LABEL_MAX:
+        return CHEATS_LABEL_MAX[label]
     return STATES_LABEL_MAX.get(label, IGM_WIDTH_MAX)
 
 
@@ -183,7 +202,8 @@ def main():
             problems.append(f"{lbl}: missing from lang_{name}.py")
         for lbl in sorted(dl - const_labels):
             problems.append(f"{lbl}: in lang_{name}.py but not in {base.name}")
-    for lbl in HELP_LABELS + STATES_LABELS + SAVES_LABELS + TAB_LABELS + MANUAL_LABELS:
+    for lbl in (HELP_LABELS + STATES_LABELS + SAVES_LABELS + TAB_LABELS + MANUAL_LABELS
+                + CHEATS_LABELS):
         if lbl not in en_args:
             problems.append(f"{lbl}: listed in a *_LABELS table but not in {base.name}")
     if problems:
@@ -204,7 +224,8 @@ def main():
 
     # --- width guard (overlay width, plus tighter per-label caps for column layout) ---
     wide = []
-    for lbl in HELP_LABELS + STATES_LABELS + SAVES_LABELS + TAB_LABELS + MANUAL_LABELS:
+    for lbl in (HELP_LABELS + STATES_LABELS + SAVES_LABELS + TAB_LABELS + MANUAL_LABELS
+                + CHEATS_LABELS):
         cap = cap_for(lbl)
         for lang in lang_order:
             n = encoded_len(args_for(lbl, lang))
@@ -214,17 +235,37 @@ def main():
         sys.exit("gen_igmenu_lang.py: line(s) exceed the overlay width:\n  "
                  + "\n  ".join(wide))
 
+    # --- row stride ---------------------------------------------------------
+    # The tables are indexed as `line*STRIDE + lang`, and igmenu.a65 computes that
+    # offset in 65816. A stride that is a power of two makes the row index a plain
+    # shift (`asl : asl : asl`), so the nine index sites in igmenu.a65 never have to
+    # change when a language is added -- previously each one open-coded `*5` as
+    # `asl : asl : adc idx`, which the assembler happily accepted after a 6th
+    # language landed and shipped a silently mis-indexed binary.
+    # The stride is FIXED, not derived from nlang: deriving it would silently
+    # re-break the same sites the moment the language count crossed a power of two.
+    # Columns past nlang are dead (every reader clamps to IGM_LANG_COUNT) but still
+    # point at the EN string, so a stray index reads valid text instead of garbage.
+    if nlang > IGM_LANG_STRIDE:
+        sys.exit(f"gen_igmenu_lang.py: {nlang} languages exceed IGM_LANG_STRIDE="
+                 f"{IGM_LANG_STRIDE}.\nRaise IGM_LANG_STRIDE to the next power of two "
+                 f"AND update the {IGM_LANG_SHIFT} `asl` in each of the nine row-index "
+                 f"sites in snes/igmenu.a65 (grep IGM_LANG_SHIFT).")
+    padded_order = lang_order + ["en"] * (IGM_LANG_STRIDE - nlang)
+
     def emit_table(table_name, str_prefix, labels):
-        """Emit `<table_name>[line*IGM_LANG_COUNT + lang] -> 16-bit $C2 offset` plus the
+        """Emit `<table_name>[line*IGM_LANG_STRIDE + lang] -> 16-bit $C2 offset` plus the
         NUL-terminated font-encoded source strings (labels `<str_prefix><li>_<lang>`)."""
         lines = [
-            f"// {table_name}[line*IGM_LANG_COUNT + lang] = 16-bit offset within bank $C2",
+            f"// {table_name}[line*IGM_LANG_STRIDE + lang] = 16-bit offset within bank $C2",
             "// of the NUL-terminated font-encoded string. igmenu.a65: lda @<tbl>,x : tax",
             "// then lda @$c20000,x walks the source bytes (long,X, bank $C2).",
+            f"// Row is {IGM_LANG_STRIDE} words wide; columns {nlang}..{IGM_LANG_STRIDE - 1} "
+            "are dead padding (aliased to EN) that keeps the row index a pure shift.",
             f"{table_name}:",
         ]
         for li in range(len(labels)):
-            row = " : ".join(f".word {str_prefix}{li}_{lang}" for lang in lang_order)
+            row = " : ".join(f".word {str_prefix}{li}_{lang}" for lang in padded_order)
             lines.append(f"  {row}")
         lines.append("")
         for li, lbl in enumerate(labels):
@@ -245,7 +286,10 @@ def main():
         f"#define IGM_SAVES_NLINES {len(SAVES_LABELS)}",
         f"#define IGM_TAB_NLINES {len(TAB_LABELS)}",
         f"#define IGM_MANUAL_NLINES {len(MANUAL_LABELS)}",
+        f"#define IGM_CHEATS_NLINES {len(CHEATS_LABELS)}",
         f"#define IGM_LANG_COUNT {nlang}",
+        f"#define IGM_LANG_STRIDE {IGM_LANG_STRIDE}",
+        f"#define IGM_LANG_SHIFT {IGM_LANG_SHIFT}",
         "",
     ]
     out += emit_table("igm_help_tbl", "igm_s", HELP_LABELS)
@@ -253,10 +297,12 @@ def main():
     out += emit_table("igm_saves_tbl", "igm_sv", SAVES_LABELS)
     out += emit_table("igm_tab_tbl", "igm_tb", TAB_LABELS)
     out += emit_table("igm_manual_tbl", "igm_mn", MANUAL_LABELS)
+    out += emit_table("igm_cheats_tbl", "igm_ch", CHEATS_LABELS)
 
     out_path.write_text("\n".join(out) + "\n")
     print(f"generated {out_path}: HELP {len(HELP_LABELS)} + STATES {len(STATES_LABELS)} "
           f"+ SAVES {len(SAVES_LABELS)} + TAB {len(TAB_LABELS)} + MANUAL {len(MANUAL_LABELS)} "
+          f"+ CHEATS {len(CHEATS_LABELS)} "
           f"lines x {nlang} langs ({', '.join(lang_order)})")
 
 

@@ -73,6 +73,12 @@ resolve_str_out:
   plp
   rts
 
+; ui_call_resolve: $C0 trampoline so objects in bank $C1 (sysinfo_render.a65) can
+; language-resolve print_src/print_bank. Same role gi_call_hiprint plays for hiprint.
+ui_call_resolve:
+  jsr resolve_str
+  rtl
+
 ; resolve_yx: resolve_str for a (Y=addr, A=bank) pointer (as used by strlen).
 ; Entry .as/.xl. Exit same widths, A=resolved bank, Y=resolved addr.
 resolve_yx:

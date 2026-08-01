@@ -206,6 +206,7 @@ text_lang_ptbr                    .byt "Portugu", 135, "s", 0
 text_lang_es                      .byt "Espa", 154, "ol", 0
 text_lang_de                      .byt "Deutsch", 0
 text_lang_fr                      .byt "Fran", 141, "ais", 0
+text_lang_it                      .byt "Italiano", 0
 ; ---- In-game TAB menu HELP tab (Phase 2). These are the ENGLISH base; the
 ;      per-language dicts (utils/lang_*.py) carry the translations. build_const.py
 ;      pools them into bank $C1 (the menu never renders them), and the SEPARATE
@@ -482,6 +483,37 @@ text_err_noimpl     .byt "Chip not supported:", 0
 text_err_generic    .byt "Load error:", 0
 text_system         .byt "CPU/PPU1/PPU2: a/b/c        VMode: x0Hz",0
 
+; System Information screen templates.  The MCU publishes BINARY values in
+; SYSINFO_BLK and snes/sysinfo_render.a65 composes each line from these, so the
+; firmware carries no localized text at all.  The raw bytes $02..$16 are the
+; PLACEHOLDERS listed in si_fmt_tbl (in a translation they are written {2}..{22});
+; byte 34 is a literal quote and 127,128 the animated ellipsis.  Placeholders start
+; at $02 because hiprint treats BOTH $00 and $01 as end-of-string.
+; build_const.py checks that every translation carries the SAME multiset of
+; placeholders as the English base, so a dropped or duplicated one fails the build.
+; Budget: 40 columns after substitution (WIDTH_LIMITS caps the template at 40 too).
+text_si_fw        .byt "    Firmware version: ", 2, 0
+text_si_busy      .byt "Calculating disk space", 127, 128, 0
+text_si_removed   .byt "    *** SD Card removed/USB busy ***", 0
+text_si_maker     .byt "SD Maker/OEM:    0x", 3, ", ", 34, 4, 34, 0
+text_si_product   .byt "SD Product Name: ", 34, 5, 34, ", Rev. ", 6, ".", 7, 0
+text_si_serial    .byt "SD Serial No.:   ", 8, ", Mfd. ", 9, "/", 10, 0
+text_si_acc       .byt "SD acc. time: ", 11, ".", 12, " / ", 13, ".", 14, " ms avg/max", 0
+text_si_accmeas   .byt "SD acc. time: measuring", 127, 128, 0
+text_si_usage     .byt "Card usage: ", 15, "MB / ", 16, "MB", 0
+text_si_sgb       .byt "sgb", 17, "_boot.bin/sgb", 17, "_snes.bin: ", 18, 0
+text_si_sgb_checking .byt "checking", 127, 128, 0
+text_si_sgb_missing  .byt "missing", 0
+text_si_sgb_mismatch .byt "mismatch", 0
+text_si_sgb_ok       .byt "ok", 0
+text_si_cic       .byt "CIC state: ", 19, 0
+text_si_clk       .byt "SNES master clock: ", 20, "Hz", 0
+text_si_clkmeas   .byt "SNES master clock: measuring", 127, 128, 0
+text_si_u16on     .byt "Ultra16 serial no. ", 21, " (Autoboot On)", 0
+text_si_u16off    .byt "Ultra16 serial no. ", 21, " (Autoboot Off)", 0
+text_si_model     .byt "Model: ", 22, 0
+text_si_updatefw  .byt "*** Please update the firmware ***", 0
+
 text_on_p1      .byt "On: P1", 0
 text_on_p2      .byt "On: P2", 0
 text_on         .byt "On", 0
@@ -579,6 +611,12 @@ loading_win_w   .byt 34
 loading_win_h   .byt 1
 
 text_cheat      .byt "Cheats for ", 0
+; Placeholder for a cheat whose YAML carries no name.  The firmware sends the name
+; EMPTY now, so both cheat UIs substitute this: the menu list draws text_cheat_noname
+; directly, and the in-game list (a separate $C2 link that cannot reach this pool)
+; gets text_igm_cheat_noname staged into OVL_NONAME_BUF by whichever host opened it.
+text_cheat_noname .byt "(no name)", 0
+text_igm_cheat_noname .byt "(no name)", 0
 text_ips_header .byt "Patches", 0
 text_ips_nopatch .byt "[No patch]", 0
 ; Header-mode markers on the patch rows. PADDED TO 6 CHARACTERS in every

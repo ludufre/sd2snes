@@ -6,14 +6,10 @@ single binary, every *localized* label (one that appears in any lang_*.py)
 is expanded into:
 
     <label>_en   .byt <english>, 0
-    <label>_ptbr .byt <portuguese>, 0
-    <label>_es   .byt <spanish>, 0
-    <label>_de   .byt <german>, 0
+    <label>_<code> .byt <translation>, 0    ; one per lang_<code>.py given on argv
     <label>:                              ; dispatch table (the public label)
       .word !<label>_en
-      .word !<label>_ptbr
-      .word !<label>_es
-      .word !<label>_de
+      .word !<label>_<code>                ; ... one word per language, in argv order
 
 All dispatch tables are emitted contiguously between the exported labels
 `strtab_lo` and `strtab_hi`. The menu's `resolve_str` recognises a dispatch
@@ -26,7 +22,7 @@ Non-localized lines (data tables, window geometry, neutral strings) are copied
 verbatim and keep their original positions.
 
 Usage:
-    build_const.py <const.a65> <lang_ptbr.py> <lang_es.py> <lang_de.py> -o <const_lang.a65>
+    build_const.py <const.a65> <lang_*.py> [<lang_*.py> ...] -o <const_lang.a65>
     build_const.py <const.a65> --dump-en <out.py>   # English scaffold for a new lang
 """
 import re
@@ -46,6 +42,11 @@ ACCENTS = {
     # gameinfo reuses 160/161/176/177 for the chip icon OBJ. 224-255 are blank
     # and unreferenced, so the French block lives there):
     "è": 224, "ù": 225, "î": 226, "ï": 227, "ë": 228, "û": 229,
+    # Italian additions. The lowercase graves the earlier blocks never needed
+    # (à/è/ù already exist), plus the uppercase graves: Italian headers are drawn
+    # in caps by the in-game menu and "E'" is not an acceptable stand-in for "È",
+    # which opens a large share of sentences:
+    "ì": 230, "ò": 231, "È": 232, "Ì": 233, "Ò": 234, "Ù": 235,
 }
 DECODE = {v: k for k, v in ACCENTS.items()}
 
@@ -210,8 +211,8 @@ def main():
     if missing:
         sys.exit(f"build_const.py: {len(missing)} translated label(s) not found "
                  f"in {base}: {', '.join(missing)}\n"
-                 f"(label renamed/removed in const.a65? update lang_ptbr.py / "
-                 f"lang_es.py to match, or the translation silently ships as English)")
+                 f"(label renamed/removed in const.a65? update every lang_*.py to "
+                 f"match, or the translation silently ships as English)")
 
     # Render budgets (encoded bytes, excluding the NUL terminator). A
     # translation longer than its UI slot overruns a popup border or wraps the
@@ -230,7 +231,13 @@ def main():
     #                   sanity cap to keep a translation from bloating the ROM.
     #   text_err_*      show_error_msg box: window_w=28 -> interior ~26
     #                   (game-load error popup, filesel.a65)
-    WIDTH_LIMITS = (("text_no_", 22), ("cheat_tab_head", 48), ("mtext_", 40),
+    #   text_si_*       System Information line: 40 columns, hard-clipped by
+    #                   sysinfo_render.a65. Note this counts the TEMPLATE, so a long
+    #                   substituted value can still be clipped at runtime.
+    #   text_cheat_noname  drawn in the cheat list's name column, CHEAT_NAME_WIDTH = 42
+    #                   (cheatmenu.a65); hiprint truncates past that
+    WIDTH_LIMITS = (("text_si_", 40), ("text_cheat_noname", 42),
+                    ("text_no_", 22), ("cheat_tab_head", 48), ("mtext_", 40),
                     ("mdesc_", 160), ("text_err_", 26))
     WIDTH_DEFAULT = 56
 
@@ -250,7 +257,7 @@ def main():
         return WIDTH_DEFAULT
 
     too_wide = []
-    for lang_name, d in langs:   # all loaded translations (pt-BR, es, de): validate each
+    for lang_name, d in langs:   # every loaded translation: validate each
         for label in order:
             text = d.get(label)
             if not text:
@@ -261,6 +268,45 @@ def main():
     if too_wide:
         sys.exit("build_const.py: translation(s) exceed their UI slot:\n  "
                  + "\n  ".join(too_wide))
+
+    # The System Information templates (text_si_*) carry raw bytes $02..$1F that the
+    # menu replaces with values from the firmware's binary block. A translation that
+    # drops one silently loses a field; one that adds or repeats one prints a field
+    # twice or, worse, formats an unrelated one. Neither shows up as a build error
+    # anywhere else, so require the exact same MULTISET of placeholder bytes as the
+    # English base (multiset, not set: the SGB line legitimately uses {17} twice).
+    def placeholders(args):
+        counts = {}
+        for p in split_args(args):
+            if p.startswith('"'):
+                continue
+            try:
+                n = int(p, 0)
+            except ValueError:
+                continue
+            if 2 <= n <= 31:
+                counts[n] = counts.get(n, 0) + 1
+        return counts
+
+    def fmt_counts(counts):
+        return ", ".join(f"{{{n}}}x{c}" for n, c in sorted(counts.items())) or "(none)"
+
+    bad_ph = []
+    for lang_name, d in langs:
+        for label in order:
+            if not label.startswith("text_si_"):
+                continue
+            text = d.get(label)
+            if not text:
+                continue
+            want = placeholders(en_args[label])
+            got = placeholders(encode_string(text))
+            if want != got:
+                bad_ph.append(f"{label} [{lang_name}]: has {fmt_counts(got)}, "
+                              f"English base has {fmt_counts(want)}")
+    if bad_ph:
+        sys.exit("build_const.py: sysinfo template(s) with mismatched placeholders:\n  "
+                 + "\n  ".join(bad_ph))
 
     # Intern identical strings so a label whose translations coincide (e.g. an
     # untranslated language that falls back to English) stores each unique byte

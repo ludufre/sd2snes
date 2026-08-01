@@ -276,13 +276,26 @@
    ($F48200..$F4823F) and OVL_TMBUF ($F49000..$F499FF) -- now occupied up to $F48397:
    IGM_THM_* $F48260-$F482D2, ovl_sb_* $F482DE-$F482E7 (cheatlist.i65), OVL_CUR_OFF
    $F482E8, ig_hdma_mask + BAR scratch $F482F0-$F482FF and theme WRAM/DMA-reg saves
-   $F48300-$F483A3 (igmenu.a65); free again from $F483AE (ig_win_x..h $F483A4-A7, tint $F483A8, pos_focus $F483AA, pos_slot $F483AC). */
+   $F48300-$F483A3 (igmenu.a65); then ig_win_x..h $F483A4-A7, tint $F483A8, pos_focus
+   $F483AA, pos_slot $F483AC and the guide-picker mh_* block $F483B0-$F483BB
+   (manhost.a65) -- free again from $F483BC, with OVL_NONAME_BUF taking $F483C0-$F483DF. */
 #define IGM_THM_MAGIC               $F48260 /* 1B: $A5 = staged block valid, written LAST by the overlay before the jsl $c20008; 0 = invalid (aborted/never staged) and the shell must fall back to its baked colours. */
 #define IGM_THM_GRAD                $F48261 /* 55B: backdrop gradient blob ([count,lo,hi]* terminated by a 0 count), copied from the THEMED hdma_pal_src. Same 55-byte region size main.a65 DMAs into the hdma_pal WRAM buffer. */
 #define IGM_THM_GRAD_A              $8261   /* 16-bit abs alias of IGM_THM_GRAD for abs,Y reads under DBR=$F4 (igt_grad_build walks two cursors and the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with IGM_THM_GRAD above -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65. */
 #define IGM_THM_MATH                $F48298 /* 19B: colour-math table of the selection BAR, copied RAW from hdma_math_src -- so it already carries the NORMAL bar colour in its COLDATA bytes. */
 #define IGM_THM_BARCOL              $F482AB /* 8B: BAR colours from hdma_bar_color_src -- 4B normal then 4B highlight (active editing). The shell applies a group the way set_bar_color (ui.a65) does: byte i overwrites table offset 2+3*i (2, 5, 8, 11) of its WRAM copy of IGM_THM_MATH. The staged table is RAW, so only the highlight group ever NEEDS patching in. */
 #define IGM_THM_PAL                 $F482B3 /* 32B: four 8-byte (4 colours x BGR555) sub-palettes lifted out of the menu's raw 512B `palette` block: +0 pal0 (text, CGRAM 0-3), +8 pal6 (grey, CGRAM 24-27), +16 pal2 (green, CGRAM 8-11), +24 pal3 (frame, CGRAM 12-15). */
+/* ---- localized "(no name)" placeholder for the in-game cheat list ----
+   The firmware no longer stages a placeholder for a cheat whose YAML carries no
+   name: an empty CHEAT_NAMES entry means "draw the localized placeholder", and the
+   HOST that opened the list stages that string here BEFORE the first list paint
+   (snes/cheatoverlay.a65 resolves it out of the menu's $C1 pool; snes/igmenu.a65
+   indexes its own $C2 table). cheatlist.i65 -- shared source, no host symbols -- only
+   ever READS it. 32 B in the free $F483BC..$F48FFF gap, clear of the mh_* guide-picker
+   block below ($F483B0..$F483BB) and of OVL_TMBUF ($F49000). */
+#define OVL_NONAME_BUF              $F483C0 /* 32 B: NUL-terminated placeholder, font-encoded. */
+#define OVL_NONAME_A                $83C0   /* 16-bit abs alias of OVL_NONAME_BUF for abs,Y stores under DBR=$F4 (the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with OVL_NONAME_BUF -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65 and IGM_THM_GRAD_A above. */
+#define OVL_NONAME_MAX              32      /* buffer size: at most 31 visible chars + the NUL. */
 #define OVL_CUR_OFF                 $F482E8 /* 1B: 0 = the cheat list draws its own '>' cursor (the $C0 fail-safe path); 1 = the $C2 shell suppresses it because the BAR marks the selection. Zeroed by the overlay on EVERY open, BEFORE the first list paint (ss_ovl_draw_full_row is the reader) -- PSRAM $F4 is not auto-cleared and survives reopens. The reader does a 16-bit lda + and #$00ff, so $F482E9 is fetched and discarded: keep it unallocated. */
 #define SS_OBC1_GATE                $FF0718 /* OBC1 savestate present flag (firmware-armed = fpga_conf==FPGA_OBC1, on Mk.II and Mk.III -- the OBC1 is purely reactive, no chip halt needed). Handler reads it to decide whether to capture/restore the OBC1 window. Free $FF0701..$FF07FF gap, after SRM_SLOT_STATUS (below the BPS breadcrumbs $FF0720-2E). Lockstep with SS_OBC1_GATE_ADDR in src/memory.h. */
 #define SS_OBC1_SCRATCH             $F47000 /* PSRAM scratch for the OBC1 window image (2 KB = the SNES-visible $7800-$7FFF window: obc_lower + obc_upper mirror image + the 8 regs). Shares the coprocessor scratch slot (SA-1 IRAM / GSU cache / DSP snapshot); a game is never two chips. Captures/restores the state VISIBLE to the SNES, not the chip's internal BRAM (on Mk.II the unreachable obc_lower[512:1023] never enters the window). */
@@ -298,7 +311,7 @@
 #define CHEAT_MASTER                $FF071A /* master cheat switch mirror (1 = cheats globally enabled). Published by the firmware in cheat_program (= CFG.enable_cheats) and kept in sync when the L+R+Start+A/B combos are served (main.c). The in-game CHEATS tab reads it to draw the status line and writes it when X toggles the master. The ACTUAL switch is the FPGA's cheat_enable register: writing $82/$83 to MCU_CMD ($002A00) under snescmd_unlock is decoded by cheat.v -- this byte is only the mirror the UI reads back. Free $FF0701..$FF07FF gap, after SS_SDD1_GATE. Lockstep with SRAM_CHEAT_MASTER_ADDR in src/memory.h. */
 #define CHEAT_ADDR                  $D00000
 #define CHEAT_CODE_STRINGS          $D40000 /* per-code display strings, 12 bytes each. cheat_idx*512 + code_idx*12. Spans banks D4..D7 to leave D0..D3 free for up to 512 cheat records (512 bytes each). */
-#define CHEAT_TITLE                 $D80000 /* 256 bytes "Cheats for <game>" null-terminated, in cheat region past any plausible cheat count */
+#define CHEAT_TITLE                 $D80000 /* 64 bytes: source for the cheat window title, in the cheat region past any plausible cheat count. v2 layout = byte0 $02 (marker, lockstep with SRAM_CHEAT_TITLE_MARKER in src/memory.h) followed by the ROM basename WITHOUT its extension, NUL-terminated. NO "Cheats for " prefix and NO clipping: cm_compose_title (snes/sysinfo_render.a65) prepends the localized text_cheat and clips to the window width, so neither the language nor the geometry is baked into the firmware. The marker is non-printable on purpose -- an older firmware wrote a ready-made printable title here, and byte0 alone tells the two layouts apart. */
 #define CHEAT_FLAGS                 $FF0500 /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle, MCU also keeps it in sync. */
 #define CHEAT_NAMES                 $FF8000 /* in-game cheat overlay: first CHEAT_OVL_MAX names, CHEAT_NAME_LEN bytes each, staged by firmware at game load ($D00000 records are game ROM in-game). 64*64=4KB fills $FF8000..$FF8FFF. Lockstep with SRAM_CHEAT_NAMES_ADDR in src/memory.h. */
 #define CHEAT_OVL_MAX               64      /* size of the RESIDENT in-game name window: CHEAT_NAMES holds 64 names for [CHEAT_WIN_BASE, +64). The list slides the window (CMD_CHEAT_NAMES_WINDOW) to cover all cheats up to CHEAT_LIST_MAX. */
@@ -319,6 +332,51 @@
 #define ST_MCU_ADDR                 $FF1100
 #define ST_SNES_ADDR                $FF1110
 #define SYSINFO_BLK                 $FF1200
+/* ---- System Information block v2 ("SI2"), published by the MCU on CMD_SYSINFO ----
+   BINARY VALUES ONLY. The menu formats the 13 screen lines itself, from localized
+   templates in the $C1 string pool (snes/sysinfo_render.a65), so no localized text
+   ever crosses the MCU boundary. LOCKSTEP with sysinfo_blk_t in src/memory.h: an
+   offset that drifts on one side shows garbage on screen with no build error.
+   The block starts with the magic 'S','I' + a version byte, so a menu running
+   against an OLDER firmware (which writes 13 lines of legacy TEXT here) recognises
+   the absence and says so instead of rendering the text as values. The legacy line 0
+   always started with ' ', 'C' or 'U', never 'S'. The region has 544 B up to
+   LAST_GAME ($FF1420); the block uses 128. */
+#define SI2_MAGIC0                  0   /* 'S' ($53) */
+#define SI2_MAGIC1                  1   /* 'I' ($49) */
+#define SI2_VERSION                 2   /* 1 = the layout below */
+#define SI2_FLAGS                   3   /* u8, bits below */
+#define SI2_F_SD_GONE               $01 /* bit0: SD card removed OR the USB server is busy */
+#define SI2_F_FS_BUSY               $02 /* bit1: still computing the card usage (f_getfree) */
+#define SI2_F_ACC_MEAS              $04 /* bit2: SD access time not measured yet */
+#define SI2_F_CLK_MEAS              $08 /* bit3: SNES master clock not measured yet */
+#define SI2_F_U16                   $10 /* bit4: an Ultra16 was detected */
+#define SI2_F_U16_BOOT              $20 /* bit5: ...with autoboot enabled */
+#define SI2_SGB_VER                 4   /* u8: CFG.sgb_bios_version */
+#define SI2_SGB_STATE               5   /* u8 CANONICAL: 0=checking 1=missing 2=mismatch 3=ok (the MCU maps SGB_BIOS_* onto this, its order is different) */
+#define SI2_CIC_STATE               6   /* u8 raw CIC state (the menu only prints SI2_CIC_STR) */
+#define SI2_SD_MAKER                7   /* u8 */
+#define SI2_SD_OEM                  8   /* char[2] */
+#define SI2_SD_PRODUCT              10  /* char[5] */
+#define SI2_SD_REV_MAJ              15  /* u8 (nibbles already split by the MCU) */
+#define SI2_SD_REV_MIN              16  /* u8 */
+#define SI2_SD_SERIAL               17  /* u8[4] (+21 pad) */
+#define SI2_SD_MFD_YEAR             22  /* u16 LE, 2000 already added */
+#define SI2_SD_MFD_MONTH            24  /* u8 (+25 pad) */
+#define SI2_TACC_AVG_INT            26  /* u16 ms */
+#define SI2_TACC_AVG_FRAC           28  /* u16, 0..999 */
+#define SI2_TACC_MAX_INT            30  /* u16 ms */
+#define SI2_TACC_MAX_FRAC           32  /* u16, 0..999 */
+#define SI2_CARD_USED_MB            34  /* u32 */
+#define SI2_CARD_TOTAL_MB           38  /* u32 */
+#define SI2_SNES_CLK_HZ             42  /* u32 */
+#define SI2_U16_SERIAL              46  /* u16 */
+#define SI2_FW_STR                  48  /* char[24] NUL */
+#define SI2_CIC_STR                 72  /* char[28] NUL -- 28, not 24: "SuperCIC detected, not used" is 27+NUL */
+#define SI2_MODEL_STR               100 /* char[28] NUL */
+#define SI2_SIZE                    128
+#define SI_GRACE_FRAMES             60  /* render passes the magic may be absent before the screen says "update the firmware" (the MCU publishes the block only after the first CMD_SYSINFO round trip) */
+#define MENU_CAP_MARKER             $C0FF02 /* DOCUMENTAL: the 4-byte menu capability marker in snes/header.a65 ('S','2',ver,rsvd). The MCU reads it with sram_readblock(SRAM_MENU_ADDR + 0xFF02) once per sysinfo entry to tell a v2-capable menu from an old one; nothing on the menu side reads this address. */
 #define LAST_GAME                   $FF1420
 #define LAST_GAME_DIR               $FF1F00
 #define WRAM_BAK                    $FF2000

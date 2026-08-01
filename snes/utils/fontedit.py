@@ -11,6 +11,7 @@ Usage:
     python3 fontedit.py show <code>        Render a single char
     python3 fontedit.py addaccents         Insert PT-BR accented chars
     python3 fontedit.py addfrench          Insert French chars (è ù î ï ë û)
+    python3 fontedit.py additalian         Insert Italian chars (ì ò È Ì Ò Ù)
     python3 fontedit.py addscrollbar       Write scrollbar glyphs (codes 16,17)
 
 The PT-BR insertion writes 24 new tiles into empty slots and prints the
@@ -21,6 +22,9 @@ marks and writes ONLY the 6 new slots (224-229), preserving every other tile
 (so the hand-made Spanish glyphs and the art in 161-223 are untouched). At 8x8
 the diaeresis and circumflex collapse to the same two-dot mark, so ë==ê and
 ï==î byte-for-byte (see DIAERESIS below).
+
+`additalian` follows the same targeted pattern for codes 230-235 and introduces
+no new mark: every Italian glyph is the existing GRAVE over its base letter.
 """
 
 import re
@@ -42,6 +46,11 @@ ACCENT_MAP = {
     # gameinfo reuses 160/161/176/177 for the chip icon OBJ. 224-255 are blank
     # and unreferenced, so the French block lives there):
     "è": 224, "ù": 225, "î": 226, "ï": 227, "ë": 228, "û": 229,
+    # Italian additions. The lowercase graves the earlier blocks never needed
+    # (à/è/ù already exist), plus the uppercase graves: Italian headers are drawn
+    # in caps by the in-game menu and "E'" is not an acceptable stand-in for "È",
+    # which opens a large share of sentences:
+    "ì": 230, "ò": 231, "È": 232, "Ì": 233, "Ò": 234, "Ù": 235,
 }
 
 BYTE_RE = re.compile(r"\$([0-9a-fA-F]{2})")
@@ -246,6 +255,39 @@ def add_french():
         print(render_ascii(tile_to_pixels(new_tiles[code])))
 
 
+# -- Italian accents (targeted: writes ONLY the 6 new slots) ----------------
+# Same discipline as add_french: touches ONLY codes 230-235, so the hand-made
+# Spanish glyphs, the art in 161-223 and the French block stay byte-for-byte.
+# Every mark here is the existing GRAVE, so no new accent art is introduced --
+# the uppercase forms reuse the proven À (143) construction on their own base.
+ITALIAN_BASE = {
+    "ì": ("i", GRAVE), "ò": ("o", GRAVE),
+    "È": ("E", GRAVE), "Ì": ("I", GRAVE),
+    "Ò": ("O", GRAVE), "Ù": ("U", GRAVE),
+}
+
+
+def add_italian():
+    header, tiles = load_font()
+    new_tiles = dict(enumerate(tiles))  # code -> tile (start from current file)
+    for ch, (base_letter, mark) in ITALIAN_BASE.items():
+        code = ACCENT_MAP[ch]
+        new_tiles[code] = pixels_to_tile(with_accent(base_letter, mark, tiles))
+
+    out_lines = list(header)
+    total = max(len(tiles), max(new_tiles) + 1)
+    for code in range(total):
+        tile = new_tiles.get(code, [0] * 16)
+        label = "font" if code == 0 else None
+        out_lines.extend(encode_tile_lines(tile, label=label))
+    FONT.write_text("\n".join(out_lines) + "\n")
+    print(f"Updated {FONT}")
+    for ch, (base_letter, mark) in ITALIAN_BASE.items():
+        code = ACCENT_MAP[ch]
+        print(f"  {ch} = {code} (base {base_letter!r})")
+        print(render_ascii(tile_to_pixels(new_tiles[code])))
+
+
 # -- Scrollbar glyphs (Y-mode game-info full description) --------------------
 # Two solid vertical bars used by gi_desc_scrollbar in gameinfo.a65. Both fill
 # all 8 rows so adjacent cells join into a continuous bar. Codes 16/17 are in
@@ -294,6 +336,8 @@ def main():
         add_accents()
     elif cmd == "addfrench":
         add_french()
+    elif cmd == "additalian":
+        add_italian()
     elif cmd == "addscrollbar":
         add_scrollbar()
     else:
