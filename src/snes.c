@@ -47,6 +47,9 @@
 #include "hwinfo.h"
 #include "msu1.h"   /* menu_sfx_* : menu sound effects via the MSU-1 DAC */
 #include "gameinfo.h" /* gameinfo_fmv_idle_check : stop a lingering FMV when its screen closes */
+#include "cheat.h"
+#include "savestate.h"
+#include "manual.h"
 
 uint32_t saveram_crc, saveram_crc_old;
 uint32_t bs_pack_crc, bs_pack_crc_old; /* BS Memory Pack autosave */
@@ -439,6 +442,100 @@ uint8_t snes_main_loop() {
   }
 
   return snes_get_mcu_cmd();
+}
+
+/*
+ * Commands the in-game TAB menu (igmenu.bin) and the cheat overlay issue while a
+ * game runs.  Served here, ONCE, because there are TWO game loops: the normal one
+ * (main.c) and the parallel MSU-1 one (msu1_loop, msu1.c).  The MSU loop used to
+ * let these fall through to its default arm, which ACKs (freeing the shell's
+ * bounded spin) without doing the work -- so on any MSU-1 title the GUIDES viewer,
+ * the SAVES slot selector, the cheat name window and the master cheat switch all
+ * looked alive and did nothing.  Keeping one body is also what stops the two loops
+ * from drifting again as commands are added.
+ *
+ * Returns 1 when the command was served; 0 leaves it to the caller's own switch
+ * (resets and anything loop-specific, which differ between the two loops).
+ *
+ * msu_dac_hold/release bracket the arms that block on the SD card: the DAC buffer
+ * is 2 KB (~11.6 ms) and a page stage blocks far longer, so a playing MSU-1 track
+ * would re-wrap the last buffer audibly.  Both are no-ops when nothing is playing,
+ * which is always the case outside an MSU-1 game.
+ */
+uint8_t game_cmd_serve(uint8_t cmd) {
+  switch(cmd) {
+    case SNES_CMD_SAVESTATE:
+      msu_dac_hold();
+      save_backup_state();
+      msu_dac_release();
+      break;
+    case SNES_CMD_LOADSTATE:
+      msu_dac_hold();
+      load_backup_state();
+      msu_dac_release();
+      break;
+    case SNES_CMD_CHEAT_REPROGRAM:
+      cheat_reprogram_from_mirror();
+      break;
+    case SNES_CMD_ENABLE_CHEATS:
+    case SNES_CMD_DISABLE_CHEATS:
+      /* Master cheat switch (L+R+Start+A / +B combos, and X on the in-game CHEATS
+         tab). The FPGA has ALREADY flipped cheat_enable by the time we get here --
+         cheat.v decodes the very write to MCU_CMD that delivered this command -- so
+         nothing here needs to touch the switch to make it take effect. What we do is
+         keep the MCU's own view consistent: CFG.enable_cheats is what cheat_program()
+         re-applies, so without this a later reprogram (e.g. closing the overlay after
+         toggling a cheat) would silently undo the combo. Runtime only: NOT persisted
+         to config.yml (writing the SD with the SNES frozen in the overlay is the
+         documented way to wedge the MCU). */
+      CFG.enable_cheats = (cmd == SNES_CMD_ENABLE_CHEATS) ? 1 : 0;
+      sram_writebyte(CFG.enable_cheats ? 1 : 0, SRAM_CHEAT_MASTER_ADDR);
+      break;
+    case SNES_CMD_CHEAT_NAMES_WINDOW:
+      /* in-game cheat overlay: stage the sliding 64-name window at the requested base
+         (MCU_PARAM low 16 = absolute base index) from the $D00000 records so ALL cheats
+         can be listed. Bounded (64 reads, no SD); the caller's snes_set_mcu_cmd(0) ACKs. */
+      cheat_stage_names_window((int)(snes_get_mcu_param() & 0xffff));
+      break;
+    case SNES_CMD_SET_SRM_SLOT:
+      /* in-game SAVES tab: persist the selected SRAM slot to the sidecar (consumed on
+         the NEXT game load) + refresh the status block. NEVER changes the live session
+         slot -> an in-game switch cannot misroute an autosave. Bounded (1 f_write +
+         f_stat loop). */
+      msu_dac_hold();
+      srm_slot_save(file_lfn, (uint8_t)(snes_get_mcu_param() & 0x03));
+      saveinfo_stage(file_lfn);
+      msu_dac_release();
+      break;
+    case SNES_CMD_MANUAL_ZPAGE: {
+      /* in-game guides viewer, scrollable 2x zoom: stage ONE WHOLE 2x page (<=119KB)
+         into PSRAM $C5/$C6. MCU_PARAM: [0] = compacted guide (0..7), [1] = zoom page
+         (== the 1x block index). After this the viewer pans with pure PSRAM->VRAM DMA
+         and issues NO further commands until it turns the page, which is exactly why
+         the pan cannot stall. Bounded + fail-safe. */
+      uint32_t p = snes_get_mcu_param();
+      msu_dac_hold();
+      manual_stage_zpage((uint8_t)(p & 0xff),              /* guide (compacted) */
+                         (uint16_t)((p >> 8) & 0xffff),    /* block or zoom page */
+                         (uint8_t)((p >> 24) & 0xff));     /* mode: bit0 = page */
+      msu_dac_release();
+      break;
+    }
+    case SNES_CMD_MANUAL_S1PAGE: {
+      /* in-game guides viewer, scrollable 1x: stage one whole scale-1 page so the 1x
+         view pans over the page instead of jumping band to band. Its PSRAM region is
+         separate from the 2x page, so both stay resident and Y toggles instantly.
+         MCU_PARAM: [0] = guide, [1..2] = page. Bounded + fail-safe. */
+      uint32_t p = snes_get_mcu_param();
+      msu_dac_hold();
+      manual_stage_s1page((uint8_t)(p & 0xff), (uint16_t)((p >> 8) & 0xffff));
+      msu_dac_release();
+      break;
+    }
+    default:
+      return 0;   /* not ours: the caller's switch decides */
+  }
+  return 1;
 }
 
 /*

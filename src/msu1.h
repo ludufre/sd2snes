@@ -41,6 +41,8 @@
 
 int msu1_check(uint8_t*);
 int msu1_loop(void);
+void msu_dac_hold(void);      /* pause the DAC around a blocking op (no-op if idle) */
+void msu_dac_release(void);   /* resume it (no-op if idle) */
 
 /* Menu navigation sound effects via the MSU-1 DAC, one-shot (see msu1.c). */
 void menu_sfx_play(const char *filename); /* play one MSU-1 PCM once; silent if absent/bad */

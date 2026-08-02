@@ -246,6 +246,9 @@ uint8_t get_snes_reset(void);
 uint8_t get_snes_reset_state(void);
 uint8_t snes_reset_loop(void);
 uint8_t snes_main_loop(void);
+/* serves the in-game shell / overlay commands shared by BOTH game loops (main.c and
+   msu1_loop); returns 0 for commands the caller must handle itself. See snes.c. */
+uint8_t game_cmd_serve(uint8_t cmd);
 uint8_t menu_main_loop(void);
 void get_selected_name(uint8_t* lfn);
 void snes_bootprint(int line, void* fmt, ...);

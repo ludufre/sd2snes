@@ -1284,6 +1284,14 @@ int main(void) {
 
     if(romprops.has_msu1) {
       while(!msu1_loop());
+      /* An MSU-1 game runs its own loop instead of the one below, so the
+         reset-to-menu flag has to be raised HERE too: msu1_loop only ever
+         returns 1 for a long reset or the $81 combo, i.e. exactly the two
+         cases the normal loop flags. Without it the menu boots with
+         ST_RESET_TO_MENU_ACTIVE = 0 and never runs filesel_nav_last, so
+         "Reset to menu" Folder/ROM silently degrades to the root folder on
+         every MSU-1 title. */
+      STM.reset_to_menu_active = (CFG.reset_to_menu >= 2) ? 1 : 0;
       prepare_reset();
       continue;
     }
@@ -1330,7 +1338,11 @@ int main(void) {
           if (usb_cmd && !cmd) cmd = usb_cmd;
           if(cmd) {
             printf("snes loop cmd=%02x\n", cmd);
-            switch(cmd) {
+            /* in-game shell / overlay commands are served by the shared dispatcher
+               (snes.c), which the parallel MSU-1 loop calls too -- one body, so the
+               two loops cannot drift. Only loop-specific arms remain below. */
+            if(game_cmd_serve(cmd)) usb_cmd = 0;
+            else switch(cmd) {
               case SNES_CMD_RESET_LOOP_PASS:
               case SNES_CMD_RESET_LOOP_FAIL:
                 usb_cmd = 0;
@@ -1347,74 +1359,6 @@ int main(void) {
                 STM.reset_to_menu_active = (CFG.reset_to_menu >= 2) ? 1 : 0;
                 prepare_reset();
                 goto snes_loop_out;
-              case SNES_CMD_SAVESTATE:
-                usb_cmd = 0;
-                save_backup_state();
-                break;
-              case SNES_CMD_LOADSTATE:
-                usb_cmd = 0;
-                load_backup_state();
-                break;
-              case SNES_CMD_CHEAT_REPROGRAM:
-                usb_cmd = 0;
-                cheat_reprogram_from_mirror();
-                break;
-              case SNES_CMD_ENABLE_CHEATS:
-              case SNES_CMD_DISABLE_CHEATS:
-                /* Master cheat switch (L+R+Start+A / +B combos, and X on the in-game
-                   CHEATS tab). The FPGA has ALREADY flipped cheat_enable by the time we
-                   get here -- cheat.v decodes the very write to MCU_CMD that delivered
-                   this command -- so nothing here needs to touch the switch to make it
-                   take effect. What we do is keep the MCU's own view consistent:
-                   CFG.enable_cheats is what cheat_program() re-applies, so without this
-                   a later reprogram (e.g. closing the overlay after toggling a cheat)
-                   would silently undo the combo. Runtime only: NOT persisted to
-                   config.yml (writing the SD with the SNES frozen in the overlay is the
-                   documented way to wedge the MCU). */
-                usb_cmd = 0;
-                CFG.enable_cheats = (cmd == SNES_CMD_ENABLE_CHEATS) ? 1 : 0;
-                sram_writebyte(CFG.enable_cheats ? 1 : 0, SRAM_CHEAT_MASTER_ADDR);
-                break;
-              case SNES_CMD_MANUAL_ZPAGE:
-                /* in-game guides viewer, scrollable 2x zoom: stage ONE WHOLE 2x page (<=119KB)
-                   into PSRAM $C5/$C6. MCU_PARAM: [0] = compacted guide (0..7), [1] = zoom page
-                   (== the 1x block index). After this the viewer pans with pure PSRAM->VRAM DMA
-                   and issues NO further commands until it turns the page, which is exactly why
-                   the pan cannot stall. Bounded + fail-safe; snes_set_mcu_cmd(0) below is the ACK. */
-                usb_cmd = 0;
-                { uint32_t p = snes_get_mcu_param();
-                  manual_stage_zpage((uint8_t)(p & 0xff),              /* guide (compacted) */
-                                     (uint16_t)((p >> 8) & 0xffff),    /* block or zoom page */
-                                     (uint8_t)((p >> 24) & 0xff));     /* mode: bit0 = page */
-                }
-                break;
-              case SNES_CMD_MANUAL_S1PAGE:
-                /* in-game guides viewer, scrollable 1x: stage one whole scale-1 page so the 1x
-                   view pans over the page instead of jumping band to band. Its PSRAM region is
-                   separate from the 2x page, so both stay resident and Y toggles instantly.
-                   MCU_PARAM: [0] = guide, [1..2] = page. Bounded + fail-safe. */
-                usb_cmd = 0;
-                { uint32_t p = snes_get_mcu_param();
-                  manual_stage_s1page((uint8_t)(p & 0xff),
-                                      (uint16_t)((p >> 8) & 0xffff));
-                }
-                break;
-              case SNES_CMD_CHEAT_NAMES_WINDOW:
-                /* in-game cheat overlay: stage the sliding 64-name window at the requested base
-                   (MCU_PARAM low 16 = absolute base index) from the $D00000 records so ALL cheats
-                   can be listed. Bounded (64 reads, no SD); snes_set_mcu_cmd(0) below is the ACK. */
-                usb_cmd = 0;
-                cheat_stage_names_window((int)(snes_get_mcu_param() & 0xffff));
-                break;
-              case SNES_CMD_SET_SRM_SLOT:
-                /* in-game SAVES tab: persist the selected SRAM slot to the sidecar
-                   (consumed on the NEXT game load) + refresh the status block. NEVER
-                   changes the live session slot -> an in-game switch cannot misroute
-                   an autosave. Bounded (1 f_write + f_stat loop); ACK = snes_set_mcu_cmd(0). */
-                usb_cmd = 0;
-                srm_slot_save(file_lfn, (uint8_t)(snes_get_mcu_param() & 0x03));
-                saveinfo_stage(file_lfn);
-                break;
               case SNES_CMD_COMBO_TRANSITION:
                 usb_cmd = 0;
                 load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_COMBO | LOADROM_WITH_RESET);

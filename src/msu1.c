@@ -18,6 +18,7 @@
 #include "savestate.h"
 #include "cheat.h"
 #include "cfg.h"
+#include "manual.h"
 
 FIL msudata;
 FIL msuaudio;
@@ -44,6 +45,7 @@ uint16_t fpga_status_now = 0;
 
 inline int is_msu_free_to_save(void);
 extern volatile cfg_t CFG;
+extern volatile int reset_changed;   /* set by the reset-line edge (snes.c) */
 
 int msu_audio_usage = MSU_IDLE;
 int msu_data_usage = MSU_IDLE;
@@ -58,6 +60,19 @@ void save_during_msu_shortreset(void) {
     writeled(0);
   }
   snes_reset(0);
+}
+
+/* Pause / resume the DAC around a long blocking operation (SD access) so a playing
+   MSU-1 track doesn't re-wrap its 2 KB buffer audibly.  Both are no-ops unless a
+   track is actually playing, which lets the shared command dispatcher
+   (game_cmd_serve, snes.c) call them unconditionally -- outside an MSU-1 game
+   msu_audio_usage is always MSU_IDLE. */
+void msu_dac_hold(void) {
+  if(msu_audio_usage == MSU_BUSY) dac_pause();
+}
+
+void msu_dac_release(void) {
+  if(msu_audio_usage == MSU_BUSY) dac_play();
 }
 
 /* returns true if no MSU feature is in use at the moment so the SD card
@@ -292,34 +307,71 @@ int msu1_loop() {
   fpga_status_prev = fpga_status();
   fpga_status_now = fpga_status();
   while(msu_res == SNES_RESET_NONE){
-    msu_res = get_snes_reset_state();
+    /* FPGA liveness.  The main loop makes this its while condition and led_panics on
+       the way out; this loop had no check at all, so a dead FPGA left it spinning on
+       garbage status words with nothing to show for it.  led_panic never returns. */
+    if(fpga_test() != FPGA_TEST_TOKEN) led_panic(LED_PANIC_FPGA_DEAD);
     cmd = snes_get_mcu_cmd();
+    /* Serve USB-issued commands (RESET / MENU_RESET) exactly like the ones from
+       the SNES.  This used to run AFTER the switch and only assign to cmd, which
+       the next iteration overwrote with snes_get_mcu_cmd() -- so every USB command
+       was silently dropped and MENU_RESET (flash.sh, Web Manager) did nothing while
+       an MSU-1 game was running.  SNES commands win; GAMELOOP just means "you are
+       already in the game loop", consumed here like the main loop does. */
+    if(!cmd) {
+      cmd = usbint_handler();
+      if(cmd == SNES_CMD_GAMELOOP) cmd = 0;
+    }
+    /* A USB-driven boot/reset drives the reset line itself while usbint_handler works.
+       Skip the rest of the pass like the main loop does -- and note this HAS to come
+       before get_snes_reset_state(), which would otherwise read the line the server is
+       driving as a user reset and tear the game down mid-transfer. */
+    if(usbint_server_reset()) continue;
+    /* Console reset sensed mid-game: re-arm the SRTC.  This loop only did it on the way
+       out, so an SRTC game that was reset during play kept running on the stale state. */
+    if(reset_changed) {
+      printf("reset\n");
+      reset_changed = 0;
+      fpga_reset_srtc_state();
+    }
+    msu_res = get_snes_reset_state();
+    /* Combo carts: snes_reset_loop() only reloads slot 0 when the reset came from the
+       button or a combo (snes.c).  The main loop raises this flag on a short reset and
+       in the RESET arm below; the MSU loop raised it nowhere. */
+    if(msu_res == SNES_RESET_SHORT) resetButtonState = 1;
     if(cmd) {
-      switch(cmd) {
+      /* everything the in-game shell and the overlay issue is served by the shared
+         dispatcher (snes.c), so this loop and the main one can never drift again.
+         What stays here is what genuinely differs: leaving the loop restarts MSU
+         streaming from scratch, which the main loop has no notion of. */
+      if(!game_cmd_serve(cmd)) switch(cmd) {
         case SNES_CMD_RESET_LOOP_FAIL:
           msu_res = SNES_RESET_SHORT;
           snes_reset_loop();
           break;
         case SNES_CMD_RESET:
           msu_res = SNES_RESET_SHORT;
+          resetButtonState = 1;   /* force the full ROM reset on a combo cart */
           snes_reset_pulse();
           break;
         case SNES_CMD_RESET_TO_MENU:
           msu_res = SNES_RESET_LONG;
           break;
-        case SNES_CMD_SAVESTATE:
-          if(msu_audio_usage == MSU_BUSY) dac_pause();
-          save_backup_state();
-          if(msu_audio_usage == MSU_BUSY) dac_play();
-          break;
-        case SNES_CMD_LOADSTATE:
-          if(msu_audio_usage == MSU_BUSY) dac_pause();
-          load_backup_state();
-          if(msu_audio_usage == MSU_BUSY) dac_play();
-          break;
-        case SNES_CMD_CHEAT_REPROGRAM:
-          cheat_reprogram_from_mirror();
-          break;
+        case SNES_CMD_COMBO_TRANSITION:
+          /* multicart slot switch.  The reload runs msu1_check() again, which
+             reopens .msu behind our back, so every streaming offset we hold is
+             stale.  Return 0 instead of continuing: main.c loops on
+             `while(!msu1_loop())`, so it re-enters and rebuilds the whole MSU
+             state (handles, buffer pages, DAC, track) from scratch.  The short-
+             reset save is skipped on purpose -- the reload already reset the SNES,
+             exactly like the main loop's own COMBO_TRANSITION arm. */
+          dac_pause();
+          f_close(&msuaudio);
+          msu_audio_usage = MSU_IDLE;
+          msu_data_usage = MSU_IDLE;
+          load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_COMBO | LOADROM_WITH_RESET);
+          snes_set_mcu_cmd(0);
+          return 0;
         default:
           printf("unknown cmd: %02x\n", cmd);
           break;
@@ -327,7 +379,6 @@ int msu1_loop() {
       snes_set_mcu_cmd(0);
     }
     cli_entrycheck();
-    if (!cmd) { cmd = usbint_handler(); }
 
     fpga_status_now = fpga_status();
 
@@ -349,11 +400,17 @@ int msu1_loop() {
       set_msu_addr(msu_addr);
       sd_offload_tgt = 2;
       ff_sd_offload = 1;
-      msu_res = f_read(&msudata, file_buf, MSU_DATA_BUFSIZE / 2, &msu_data_bytes_read);
+      /* NOT into msu_res: that variable carries the pending reset request and is
+         the loop's exit condition.  Storing FR_OK (== SNES_RESET_NONE) here threw
+         away a SNES_RESET_LONG raised earlier in the SAME iteration -- the SNES
+         had already parked itself in nmi_stop and the MCU_CMD was already ACKed,
+         so the console stayed frozen on a black screen and never reached the menu. */
+      FRESULT refill_res = f_read(&msudata, file_buf, MSU_DATA_BUFSIZE / 2, &msu_data_bytes_read);
       if(f_eof(&msudata)) {
         msu_data_usage = MSU_IDLE;
       }
-      DBG_MSU1 printf("data page %d refilled. res=%d page1=%08lx page2=%08lx\n", msu_addr ? 2 : 1, msu_res, msu_page1_start, msu_page2_start);
+      DBG_MSU1 printf("data page %d refilled. res=%d page1=%08lx page2=%08lx\n", msu_addr ? 2 : 1, refill_res, msu_page1_start, msu_page2_start);
+      (void)refill_res;
     }
 
     /* Audio buffer refill */
