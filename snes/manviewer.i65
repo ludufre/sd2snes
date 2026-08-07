@@ -120,6 +120,20 @@ manual_viewer_enter:
 	lda @man_pos_frx   : sta @man_frx           // and the zoom-area box (was reset to centre)
 	lda @man_pos_fry   : sta @man_fry
 mve_nopos:
+	lda @man_s1page
+	jsr man_s1page_req                           // PRE-STAGE with the screen still ALIVE: the
+	                                             //   request only drives the MCU mailbox and
+	                                             //   PSRAM, nothing needs the PPU yet. The show
+	                                             //   below re-requests the same page and hits
+	                                             //   the MCU's residency skip, so the forced-
+	                                             //   blank window shrinks from the whole stage
+	                                             //   (~700ms on a big guide -- long enough for
+	                                             //   scaler/capture chains to re-lock and
+	                                             //   visibly ROLL when the picture returns)
+	                                             //   down to a page-turn's VRAM refill. A
+	                                             //   failure here is deliberately ignored: the
+	                                             //   show's own request retries, and its error
+	                                             //   path still runs on a real timeout.
 	jsr man_host_enter                           // HOST: quiesce its own draw pipeline, then
 	                                             //   snapshot the screen it wants back on exit
 	lda @man_modal : ora #$0001 : sta @man_modal   // enter viewer sub-mode
@@ -831,11 +845,17 @@ man_s1_setup:
 	lda #$3c : sta @$002107                      // BG1SC: map word $3C00, 32x32
 	lda #$00 : sta @$00210b                      // BG12NBA: BG1 char word $0000
 	lda #MN_S1_OBJSEL : sta @$002101             // OBJ name base word $4000
-	lda #$00 : sta @$002133
-	sta @$002106
+	lda #$08 : sta @$002133                      // KEEP pseudo-512: both hosts' shells run the
+	                                             //   mode-5 text setup with $2133.3 set, and
+	                                             //   flipping the dot clock 512->256 here (and
+	                                             //   back on exit) makes scalers/captures re-lock
+	                                             //   = a visible sync roll on every viewer open.
+	                                             //   Same-pixel sub-screen mirror below makes
+	                                             //   pseudo-hires render identical to 256 dots
+	                                             //   (the game-info screen's proven trick).
+	lda #$00 : sta @$002106
 	sta @$002130
 	sta @$002131
-	sta @$00212d
 	sta @$002123                                 // no windows at all in 1x
 	sta @$002124
 	sta @$002125
@@ -844,6 +864,7 @@ man_s1_setup:
 	sta @$00212e
 	sta @$00212f
 	lda #$11 : sta @$00212c                      // main screen: BG1 + OBJ (the HUD)
+	sta @$00212d                                 // sub screen: SAME (pseudo-512 pixel mirror)
 	lda #$00 : sta @$00210d : sta @$00210d       // H scroll 0 -- page is screen-width
 	rep #$30 : .al : .xl
 	lda #MN_S1_OBJ_VW : sta @man_obj_base
@@ -1155,21 +1176,24 @@ man_setup_mode1_zoom:
 	lda #$7c : sta @$002108                      // BG2SC: map word $7C00, 32x32
 	lda #$40 : sta @$00210b                      // BG12NBA: BG1 char $0000, BG2 char $4000
 	lda #$00 : sta @$002101                      // OBJSEL: 8x8/16x16, name base word $0000
-	lda #$00 : sta @$002133                      // no pseudo-hires / interlace
-	sta @$002106                                 // mosaic off
+	lda #$08 : sta @$002133                      // KEEP pseudo-512 (see man_s1_setup: flipping the
+	                                             //   dot clock makes scalers re-lock = sync roll)
+	lda #$00 : sta @$002106                      // mosaic off
 	sta @$002130                                 // colour math off
 	sta @$002131
-	sta @$00212d                                 // sub screen off
 	sta @$002124                                 // BG3/BG4 window select off
 	sta @$002125                                 // OBJ/colour window select off
 	sta @$00212a                                 // window logic
 	sta @$00212b
-	sta @$00212f                                 // sub-screen window mask off
 	// window 1 splits the two halves: BG1 enabled non-inverted, BG2 enabled INVERTED, so the
 	// single [split,255] region clips BG1 on the right and BG2 everywhere else.
 	lda #$32 : sta @$002123                      // W12SEL: BG1 win1, BG2 win1+invert
 	lda #$03 : sta @$00212e                      // TMW: window-clip BG1 and BG2 (NOT OBJ)
+	sta @$00212f                                 // TSW: SAME clip on the sub screen -- the mirror
+	                                             //   below only renders identical to 256 dots if
+	                                             //   sub == main per pixel, windows included
 	lda #$13 : sta @$00212c                      // main screen: BG1 + BG2 + OBJ (the HUD)
+	sta @$00212d                                 // sub screen: SAME (pseudo-512 pixel mirror)
 	rep #$30 : .al : .xl
 	lda #$0000 : sta @man_obj_base               // 2x: OBJ tiles at word 0 (VRAM is full there)
 	jsr man_obj_hide                             // no stale sprites before the HUD is drawn

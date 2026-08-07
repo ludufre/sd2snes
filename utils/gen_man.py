@@ -36,6 +36,12 @@ Pipeline (encode):
     hardware scroll. (Cutting zoom at band boundaries made the view jump at the
     half-way point of every page -- do not reintroduce that.) A page taller than
     the resident budget is split into several zoom pages.
+  --spread auto|on|off (default auto): a PDF page whose aspect (w/h) crosses
+    SPREAD_AR is a 2-page spread scan laid flat; fit-width would squeeze each
+    printed page into HALF the pixel budget (illegible after quantization).
+    Split pages are re-rendered at double width (512/1024) and emitted as TWO
+    pages (left, right) -- each half IS one printed page, so the emitted
+    sequence stays the book's own pagination and each gets the full budget.
 
 Block layout (fixed 57856 B = 113 * 512, sector-aligned; 1x and zoom blocks
 are byte-for-byte the SAME shape, so the viewer's block-DMA path is unchanged
@@ -109,6 +115,7 @@ Compat (both directions clean, which is why bit0 is retired rather than reused):
 
 Usage:
   gen_man.py <input.pdf> -o <out.man> [--title "Texto"] [--zoom]
+                                      [--spread auto|on|off] [--no-sharpen]
   gen_man.py --verify <man>                        structural audit (no -o needed)
   gen_man.py --verify <man> --block N -o out.png   round-trip a 1x block to PNG
   gen_man.py --verify <man> --zoom-page P -o out.png   round-trip a zoom page
@@ -116,7 +123,7 @@ Usage:
 """
 import os, re, sys, struct, argparse, subprocess, tempfile, glob
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFilter
 import numpy as np
 # reuse the fork's canonical 8bpp PLANAR tile codec (bitplanes interleaved, MSB-first)
 # so the .man tiles match what the mode-3 BG1 8bpp viewer DMAs straight to VRAM.
@@ -191,8 +198,32 @@ ZMAP_STRUCT  = "<HH"                            # per 1x block: zoom page, Y wit
 S1TILES_W    = PAGE_W // 8                      # 32
 S1ROW_BYTES  = S1TILES_W * ZTILE_BYTES          # 1024 = 2 sectors
 S1ATTR_STRIDE = S1TILES_W                       # 32 attr bytes / tile row
-S1MAX_ROWS   = 64
+S1MAX_ROWS   = 64                               # PSRAM capacity clamp (bank $C3), NOT the cut size
+# SCL1 chunk height: 48 rows = 384 1x px = HALF a zoom chunk (768 2x px). The viewer pairs 1x page p
+# with zoom page p (Y2 = 2*Y1) with NO cross-count fallback, so both sections MUST cut into the same
+# number of chunks for any page height: ceil(H1/384) == ceil(2*H1/768). Cutting at the 64-row
+# capacity instead breaks the pairing for tall pages (H1 in (384,512]: 1 SCL1 chunk vs 2 zoom
+# chunks -> the A toggle on the 2nd zoom page has no 1x page to return to).
+S1CHUNK_ROWS = 48
 S1HDR_MAGIC  = b"SCL1"
+# A page wider than SPREAD_AR * height is a 2-page spread scan laid flat (see --spread). 1.6 catches
+# real spreads (2 landscape pages ~2.8, 2 squarish ~1.8) while a single landscape A4 (1.414) stays
+# whole; 2 portrait pages side by side also land at ~1.414 -- that false negative is what
+# --spread on is for. Splitting is RECURSIVE: a piece still at/over the threshold is halved again
+# (cover WRAPS scan at ~4.8:1 and fold-outs at ~3.3:1 -- one halving leaves them at 2.4/1.65, still
+# a sliver on screen), capped at SPREAD_MAX_SPLITS halvings (4 pieces covers aspect < 6.4).
+SPREAD_AR    = 1.6
+SPREAD_MAX_SPLITS = 2
+
+
+def spread_split_factor(width, height):
+    """Number of halvings (0..SPREAD_MAX_SPLITS) so every emitted piece is < SPREAD_AR."""
+    k = 0
+    ar = width / height if height else 0.0
+    while k < SPREAD_MAX_SPLITS and ar >= SPREAD_AR:
+        ar /= 2.0
+        k += 1
+    return k
 ZLLOYD_ITERS = 6                                # fixed count -> deterministic output.
 # Measured on a scanned 32-page manual (the hard case): 1 iter = 26.08 dB mean over the 5 worst
 # pages, 3 = 26.37, 6 = 26.69, 12 = 27.04, at 0.07 / 0.08 / 0.10 / 0.13 s per page. Returns are
@@ -578,10 +609,63 @@ def zoom_band(page2x, y0, y1):
     return page2x[2 * y0:min(2 * y1, page2x.shape[0])]
 
 
-def encode(pdf_path, out_path, title=None, zoom=False):
+def _unsharp(a):
+    """Pre-quantize sharpen (mild unsharp mask). Applied to the QUANTIZER INPUTS
+    only -- the seam finder keeps reading the original page, so the HEAD region
+    (header/index/dirs) is identical with sharpen on or off."""
+    im = Image.fromarray(np.ascontiguousarray(a), "RGB")
+    return np.asarray(im.filter(ImageFilter.UnsharpMask(radius=1, percent=80,
+                                                        threshold=0)), dtype=np.uint8)
+
+
+def encode(pdf_path, out_path, title=None, zoom=False, spread="auto", sharpen=True):
     with tempfile.TemporaryDirectory() as wd:
-        pages = render_pdf(pdf_path, wd, PAGE_W)
-        pages2x = render_pdf(pdf_path, wd, PAGE_W * 2) if zoom else None
+        p256 = render_pdf(pdf_path, wd, PAGE_W)
+        if not p256:
+            raise SystemExit("no pages rendered from PDF")
+        if len(p256) > 255:
+            raise SystemExit("PDF has >255 pages (npages is a u8)")
+        if spread == "off":
+            ks = [0] * len(p256)
+        else:
+            ks = [spread_split_factor(p.shape[1], p.shape[0]) for p in p256]
+            if spread == "on":
+                ks = [max(1, k) for k in ks]
+        # one whole-document render per distinct source width: piece k needs the page at
+        # 256*2^k (1x) and 512*2^k (2x), sliced into 2^k equal columns of 256/512.
+        widths = set()
+        for k in ks:
+            if k > 0:
+                widths.add(PAGE_W << k)      # k=0 reuses the base 256 render
+            if zoom:
+                widths.add((PAGE_W * 2) << k)
+        renders = {w: render_pdf(pdf_path, wd, w) for w in sorted(widths)}
+        for w, pl in renders.items():
+            if len(pl) != len(p256):
+                raise SystemExit(f"render page count mismatch at {w}px vs 1x")
+
+        def slices(arr, k):
+            n = 1 << k
+            cw = arr.shape[1] // n
+            return [np.ascontiguousarray(arr[:, j * cw:(j + 1) * cw]) for j in range(n)]
+
+        # Assemble in reading order: a split spread contributes its pieces left-to-right --
+        # each piece IS (a column of) one printed page, so the emitted sequence follows the
+        # book's own pagination (and "Pg X/N" counts emitted pages).
+        pages = []
+        pages2x = [] if zoom else None
+        for i, k in enumerate(ks):
+            if k == 0:
+                pages.append(p256[i])
+                if zoom:
+                    pages2x.append(renders[PAGE_W * 2][i])
+            else:
+                pages.extend(slices(renders[PAGE_W << k][i], k))
+                if zoom:
+                    pages2x.extend(slices(renders[(PAGE_W * 2) << k][i], k))
+        if len(pages) > 255:
+            raise SystemExit(f"spread split produces {len(pages)} pages (npages is a "
+                             f"u8, max 255) -- use --spread off or trim the PDF")
         if zoom:
             # Seam-lock invariant: force each 2x page to be EXACTLY double the
             # matching 1x page's shape. pdftoppm scales each render (-scale-to-x
@@ -596,12 +680,6 @@ def encode(pdf_path, out_path, title=None, zoom=False):
                         (target_w, target_h), Image.LANCZOS)
                     pages2x[i] = np.asarray(im, dtype=np.uint8)
     npages = len(pages)
-    if npages == 0:
-        raise SystemExit("no pages rendered from PDF")
-    if npages > 255:
-        raise SystemExit("PDF has >255 pages (npages is a u8)")
-    if zoom and len(pages2x) != npages:
-        raise SystemExit("zoom render page count mismatch (2x vs 1x)")
 
     blocks, index = [], []              # 1x blocks: legacy 8bpp stream (still emitted; the viewer
                                         #   now reads the scale-1 SCROLLABLE section instead)
@@ -620,13 +698,15 @@ def encode(pdf_path, out_path, title=None, zoom=False):
             index.append((pi, bi, content_rows, 0))
             blocks.append(None)
         if zoom:
+            sq1 = _unsharp(page) if sharpen else page       # quantizer inputs only
+            sq2 = _unsharp(page2x) if sharpen else page2x
             # The zoom image is the WHOLE 2x page, split only if it exceeds the resident budget.
             H2 = page2x.shape[0]
             nchunks = max(1, (H2 + ZCHUNK_PX - 1) // ZCHUNK_PX)
             zp0 = len(zpages)
             for j in range(nchunks):
                 y0c, y1c = j * ZCHUNK_PX, min((j + 1) * ZCHUNK_PX, H2)
-                zq = quantize_zoom_page(page2x[y0c:y1c])
+                zq = quantize_zoom_page(sq2[y0c:y1c])
                 zpages.append(emit_zoom_page(*zq[:3], zq[3]) + (zq[3], zq[4], pi, None))
             # every 1x band maps to the chunk holding its top scanline, doubled
             for bi, (_b, _c, y0, _y1) in enumerate(bands):
@@ -645,13 +725,14 @@ def encode(pdf_path, out_path, title=None, zoom=False):
             for j in range(nchunks):
                 n = sum(1 for (zp, _zy) in zmap[-len(bands):] if zp == zp0 + j)
                 zpages[zp0 + j] = zpages[zp0 + j] + (max(1, n),)
-            # --- scale 1: the SAME page at 256px, cut the same way, so page p at 1x and page p
-            #     at 2x are the same content and toggling is a pure coordinate scale (x2). ---
+            # --- scale 1: the SAME page at 256px, cut into S1CHUNK_ROWS-tall chunks -- HALF a
+            #     zoom chunk, so both sections always yield the SAME page count and page p at 1x
+            #     and page p at 2x are the same content (toggling is a pure coordinate scale x2). ---
             H1 = page.shape[0]
-            c1 = max(1, (H1 + S1MAX_ROWS * 8 - 1) // (S1MAX_ROWS * 8))
+            c1 = max(1, (H1 + S1CHUNK_ROWS * 8 - 1) // (S1CHUNK_ROWS * 8))
             for j in range(c1):
-                y0c, y1c = j * S1MAX_ROWS * 8, min((j + 1) * S1MAX_ROWS * 8, H1)
-                q1 = quantize_zoom_page(page[y0c:y1c], S1TILES_W)
+                y0c, y1c = j * S1CHUNK_ROWS * 8, min((j + 1) * S1CHUNK_ROWS * 8, H1)
+                q1 = quantize_zoom_page(sq1[y0c:y1c], S1TILES_W)
                 s1pages.append(emit_zoom_page(*q1[:3], q1[3], S1TILES_W) + (q1[3], q1[4], pi))
 
     nblocks = len(blocks)
@@ -948,6 +1029,11 @@ def main(argv):
     ap.add_argument("--title", help="guide title (UTF-8; font-encoded, cap 23 glyphs). "
                                      "Default: derived from the output filename stem.")
     ap.add_argument("--zoom", action="store_true", help="also emit a seam-locked 2x zoom section")
+    ap.add_argument("--spread", choices=("auto", "on", "off"), default="auto",
+                    help="split 2-page spread scans into one emitted page per half "
+                         "(auto = aspect w/h >= %.1f; default auto)" % SPREAD_AR)
+    ap.add_argument("--no-sharpen", action="store_true",
+                    help="skip the pre-quantize unsharp mask (body bytes only)")
     ap.add_argument("--verify", metavar="MAN", help="structural audit of MAN; with a target "
                                                     "below, also round-trip it back to PNG")
     ap.add_argument("--block", type=int, help="1x block index to round-trip")
@@ -974,7 +1060,8 @@ def main(argv):
         ap.error("input PDF required (or use --verify)")
     if not args.out:
         ap.error("-o output .man required")
-    npages, nblocks, nzrows, total = encode(args.input, args.out, args.title, args.zoom)
+    npages, nblocks, nzrows, total = encode(args.input, args.out, args.title, args.zoom,
+                                            spread=args.spread, sharpen=not args.no_sharpen)
     print(f"{args.out}: {npages} pages, {nblocks} blocks"
           f"{f' + {nzrows} zoom tile rows' if nzrows else ''}, {total} bytes "
           f"({total/1024/1024:.2f} MB)")

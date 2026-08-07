@@ -545,10 +545,12 @@ static int man_zmap_lookup(uint8_t guide, uint16_t block, uint16_t *zpage, uint1
    The BG1 half (cols 0-31) and BG2 half (cols 32-63) use the SAME tile numbering because each is
    indexed against its own char base, so one formula serves both. Attr bytes are pre-shifted
    (palette << 2) by the host, so the palette bits are just `attr << 8`. */
-static int man_stage_zattrs(uint32_t attr_ofs, uint16_t nrows) {
+static int man_stage_zattrs(uint32_t attr_ofs, uint16_t nrows, uint16_t row0) {
   UINT     got;
   uint16_t r;
-  uint8_t  slot = 0;                       /* r % MAN_Z_RING_ROWS, kept as a counter: no division */
+  uint8_t  slot = (uint8_t)row0;           /* r % MAN_Z_RING_ROWS, kept as a counter: no division.
+                                              row0 (centering pad, see MAN_VIS_ROWS) is only ever
+                                              nonzero for pages < one window, so slot never wraps */
 
   if(f_lseek(&man_fil, attr_ofs)) return 0;
   for(r = 0; r < nrows; r++) {
@@ -561,7 +563,7 @@ static int man_stage_zattrs(uint32_t attr_ofs, uint16_t nrows) {
       m[c * 2]     = (uint8_t)(tile & 0xff);
       m[c * 2 + 1] = (uint8_t)((tile >> 8) | man_buf[c]); /* attr = pal<<2 == word bits 10-12 */
     }
-    sram_writeblock(m, SRAM_MANUAL_ZTMAP_ADDR + (uint32_t)r * MAN_Z_TMAP_STRIDE,
+    sram_writeblock(m, SRAM_MANUAL_ZTMAP_ADDR + (uint32_t)(row0 + r) * MAN_Z_TMAP_STRIDE,
                     MAN_Z_TMAP_STRIDE);
     if(++slot >= MAN_Z_RING_ROWS) slot = 0;
   }
@@ -571,7 +573,7 @@ static int man_stage_zattrs(uint32_t attr_ofs, uint16_t nrows) {
 /* One sequential pass over the tile rows. Each in-file row is already PRE-SPLIT (1024B of cols
    0-31 then 1024B of cols 32-63), so this is two contiguous copies per row into the two banks --
    no de-interleaving, and no DMA the viewer issues ever crosses a bank boundary. */
-static int man_stage_ztiles(uint32_t tile_ofs, uint16_t nrows) {
+static int man_stage_ztiles(uint32_t tile_ofs, uint16_t nrows, uint16_t row0) {
   UINT     got;
   uint16_t r;
 
@@ -579,8 +581,8 @@ static int man_stage_ztiles(uint32_t tile_ofs, uint16_t nrows) {
   for(r = 0; r < nrows; r++) {
     uint32_t dst[2];
     int      half;
-    dst[0] = SRAM_MANUAL_ZTILES_A_ADDR + (uint32_t)r * MAN_Z_HALF_BYTES;
-    dst[1] = SRAM_MANUAL_ZTILES_B_ADDR + (uint32_t)r * MAN_Z_HALF_BYTES;
+    dst[0] = SRAM_MANUAL_ZTILES_A_ADDR + (uint32_t)(row0 + r) * MAN_Z_HALF_BYTES;
+    dst[1] = SRAM_MANUAL_ZTILES_B_ADDR + (uint32_t)(row0 + r) * MAN_Z_HALF_BYTES;
     for(half = 0; half < 2; half++) {
       uint32_t addr   = dst[half];
       uint32_t remain = MAN_Z_HALF_BYTES;
@@ -599,10 +601,11 @@ static int man_stage_ztiles(uint32_t tile_ofs, uint16_t nrows) {
  * The 1x view is the same scrollable machine at 256px: 32 tiles/row, one BG layer, no split.
  * Staging is therefore the 2x path minus the second half -- one 1024B copy per row instead of
  * two, and a 64B tilemap row instead of 128. */
-static int man_stage_s1attrs(uint32_t attr_ofs, uint16_t nrows) {
+static int man_stage_s1attrs(uint32_t attr_ofs, uint16_t nrows, uint16_t row0) {
   UINT     got;
   uint16_t r;
-  uint8_t  slot = 0;                       /* r % MAN_Z_RING_ROWS -- same ring depth as the 2x */
+  uint8_t  slot = (uint8_t)row0;           /* r % MAN_Z_RING_ROWS -- same ring depth as the 2x;
+                                              row0 nonzero only for pages < one window (no wrap) */
 
   if(f_lseek(&man_fil, attr_ofs)) return 0;
   for(r = 0; r < nrows; r++) {
@@ -615,16 +618,16 @@ static int man_stage_s1attrs(uint32_t attr_ofs, uint16_t nrows) {
       m[c * 2]     = (uint8_t)(tile & 0xff);
       m[c * 2 + 1] = (uint8_t)((tile >> 8) | man_buf[c]);   /* attr = pal<<2 == word bits 10-12 */
     }
-    sram_writeblock(m, SRAM_MANUAL_S1TMAP_ADDR + (uint32_t)r * MAN_S1_TMAP_STRIDE,
+    sram_writeblock(m, SRAM_MANUAL_S1TMAP_ADDR + (uint32_t)(row0 + r) * MAN_S1_TMAP_STRIDE,
                     MAN_S1_TMAP_STRIDE);
     if(++slot >= MAN_Z_RING_ROWS) slot = 0;
   }
   return 1;
 }
 
-static int man_stage_s1tiles(uint32_t tile_ofs, uint16_t nrows) {
+static int man_stage_s1tiles(uint32_t tile_ofs, uint16_t nrows, uint16_t row0) {
   UINT     got;
-  uint32_t addr   = SRAM_MANUAL_S1TILES_ADDR;
+  uint32_t addr   = SRAM_MANUAL_S1TILES_ADDR + (uint32_t)row0 * MAN_S1_ROW_BYTES;
   uint32_t remain = (uint32_t)nrows * MAN_S1_ROW_BYTES;
 
   if(f_lseek(&man_fil, tile_ofs)) return 0;
@@ -635,6 +638,57 @@ static int man_stage_s1tiles(uint32_t tile_ofs, uint16_t nrows) {
     addr += got; remain -= got;
   }
   return 1;
+}
+
+/* ---- viewport floor for SHORT pages -------------------------------------------------------
+ * The visible window is MAN_VIS_ROWS tile rows (224px) in BOTH views, and the viewer refills
+ * that whole window from the per-row PSRAM arrays regardless of the page's nrows. A page
+ * shorter than the window (pre-spread-split guides shipped 54-92px pages) therefore shows
+ * whatever PSRAM held beyond the content -- the previous guide's tiles, the browser string
+ * table -- as garbage rows. Fix at the STAGE: CENTER the content vertically (row0 =
+ * (MAN_VIS_ROWS - nrows) / 2) and pad the rows above and below with zeroed 4bpp tiles
+ * (colour 0 = transparent -> backdrop, which CGRAM 0 makes the page's own background colour)
+ * plus matching prebuilt tilemap words, then publish the PADDED nrows/pix_h so the viewer
+ * treats the page as exactly one window tall (scroll/pan clamp collapses to 0; no code change
+ * on the 65816 side). The 1x<->2x toggle is offset-safe: with zero pan range the 2x always
+ * shows its own centered page from the top, so the two views never need matching offsets.
+ * Rows < MAN_Z_RING_ROWS by construction, so slot == row and the padded words point at the
+ * rows just zeroed. */
+#define MAN_VIS_ROWS 28
+
+static void man_blank_s1rows(uint16_t from, uint16_t to) {
+  uint16_t r;
+  for(r = from; r < to; r++) {
+    uint8_t *m = man_buf + MAN_ZMAP_OFS;
+    uint16_t base = (uint16_t)(MAN_Z_TILE0 + r * MAN_S1_TILES_W);
+    int c;
+    for(c = 0; c < MAN_S1_TILES_W; c++) {
+      uint16_t tile = (uint16_t)(base + c);
+      m[c * 2]     = (uint8_t)(tile & 0xff);
+      m[c * 2 + 1] = (uint8_t)(tile >> 8);               /* attr 0: tile data below is zeroed */
+    }
+    sram_writeblock(m, SRAM_MANUAL_S1TMAP_ADDR + (uint32_t)r * MAN_S1_TMAP_STRIDE,
+                    MAN_S1_TMAP_STRIDE);
+    sram_memset(SRAM_MANUAL_S1TILES_ADDR + (uint32_t)r * MAN_S1_ROW_BYTES, MAN_S1_ROW_BYTES, 0);
+  }
+}
+
+static void man_blank_zrows(uint16_t from, uint16_t to) {
+  uint16_t r;
+  for(r = from; r < to; r++) {
+    uint8_t *m = man_buf + MAN_ZMAP_OFS;
+    uint16_t base = (uint16_t)(MAN_Z_TILE0 + r * 32);
+    int c;
+    for(c = 0; c < MAN_Z_TILES_W; c++) {
+      uint16_t tile = (uint16_t)(base + (c & 31));
+      m[c * 2]     = (uint8_t)(tile & 0xff);
+      m[c * 2 + 1] = (uint8_t)(tile >> 8);
+    }
+    sram_writeblock(m, SRAM_MANUAL_ZTMAP_ADDR + (uint32_t)r * MAN_Z_TMAP_STRIDE,
+                    MAN_Z_TMAP_STRIDE);
+    sram_memset(SRAM_MANUAL_ZTILES_A_ADDR + (uint32_t)r * MAN_Z_HALF_BYTES, MAN_Z_HALF_BYTES, 0);
+    sram_memset(SRAM_MANUAL_ZTILES_B_ADDR + (uint32_t)r * MAN_Z_HALF_BYTES, MAN_Z_HALF_BYTES, 0);
+  }
 }
 
 void manual_stage_s1page(uint8_t guide, uint16_t page) {
@@ -686,12 +740,18 @@ void manual_stage_s1page(uint8_t guide, uint16_t page) {
          || f_read(&man_fil, man_buf, MAN_Z_PAL_BYTES, &got) || got != MAN_Z_PAL_BYTES) {
         man_close(); continue;
       }
+      uint16_t row0 = (nrows < MAN_VIS_ROWS) ? (uint16_t)((MAN_VIS_ROWS - nrows) / 2) : 0;
       sram_writeblock(man_buf, SRAM_MANUAL_S1PAL_ADDR, MAN_Z_PAL_BYTES);
-      if(!man_stage_s1attrs(attr_ofs, nrows)) { man_close(); man_s1res_guide = 0xff; continue; }
-      if(!man_stage_s1tiles(tile_ofs, nrows)) { man_close(); man_s1res_guide = 0xff; continue; }
+      if(!man_stage_s1attrs(attr_ofs, nrows, row0)) { man_close(); man_s1res_guide = 0xff; continue; }
+      if(!man_stage_s1tiles(tile_ofs, nrows, row0)) { man_close(); man_s1res_guide = 0xff; continue; }
+      if(row0) man_blank_s1rows(0, row0);
+      if((uint16_t)(row0 + nrows) < MAN_VIS_ROWS) man_blank_s1rows((uint16_t)(row0 + nrows), MAN_VIS_ROWS);
       man_s1res_guide = guide;
       man_s1res_page  = page;
     }
+    /* publish the PADDED size for short pages (see man_blank_s1rows) */
+    if(nrows < MAN_VIS_ROWS) nrows = MAN_VIS_ROWS;
+    if(pix_h < (uint16_t)(MAN_VIS_ROWS * 8)) pix_h = (uint16_t)(MAN_VIS_ROWS * 8);
 
     sram_writebyte((uint8_t)nrows,           SRAM_MANUAL_S1META_ADDR + MAN_S1META_NROWS_OFS);
     sram_writebyte((uint8_t)(pix_h & 0xff),  SRAM_MANUAL_S1META_ADDR + MAN_S1META_PIXH_OFS);
@@ -759,12 +819,18 @@ void manual_stage_zpage(uint8_t guide, uint16_t index, uint8_t mode) {
          || f_read(&man_fil, man_buf, MAN_Z_PAL_BYTES, &got) || got != MAN_Z_PAL_BYTES) {
         man_close(); continue;
       }
+      uint16_t row0 = (nrows < MAN_VIS_ROWS) ? (uint16_t)((MAN_VIS_ROWS - nrows) / 2) : 0;
       sram_writeblock(man_buf, SRAM_MANUAL_ZPAL_ADDR, MAN_Z_PAL_BYTES);
-      if(!man_stage_zattrs(attr_ofs, nrows)) { man_close(); man_zres_guide = 0xff; continue; }
-      if(!man_stage_ztiles(tile_ofs, nrows)) { man_close(); man_zres_guide = 0xff; continue; }
+      if(!man_stage_zattrs(attr_ofs, nrows, row0)) { man_close(); man_zres_guide = 0xff; continue; }
+      if(!man_stage_ztiles(tile_ofs, nrows, row0)) { man_close(); man_zres_guide = 0xff; continue; }
+      if(row0) man_blank_zrows(0, row0);
+      if((uint16_t)(row0 + nrows) < MAN_VIS_ROWS) man_blank_zrows((uint16_t)(row0 + nrows), MAN_VIS_ROWS);
       man_zres_guide = guide;
       man_zres_page  = page;
     }
+    /* publish the PADDED size for short pages (see man_blank_zrows) */
+    if(nrows < MAN_VIS_ROWS) nrows = MAN_VIS_ROWS;
+    if(pix_h < (uint16_t)(MAN_VIS_ROWS * 8)) pix_h = (uint16_t)(MAN_VIS_ROWS * 8);
 
     /* publish LAST, so the ready flag is only ever set over a fully staged page. */
     sram_writebyte(pdf_page,                        SRAM_MANUAL_META_ADDR + 3);
