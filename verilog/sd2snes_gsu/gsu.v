@@ -365,8 +365,11 @@ always @(posedge CLK) begin
     // pause: hold the execution clock-enable low.  The divider keeps counting, so
     // the GSU resumes in phase; the memory FSMs are NOT gated and drain in-flight
     // fetches (the CX4 core taught us freezing mid-fill corrupts cached state).
+    // Driven by the overlay's $202C snapshot pause ONLY -- the in-game hook window
+    // yields the ROM arbiter but lets the GSU keep running (main.v), the same way
+    // the game's own NMI never stops the chip.
     // Savestate freeze: while a halt is REQUESTED but not yet frozen, override
-    // the hook pause so a mid-program GSU can run to completion (GO -> 0); once
+    // the pause so a mid-program GSU can run to completion (GO -> 0); once
     // frozen, hold the clock-enable low unconditionally.
     gsu_clock_en <= ~((pause & ~(ss_halt_r & ~ss_frozen_r)) | ss_frozen_r)
                     & (gsu_cycle_r == 2'b10);

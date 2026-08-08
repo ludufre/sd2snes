@@ -222,7 +222,8 @@ wire free_slot = (SNES_PULSE_end | free_strobe) & ~SD_DMA_TO_ROM;
 wire ROM_HIT;
 wire IS_PATCH;
 wire gsu_ss_enable;
-wire gsu_hook_pause;
+wire gsu_exec_pause;   // GSU execution freeze ($202C snapshot pause only)
+wire gsu_hook_yield;   // ROM-arbiter yield while the hook may fetch from PSRAM
 
 assign DCM_RST=0;
 
@@ -246,7 +247,7 @@ end
 
 // Provide full bandwidth if snes is not accessing the bus.
 always @(posedge CLK2) begin
-  if(GSU_RONr & ~gsu_hook_pause) free_strobe <= 1;  // yield to SNES while the hook runs from PSRAM
+  if(GSU_RONr & ~gsu_hook_yield) free_strobe <= 1;  // yield to SNES while the hook runs from PSRAM
   else if (SNES_cycle_start) free_strobe <= ~ROM_HIT | IS_SAVERAM;
   else free_strobe <= 1'b0;
 end
@@ -407,7 +408,7 @@ wire        GSU_RAM_WORD;
 gsu snes_gsu (
   .RST(SNES_reset_strobe),
   .CLK(CLK2),
-  .pause(gsu_hook_pause),
+  .pause(gsu_exec_pause),
   .SS_EN(gsu_ss_enable),
 
   .SAVERAM_MASK(SAVERAM_MASK),
@@ -636,6 +637,8 @@ wire rs_snoop_pawr_oe  = ~SNES_PAWR & (SNES_PA < 8'h40);
 
 // In-game cheat overlay coprocessor pause ($202C bit0, same protocol as the SA-1/
 // CX4 cores): freezes the GSU execution clock-enable; memory FSMs drain (gsu.v).
+// This is the ONLY producer of the execution freeze -- the in-game hook itself
+// yields the bus but leaves the GSU running (see gsu_hook_yield below).
 reg snapshot_pause; initial snapshot_pause = 1'b0;
 always @(posedge CLK2) begin
   if(SNES_reset_strobe)
@@ -645,16 +648,80 @@ always @(posedge CLK2) begin
 end
 
 // While the in-game hook executes (snescmd_unlock: vector redirect until shortly
-// after hook exit) the CPU fetches the savestate handler from the IS_PATCH window
-// (PSRAM).  With the GSU running under RON the ROM arbiter gives the GSU every
-// slot (free_strobe held 1) so the SNES-side PSRAM fetch is never serviced -> the
-// handler executes garbage and the game hard-freezes (seen in HW when the overlay
-// combo lands on a GSU-heavy scene).  Auto-pause the GSU for the duration of the
-// hook and yield the arbiter back to the SNES.  The stock hook paths never hit
-// this because they run entirely from snescmd BRAM.  RON stays asserted while
-// paused, so vector fetches still serve the RON stub and the game's RON-wait
-// resolves normally once the unlock countdown releases the pause.
-assign gsu_hook_pause = snapshot_pause | snescmd_unlock;
+// after hook exit) the CPU MAY fetch the savestate/overlay handler from the
+// IS_PATCH window (PSRAM).  With the GSU running under RON the ROM arbiter gives
+// the GSU every slot (free_strobe held 1) so an SNES-side PSRAM fetch is never
+// serviced -> the handler executes garbage and the game hard-freezes (seen in HW
+// when the overlay combo lands on a GSU-heavy scene).  The arbiter therefore has
+// to be yielded back to the SNES while PSRAM is actually being executed.
+//
+// TWO SEPARATE THINGS, and only ONE of them is a hook requirement:
+//
+//   gsu_hook_yield -- bus priority.  Required: it is what fixes the hard-freeze.
+//   gsu_exec_pause -- execution freeze ($202C only).  NOT a hook requirement.
+//
+// The freeze used to be driven by the hook as well (first snescmd_unlock, then the
+// IS_PATCH scope below), which is inherited conservatism: the game's OWN NMI never
+// stops the GSU -- the chip keeps rendering in parallel with the ISR, by design --
+// and our handler is just another ISR as far as the GSU is concerned.  Stopping it
+// costs a hooked frame stub (~50 SNES cycles) + handler (~95-150) + the 72-cycle
+// unlock countdown ~= 220-270 CPU cycles ~= 55-75us of DEAD GSU per frame (~0.4% of
+// a 16.6ms frame, ~1 scanline).  Measured on HW (Yoshi's Island 1-1, real gameplay
+// with a button held so branch1 enters the handler every NMI): 52 of 105 frame
+// pairs showed a +-1..2px vertical jump -- a frame-limited renderer alternating
+// around its buffer-flip deadline.  Zeroing the stub-only frames (the IS_PATCH
+// scoping above this) did not move that number, because with a button held the
+// handler runs EVERY frame.
+//
+// Running instead of pausing does not give the handler's PSRAM fetches away: the
+// yield puts the ROM arbiter back into its STANDARD SNES-priority scheme, which
+// already is a per-access yield -- free_strobe is a one-cycle grant taken at
+// SNES_PULSE_end (end of the previous SNES access, the calibrated safe point the
+// base core uses for MCU traffic during game ROM reads) plus one at
+// SNES_cycle_start in every cycle where the SNES is NOT hitting PSRAM
+// (~ROM_HIT: WRAM, $21xx/$42xx, stack).  A granted slot drains in
+// ST_MEM_DELAY (8) + RD_END (1) = 10 CLK2 ~= 116ns, ~40% of a 279ns FastROM cycle,
+// so it is over long before the SNES samples its data -- the same argument as the
+// single drain slot the IS_PATCH scoping already accepted, applied per cycle.  The
+// GSU keeps 100% of its cache/RAM execution and roughly half its peak ROM fetch
+// bandwidth instead of stopping dead.
+//
+// The whole stub path (nmihook / nmi_manual_read / nmi_echocmd / nmi_patches /
+// nmi_exit, $002A10-$002BFD, incl. NMI_WRAM_CHEATS at $002AD8) lives in snescmd
+// BRAM; it touches only $004218 / $004016, the WRAM stack and BRAM, and exits
+// through jmp ($ffxx) whose vector bytes are served combinationally by the RON
+// stub in the SNES_DATA mux below -- it never needs a ROM/PSRAM bus grant.  Only
+// the jsl into the $C0xxxx handler does, and that fetch asserts IS_PATCH itself.
+//
+// So the yield arms off IS_PATCH combinationally (the very cycle that first
+// addresses $C0-$FF already yields) and latches for the rest of the unlock so the
+// handler keeps SNES bus priority across its non-$C0 accesses (WRAM, $21xx/$42xx,
+// stack).  RON is untouched, so vector fetches still serve the RON stub and the
+// game's RON-wait resolves normally.
+//
+// What still relies on the GSU being stopped, and why each is unaffected:
+//   - overlay: writes $202C=1 as its FIRST instruction (cheatoverlay.a65), so the
+//     long snapshot/list phase keeps the bespoke clock freeze it always had; only
+//     the handler prologue that dispatches to it now runs with the GSU alive,
+//     exactly like the game's own ISR.
+//   - GSU savestate: uses run-to-stop (window $E8:00FE), requested EARLY in the
+//     handler (savestate.a65 ss_gsu_early), and the freeze logic in gsu.v already
+//     OVERRIDES this pause while a halt is pending so the program can reach GO=0.
+//     Capture/restore run under ss_frozen_r, which holds gsu_clock_en low
+//     unconditionally -- independent of this signal.
+//   - window/MMIO writes (snes_writebuf_val_r & ~gsu_clock_en) are phase gates,
+//     not stop gates: gsu_clock_en is a 1-in-4 enable and the write buffer is a
+//     level held until consumed, so they land whether the GSU runs or not.
+//   - VRAM/CGRAM snapshot readback: the GSU never writes VRAM (it plots into cart
+//     RAM / ROM buffers and the game DMAs them), so a running GSU cannot dirty
+//     what the overlay reads back through $2139/$213B.
+reg gsu_hook_psram_r; initial gsu_hook_psram_r = 1'b0;
+always @(posedge CLK2) begin
+  if(~snescmd_unlock) gsu_hook_psram_r <= 1'b0;
+  else if(IS_PATCH)   gsu_hook_psram_r <= 1'b1;
+end
+assign gsu_hook_yield = snapshot_pause | IS_PATCH | gsu_hook_psram_r;
+assign gsu_exec_pause = snapshot_pause;
 wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 
 always @(posedge CLK2) begin
@@ -1002,9 +1069,22 @@ reg MCU_WRITE_1;
 always @(posedge CLK2) MCU_WRITE_1<= MCU_WRITE;
 
 // odd addresses xxx1
+// SNES->PSRAM writes used to be dropped whenever the GSU held RON (~GSU_RONr):
+// a game write to ROM space is never legitimate, so the upstream gate avoids bus
+// fighting.  The hook handler, however, DOES legitimately write PSRAM through the
+// IS_PATCH window every hooked frame (CS_STATE/CS_INPUT_* at $FE10xx, the overlay
+// scratches) -- with the gate those writes vanished silently whenever the GSU held
+// GO, which is exactly the "combo only sometimes arms" class: the edge detector
+// never saw its CS_INPUT_* transitions land in heavy scenes.  Resolution = the
+// SA-1 write-path form after upstream 583c32fa: drive SNES_DATA onto the bus ONLY
+// for IS_PATCH writes (stray game writes to ROM stay high-Z, as upstream intends;
+// note ROM_WE's SNES arm only ever fired for IS_PATCH anyway, since
+// IS_WRITABLE & ~IS_SAVERAM === IS_PATCH here).  The hook-scoped arbiter yield
+// above keeps the GSU off the bus on every cycle that addresses the window, so
+// the write cannot fight an active GSU access.
 assign ROM_DATA[7:0] = (ROM_ADDR0)
                        ?(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
-                                       : (ROM_HIT & ~IS_SAVERAM & ~SNES_WRITE & ~GSU_RONr) ? SNES_DATA
+                                       : (IS_PATCH & ~SNES_WRITE) ? SNES_DATA
                                        : MCU_WR_HIT ? MCU_DOUT : 8'bZ
                         )
                        :8'bZ;
@@ -1013,14 +1093,14 @@ assign ROM_DATA[7:0] = (ROM_ADDR0)
 assign ROM_DATA[15:8] = (ROM_ADDR0)
                         ? 8'bZ
                         :(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
-                                        : (ROM_HIT & ~IS_SAVERAM & ~SNES_WRITE & ~GSU_RONr) ? SNES_DATA
+                                        : (IS_PATCH & ~SNES_WRITE) ? SNES_DATA
                                         : MCU_WR_HIT ? MCU_DOUT
                                         : 8'bZ
                          );
 
 assign ROM_WE = SD_DMA_TO_ROM
                 ?MCU_WRITE
-                : (ROM_HIT & IS_WRITABLE & ~IS_SAVERAM & SNES_CPU_CLK & ~GSU_RONr) ? SNES_WRITE
+                : (ROM_HIT & IS_WRITABLE & ~IS_SAVERAM & SNES_CPU_CLK & (~GSU_RONr | IS_PATCH)) ? SNES_WRITE
                 : MCU_WE_HIT ? 1'b0
                 : 1'b1;
 

@@ -549,7 +549,11 @@ upd77c25 snes_dspx (
   .DI(DSPX_SNES_DATA_IN),
   .DO(DSPX_SNES_DATA_OUT),
   .A0(DSPX_A0),
-  .enable(dspx_enable),
+  // The $E8 savestate-scan window (dspx_dp_enable) must not clock the live
+  // DR/SR side effects: the LoROM MMIO decode also matches $E0-EF for <=1MB
+  // ROMs, so every halt poke/poll through the window would otherwise advance
+  // the uPD7725 handshake (DR/RQM/DRS) behind the game's back.
+  .enable(dspx_enable & ~dspx_dp_enable),
   .reg_oe_falling(SNES_RD_start),
   .reg_oe_rising(SNES_RD_end),
   .reg_we_rising(SNES_WR_end),

@@ -1529,9 +1529,14 @@ assign ROM_DATA[7:0] = (ROM_ADDR0 || (!SD_DMA_TO_ROM && CTX_HIT && CTX_ROM_WORDr
                        ?(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
                                        : CTX_WR_HIT ? CTX_ROM_DATAr[15:8]  // ctx snapshot write (mk3)
                                        : DMA_WR_HIT ? DMA_ROM_DATAr[15:8]
-//                                       : (ROM_HIT
-//                                         & ~IS_SAVERAM
-//                                         & ~SNES_WRITE) ? SNES_DATA
+                                       // Upstream 583c32fa stopped echoing SNES_DATA on ROM writes (bus
+                                       // fighting on stray game writes to ROM areas).  This fork's IS_PATCH
+                                       // window NEEDS the SNES->PSRAM write path (overlay/savestate handlers
+                                       // write their scratches through the ROM bus), so keep the drive for
+                                       // IS_PATCH writes only -- stray ROM writes stay high-Z as upstream
+                                       // intends.
+                                       : (IS_PATCH
+                                         & ~SNES_WRITE) ? SNES_DATA
                                        : MCU_WR_HIT ? MCU_DOUT : 8'bZ
                         )
                        :8'bZ;
@@ -1542,9 +1547,9 @@ assign ROM_DATA[15:8] = ROM_ADDR0
                         :(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
                                         : CTX_WR_HIT ? CTX_ROM_DATAr[7:0]  // ctx snapshot write (mk3)
                                         : DMA_WR_HIT ? DMA_ROM_DATAr[7:0]
-//                                        : (ROM_HIT
-//                                          & ~IS_SAVERAM
-//                                          & ~SNES_WRITE) ? SNES_DATA
+                                        // See the IS_PATCH note on the odd-byte mux above.
+                                        : (IS_PATCH
+                                          & ~SNES_WRITE) ? SNES_DATA
                                         : MCU_WR_HIT ? MCU_DOUT
                                         : 8'bZ
                          );
