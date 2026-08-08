@@ -116,6 +116,9 @@ wire [10:0] SD_DMA_PARTIAL_END;
 wire [10:0] dac_addr;
 wire [2:0] dac_vol_select_out;
 wire [8:0] dac_ptr_addr;
+// SMS PSG -> dac.v cartridge ("sgb") channel
+wire [19:0] SMS_APU_DAT;
+wire        SMS_APU_CLK_EDGE;
 //wire [7:0] dac_volume;
 wire [7:0] msu_volumerq_out;
 wire [7:0] msu_status_out;
@@ -437,12 +440,20 @@ dac snes_dac(
   .pgm_data(SD_DMA_SRAM_DATA),
   .DAC_STATUS(DAC_STATUS),
   .volume(msu_volumerq_out),
+  .sgb_apu_dat(SMS_APU_DAT),
+  .sgb_apu_clk_edge(SMS_APU_CLK_EDGE),
   .vol_latch(msu_volume_latch_out),
   .vol_select(dac_vol_select_out),
+  // unity: the SGB core drives this from a feature bit, the NES core hardcodes
+  // 000. Start at the proven level; this -- not sms_core's gain shift -- is the
+  // knob to promote if measurement says the SMS is quiet.
+  .sgb_vol_select(3'b000),
   .palmode(dac_palmode_out),
   .play(dac_play),
   .reset(dac_reset),
-  .dac_address_ext(dac_ptr_addr)
+  .dac_address_ext(dac_ptr_addr),
+  // no breadcrumb bus in this core -> left open; Quartus trims the probe logic
+  .dbg_cic_max(), .dbg_i2s_act(), .dbg_dat_max()
 );
 
 srtc snes_srtc (
@@ -974,7 +985,8 @@ sms_core sms_inst (
   .DBG_VRAM_ADDR(14'd0), .DBG_VRAM_DATA(), .DBG_CRAM_ADDR(5'd0), .DBG_CRAM_DATA(),
   .DBG_VREGS(), .DBG_FORCE_TR(1'b0), .TR_GATE(sms_ready),
   .BACK_SET(~sms_buf_front),       // the set written this pass is the one NOT being read (front)
-  .DBG_FORCE_FULL(1'b0)
+  .DBG_FORCE_FULL(1'b0),
+  .APU_DAT(SMS_APU_DAT), .APU_CLK_EDGE(SMS_APU_CLK_EDGE)
 );
 
 `ifdef MK2

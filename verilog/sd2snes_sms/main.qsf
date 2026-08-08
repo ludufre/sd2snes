@@ -518,6 +518,7 @@ set_global_assignment -name VERILOG_FILE main.v
 set_global_assignment -name VERILOG_FILE sms_core.v
 set_global_assignment -name VERILOG_FILE sms.v
 set_global_assignment -name VERILOG_FILE sms_translate.v
+set_global_assignment -name VERILOG_FILE psg.v
 set_global_assignment -name VERILOG_FILE tv80/tv80s_ce.v
 set_global_assignment -name VERILOG_FILE tv80/tv80_core.v
 set_global_assignment -name VERILOG_FILE tv80/tv80_alu.v

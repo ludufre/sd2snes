@@ -27,8 +27,11 @@ module dac(
   input[10:0] pgm_address,
   input[7:0] pgm_data,
   input[7:0] volume,
+  input [19:0] sgb_apu_dat,
+  input        sgb_apu_clk_edge,
   input vol_latch,
   input [2:0] vol_select,
+  input [2:0] sgb_vol_select,
   input [8:0] dac_address_ext,
   input play,
   input reset,
@@ -37,8 +40,23 @@ module dac(
   output mclk_out,
   output lrck_out,
   output sclk_out,
-  output DAC_STATUS
+  output DAC_STATUS,
+  // NES-core debug liveness (main.v -> nes_wrap group 0x04 idx16/17; probes
+  // the INSIDE of the DAC path after APU_DAT was proven alive in silicon):
+  //   dbg_cic_max = max-hold of |sgb-CIC output, ch0| (same [27:18] slice the
+  //                 datapath uses, pre-<<4), top 8 bits; sticky, cleared by
+  //                 the firmware's dac_reset pulse (every load).
+  //   dbg_i2s_act = rolling count of LRCK rising edges (I2S clock alive).
+  output reg [7:0] dbg_cic_max,
+  output reg [7:0] dbg_i2s_act,
+  //   dbg_dat_max = max-hold of |vol_sample_sat| top 8 bits -- the exact
+  //                 16-bit word the I2S shifter reloads on every LRCK edge.
+  //                 >0 here + LRCK spinning + mute on the jack = the data IS
+  //                 on the wire; the mystery moves off-chip.
+  output reg [7:0] dbg_dat_max
 );
+
+integer i;
 
 reg[8:0] dac_address_r;
 reg[8:0] dac_address_r_sync;
@@ -53,11 +71,13 @@ reg vol_valid;
 reg[2:0] sysclk_sreg;
 wire sysclk_rising = (sysclk_sreg[2:1] == 2'b01);
 
+reg[10:0] sgb_vol_reg = 11'h100;
+
 always @(posedge clkin) begin
   sysclk_sreg <= {sysclk_sreg[1:0], sysclk};
 end
+
 `ifdef MK2
-`ifndef DEBUG
 dac_buf snes_dac_buf (
   .clka(clkin),
   .wea(~we), // Bus [0 : 0]
@@ -67,8 +87,6 @@ dac_buf snes_dac_buf (
   .addrb(dac_address), // Bus [8 : 0]
   .doutb(dac_data)); // Bus [31 : 0]
 `endif
-`endif
-
 `ifdef MK3
 dac_buf snes_dac_buf (
   .clock(clkin),
@@ -163,16 +181,23 @@ parameter ST4_INT1  = 10'b0000010000;
 parameter ST5_INT2  = 10'b0000100000;
 parameter ST6_INT3  = 10'b0001000000;
 
-reg [63:0] ci[2:0], co[2:0], io[2:0];
-reg [9:0] cicstate = 10'h200;
-wire [63:0] bufi = {{16{dac_data[31]}}, dac_data[31:16], {16{dac_data[15]}}, dac_data[15:0]};
+`define MSU_CIC_BITS (16+3*4) // 3 stages, *16 (2^4)
 
+reg [(`MSU_CIC_BITS-1):0] ci[2:0][1:0], co[2:0][1:0], io[2:0][1:0];
+reg [9:0] cicstate = 10'h200;
+wire [(`MSU_CIC_BITS-1):0] bufi[1:0];
+assign bufi[1] = {{(`MSU_CIC_BITS-16){dac_data[31]}}, dac_data[31:16]};
+assign bufi[0] = {{(`MSU_CIC_BITS-16){dac_data[15]}}, dac_data[15:0]};
+
+`ifdef MSU_AUDIO
 always @(posedge clkin) begin
   if(reset) begin
     cicstate <= ST0_IDLE;
-    {ci[2], ci[1], ci[0]} <= 192'h0;
-    {co[2], co[1], co[0]} <= 192'h0;
-    {io[2], io[1], io[0]} <= 192'h0;
+    for (i = 0; i < 2; i = i + 1) begin
+      {ci[2][i], ci[1][i], ci[0][i]} <= 0;
+      {co[2][i], co[1][i], co[0][i]} <= 0;
+      {io[2][i], io[1][i], io[0][i]} <= 0;
+    end
   end else if(int_strobe) begin
     if(comb_strobe) cicstate <= ST1_COMB1;
     else cicstate <= ST4_INT1;
@@ -181,40 +206,134 @@ always @(posedge clkin) begin
 /****** COMB STAGES ******/
       ST1_COMB1: begin
         cicstate <= ST2_COMB2;
-        ci[0] <= bufi;
-        co[0][63:32] <= bufi[63:32] - ci[0][63:32];
-        co[0][31:0] <= bufi[31:0] - ci[0][31:0];
+        for (i = 0; i < 2; i = i + 1) begin
+          ci[0][i] <= bufi[i];
+          co[0][i] <= bufi[i] - ci[0][i];
+        end
       end
       ST2_COMB2: begin
         cicstate <= ST3_COMB3;
-        ci[1] <= co[0];
-        co[1][63:32] <= co[0][63:32] - ci[1][63:32];
-        co[1][31:0] <= co[0][31:0] - ci[1][31:0];
+        for (i = 0; i < 2; i = i + 1) begin
+          ci[1][i] <= co[0][i];
+          co[1][i] <= co[0][i] - ci[1][i];
+        end
       end
       ST3_COMB3: begin
         cicstate <= ST4_INT1;
-        ci[2] <= co[1];
-        co[2][63:32] <= co[1][63:32] - ci[2][63:32];
-        co[2][31:0] <= co[1][31:0] - ci[2][31:0];
+        for (i = 0; i < 2; i = i + 1) begin
+          ci[2][i] <= co[1][i];
+          co[2][i] <= co[1][i] - ci[2][i];
+        end
       end
 /****** INTEGRATOR STAGES ******/
       ST4_INT1: begin
-        io[0][63:32] <= co[2][63:32] + io[0][63:32];
-        io[0][31:0] <= co[2][31:0] + io[0][31:0];
+        for (i = 0; i < 2; i = i + 1) begin
+          io[0][i] <= co[2][i] + io[0][i];
+        end
         cicstate <= ST5_INT2;
       end
       ST5_INT2: begin
-        io[1][63:32] <= io[0][63:32] + io[1][63:32];
-        io[1][31:0] <= io[0][31:0] + io[1][31:0];
+        for (i = 0; i < 2; i = i + 1) begin
+          io[1][i] <= io[0][i] + io[1][i];
+        end
         cicstate <= ST6_INT3;
       end
       ST6_INT3: begin
-        io[2][63:32] <= io[1][63:32] + io[2][63:32];
-        io[2][31:0] <= io[1][31:0] + io[2][31:0];
+        for (i = 0; i < 2; i = i + 1) begin
+          io[2][i] <= io[1][i] + io[2][i];
+        end
         cicstate <= ST0_IDLE;
       end
       default: begin
         cicstate <= ST0_IDLE;
+      end
+    endcase
+  end
+end
+`endif
+
+/*
+  Downsampler for SGB
+  4 MHz input sample rate
+  /64 downsample
+  
+  10b input.
+*/
+
+`define SGB_CIC_BITS (10+3*6) // 3 stages, /64 (2^6)
+
+reg [(`SGB_CIC_BITS-1):0] sgb_ci[2:0][1:0], sgb_io[2:0][1:0], sgb_co[2:0][1:0];
+reg [9:0] sgb_cicstate = 10'h200;
+reg [9:0] sgb_cicstate_next = 10'h200;
+reg [5:0] sgb_phasediv = 0;
+reg       sgb_apu_clk_edge_r = 0;
+
+wire [(`SGB_CIC_BITS-1):0] sgb_bufi[1:0];
+assign sgb_bufi[1] = {{(`SGB_CIC_BITS-10){sgb_apu_dat[19]}}, sgb_apu_dat[19:10]};
+assign sgb_bufi[0] = {{(`SGB_CIC_BITS-10){sgb_apu_dat[9]}}, sgb_apu_dat[9:0]};
+
+always @(posedge clkin) begin
+  sgb_apu_clk_edge_r <= sgb_apu_clk_edge;
+
+  if(reset) begin
+    sgb_cicstate <= ST0_IDLE;
+    for (i = 0; i < 2; i = i + 1) begin
+      {sgb_ci[2][i], sgb_ci[1][i], sgb_ci[0][i]} <= 0;
+      {sgb_io[2][i], sgb_io[1][i], sgb_io[0][i]} <= 0;
+      {sgb_co[2][i], sgb_co[1][i], sgb_co[0][i]} <= 0;
+    end
+    
+    sgb_phasediv <= 0;
+  end else if(sgb_apu_clk_edge_r) begin
+    sgb_cicstate <= ST4_INT1;
+    sgb_cicstate_next <= ~|sgb_phasediv ? ST1_COMB1 : ST0_IDLE;
+    
+    sgb_phasediv <= sgb_phasediv + 1;
+  end else begin
+    case(sgb_cicstate)
+/****** COMB STAGES ******/
+      ST1_COMB1: begin
+        sgb_cicstate <= ST2_COMB2;
+        for (i = 0; i < 2; i = i + 1) begin
+          sgb_ci[0][i] <= sgb_io[2][i];
+          sgb_co[0][i] <= sgb_io[2][i] - sgb_ci[0][i];
+        end
+      end
+      ST2_COMB2: begin
+        sgb_cicstate <= ST3_COMB3;
+        for (i = 0; i < 2; i = i + 1) begin
+          sgb_ci[1][i] <= sgb_co[0][i];
+          sgb_co[1][i] <= sgb_co[0][i] - sgb_ci[1][i];
+        end
+      end
+      ST3_COMB3: begin
+        sgb_cicstate <= ST0_IDLE;
+        for (i = 0; i < 2; i = i + 1) begin
+          sgb_ci[2][i] <= sgb_co[1][i];
+          sgb_co[2][i] <= sgb_co[1][i] - sgb_ci[2][i];
+        end
+      end
+/****** INTEGRATOR STAGES ******/
+      ST4_INT1: begin
+        for (i = 0; i < 2; i = i + 1) begin
+          sgb_io[0][i] <= sgb_bufi[i] + sgb_io[0][i];
+        end
+        sgb_cicstate <= ST5_INT2;
+      end
+      ST5_INT2: begin
+        for (i = 0; i < 2; i = i + 1) begin
+          sgb_io[1][i] <= sgb_io[0][i] + sgb_io[1][i];
+        end
+        sgb_cicstate <= ST6_INT3;
+      end
+      ST6_INT3: begin
+        for (i = 0; i < 2; i = i + 1) begin
+          sgb_io[2][i] <= sgb_io[1][i] + sgb_io[2][i];
+        end
+        sgb_cicstate <= sgb_cicstate_next;
+      end
+      default: begin
+        sgb_cicstate <= ST0_IDLE;
       end
     endcase
   end
@@ -267,14 +386,43 @@ always @(posedge clkin) begin
   end
 end
 
-wire signed [15:0] dac_data_ch = lrck ? io[2][59:44] : io[2][27:12];
+// assign SGB volume boost
+always @(posedge clkin) begin
+  case(sgb_vol_select)
+    3'b000:  sgb_vol_reg = 11'h100;//11'h101;
+    3'b001:  sgb_vol_reg = 11'h160;//11'h181;
+    3'b010:  sgb_vol_reg = 11'h220;//11'h202;
+    3'b011:  sgb_vol_reg = 11'h300;//11'h302;
+    3'b100:  sgb_vol_reg = 11'h380;//11'h402;
+    default: sgb_vol_reg = 11'h100;
+  endcase
+end
+
+wire signed [15:0] dac_data_ch = lrck ? {{(16+12-`MSU_CIC_BITS){io[2][1][(`MSU_CIC_BITS-1)]}},io[2][1][(`MSU_CIC_BITS-1):12]} : {{(16+12-`MSU_CIC_BITS){io[2][0][(`MSU_CIC_BITS-1)]}},io[2][0][(`MSU_CIC_BITS-1):12]};
+wire signed [25:0] dac_vol_sample;
 wire signed [25:0] vol_sample;
 wire signed [15:0] vol_sample_sat;
-assign vol_sample = dac_data_ch * $signed({1'b0, vol_reg});
+
+// TODO: arbitrary scaling which used to be in SGB APU
+wire signed [15:0] sgb_data_ch = lrck ? {{(16+18-`SGB_CIC_BITS-4){sgb_co[2][1][(`SGB_CIC_BITS-1)]}},sgb_co[2][1][(`SGB_CIC_BITS-1):18],4'h0} : {{(16+18-`SGB_CIC_BITS-4){sgb_co[2][0][(`SGB_CIC_BITS-1)]}},sgb_co[2][0][(`SGB_CIC_BITS-1):18],4'h0};
+//wire signed [15:0] sgb_data_ch = lrck ? {{2{sgb_apu_dat[19]}},sgb_apu_dat[19:10],4'h0} : {{2{sgb_apu_dat[9]}},sgb_apu_dat[9:0],4'h0};
+wire signed [25:0] sgb_vol_sample;
+
+assign dac_vol_sample = dac_data_ch * $signed({1'b0, vol_reg});
+assign sgb_vol_sample = sgb_data_ch * $signed({1'b0, sgb_vol_reg});
+
+reg signed [25:0] dac_vol_sample_r;
+reg signed [25:0] sgb_vol_sample_r;
+always @(posedge clkin) begin
+  dac_vol_sample_r <= dac_vol_sample;
+  sgb_vol_sample_r <= sgb_vol_sample;
+end
+
+assign vol_sample = dac_vol_sample_r + sgb_vol_sample_r;
 assign vol_sample_sat = ((vol_sample[25:23] == 3'b000 || vol_sample[25:23] == 3'b111) ? vol_sample[23:8]
                       : vol_sample[25] ? 16'sh8000
-                      : 16'sh7fff);
-
+                      : 16'sh7fff);                      
+                      
 always @(posedge clkin) begin
   if (sclk_falling) begin
     smpcnt <= smpcnt + 1;
@@ -284,6 +432,25 @@ always @(posedge clkin) begin
     end else begin
       smpshift <= {smpshift[14:0], 1'b0};
     end
+  end
+end
+
+// ---------------------------------------------------------------------------
+// NES-core debug liveness (see port comment).  Shallow single-cycle cones at
+// 84MHz: 10-bit abs + 8-bit compare (CIC), 1 detect + 8-bit inc (LRCK).
+// ---------------------------------------------------------------------------
+wire signed [9:0] dbg_cic_ch0 = sgb_co[2][0][(`SGB_CIC_BITS-1):18];
+wire        [9:0] dbg_cic_abs = dbg_cic_ch0[9] ? (~dbg_cic_ch0 + 10'd1) : dbg_cic_ch0;
+wire       [15:0] dbg_dat_abs = vol_sample_sat[15] ? (~vol_sample_sat + 16'd1) : vol_sample_sat;
+always @(posedge clkin) begin
+  if (reset) begin
+    dbg_cic_max <= 8'd0;
+    dbg_i2s_act <= 8'd0;
+    dbg_dat_max <= 8'd0;
+  end else begin
+    if (dbg_cic_abs[9:2] > dbg_cic_max) dbg_cic_max <= dbg_cic_abs[9:2];
+    if (lrck_rising)                    dbg_i2s_act <= dbg_i2s_act + 8'd1;
+    if (dbg_dat_abs[15:8] > dbg_dat_max) dbg_dat_max <= dbg_dat_abs[15:8];
   end
 end
 

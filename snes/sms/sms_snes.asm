@@ -60,6 +60,8 @@ Reset:
     lda.b #$11
     sta $212C           ; TM: BG1 + OBJ
 
+    jsr SmsApuUnmute    ; open the console's cart-DAC audio path
+
     lda.b #$81
     sta $4200           ; NMI + auto-joypad
     lda.b #$0F
@@ -269,6 +271,199 @@ DmaTileSpan:
 
 Stub:
     rti
+
+
+; ===========================================================================
+; S-DSP unmute -- opens the console's cartridge-DAC audio path.
+;
+; WHY: with no program uploaded to the S-SMP, the S-DSP stays in its IPL
+; reset/mute state, and in that state the console's analogue path GATES the
+; cartridge DAC output -- the FPGA can drive I2S perfectly and nothing reaches
+; the jack.  Same mechanic, same cure, same 82-byte payload as snes/sfx.a65
+; (menu) and snes/nes/nes_apu.a65 (NES renderer, proven on hardware).
+;
+; ENTRY CONTRACT (true at the call site in Reset): native mode, DBR=$00,
+; DP=$0000, NMI off ($4200=0 since the reset), A 8-bit / X,Y 16-bit.  Returns
+; carry clear = stub running, carry set = timed out (boot continues, at worst
+; silent).
+; ===========================================================================
+
+!SMS_APU_BEEP = 0              ; 1 = instrumented payload (209 bytes): the same
+                               ;     unmute plus a 0.5 s 2 kHz beep at boot, so
+                               ;     "no sound" can be split into "the S-DSP
+                               ;     gate is still shut" (no beep) and "the gate
+                               ;     is open, the PSG side is the problem"
+                               ;     (beep, then silence).  BRING-UP ONLY.
+                               ; 0 = PRODUCTION: 82 bytes, unmute only, silent.
+                               ;     Set this back to 0 before shipping.
+
+!APUIO0 = $2140
+!APUIO1 = $2141
+!APUIO2 = $2142
+
+if !SMS_APU_BEEP == 1
+!SMS_APU_STUB_ADDR = $0300     ; upload base: DIR table + BRR + code
+!SMS_APU_EXEC_ADDR = $0320     ; code entry (DIR must own $0300)
+!SMS_APU_STUB_LEN  = $00D1     ; 209
+else
+!SMS_APU_STUB_ADDR = $0300
+!SMS_APU_EXEC_ADDR = $0300
+!SMS_APU_STUB_LEN  = $0052     ; 82
+endif
+
+!SMS_APU_WAIT_POLLS  = $0800   ; per-wait ceiling
+!SMS_APU_POLL_BUDGET = $FFFF   ; aggregate ceiling across the whole routine
+
+SmsApuUnmute:
+    sep #$20
+    rep #$10
+    ldy.w #!SMS_APU_POLL_BUDGET
+
+    ; --- 1) wait for the IPL to publish $BBAA ---------------------------------
+    ; own ceiling ~5x the handshake one: the IPL spends ~2.4 ms clearing page
+    ; zero before it answers, and a timeout here is indistinguishable from
+    ; "the analogue gate was not the cause".
+    ldx.w #$4000
+SmsApuHello:
+    lda !APUIO0
+    cmp.b #$aa
+    bne SmsApuHelloNext
+    lda !APUIO1
+    cmp.b #$bb
+    beq SmsApuHelloOk
+SmsApuHelloNext:
+    dey
+    beq SmsApuFail
+    dex
+    bne SmsApuHello
+    bra SmsApuFail
+SmsApuHelloOk:
+
+    ; --- 2) open the transfer -------------------------------------------------
+    ldx.w #!SMS_APU_STUB_ADDR
+    stx !APUIO2                 ; $2142/$2143 = destination
+    lda.b #$cc
+    sta !APUIO1                 ; non-zero starts the transfer
+    sta !APUIO0
+    jsr SmsApuWait
+    bcs SmsApuFail
+
+    ; --- 3) payload, byte by byte --------------------------------------------
+    ; X is both the table index and the protocol index; the payload is < 256
+    ; bytes so the index never wraps.
+    ldx.w #$0000
+SmsApuSend:
+    lda.l SmsApuStub,x
+    sta !APUIO1
+    txa
+    sta !APUIO0
+    jsr SmsApuWait
+    bcs SmsApuFail
+    inx
+    cpx.w #!SMS_APU_STUB_LEN
+    bne SmsApuSend
+
+    ; --- 4) end of transfer: entry address + index+2 --------------------------
+    ldx.w #!SMS_APU_EXEC_ADDR
+    stx !APUIO2
+    stz !APUIO1                 ; 0 = execute, no further block
+    lda !APUIO0
+    inc a
+    inc a
+    sta !APUIO0
+    jsr SmsApuWait
+    bcs SmsApuFail
+    clc
+    rts
+
+SmsApuFail:
+    sec
+    rts
+
+; A(8) = expected echo, Y(16) = remaining global budget.
+; carry clear = echoed, carry set = timed out.  A and X preserved.
+SmsApuWait:
+    phx
+    ldx.w #!SMS_APU_WAIT_POLLS
+SmsApuWaitPoll:
+    cmp !APUIO0
+    beq SmsApuWaitOk
+    dey
+    beq SmsApuWaitTo
+    dex
+    bne SmsApuWaitPoll
+SmsApuWaitTo:
+    plx
+    sec
+    rts
+SmsApuWaitOk:
+    plx
+    clc
+    rts
+
+; ===========================================================================
+; SPC700 payload.  BYTE-IDENTICAL to the blobs already proven on hardware --
+; do not "improve" it here; change snes/sfx.a65 and re-mirror.
+;
+; Order is the whole point: the DSP is kept MUTED while every voice and the
+; whole echo path are scrubbed, MVOL is restored, and FLG's unmute is the LAST
+; DSP write.  Unmuting first lets the power-on garbage in the voice registers
+; out as continuous clicking (observed on the Mk.II).
+; ===========================================================================
+SmsApuStub:
+if !SMS_APU_BEEP == 1
+; ---- instrumented: DIR table ($0300) + BRR ($0310) + code ($0320) ----------
+; entry 0 = { start $0310, loop $0310 }; the BRR block is one looping block,
+; header $c3 = shift 12 / filter 0 / loop+end, nibbles 7777777788888888 =
+; a 16-sample square -> 32000/16 = 2000 Hz at pitch $1000.
+    db $10,$03,$10,$03,$00,$00,$00,$00
+    db $00,$00,$00,$00,$00,$00,$00,$00
+    db $c3,$77,$77,$77,$77,$88,$88,$88
+    db $88,$00,$00,$00,$00,$00,$00,$00
+; ---- code (identical to the production 82 bytes up to the MVOL block, then
+;      voice 0 setup, KON, ~0.5 s delay, KOFF, voice volumes back to 0) ------
+    db $8f,$6c,$f2,$8f,$60,$f3,$8f,$5c
+    db $f2,$8f,$ff,$f3,$8f,$4c,$f2,$8f
+    db $00,$f3,$8f,$4d,$f2,$8f,$00,$f3
+    db $8f,$2c,$f2,$8f,$00,$f3,$8f,$3c
+    db $f2,$8f,$00,$f3,$8f,$0d,$f2,$8f
+    db $00,$f3,$8d,$00,$e8,$00,$c4,$f2
+    db $cb,$f3,$bc,$c4,$f2,$cb,$f3,$60
+    db $88,$0f,$68,$80,$d0,$f0,$8f,$5c
+    db $f2,$8f,$00,$f3,$8f,$5d,$f2,$8f
+    db $03,$f3,$8f,$04,$f2,$8f,$00,$f3
+    db $8f,$02,$f2,$8f,$00,$f3,$8f,$03
+    db $f2,$8f,$10,$f3,$8f,$05,$f2,$8f
+    db $00,$f3,$8f,$06,$f2,$8f,$00,$f3
+    db $8f,$07,$f2,$8f,$7f,$f3,$8f,$00
+    db $f2,$8f,$40,$f3,$8f,$01,$f2,$8f
+    db $40,$f3,$8f,$0c,$f2,$8f,$7f,$f3
+    db $8f,$1c,$f2,$8f,$7f,$f3,$8f,$6c
+    db $f2,$8f,$20,$f3,$8f,$4c,$f2,$8f
+    db $01,$f3,$cd,$00,$8d,$00,$00,$dc
+    db $d0,$fc,$1d,$d0,$f7,$8f,$5c,$f2
+    db $8f,$ff,$f3,$8f,$00,$f2,$8f,$00
+    db $f3,$8f,$01,$f2,$8f,$00,$f3,$2f
+    db $fe
+else
+; ---- production: 82 bytes, byte-identical to sfx_dsp_stub_code -------------
+    db $8f,$6c,$f2,$8f,$60,$f3   ; FLG   = $60  soft-reset off, MUTE ON
+    db $8f,$5c,$f2,$8f,$ff,$f3   ; KOFF  = $ff
+    db $8f,$4c,$f2,$8f,$00,$f3   ; KON   = $00
+    db $8f,$4d,$f2,$8f,$00,$f3   ; EON   = $00
+    db $8f,$2c,$f2,$8f,$00,$f3   ; EVOL_L= $00
+    db $8f,$3c,$f2,$8f,$00,$f3   ; EVOL_R= $00
+    db $8f,$0d,$f2,$8f,$00,$f3   ; EFB   = $00
+    db $8d,$00,$e8,$00           ; y=0, a=0
+    db $c4,$f2,$cb,$f3,$bc       ; loop: VOL_L=0, next reg
+    db $c4,$f2,$cb,$f3           ;       VOL_R=0
+    db $60,$88,$0f,$68,$80,$d0,$f0 ;     a+=15, until a==$80
+    db $8f,$0c,$f2,$8f,$7f,$f3   ; MVOL_L= $7f
+    db $8f,$1c,$f2,$8f,$7f,$f3   ; MVOL_R= $7f
+    db $8f,$6c,$f2,$8f,$20,$f3   ; FLG   = $20  MUTE OFF (last DSP write)
+    db $2f,$fe                   ; bra *
+endif
+
 
 ; ---- LoROM header (so smc_id detects LoROM) ----
 org $00FFC0

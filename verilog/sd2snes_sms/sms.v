@@ -12,7 +12,7 @@
 // for address mapping) and are mirrored into WRAM for read-back. vcounter + frame
 // IRQ come from a free-running 228-cyc/line, 262-line counter (enough for Sonic's
 // boot V==$B0 wait + per-frame vint). TODO_SMS_COMPAT: exact VDP timing, line IRQ,
-// PSG, sprite zoom. cen=1 here (Z80 every clk); real SMS-rate pacing is M7.4.
+// sprite zoom. cen=1 here (Z80 every clk); real SMS-rate pacing is M7.4.
 module sms (
   input         CLK,
   input         RST,
@@ -55,7 +55,11 @@ module sms (
   input             BACK_SET,      // which double-buffer set is being written this pass (= ~sms_buf_front)
   output reg [31:0] DIRTY_COLS,    // per-set dirty name-table COLUMN bitmap (1 = re-emit that column)
   input             DBG_FORCE_FULL,// test: publish all 32 columns dirty (full tilemap emit)
-  output [1:0]      DBG_WAIT       // Z80 wait-stall live: bit0=ROM read, bit1=WRAM read
+  output [1:0]      DBG_WAIT,      // Z80 wait-stall live: bit0=ROM read, bit1=WRAM read
+  // audio: unipolar PSG mix (0..1020) + the chip's internal 223.72kHz tick.
+  // Amplitude conditioning for the DAC lives in sms_core.v (the wrap), not here.
+  output [10:0]     PSG_MIX,
+  output            PSG_TICK
 );
 
   // ---------------- Z80 ----------------
@@ -315,6 +319,17 @@ module sms (
 
   assign DBG_PC = A;
 
+  // ---------------- PSG (SN76489) ----------------
+  // The SMS decodes ANY I/O write in $40-$7F to the sound chip. Same
+  // wr_edge + iorq_n qualification the VDP/WRAM write templates use.
+  wire psg_we = wr_edge & ~iorq_n & (A[7:6] == 2'b01);
+
+  psg u_psg (
+    .CLK(CLK), .RST(RST), .CE(CE),
+    .WE(psg_we), .D(dout),
+    .MIX(PSG_MIX), .TICK(PSG_TICK)
+  );
+
   // ---------------- VDP/WRAM writes, mapper, VDP read side effects ----------------
   always @(posedge CLK) begin
     if (RST) begin
@@ -348,7 +363,7 @@ module sms (
               vdp_addr <= vdp_addr + 1'b1;
             end
           end
-          // $40-$7F PSG writes ignored (M8 later)
+          // $40-$7F -> PSG (handled by u_psg via psg_we; nothing to do here)
         end else if (~mreq_n) begin
           // memory write: WRAM data goes via the wram template (wram_we); here we
           // only latch the Sega mapper bank regs into their dedicated FFs.
