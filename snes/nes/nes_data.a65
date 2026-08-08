@@ -14,10 +14,20 @@
 ;   $7F0000  nes_mailbox_buf        8192B  drain da janela $6000-$7FFF (so device)
 ;   $7F2000  nes_nametable_shadow   2048B  CIRAM FISICA inteira (2 bancos, v1.1)
 ;   $7F2800  nes_tilemap_shadow     4096B  BG1 2 screens SNES (2x 32x32 words)
-;   $7F3800  nes_oam_shadow          512B  OAM SNES low-table (128 sprites x 4B)
+;   $7F3800  nes_oam_shadow          512B  OAM SNES low-table (128 sprites x 4B;
+;                                          em 8x8 so' os 64 primeiros slots sao
+;                                          usados, em 8x16 os 128 -- v2.7)
 ;   $7F3A00  nes_cgram_bg_shadow      32B  16 cores BG1 (BGR555)
 ;   $7F3A20  nes_cgram_obj_shadow    128B  4 grupos OBJ x 16 cores (so 1-3 usados)
 ;   $7F3AA0  regs/estado (escalares, ver abaixo)
+;   $7F4600  nes_fb_oam0b            256B  v2.7: metade ALTA do shadow, buffer 0
+;   $7F4700  nes_fb_oam1b            256B  v2.7: idem, buffer 1 (fb_oam?+$0600 --
+;                                          derivacao TRAVADA no Makefile)
+;   $7F4800  nes_oam_park            256B  v2.7: pagina escondida estatica (Y=$F0)
+;   $7F4900  nes_chrfd_*              24B  v2.8: estado do despejo rapido de
+;                                          CHR-RAM (faixa suja + cursor do passe)
+;   $7F4918  nes_tm_*                 14B  v2.9/v2.9b: faixa suja da tilemap +
+;                                          cursor do scrub rotativo
 ;   $7F7FE0  (harness-only) magic do modo PPU-suja + breadcrumb -- ver
 ;            harness_main.a65/run_harness.py (fora deste arquivo de proposito)
 
@@ -285,9 +295,10 @@ nes_sp_snap          .byt 0, 0, 0, 0, 0, 0, 0, 0
 ;                   vblank nao atrasa o proximo).
 ; ============================================================
 *= $7F4000
-nes_fb_oam0 .byt 0           ; 256B -- snapshot da OAM SNES do frame (so' os
-                             ; 64 sprites reais; 64-127 escondidos 1x no
-                             ; boot direto na OAM hw, fora do DMA de 256B)
+nes_fb_oam0 .byt 0           ; 256B -- snapshot da OAM SNES do frame: slots
+                             ; 0-63. Os slots 64-127 vem de OUTRA pagina no
+                             ; apply: @nes_oam_park (8x8) ou nes_fb_oam?b
+                             ; (8x16, v2.7) -- ver o bloco no fim do arquivo
 *= $7F4100
 nes_fb_oam1 .byt 0
 *= $7F4200
@@ -648,6 +659,17 @@ nes_chrw_starve   .byt 0   ; +$D0: (NMI) jobs SEGUIDOS na regiao corrente com
                            ; NES_CHRW_STARVE_MAX o pick da a vez a ela e zera.
                            ; So' o contexto NMI (nes_chrw_pick) toca nele.
 nes_chrw_pad2     .byt 0   ; +$D1: mantem o proximo campo em WORD
+; --- v2.11: scratch do PASSO ADAPTATIVO (so' o contexto NMI toca). Nao sao
+;     gates (escritos antes de lidos DENTRO da mesma chamada), entao nao
+;     precisam do init explicito de $55 -- mas o boot ja' zera o bloco. ---
+nes_chrw_vraw     .byt 0   ; +$D2: V[7:0] lido no ponto do passo de janela
+nes_chrw_vidx     .byt 0   ; +$D3: indice na tabela (= vraw - 225)
+; --- v2.11c ESTAGIO 1: o V lido DEPOIS do transfer, em NOVE bits. O par
+;     vend/vhi e' contiguo DE PROPOSITO: lido como WORD (rep #$20) ele ja' e'
+;     o V completo 0..261, sem montagem. Escritos antes de lidos dentro da
+;     propria guarda (nao sao gates de boot). ---
+nes_chrw_vend     .byt 0   ; +$D4: V[7:0] no fim do passo
+nes_chrw_vhi      .byt 0   ; +$D5: V[8]   no fim do passo (0 ou 1)
 
 ; --- buffers de stage e shadow. Ficam acima do magic/breadcrumb do harness
 ;     ($7F7FE0-$7F7FEA) e do ring do logger ($7F6000+), na metade alta de $7F
@@ -674,3 +696,340 @@ nes_chrq_ob1  .byt 0
 nes_chr_shadow .byt 0        ; 8192 B -- CHR-RAM em formato NES (fonte de
                              ; verdade; nasce zerada como a CHR-RAM real,
                              ; que o loader tambem zera na PSRAM)
+
+; ============================================================
+; v2.7 -- SPRITES 8x16 (PPUCTRL b5). Em 8x16 cada entrada da OAM NES vira
+; DUAS entradas de OAM SNES (o SNES nao tem tamanho 8x16), entao o shadow
+; passa a ser usado INTEIRO (512B = 128 slots) e a pagina alta deixou de
+; ser estatica. Consequencias, todas aqui:
+;  - nes_fb_oam0b/1b: o snapshot ping-pong da METADE ALTA do shadow. Os
+;    enderecos NAO sao arbitrarios: fb_oam0=$7F4000 -> +$0600 = $7F4600 e
+;    fb_oam1=$7F4100 -> $7F4700, para o NMI derivar a fonte com um unico
+;    'adc #$0600' sobre nes_av_fbo (sem seletor novo no contexto NMI).
+;    Essa derivacao e' TRAVADA NO BUILD: o Makefile de snes/nes le os
+;    enderecos REAIS destes quatro simbolos no log de simbolos do snescom
+;    e ABORTA o build se qualquer delta deixar de ser $0600. Sem a trava,
+;    mover um dos blocos faria a NMI DMAr 256B de WRAM ERRADA direto pros
+;    slots 64-127 da OAM -- em silencio, e nenhum gate garante pegar.
+;  - nes_oam_park: a pagina PARKED (Y=$F0, invisivel e SEM wrap de 8 bits)
+;    que o jogo 8x8 continua exibindo nos slots 64-127. Antes ela morava em
+;    nes_oam_shadow+256; em 8x16 o decode escreve la', entao ela precisa de
+;    casa propria. Escrita 1x no boot, NUNCA mais tocada -> uma transicao
+;    8x16 -> 8x8 esconde os slots altos por CONSTRUCAO (sem latch de modo,
+;    sem re-park, sem custo no caminho 8x8).
+; ============================================================
+*= $7F4600
+nes_fb_oam0b .byt 0          ; 256B -- slots SNES 64-127 do frame commitado
+*= $7F4700
+nes_fb_oam1b .byt 0          ; 256B -- idem, buffer 1 do ping-pong
+*= $7F4800
+nes_oam_park .byt 0          ; 256B -- pagina escondida estatica (Y=$F0)
+
+; ============================================================
+; v2.8 -- DESPEJO RAPIDO de CHR-RAM (tela apagada). Estado do modo em que o
+; $41 so' alimenta o SHADOW e a conversao vira um passe FATIADO em
+; forced-blank sobre a FAIXA SUJA. Motivacao/constantes: nes_equates.i65
+; (bloco NES_CHRFD_*).
+;
+; PINADO em $7F4900 (o bloco anterior, nes_oam_park, acaba em $7F48FF; o
+; proximo uso de WRAM e' $7F8000). ENDERECO FIXO pelo mesmo motivo do
+; nes_nmi_busy/nes_chrq_rb_t: sao gates LIDOS-ANTES-DE-ESCRITOS, o
+; clear_wram enche a WRAM de $55, e o gate os sonda por endereco.
+; *** LOCKSTEP DECLARADO: nes/tests/renderer-harness/run_chrram_gate.py
+;     (W_CHRFD_MODE = $7F4900) ***
+;
+; INVARIANTES (as duas que autorizam o passe a usar o BUFFER 0 como
+; rascunho, exatamente como o rebuild total):
+;  1. Enquanto nes_chrfd_mode != 0 o MAIN NAO ESTAGIA tile nenhum -- so'
+;     escreve o shadow e amplia a faixa pendente. (Se estagiasse, o buffer
+;     que o nes_chrq_setbuf escolhe para wr=1 E' o buffer 0.)
+;  2. O passe so' ARMA com a fila VAZIA (nes_chrq_rdy == 0, testado em
+;     nes_chrq_service ANTES do despacho). Assim um descritor estagiado
+;     ANTES da entrada no modo -- cujos bytes ja' foram swizzlados de uma
+;     versao ANTIGA do shadow -- e' sempre DMAiado ANTES do passe, nunca
+;     depois (senao ele sobrescreveria com dado velho o tile que o passe
+;     acabou de converter do shadow novo).
+; ============================================================
+*= $7F4900
+nes_chrfd_mode  .byt 0     ; +$00: 1 = modo despejo rapido ativo (MAIN nao
+                           ; estagia). Cai a 0 quando o passe termina e nao
+                           ; ha' mais faixa pendente.
+nes_chrfd_pend  .byt 0     ; +$01: 1 = faixa [plo,phi) valida esperando passe
+nes_chrfd_act   .byt 0     ; +$02: 1 = passe EM CURSO (cursor nes_chrfd_t
+                           ; valido; a tela ja' esta' em forced-blank, entao
+                           ; a continuacao NAO re-consulta o gate -- mesma
+                           ; razao do rb_t no rebuild total)
+nes_chrfd_quiet .byt 0     ; +$03: 1 = o ultimo frame FECHOU sem payload $41
+                           ; (latch do MAIN em nes_chrq_publish)
+nes_chrfd_ron   .byt 0     ; +$04: ppumask & $18 do frame COMMITADO (o mesmo
+                           ; byte que vira TM). != 0 = a tela vai ABRIR =>
+                           ; converter AGORA, sob blank, e' obrigatorio.
+nes_chrfd_age   .byt 0     ; +$05: frames com faixa pendente (escape MAXWAIT)
+nes_chrfd_ntdef .byt 0     ; +$06: 1 = conversao GLOBAL da tilemap DEVIDA (o
+                           ; run so' escreveu a CIRAM). PRECISA ser persistente:
+                           ; o nes_nt_dirty e' zerado no topo de TODO
+                           ; nes_process_frame, entao ele nao serve de divida.
+                           ; Tambem segura a saida do modo (e o forced-blank)
+                           ; ate' a tilemap estar convertida.
+nes_chrfd_pad1  .byt 0     ; +$07 (alinha os words abaixo)
+nes_chrfd_plo   .word 0    ; +$08: faixa PENDENTE, primeiro tile
+nes_chrfd_phi   .word 0    ; +$0A: ... e o fim (EXCLUSIVE)
+nes_chrfd_lo    .word 0    ; +$0C: faixa do passe corrente (breadcrumb)
+nes_chrfd_hi    .word 0    ; +$0E: fim (exclusive) do passe corrente
+nes_chrfd_t     .word 0    ; +$10: cursor do passe -- valor INTERMEDIARIO
+                           ; observavel = prova do fatiamento
+nes_chrfd_ent   .word 0    ; +$12: breadcrumb -- entradas no modo despejo
+nes_chrfd_pass  .word 0    ; +$14: breadcrumb -- passes concluidos
+nes_chrfd_tacc  .word 0    ; +$16: breadcrumb -- tiles convertidos por passes
+
+; ------------------------------------------------------------
+; v2.9 -- FAIXA SUJA PENDENTE DA TILEMAP (nes_tm_*).
+;
+; POR QUE EXISTE. O apply do vblank passou a mandar a tilemap na CAUDA
+; (v2.7a: a OAM e' destrutiva quando estoura, a VRAM so' perde escrita).
+; So' que o custo do apply COM um passo de CHR na mesma NMI nao cabe no
+; vblank de 36 linhas -- conta do proprio nes_equates.i65 (ancora de ~1020
+; cyc por transferencia + 8 cyc/byte):
+;     passo de CHR 768B/2 DMAs .. 8.184 cyc
+;     CGRAM 64B/2 DMAs ......... 3.320
+;     OAM   544B/3 DMAs ........ 7.412
+;     tilemap 4096B/1 DMA ......33.788
+;                             = 52.704 cyc = 38,6 linhas > 36
+; ou seja: com um passo de CHR em voo a CAUDA do DMA da tilemap cai no
+; display ativo TODO FRAME e a PPU a descarta. Como e' SEMPRE a mesma
+; cauda, a alegacao de "auto-cura no vblank seguinte" NAO vale: os jogos
+; que animam CHR todo frame (SMB2/SMB3 -- 100% de utilizacao do passo,
+; medido no Gate 2.4) ficam com a mesma faixa de VRAM parada por segundos.
+;
+; O QUE MUDA. A tilemap deixa de descer INTEIRA todo frame e passa a
+; descer so' a faixa que a conversao SUJOU, limitada pelo que ainda cabe
+; no vblank; o que nao coube fica PENDENTE (cursor nes_tm_lo) e sai no
+; vblank seguinte. Nenhum byte e' descartado, e o caso quente (o jogo
+; reescreve UMA coluna/linha da nametable) cai de 4096B para <=2048B.
+;
+; v2.9b -- POR QUE A FAIXA SUJA SOZINHA NAO BASTA (medido, nao suposto).
+; Rastrear sujeira entrega em ate' 8 frames tudo o que a CONVERSAO escreve
+; (stream real dos goldens, orcamento de V=238: SMB3 faixa media 526 B,
+; idade maxima 8 frames) -- e' o bug do SMB2, e ele morreu. So' que o DMA
+; fixo de 4096 B que existia antes dava DE GRACA uma segunda propriedade:
+; AUTO-CURA. Qualquer divergencia VRAM x shadow que a faixa NAO conheca
+; -- cauda descartada por um apply que estourou o vblank (era o regime do
+; hotfix v2.7a), corrida entre a NMI que avanca o cursor e o hook que
+; recua o 'lo', escrita futura no shadow que esqueca de marcar -- some no
+; vblank seguinte. Com a faixa suja sozinha ela vira PERMANENTE: medido no
+; mesmo stream, um bloco de 1152 B perdido no frame 300 leva 47 frames
+; (SMB3), 339 (Fantasy Zone) ou NUNCA (tela sem redraw global) pra voltar,
+; porque o rearme de 64 frames OCIOSOS nao dispara em jogo que suja
+; alguma coisa todo frame. E' esse o fantasma do logo do SMB3 na tela de
+; titulo, que persiste indefinidamente.
+;
+; O QUE MUDA NA v2.9b. Depois da faixa suja, o que SOBRAR do orcamento vai
+; num SCRUB ROTATIVO: um cursor (nes_tm_sc) que varre os 4096 B em circulo,
+; ate' NES_TM_SCRUB_MAX por vblank. A tilemap inteira e' reescrita a cada 4
+; frames (8 no pior caso, com o piso NES_TM_SCRUB_MIN) => TODA divergencia
+; e' limitada no tempo por CONSTRUCAO, sem depender de ninguem marcar nada.
+; A faixa suja continua descendo INTEIRA sempre que couber no orcamento
+; (latencia 0 pro que mudou); o piso do scrub so' e' cobrado dela quando ela
+; NAO cabe -- que e' exatamente o caso em que ela poderia monopolizar o
+; vblank pra sempre.
+;
+; OS DOIS RESIDUAIS QUE O SCRUB FECHA (levantados na revisao adversarial
+; da v2.9; nenhum dos dois e' visivel no corpus, os dois eram PERMANENTES
+; sem ele):
+;   R1 -- FOME DO TOPO DA FAIXA. O cursor e' FIFO a partir de 'lo' e o
+;         'lo' VOLTA PRA TRAS a cada sujeira nova; com orcamento < (hi-lo)
+;         em todo frame o TOPO da faixa nunca desceria, e o rearme de 64
+;         frames nao cobria (ele so' contava frame com a faixa VAZIA). O
+;         scrub cobre os 4096 B em circulo, independente do cursor.
+;   R2 -- CORRIDA CONVERSOR x NMI. Se a NMI esvaziasse a faixa entre a
+;         marcacao de minimo e a de maximo da MESMA linha, a linha ficava
+;         stale ate' o jogo re-suja-la. Duas defesas: (a) a marcacao virou
+;         UM par de stores ADJACENTES no ncr_rowdone (janela ~1.400 cyc =
+;         1 scanline -> ~10 cyc); (b) mesmo que escape, o scrub cura em
+;         <= 4 frames.
+;
+; INVARIANTE. O UNICO produtor de @nes_tilemap_shadow e' o
+; nes_convert_range (nucleo unico da conversao) -- a marcacao da faixa
+; vive la'. Escritor novo no shadow DEVE marcar a faixa (senao a celula
+; so' desce no scrub, ate' 4 frames depois).
+;
+; [lo, hi) em BYTES dentro do shadow, hi EXCLUSIVE; VAZIA quando hi <= lo
+; (sentinela lo=$1000/hi=$0000). Zeradas explicitamente no boot -- o
+; clear_wram enche a WRAM de $55 e estas sao lidas antes de escritas.
+; ------------------------------------------------------------
+nes_tm_lo       .word 0    ; inicio (byte) da faixa suja pendente
+nes_tm_hi       .word 0    ; fim EXCLUSIVE da faixa suja pendente
+nes_tm_len      .word 0    ; scratch (NMI): bytes que descem neste DMA
+nes_tm_tmp      .word 0    ; scratch (NMI): aritmetica do orcamento
+nes_tm_rem      .word 0    ; scratch (NMI): orcamento que ainda sobra
+nes_tm_sc       .word 0    ; v2.9b: cursor do scrub rotativo (byte, 0..$FFF)
+nes_tm_rs       .word 0    ; v2.9b: inicio da linha corrente do conversor
+                           ; (marcacao de [lo,hi) e' feita INTEIRA no
+                           ; ncr_rowdone -- ver R2 acima)
+
+; ============================================================
+; v2.11 -- INSTRUMENTO DE CAMPO (nes_dbg_*).  PINADO em $7F4930.
+;
+; POR QUE PINADO. Mesma razao do nes_nmi_busy/nes_chrfd_mode: o gate e o
+; poke do coordenador sondam por ENDERECO FIXO, e o clear_wram enche a
+; WRAM de $55 -- todas sao zeradas explicitamente no boot.  O bloco
+; anterior (chrfd + tm) termina em $7F4926, entao $7F4930 esta' livre com
+; folga; o proximo uso de WRAM e' $7F8000.
+; *** LOCKSTEP DECLARADO: frenteF/GATE/run_chrram_gate_f.py e
+;     frenteF/GATE/dbg_probe.py (W_DBG_BADRUN = $7F4930) ***
+;
+; O QUE CADA UMA RESPONDE:
+;   badrun/badop -- o residual "(203,10)" da v2.7: o renderer CHEGA a ver
+;     um run com nt_off fora da CIRAM (ou um opcode que nao existe)?  Hoje
+;     os dois sao descartados em silencio e o device nao distingue "a
+;     bridge nao emitiu" de "o dreno corrompeu o byte".
+;   bfr/bmax/wsteps/wbytes -- o custo REAL de consumo por frame no
+;     silicio, que e' o numero que falta para calibrar o modelo de bancada
+;     (a bancada da >=1 vblank por frame alimentado; o device nao).
+;   vis -- latch VISUAL (ver nes_equates NES_DBG_VIS_*): nasce 0 e so' e'
+;     ligado por poke/build de diagnostico.  E' o unico canal
+;     device-visivel do renderer (os mirrors de savestate nao existem sob
+;     o core NES; o NDBG e' publicado pela MCU e nao prova renderer vivo).
+; ============================================================
+*= $7F4930
+nes_dbg_badrun  .word 0    ; +$00: CMD_NT_RUN com nt_off >= $0800
+nes_dbg_badop   .word 0    ; +$02: opcode desconhecido no laco TLV
+nes_dbg_badoff  .word 0    ; +$04: nt_off do ULTIMO run invalido
+nes_dbg_pendfr  .word 0    ; +$06: frames com janela de CHR pendente (satura
+                           ; em $ffff) -- o par device do "pend_frames" que o
+                           ; modelo offline mede
+nes_dbg_vhead   .word 0    ; +$08: MAIOR V ja' visto no ponto do passo de
+                           ; janela (= depois da OAM).  E' o numero que
+                           ; calibra o modelo de vblank contra o SILICIO: a
+                           ; bancada da >=1 vblank por frame alimentado e o
+                           ; device nao, entao so' o device sabe onde a NMI
+                           ; realmente chega nesse ponto.
+nes_dbg_wsteps  .word 0    ; +$0A: passos de janela aplicados (acumulado)
+nes_dbg_wbytes  .word 0    ; +$0C: bytes de BG do ultimo passo de janela
+nes_dbg_wmax    .word 0    ; +$0E: max retido de +$0C
+nes_dbg_vis     .byt 0     ; +$10: 1 = latch visual LIGADO (default 0)
+nes_dbg_pad     .byt 0     ; +$11
+nes_dbg_nmi     .word 0    ; +$12: contador livre de NMIs (strobe do latch)
+nes_dbg_vtail   .word 0    ; +$14: V do ULTIMO apply no ponto da TILEMAP
+nes_dbg_vtmax   .word 0    ; +$16: max retido de +$14 -- com o vhead acima,
+                           ; fecha a conta "onde o apply comeca e termina no
+                           ; silicio" sem precisar de sonda externa
+; --- v2.11c ESTAGIO 1 -- INSTRUMENTO DA GUARDA DE ESTOURO. Nao ha' ACAO
+;     nenhuma associada a eles: o passo conta e SEGUE, exatamente como na
+;     base validada em silicio. Sao os dois numeros que decidem se a guarda
+;     ATUANTE (estagio 2) deve existir. ---
+nes_dbg_wovr    .word 0    ; +$18: passos que TERMINARAM em display ATIVO
+                           ; (V de 9 bits em [1,224]) = cauda de DMA que a
+                           ; PPU descartou. Satura em $ffff. Se ficar 0 no
+                           ; device, o furo F1/A13 nao acontece em jogo real.
+nes_dbg_vwmax   .word 0    ; +$1A: HIGH-WATER do fim do passo, em escala
+                           ; MONOTONA: V se V>=225, senao V+262. Assim
+                           ;   225..261 = terminou dentro do vblank
+                           ;   262      = terminou na linha 0 (blanking)
+                           ;   263..486 = terminou N linhas DENTRO do display
+                           ; E' a calibracao direta do modelo de custo da casa
+                           ; (1020 cyc/transferencia + 8 cyc/byte) contra o
+                           ; SILICIO -- vale mesmo com wovr == 0.
+
+; --- v2.12 ESTAGIO 2 -- estado e instrumento da GUARDA ATUANTE. ---
+; Regra de layout da casa: var nova SO' no FIM do bloco. Este e' o ultimo
+; bloco absoluto do arquivo (*= $7F4930), e tudo abaixo (nes_vg_*) e'
+; acessado EXCLUSIVAMENTE por simbolo -- as sondas dos gates
+; ($7F4930+$00..$16, $7F3AB5/$7F3ABB, W_CHRW+...) nao se movem.
+nes_dbg_qovr    .word 0    ; +$1C: DMAs de descritor da FILA de CHR-RAM que
+                           ; terminaram em display ATIVO (V 9 bits em [1,224])
+nes_dbg_qvwmax  .word 0    ; +$1E: high-water do fim do DMA da fila (escala
+                           ; monotona, igual ao nes_dbg_vwmax)
+nes_dbg_reent   .word 0    ; +$20: NMIs que chegaram com a anterior AINDA
+                           ; rodando (handler > 1 frame = estouro de
+                           ; ORCAMENTO DE FRAME, que e' como o MAIN perde o
+                           ; ACK e a bridge ABANDONA payload)
+nes_dbg_ntglob  .word 0    ; +$22: passes GLOBAIS de conversao de nametable
+                           ; (~1920 celulas ~= 2 frames de CPU cada)
+nes_dbg_wesc    .word 0    ; +$24: escaladas do passo de JANELA p/ o full
+nes_dbg_qesc    .word 0    ; +$26: escaladas da FILA p/ forced-blank
+nes_dbg_hold    .word 0    ; +$28: vblanks em que o release do INIDISP ficou
+                           ; SEGURADO no fim de um despejo
+nes_chrw_dfk    .byt $ff   ; +$2A: jk a que pertencem os descartes seguidos
+nes_chrw_dfail  .byt 0     ; +$2B: descartes CONSECUTIVOS no mesmo jk
+nes_chrq_dfail  .byt 0     ; +$2C: descartes CONSECUTIVOS no mesmo descritor
+nes_chrfd_hold  .byt 0     ; +$2D: vblanks de hold do blank (teto: nunca
+                           ; deixar a tela presa em preto)
+nes_chrq_dfrd   .word 0    ; +$2E: nes_chrq_rd a que pertencem os descartes
+nes_nt_facc     .word 0    ; +$30: bytes de CMD_NT_RUN NESTE frame (zerado no
+                           ; topo do nes_process_frame, junto do nt_dirty).
+                           ; E' o que permite ADIAR a conversao da tilemap no
+                           ; frame que reescreve a CIRAM INTEIRA antes de o
+                           ; primeiro $41 chegar -- ver nes_chrfd_ntdefer.
+
+; --- v2.13 F-8: FATIAMENTO da conversao GLOBAL da tilemap. ---
+; INVARIANTE DE CONTEXTO: `nes_convert_nametable` tem um
+; UNICO chamador -- o npf_finish, que roda no MAIN. Logo TODO o estado abaixo
+; e' MAIN-only e nao precisa de protocolo de corrida. Isto e' o OPOSTO do
+; nes_chrq_rb_t (cursor do rebuild fatiado), que e' NMI-only: o molde e' o
+; mesmo, o argumento de seguranca NAO e'. Se algum dia um caminho de NMI
+; passar a chamar o pass, este bloco vira corrida e precisa de guarda.
+nes_nt_gcur     .word 0    ; +$32: cursor do pass, em espaco LOGICO 0..1919
+                           ; (banco0 = 0..959 -> celula fisica igual;
+                           ;  banco1 = 960..1919 -> celula fisica +64).
+                           ; 0 = nenhum pass em voo.
+nes_nt_glo      .word 0    ; +$34: MARCA D'AGUA -- menor celula LOGICA tocada
+                           ; por um run ADIADO desde que o pass comecou.
+                           ; Sentinela = NES_NT_CELLS (nenhuma).
+nes_nt_fcells   .word 0    ; +$36: ORCAMENTO DO FRAME ja' gasto em conversao
+                           ; de tilemap (celulas). O caminho INCREMENTAL
+                           ; consome primeiro, a FATIA leva o resto: e' o que
+                           ; torna "pior frame <= NES_NT_SLICE" verdade POR
+                           ; CONSTRUCAO, em qualquer jogo. Zerado no topo do
+                           ; nes_process_frame, junto do nt_dirty.
+nes_nt_cost     .word 0    ; +$38: custo (celulas + 16*attrs) do run corrente
+nes_nt_gbud     .word 0    ; +$3A: celulas que ainda cabem NESTA fatia
+nes_nt_glim     .word 0    ; +$3C: limite LOGICO do banco corrente
+nes_nt_gofs     .word 0    ; +$3E: deslocamento logico->fisico do banco
+nes_nt_gend     .word 0    ; +$40: fim LOGICO desta passada
+nes_nt_gn       .word 0    ; +$42: celulas desta passada
+nes_nt_gtmp     .word 0    ; +$44: menor ancora vista no nes_nt_wmark
+nes_nt_fbud     .word 0    ; +$46: v2.14 -- ORCAMENTO DESTE FRAME em celulas,
+                           ; dimensionado pelo RASTER 1x por frame (topo do
+                           ; nes_process_frame). E' o metro UNICO: o dispatch
+                           ; (nes_nt_fits) e a fatia global leem o MESMO valor.
+nes_nt_vscale   .word 0    ; +$48: V de NOVE bits na escala monotona
+                           ; (scale = V se V>=225, senao V+262), scratch do
+                           ; nes_nt_frame_budget. MAIN-only, como o bloco.
+
+
+; ------------------------------------------------------------
+; v2.10 -- COSTURA das rows mortas 30/31 (HDMA de BG1VOFS, canal 4).
+;
+; A nametable do NES tem 30 rows (240px); o screen SNES tem 32 (256px).
+; O nes_convert_range so' converte as 960 celulas de cada banco, entao as
+; rows 30/31 de CADA screen nunca sao escritas e ficam com a word $0000
+; que o nes_boot_zero_tilemap_shadow deixou. Isso NAO e' lixo de
+; clear_wram: e' o TILE 0 do pattern table corrente, palette 0, repetido
+; nas 32 colunas -- a faixa de 16px que aparece rolando durante o scroll
+; vertical (Mega Man, 10-Yard Fight, Road Fighter).
+;
+; Trocar a word por um "tile vazio" NAO resolve: a unica VRAM livre
+; (words $3000-$3FFF) so' e' enderecavel com BG12NBA no slot1, e o $210B
+; e' HDMA-chaveado POR FAIXA desde a v2.3 -- qualquer indice fixo cai em
+; CHR real em alguma faixa do frame.
+;
+; O que resolve e' DOIS BG1VOFS no mesmo frame: ate' a linha da costura
+; vale o VOFS de sempre; dali pra baixo, VOFS+16 (pula as 2 rows). O
+; delta e' +16 nos DOIS arranjos -- em H o salto e' o gap do screen 1, em
+; V/single e' o wrap da tela de 256 linhas (240+16) -- entao a montagem
+; nao tem branch por arranjo.
+;
+; A tabela e' montada DENTRO do NMI (o topo do viewport so' existe la')
+; e lida pelo display do frame seguinte => NAO precisa do double-buffer
+; dos canais 2/3, que sao montados pelo main loop com o display ATIVO.
+; ------------------------------------------------------------
+nes_vg_tab      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+                           ; tabela HDMA ch4: [count<=127, lo, hi]* + $00.
+                           ; Maximo 2 regioes x 2 blocos = 12B + terminador.
+nes_vg_topo     .word 0    ; topo do viewport no espaco logico NES,
+                           ; NORMALIZADO (0..479 em H, 0..247 em V/single)
+nes_vg_v1       .word 0    ; BG1VOFS da regiao 1 (== o valor unico de hoje)
+nes_vg_d        .word 0    ; linhas do viewport ate' a costura (1..240)
+nes_vg_c        .word 0    ; linhas que faltam emitir da regiao corrente
+nes_vg_val      .word 0    ; BG1VOFS da regiao corrente

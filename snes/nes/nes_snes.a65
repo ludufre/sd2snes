@@ -67,7 +67,20 @@ NMI_HANDLER:
         ; ver nes_chrq_rebuild.
         ; ============================================================
         lda @nes_nmi_busy
-        bne nmi_reentry_exit
+        beq nmi_not_busy
+        ; v2.12 instrumento: uma NMI que chega com a anterior AINDA rodando
+        ; quer dizer que o handler passou de um frame -- e' a assinatura do
+        ; estouro de ORCAMENTO DE FRAME, o caminho pelo qual o MAIN deixa de
+        ; dar ACK em dia e a bridge ABANDONA payload nao confirmado.
+        rep #$20 : .al
+        lda @nes_dbg_reent
+        inc
+        beq nmi_reent_sat
+        sta @nes_dbg_reent
+nmi_reent_sat:
+        sep #$20 : .as
+        bra nmi_reentry_exit
+nmi_not_busy:
         lda #$01
         sta @nes_nmi_busy
 
@@ -88,6 +101,47 @@ nmi_wait_pad:
         and #$01
         bne nmi_wait_pad
         jsr nes_dev_send_pad
+
+        ; ============================================================
+        ; v2.11 -- LATCH VISUAL DO INSTRUMENTO (opt-in, nasce DESLIGADO).
+        ;
+        ; O renderer nao tem canal de leitura pela MCU: os mirrors de
+        ; savestate NAO existem sob o core NES e o NDBG e' publicado pela
+        ; MCU (nao prova nada do renderer).  O unico canal device-visivel e'
+        ; a TELA -- e a receita ja' provada em campo (v2.6) e' o strobe de
+        ; backdrop.  Aqui ele responde UMA pergunta binaria e filmavel: o
+        ; renderer chegou a ver um run de NT invalido ou um opcode
+        ; desconhecido?  Se sim, o backdrop pisca magenta a cada 32 NMIs.
+        ;
+        ; Vem DEPOIS do apply de proposito: a CGRAM do frame ja' desceu,
+        ; entao a cor forcada vale para o frame inteiro e some sozinha no
+        ; frame seguinte sem strobe.  So' escreve CGRAM[0] (o backdrop),
+        ; nunca conteudo.  nes_dbg_vis = 0 por boot => custo em producao =
+        ; 3 leituras e um branch.
+        ; ============================================================
+        sep #$20 : .as
+        rep #$20 : .al
+        lda @nes_dbg_nmi
+        inc
+        sta @nes_dbg_nmi
+        sep #$20 : .as
+        lda @nes_dbg_vis
+        beq nmi_no_vis
+        rep #$20 : .al
+        lda @nes_dbg_badrun
+        ora @nes_dbg_badop
+        sep #$20 : .as
+        beq nmi_no_vis
+        lda @nes_dbg_nmi
+        and #NES_DBG_VIS_MASK
+        beq nmi_no_vis
+        lda #$00
+        sta $2121                ; CGADD = 0 (backdrop)
+        lda #NES_DBG_VIS_LO
+        sta $2122
+        lda #NES_DBG_VIS_HI
+        sta $2122
+nmi_no_vis:
 
         sep #$20 : .as
         lda #$00
@@ -154,6 +208,22 @@ nes_snes_start:
         sta @nes_nmi_busy
         ; (v1.5.1: o estado do frame buffer ping-pong -- fb_pending/active/
         ;  target -- e' zerado no nes_boot_init, COMPARTILHADO com o harness)
+
+        ; --- desmuta o S-DSP ANTES de qualquer outra coisa.  Sem um
+        ;     programa carregado no SPC700 o S-DSP fica no reset/mute do
+        ;     IPL, e nesse estado o caminho de audio ANALOGICO do console
+        ;     gateia a saida do DAC do cartucho -- o audio do core NES nao
+        ;     chegava no jack.  A rotina sobe o mesmo stub de silencio do
+        ;     menu (snes/sfx.a65) so' pra reabrir esse caminho; ela e'
+        ;     bounded em todas as esperas e volta com carry set se o APU
+        ;     nao estiver no IPL (ai' o boot segue sem som, nunca trava).
+        ;     Fica AQUI e nao dentro de nes_boot_init de proposito:
+        ;     nes_boot.a65 e' COMPARTILHADO com o harness bsnes, que nao
+        ;     deve falar com o IPL.
+        ;     Estado exigido (satisfeito neste ponto): DBR=0, modo nativo,
+        ;     NMI desligada ($4200 zerado pelo reset; so' e' armada no fim
+        ;     deste boot), A em 8 bits e X/Y em 16 bits. ---
+        jsr nes_apu_unmute
 
         jsr nes_boot_init
 

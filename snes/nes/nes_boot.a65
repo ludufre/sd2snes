@@ -191,6 +191,76 @@ nes_boot_init:
         sta @nes_chrq_tmax
         sta @nes_chrq_bmax
         sep #$20 : .as
+
+        ; --- v2.8 despejo rapido de CHR-RAM: MESMA regra dos gates acima.
+        ;     mode/pend/act sao lidos-antes-de-escritos (o dispatcher do $41 e
+        ;     o servico da NMI), e $55 != 0 faria o renderer nascer "em
+        ;     despejo com passe em curso": o MAIN nunca estagiaria e a 1a NMI
+        ;     converteria uma faixa de lixo em forced-blank. quiet/ron/age
+        ;     entram porque gateiam o ARME do passe; plo/phi/lo/hi/t porque
+        ;     definem a faixa/cursor que ele percorre. ---
+        lda #$00
+        sta @nes_chrfd_mode
+        sta @nes_chrfd_pend
+        sta @nes_chrfd_act
+        sta @nes_chrfd_quiet
+        sta @nes_chrfd_ron
+        sta @nes_chrfd_age
+        sta @nes_chrfd_ntdef
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_chrfd_plo
+        sta @nes_chrfd_phi
+        sta @nes_chrfd_lo
+        sta @nes_chrfd_hi
+        sta @nes_chrfd_t
+        sta @nes_chrfd_ent
+        sta @nes_chrfd_pass
+        sta @nes_chrfd_tacc
+        ; --- v2.11 instrumento: MESMA regra (clear_wram enche de $55). O
+        ;     nes_dbg_vis e' um GATE lido-antes-de-escrito na NMI -- nascer
+        ;     $55 ligaria o latch visual em toda carga. ---
+        sta @nes_dbg_badrun
+        sta @nes_dbg_badop
+        sta @nes_dbg_badoff
+        sta @nes_dbg_pendfr
+        sta @nes_dbg_vhead
+        sta @nes_dbg_wsteps
+        sta @nes_dbg_wbytes
+        sta @nes_dbg_wmax
+        sta @nes_dbg_nmi
+        sta @nes_dbg_vtail
+        sta @nes_dbg_vtmax
+        sta @nes_dbg_wovr            ; v2.11c: instrumento da guarda
+        sta @nes_dbg_vwmax
+        sta @nes_dbg_qovr            ; v2.12: estagio 2 (fila + escaladas)
+        sta @nes_dbg_qvwmax
+        sta @nes_dbg_reent
+        sta @nes_dbg_ntglob
+        sta @nes_dbg_wesc
+        sta @nes_dbg_qesc
+        sta @nes_dbg_hold
+        sta @nes_chrq_dfrd
+        sta @nes_nt_facc
+        sta @nes_nt_gcur             ; v2.13 F-8: nenhum pass em voo
+        sta @nes_nt_fcells
+        sta @nes_nt_vscale           ; v2.14: scratch do orcamento por raster
+        lda #NES_NT_SLICE            ; v2.14: orcamento nasce no PISO (o topo
+        sta @nes_nt_fbud             ; do nes_process_frame o recalcula por frame)
+        lda #NES_NT_CELLS            ; ... e a marca d'agua na SENTINELA
+        sta @nes_nt_glo
+        sep #$20 : .as
+        ; v2.12: gates de 1 byte LIDOS-ANTES-DE-ESCRITOS (clear_wram enche de
+        ; $55). O dfk nasce $ff = "nenhum jk", os contadores em 0.
+        lda #$ff
+        sta @nes_chrw_dfk
+        lda #$00
+        sta @nes_chrw_dfail
+        sta @nes_chrq_dfail
+        sta @nes_chrfd_hold
+        lda #$00
+        sta @nes_dbg_vis
+
         jsr nes_boot_zero_chrq
 
         ; --- v2.3w janelas de 1KB (mapper 4): TODOS os gates sao lidos-antes-
@@ -527,6 +597,44 @@ nbz_tm_loop:
         inx
         cpx #$1000
         bne nbz_tm_loop
+        ; --- v2.9: a faixa suja pendente da tilemap nasce INTEIRA (a VRAM
+        ;     do menu nao tem relacao com este shadow) e o cursor do scrub
+        ;     no comeco. INIT EXPLICITO OBRIGATORIO: o clear_wram enche a
+        ;     WRAM de $55 e o apply le estas vars antes de qualquer
+        ;     conversao escreve-las. ---
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_tm_lo
+        sta @nes_tm_len
+        sta @nes_tm_tmp
+        sta @nes_tm_rem
+        sta @nes_tm_sc
+        sta @nes_tm_rs
+        lda #$1000
+        sta @nes_tm_hi
+        sep #$20 : .as
+        ; --- v2.10: tabela/estado da costura das rows 30/31 (canal 4).
+        ;     O canal so' e' ligado no frame em que o nav_vgap_build monta
+        ;     a tabela, entao nao ha' leitura-antes-de-escrita; zera aqui
+        ;     mesmo assim (regra da casa: clear_wram enche a WRAM de $55 e
+        ;     um $55 no byte de COUNT viraria um bloco HDMA de 85 linhas
+        ;     se um dia alguem armar o canal antes de montar). ---
+        rep #$10 : .xl
+        ldx #$0000
+        lda #$00
+nbz_vg_loop:
+        sta @nes_vg_tab,x
+        inx
+        cpx #16
+        bne nbz_vg_loop
+        rep #$20 : .al
+        lda #$0000
+        sta @nes_vg_topo
+        sta @nes_vg_v1
+        sta @nes_vg_d
+        sta @nes_vg_c
+        sta @nes_vg_val
+        sep #$20 : .as
         rts
 
 ; ------------------------------------------------------------
@@ -581,6 +689,14 @@ nes_boot_clear_oam:
 ; como escondidas (Y=$F0, fora do viewport 224 linhas). As entradas 0-63
 ; ficam com Y=0 (lixo visualmente irrelevante ate o 1o CMD_OAM chegar --
 ; a tela ainda esta em blank nesse ponto do boot).
+; v2.7: a metade alta do shadow deixou de ser "escondida pra sempre" -- em
+; 8x16 o decode a escreve todo frame (nho_big). Quem esconde os slots
+; 64-127 no modo 8x8 agora e' a pagina @nes_oam_park, inicializada logo
+; abaixo junto com os dois nes_fb_oam?b (as tres nascem com Y=$F0, porque o
+; refresh de 544B do apply as le desde o 1o vblank). O park do shadow
+; continua aqui porque ele e' o estado inicial dos slots altos ate' o 1o
+; frame 8x16 -- e porque o early-out do nho_big NAO reescreve tile/attr/X
+; de sprite escondido (contrato documentado la').
 ; ------------------------------------------------------------
 nes_boot_clear_oam_shadow:
         sep #$20 : .as
@@ -614,6 +730,37 @@ nbz_hide_loop:
         sep #$20 : .as
         cpx #$0201                 ; sprite128 (nao existe) -> offset 513 ($201)
         bne nbz_hide_loop
+
+        ; --- v2.7 (8x16): a pagina PARKED dos slots 64-127 ganhou casa
+        ;     PROPRIA (@nes_oam_park) porque em 8x16 o decode escreve o
+        ;     shadow INTEIRO. Os dois fb_oam?b nascem parkeados tambem: o
+        ;     refresh de 544B do apply le fb_oam?b desde o 1o vblank, antes
+        ;     de qualquer CMD_OAM chegar. Mesma disciplina do bug acima: o
+        ;     'lda #$f0' fica DENTRO do laco (o txa clobbera A). ---
+        rep #$10 : .xl
+        ldx #$0000
+        lda #$00
+nbz_park_zero:
+        sta @nes_oam_park,x
+        sta @nes_fb_oam0b,x
+        sta @nes_fb_oam1b,x
+        inx
+        cpx #$0100
+        bne nbz_park_zero
+        ldx #$0001                 ; byte Y do slot 0 de cada pagina
+nbz_park_hide:
+        lda #$f0
+        sta @nes_oam_park,x
+        sta @nes_fb_oam0b,x
+        sta @nes_fb_oam1b,x
+        rep #$20 : .al
+        txa
+        clc
+        adc #$0004
+        tax
+        sep #$20 : .as
+        cpx #$0101                 ; 64 entradas: ultimo Y escrito em $FD
+        bcc nbz_park_hide
         rts
 
 ; ============================================================

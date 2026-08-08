@@ -63,6 +63,30 @@ nes_dev_poll_frame:
         lda @nes_dev_drain_seq
         sta @nes_dev_last_seq
         sep #$20 : .as
+        ; --- v2.8: o ACK SAI AQUI, no fim do decode -- nao mais so' no vblank
+        ;     seguinte. MEDIDO (tb_oneshot, traces reais, custo do renderer
+        ;     v2.8): com o ACK um vblank atrasado o despejo de tela apagada
+        ;     ainda perde 1642 B (megaman1) / 306 B (bomberman2), porque a
+        ;     cauda confirmada do ring de CHR (cb_cp) so' anda com o ACK e o
+        ;     ring segura UM FRAME INTEIRO de despejo a mais; com o ACK aqui,
+        ;     0 B nos dois. Era o ULTIMO fator do trio (custo do $41, custo da
+        ;     tilemap, latencia do ACK).
+        ;     POR QUE E' SEGURO AQUI, e por que a nota antiga ("a bridge so'
+        ;     reusa o buffer apos ver o ACK") nao se aplica: o renderer NAO LE
+        ;     MAIS a janela da mailbox depois do drain -- o
+        ;     nes_dev_drain_mailbox copia os NES_LEN bytes p/ @nes_mailbox_buf
+        ;     (WRAM) e TODO o parse le de la'. Neste ponto o frame inteiro ja'
+        ;     foi absorvido pelos shadows/masters (CIRAM, shadow de CHR, OAM/
+        ;     CGRAM, fb commitado); o que falta e' so' o DMA pra VRAM, que a
+        ;     bridge nao gateia -- ela gateia RETENCAO DE DELTA, e delta
+        ;     absorvido e' delta que ela pode soltar.
+        ;     INVARIANTE INTACTA (v1.4a): o valor continua sendo o seq
+        ;     DRENADO (@nes_dev_last_seq, capturado no drain) -- so' o INSTANTE
+        ;     da escrita mudou. O ack do vblank (nes_dev_ack_frame na NMI)
+        ;     FICA: reescrever o mesmo valor e' no-op e cobre o caso de um
+        ;     frame decodificado com a NMI perdida.
+        jsr nes_dev_ack_frame
+        sep #$20 : .as
         lda #$01                   ; A=1: frame decodificado (o COMMIT p/ a
                                     ; NMI ja saiu no nes_fb_commit, dentro
                                     ; do nes_process_frame)

@@ -442,7 +442,7 @@ module nes_bridge(
   //    threshold that triggers it (232 -> 180 tiles of headroom).
   // TODO (post-hardware, bundle with ack_moved and the mid-run clamp fix): make
   // this structural instead of empirical.  Either a dynamic allowance computed
-  // at the tick, `retx_allow = 3072 - fresh_pending`, or -- the advisor's
+  // at the tick, `retx_allow = 3072 - fresh_pending`, or -- the
   // recommendation -- a HARD 3072 B/frame cap on the CHR section with DEFERRAL
   // in the CHR_WSTOP style (the surplus keeps its place in the ring instead of
   // being dropped).  The cap is preferred because it degrades VISIBLY through
@@ -668,8 +668,22 @@ module nes_bridge(
   wire        chr_any_frz   = live ? chr_any0   : chr_any1;
   wire [31:0] pal_dirty_frz = live ? pal_dirty0 : pal_dirty1;
   wire [5:0]  pal_cnt_frz   = live ? pal_cnt0   : pal_cnt1;
+  // seal_hold term: a SEALING recovery moves pal_pend_b into pal_pend_a and
+  // drops pend_avf on the SAME tick edge, so during that very frame's
+  // serialization both register terms below read 0 and the union this
+  // recovery exists to carry is never emitted -- then the next confirm kills
+  // A and the entries are lost for good.  The NT path survives the same
+  // algebra because its scan reads ntpend_q per cell AFTER the seal rewrite;
+  // the palette pend is plain registers sampled BEFORE the scan.  Palette has
+  // no shadow re-emission and no scrub, so one swallowed sealing recovery is
+  // a permanently wrong CGRAM (stuck mid-fade title after a warm reset --
+  // silicon-reproduced ~50% on Bomberman; tb_handshake mode palfade is the
+  // distilled regression).  seal_hold is latched at the tick and only ever
+  // set under resync_en, so the byte-exact goldens (resync_en=0) are
+  // untouched.
   wire        pal_pend_any  = lost_hold & ((pend_avf & (pal_pend_a != 32'd0))
-                                         | (pend_bvf & (pal_pend_b != 32'd0)));
+                                         | (pend_bvf & (pal_pend_b != 32'd0))
+                                         | (seal_hold & (pal_pend_a != 32'd0)));
   wire        pal_present   = (pal_cnt_frz != 6'd0) | force_full | pal_pend_any;
   // recovery always uses PALETTE_FULL when palette data is owed: emitting the
   // 33-byte full palette avoids a popcount over frz|pend (the serializer-
@@ -920,7 +934,7 @@ module nes_bridge(
   // the safe direction, and the hi byte only ever changes once every 256 frames.
   //
   // DEGRADATION, measured with a PERFECT lockstep consumer (tb_budget, the
-  // advisor's own probe: ack = newest published seq, zero skips) at a sweep of
+  // review probe: ack = newest published seq, zero skips) at a sweep of
   // write rates, fix vs pre-fix drops:
   //   2120 (corpus plateau) 0/0 | 2500  0/0 | 3000  0/0 | 3700  0/0
   //   5000  19866/31938 | 6000  38916/71898 | 7000  41216/111820
@@ -1905,27 +1919,53 @@ module nes_bridge(
         S_NTB: begin
           // pending union rewrite: pend accumulates the dirty of EVERY
           // serialized frame until confirmation drops the epoch (see the
-          // PENDING note).  One write per visited offset; idempotent on
-          // re-visits after a run close.
+          // PENDING note).
           // generation rewrite: SEAL (A := frz|A|B, B := 0) only when this
           // recovery seals (seal_hold); otherwise -- normal frames AND
           // recoveries with A still unconfirmed -- keep the generations
           // separate and accumulate in B.  Delivery (nt_pend_eff) is A|B
           // either way; delivery != rewrite.  The tick-latched pend_avf/bvf
           // materialize any pending invalidation into the stored bits.
-          ntpend[nt_i[10:0]] <= seal_hold
-            ? {ntdirty_frz_q | (pend_avf & ntpend_q[1]) | (pend_bvf & ntpend_q[0]), 1'b0}
-            : {(pend_avf & ntpend_q[1]), (pend_bvf & ntpend_q[0]) | ntdirty_frz_q};
+          //
+          // *** THE REWRITE IS NOT IDEMPOTENT ON A RE-VISIT, AND THE SCAN
+          //     RE-VISITS.  (v2.7 fix; this cost the whole "mecanismo 3" class.)
+          // A visit that CLOSES a run -- run_len hit the 255 ceiling, or the cell
+          // is not deliverable -- leaves nt_i WHERE IT IS on purpose, so after
+          // the payload the scan comes back to the SAME offset and evaluates it
+          // again.  The old code rewrote ntpend on BOTH visits.  On a SEALING
+          // recovery (`seal_now_w = recovery_now_w & ~avf_next_w`, so pend_avf
+          // is 0 by construction) the first rewrite moves the cell into
+          // generation A and clears B; the second visit then computes
+          // nt_pend_eff = (pend_avf & A) | (pend_bvf & B) = (0 & 1) | (x & 0) = 0
+          // and the cell is judged NOT PENDING -- so no new run opens on it and
+          // it is DROPPED, permanently, from a delta the consumer never saw.
+          // Signature: a contiguous pending span emits runs at a stride of 256
+          // with length 255, i.e. cells $00FF, $01FF, $02FF, $03FF ... vanish.
+          // Measured on megaman1_usa_attract, recovery frames: runs
+          // (0,255) (256,255) (512,255) (768,255) -- cells 255/511/767/1023 gone.
+          // It never showed up in force_full frames (runs at a stride of 255,
+          // contiguous) nor in any byte-exact golden, because a LOCKSTEP consumer
+          // never takes the recovery path at all.
+          // FIX: rewrite exactly ONCE per cell per frame, on the visit that
+          // CONSUMES it (the branches that advance nt_i).
           if (!nt_inrun) begin
+            ntpend[nt_i[10:0]] <= seal_hold
+              ? {ntdirty_frz_q | (pend_avf & ntpend_q[1]) | (pend_bvf & ntpend_q[0]), 1'b0}
+              : {(pend_avf & ntpend_q[1]), (pend_bvf & ntpend_q[0]) | ntdirty_frz_q};
             if (ntdirty_frz_q | force_full | nt_pend_eff) begin
                                  run_start<=nt_i[10:0]; run_len<=9'd1; nt_inrun<=1'b1;
                                  nt_i<=nt_i+12'd1; st<=S_NTA; end
             else begin nt_i<=nt_i+12'd1; st<=S_NTA; end
           end else begin
             if ((ntdirty_frz_q | force_full | nt_pend_eff) && run_len<9'd255) begin
+              ntpend[nt_i[10:0]] <= seal_hold
+                ? {ntdirty_frz_q | (pend_avf & ntpend_q[1]) | (pend_bvf & ntpend_q[0]), 1'b0}
+                : {(pend_avf & ntpend_q[1]), (pend_bvf & ntpend_q[0]) | ntdirty_frz_q};
               run_len<=run_len+9'd1; nt_i<=nt_i+12'd1; st<=S_NTA;
             end else begin
-              st<=S_NTHDR; sub<=0;   // close run (nt_i points at the breaking offset)
+              st<=S_NTHDR; sub<=0;   // close run (nt_i points at the breaking
+                                      // offset; it is re-visited, so it must NOT
+                                      // have been rewritten above)
             end
           end
         end

@@ -181,11 +181,110 @@
  * >teto e se agrupam num UNICO pass global, em vez de converter 2x). */
 #define NHN_INCR_MAX_CELLS 128
 
+/* ---- v2.13 F-8 + v2.14: fatiamento da conversao GLOBAL da tilemap ----
+ * O pass monolitico converte 1920 celulas (as duas CIRAM) num frame so':
+ * ~367 master/celula x 1920 = 691k = 1,93 FRAME no modelo da casa e 3,1 no
+ * custo calibrado (fator 1,6 medido em bancada, ago/2026). E' o ultimo item do
+ * renderer que viola a invariante "nenhum estagio > 1 frame" -- e e' por essa
+ * violacao que o MAIN perde o ACK e a bridge ABANDONA payload $41.
+ *
+ * ORCAMENTO POR FRAME, EM CELULAS, UNICO para os DOIS caminhos (incremental e
+ * fatia global): o incremental consome primeiro, a fatia leva o que sobrar, e
+ * o run que nao couber vai para o pass GLOBAL (com marca d'agua).
+ *
+ * ⚠ ERRATA v2.14 -- A INVARIANTE DO F-8 ESTAVA FURADA EM SILICIO, e o gate
+ * que existia para protege-la era CEGO justamente onde ela furava:
+ *   (1) o predicado de orcamento so' era testado no ramo ADIAVEL (tela
+ *       APAGADA). Com a tela LIGADA, `nhn_cost_dispatch` mandava TODO run
+ *       barato ao incremental SEM testar `nes_nt_fcells` => N runs pequenos
+ *       somavam SEM TETO NENHUM. MMC3 com status-bar e' exatamente o padrao
+ *       que produz muitos runs pequenos por frame.
+ *   (2) o corpus do run_ntglob_gate excluia TODO jogo mapper 4 por "cobertura
+ *       de parse" -- que era um BUG DO PARSER dele (`mbox.py` sem os opcodes
+ *       $14/$15, incondicionais em MMC3), nao defeito dos traces.
+ * Com o parser corrigido e os 6 traces MMC3 no corpus, o PIOR FRAME MEDIDO na
+ * arvore de producao era: smb3_2ndrun 718 (2,8x o orcamento anunciado),
+ * smb2_usa 565, tetris2_usa 480, fantasy_zone 332. O dano e' de ORCAMENTO,
+ * nao de correcao (nt_stale = 0 celulas stale nos 15 traces).
+ * O v2.14 fecha o furo: o predicado e' UM SO' (`nes_nt_fits`) e vale nos DOIS
+ * regimes.
+ *
+ * E O ORCAMENTO DEIXOU DE SER CONSTANTE: `nes_nt_frame_budget` o dimensiona
+ * pelo RASTER, 1x por frame -- o principio do passo de janela de CHR do v2.11
+ * aplicado ao MAIN. O metro e' outro DE PROPOSITO: o passo de janela e' DMA e
+ * mede o VBLANK que resta; a conversao de tilemap e' CPU do laco principal e
+ * mede o FRAME que resta.
+ *   scale   = V se V >= 225, senao V + 262      (escala monotona da casa)
+ *   celulas = 2 * (NES_NT_RASTER_K - scale)     saturado em [SLICE, SLICE_MAX]
+ * 2 celulas/linha = 1364 cyc/linha / ~587 cyc/celula (= 367 do tb_oneshot x
+ * 1,6 da calibracao de bancada) = 2,32, arredondado PARA BAIXO.
+ *
+ * A RESERVA E' DERIVADA, nao escolhida: o resto do
+ * MAIN depois da fatia, na ancora do proprio F-8 abaixo, custa
+ *   (C_FIX 20.000 + dreno 8 x 1.400) x 1,6 = 49.920 cyc / 1364 = 36,6 linhas
+ * => 37 linhas, e NES_NT_RASTER_K = 487 - 37 = 450 (o proximo vblank comeca em
+ * scale 225 + 262 = 487). Teto efetivo = 2*(450-225) = 450 celulas.
+ *
+ * ⚠ V DE NOVE BITS, SEMPRE (regra de ouro paga com um build de silicio na
+ * saga da guarda v2.11c): ler so' $213D confunde V em [256,261] -- vblank
+ * legitimo -- com 0..5 e daria orcamento MAXIMO no ponto em que ele tem de
+ * ser MINIMO. E a leitura e' FEITA DUAS VEZES, ficando com a MENOR concessao:
+ * a sequencia $213F/$2137/$213D nao e' atomica contra a NMI, que tambem usa o
+ * latch H/V -- se ela cair no meio de uma leitura, a outra segura o valor.
+ *
+ * Build de DEPURACAO: NES_NT_SLICE 64 (o harness de 14 frames passa a
+ * atravessar varias fatias -- verde com fatia grande NAO e' evidencia de
+ * fatiamento). */
+#define NES_NT_RESERVE_LINES 37    /* DERIVADA (ver acima), nao escolhida */
+#define NES_NT_RASTER_K     450    /* = 487 - NES_NT_RESERVE_LINES */
+#define NES_NT_SLICE_MAX    512    /* saturacao dura; o raster nunca passa de 450 */
+#define NES_NT_SLICE       256     /* PISO do orcamento por frame */
+#define NES_NT_CELLS      1920    /* as duas CIRAM: 2 x 960 celulas */
+#define NES_NT_B0_CELLS    960    /* fim LOGICO do banco 0 */
+#define NES_NT_B1_OFS       64    /* logico->fisico do banco 1 (1024-960) */
+
 /* ------------------------------------------------------------------ */
 /* Viewport: NES 256x240 -> SNES 256x224 (modo 224 linhas), corta 8 linhas
  * em cima + 8 embaixo (NES-BRIDGE-SPEC SS1.2, escolha default). Sprites e
  * BG1VOFS sao deslocados por essa constante (ver nes_render.a65). */
 #define VIEWPORT_CROP_Y  8
+
+/* v2.13 -- ATRASO DE EFEITO DO SPLIT DE SCROLL (CMD_SPLITS $11).
+ *
+ * O protocolo reporta a scanline em que a ESCRITA aconteceu (RTL
+ * `nes_split_capture.v`: `spl_sl_now = scanline[7:0]`), mas no PPU do NES uma
+ * escrita de $2005/$2000 NAO muda o scroll horizontal da propria scanline: os
+ * bits horizontais de `v` so' sao recarregados de `t` no **dot 257** daquela
+ * linha => o efeito comeca em N+1.  Aplicar a faixa em N deixava a ULTIMA
+ * linha do bloco de cima com o scroll do bloco de baixo -- 1 scanline, mas
+ * VISIVEL quando a fronteira cai dentro de uma linha de texto (Bomberman II:
+ * o split @sl22 pegava a linha 6 dos glifos do HUD e a deslocava 8 px, o que
+ * embaralhava os caracteres da FRONTEIRA de cada palavra: "LEFT"->"IEET").
+ *
+ * Vale so' para as entradas j>=1 (a entrada 0 e' o ESTADO no inicio do
+ * display, nao uma mudanca).  Um write de $2006 COMPLETO e' o caso em que o
+ * efeito e' imediato (copia t->v na hora, mid-scanline): esses splits ficam
+ * 1 linha atrasados, erro da MESMA ordem do que existia antes e que o HDMA
+ * (granularidade de 1 linha) nao consegue representar de nenhum jeito -- o
+ * conserto exato exige distinguir $2006 de $2005 na CAPTURA (RTL, sintese).
+ * Medido no corpus (GATE/run_splitline_gate.py): fronteiras adiantadas
+ * 4893 -> 10, custo 296 fronteiras atrasadas. */
+#define NES_SPLIT_EFF_DELAY 1
+
+/* v2.9b -- SCRUB ROTATIVO da tilemap (ver nes_tm_* em nes_data.a65).
+ *
+ * _MAX = teto de bytes por vblank que o scrub gasta do orcamento que sobrou
+ * depois da faixa suja. 1024 B = 16 linhas de tilemap => a tilemap INTEIRA e'
+ * reescrita a cada 4 frames (67 ms) mesmo que ninguem a suje, ao custo de
+ * 1024*8 + 1020 = 9.212 cyc = 6,8 linhas de vblank (~2,5 % do frame). Subir
+ * este numero encurta a cura e ALONGA a NMI (menos tempo de decode no main
+ * loop -- o renderer e' decode-bound); descer faz o contrario.
+ *
+ * _MIN = piso GARANTIDO do scrub nos frames em que a faixa suja NAO cabe no
+ * orcamento (unico caso em que ela poderia monopolizar o vblank pra sempre).
+ * 512 B => pior caso de varredura completa = 4096/512 = 8 frames. */
+#define NES_TM_SCRUB_MAX 1024
+#define NES_TM_SCRUB_MIN 512
 
 /* ------------------------------------------------------------------ */
 /* Janelas PSRAM de CHR-SNES pre-convertido (PROVISORIO -- convencao
@@ -393,6 +492,91 @@
 #define NES_CHRW_STARVE_MAX 2
 
 /* ------------------------------------------------------------------ */
+/* v2.11 -- PASSO DE JANELA ADAPTATIVO (o envelope de 8.184 cyc ESTAVA
+ * DESATUALIZADO).  Este bloco substitui NES_CHRW_SLICE_BG/_1PL como
+ * dimensionador do passo; as duas constantes ficam como PISO historico.
+ *
+ * POR QUE O ENVELOPE VELHO NAO VALE MAIS.  Ele foi derivado (v2.2/v2.3w)
+ * contra uma tilemap de 4096 B FIXOS todo vblank -- 33.788 cyc de 49.104.
+ * Sobrava exatamente a cauda em que 768 B cabiam.  A v2.9/v2.9b APOSENTOU
+ * essa tilemap fixa: hoje ela desce so' a faixa suja + o scrub, LIMITADA
+ * por um orcamento derivado do V corrente (media medida 1.040-1.200 B/
+ * frame contra 4096).  Ou seja: o teto de 768 B/vblank virou uma constante
+ * herdada, nao um limite fisico -- e era ele que travava o SMB2/SMB3 em
+ * ~90% de ground truth ("por banda, nao por politica", gate 2.4).
+ *
+ * MEDIDO (offline, modelo da casa `WinModel` sobre os goldens do
+ * bridge-sim; a linha "hoje" REPRODUZ os numeros publicados do device --
+ * SMB3 89,7% / SMB2 92,5% -- o que valida o modelo):
+ *
+ *   politica            SMB3 GT%   SMB2 GT%   frames com fila   idade max
+ *   256/512 (v2.3w)        89,7       92,5      933 / 759       77 frames
+ *   512/1024               96,0       97,0      444 / 327       27
+ *   janela cheia (1024)    98,7       99,2      162 / 109        9
+ *
+ * ORCAMENTO (mesmas ancoras: 1020 cyc/transferencia + 8 cyc/byte; 1 linha
+ * = 1364 cyc; fim util do vblank = V 261).  O passo passa a rodar DEPOIS
+ * da OAM (ver nes_apply_vblank) e le o V naquele ponto, entao o unico
+ * termo que ele ainda tem de reservar e' o piso da tilemap:
+ *     reserva = 1 DMA + NES_TM_SCRUB_MIN (512 B) + 1 linha de margem
+ *             = 1020 + 4096 + 1364 = 6.480 cyc
+ *     custo(2 planos, L bytes de BG) = 2*1020 + 24*L   (o OBJ dobra)
+ *     custo(so-BG,   L)              = 1020  +  8*L
+ *   => L_max(V) = ((261-V)*1364 - 6480 - setup) / (24 ou 8)
+ * As tabelas abaixo sao ESSA formula tabulada (unidade = 256 B, teto 1024
+ * = a janela inteira), indexadas por V-225.  Fora da faixa [225,256] o
+ * passo e' PULADO -- inclusive quando a OAM empurrou o V para depois de
+ * 261 e ele voltou pequeno, que e' o caso que a versao de constante fixa
+ * NAO enxergava.
+ *
+ * POR QUE ISSO NAO PODE "SO' CRESCER".  Estourar aqui nao e' cosmetico: a
+ * cauda do DMA cai depois de V=261, a PPU DESCARTA os bytes e o
+ * nes_chrw_dclear marca a janela como carregada assim mesmo => meia
+ * janela corrompida PARA SEMPRE (F1/A13).  Por isso o passo e' derivado
+ * do V, e nunca de uma constante otimista.
+ */
+#define NES_CHRW_VTAB_LO    225    /* 1o V tabelado (= NES_CHRQ_V_MIN) */
+#define NES_CHRW_VTAB_N     31     /* V 225..255 (V>=256 le como 0..5 em $213D e cai fora) */
+#define NES_CHRW_STEP_MAX   $0400  /* teto do passo = a janela inteira */
+/* ------------------------------------------------------------------ */
+/* v2.11c ESTAGIO 1 -- INSTRUMENTO DA GUARDA DE ESTOURO (conta, NAO age).
+ *
+ * JANELA DE DISPLAY ATIVO (a unica em que a PPU DESCARTA a escrita de VRAM),
+ * modo 224 linhas, sem overscan:
+ *     V = 0            linha de BLANKING (pre-render; a PPU nao desenha)
+ *     V = 1 .. 224     DISPLAY ATIVO      <- aqui a cauda do DMA se perde
+ *     V = 225 .. 261   VBLANK
+ *     V = 262          nao existe: o frame vira (262 linhas, 0..261)
+ * Logo o teste EXATO de estouro e' 1 <= V <= 224, com V de NOVE bits.  Ler
+ * so' o byte baixo de $213D confunde [256,261] (vblank) com [0,5) e faz o
+ * teste disparar no ALVO DE PROJETO do passo (V ~ 256,25). */
+#define NES_CHRW_V_FRAME    262    /* linhas do frame NTSC (V = 0..261) */
+
+/* ------------------------------------------------------------------ */
+/* v2.11 -- INSTRUMENTO DE CAMPO (deploy so' de instrumentacao).
+ *
+ * (a) RUNS INVALIDOS: o contador especificado na caca ao run perdido, para o
+ *     residual "(203,10)" -- run de CMD_NT_RUN com nt_off FORA da CIRAM
+ *     fisica ($0800) e opcode desconhecido no laco TLV.  Hoje os dois
+ *     casos sao descartados em SILENCIO (o nt_run faz `brl nhn_copy_done`,
+ *     o dispatcher faz `bra npf_finish`), entao o device nao consegue
+ *     distinguir "a bridge nao emitiu" de "o dreno corrompeu o byte".
+ * (b) CUSTO REAL DE CONSUMO: bytes de CHR (payload $41) e passos de janela
+ *     efetivamente aplicados POR FRAME, com maximo retido -- o numero que
+ *     falta para calibrar o modelo de bancada contra o silicio.
+ * (c) LATCH VISUAL: o unico canal device-visivel do renderer e' a tela (os
+ *     mirrors de savestate NAO existem sob o core NES e o NDBG e'
+ *     publicado pela MCU).  Com NES_DBG_VIS != 0 o backdrop (CGRAM[0])
+ *     pisca em MAGENTA a cada 32 NMIs enquanto houver run invalido
+ *     acumulado -- resposta binaria, filmavel, sem tocar no conteudo.
+ *     NASCE DESLIGADO: o coordenador liga por poke de WRAM (ou build de
+ *     diagnostico), nunca por default.
+ */
+#define NES_DBG_VIS_MASK    $20    /* strobe do latch visual: 1 a cada 32 NMIs */
+#define NES_DBG_VIS_LO      $1f    /* BGR555 magenta, byte baixo */
+#define NES_DBG_VIS_HI      $7c    /* ... e alto (snescom nao tem </> de constante) */
+
+/* ------------------------------------------------------------------ */
 /* v2.2-lite -- CHR-RAM (mapper 2/7): shadow + fila de stage do CMD_CHR_RUN
  * ($41). O mapa de WRAM e o protocolo dos 2 buffers estao em nes_data.a65;
  * aqui ficam so' os numeros.
@@ -459,4 +643,50 @@
  * barrado ele blanka assim mesmo -- um frame preto e' melhor que uma fila
  * travada, e a politica NUNCA pode deadlockar. */
 #define NES_CHRQ_FBWAIT     8
+
+/* ============================================================
+ * v2.8 -- DESPEJO RAPIDO de CHR-RAM (tela do NES APAGADA).
+ *
+ * O PROBLEMA (medido, nao suposto): com rendering OFF os jogos de CHR-RAM
+ * despejam a MEMORIA DE PADROES INTEIRA em poucos frames (megaman1: 8192 B
+ * em ~5 frames = 2120 B/frame; bomberman2: 7912 B em 8). O caminho normal
+ * converte no MAIN a ~225 master/byte (swizzle desenrolado), o que da' um
+ * TETO estrutural de 357368/225 = 1588 B/frame -- 1,33x MAIS LENTO que o
+ * despejo. O renderer entao PULA frames, a bridge nao ve ACK, o ring de
+ * 8192 B enche e ela ABANDONA payload nao confirmado: 2727 B / 200 tiles
+ * perdidos PARA SEMPRE no megaman1 (a tela one-shot nunca e' redesenhada).
+ *
+ * O FIX: com rendering OFF o payload $41 e' so' COPIADO pro shadow (MVN, 7
+ * cyc/byte) e a faixa de tiles vai pra uma PENDENCIA; a conversao inteira
+ * migra pro passe FATIADO em forced-blank (nes_chrfd_service), que reusa o
+ * swizzle e o DMA em bloco ja' validados. O consumo cai de ~225 pra ~64
+ * master/byte (teto ~5,5 KB/frame = 2,6x o despejo) => o ACK acompanha a
+ * bridge, a janela de retransmissao nunca aposenta e NADA se perde. A conta
+ * de conversao nao some -- ela sai do caminho critico do ACK.
+ *
+ * SLICE: teto de tiles convertidos por NMI. 64 tiles x ~3600 master = 0,64
+ * frame (a invariante da casa e' <= 1 frame por NMI). Com trafego de CHR no
+ * frame anterior o teto cai pra SLICE_BUSY, senao MAIN (drain + MVN, ~190k
+ * master a 2120 B/frame) e NMI juntos passariam de um frame e voltariam a
+ * pular frames -- exatamente o que este fix existe para impedir.
+ *
+ * MAXWAIT: o passe normalmente so' ARMA quando o despejo cala (frame sem
+ * $41) ou quando a tela vai abrir -- assim ele nunca disputa CPU com o
+ * despejo. MAXWAIT e' o escape em frames: um produtor que nunca cala nem
+ * liga o rendering nao pode segurar a conversao para sempre. 30 frames =
+ * 0,5 s, muito acima de qualquer despejo medido (5-8 frames). */
+#define NES_CHRFD_SLICE      64
+#define NES_CHRFD_SLICE_BUSY 32
+#define NES_CHRFD_MAXWAIT    30
+/* v2.12: teto de vblanks em que o release do forced-blank pode ficar
+ * SEGURADO no fim de um despejo (divida de tilemap + faixa suja ainda em
+ * voo). Politica nenhuma aqui pode prender a tela em preto: 30 vblanks =
+ * 0,5 s, e o caminho normal fecha em <= 6. */
+#define NES_CHRFD_HOLD_MAX   30
+/* v2.12: descartes CONSECUTIVOS no MESMO alvo antes de ESCALAR para o
+ * caminho de forced-blank. NAO e' back-off: e' o escape que torna
+ * "honestamente pendente" LIMITADO. So' o caminho de JANELA usa (a guarda da
+ * FILA ficou FORA deste candidato -- a escalada dela ligaria forced-blank em
+ * display ativo, que e' classe de artefato NOVA e nao tem gate). */
+#define NES_CHRW_DISC_MAX    1
 

@@ -1,0 +1,237 @@
+; nes_apu.a65 -- tira o S-DSP do mute do IPL no renderer NES->SNES.
+;
+; POR QUE ISTO EXISTE
+; ------------------
+; O renderer nunca tocou no SPC700. Sem nenhum programa carregado, o S-SMP
+; fica parado no IPL e o S-DSP permanece no estado de reset/mute -- e o
+; caminho de audio ANALOGICO do console GATEIA a saida do DAC do cartucho
+; nesse estado (mecanica caracterizada em hardware pelo projeto; ver o
+; cabecalho de snes/sfx.a65, que resolve exatamente o mesmo problema no
+; menu). Resultado: o audio do core NES nao chegava no jack.
+;
+; O payload e' o MESMO stub do menu (sfx_dsp_stub_code, snes/sfx.a65) --
+; BYTE POR BYTE: scrub de todas as vozes e do echo COM O DSP AINDA MUDO,
+; MVOL de volta pra $7f, unmute por ULTIMO, e idle eterno. Nada mais: o
+; renderer nao usa o SPC700 pra som nenhum, so' precisa que o DSP esteja
+; fora do reset/mute pro passthrough do DAC do cartucho existir.
+;
+; A hipotese foi PROVADA em hardware com uma variante instrumentada deste
+; mesmo arquivo, que acrescentava um beep de 2 kHz na voz 0 para distinguir
+; "upload nao aconteceu" de "upload aconteceu e o gate nao era a causa".
+; O beep confirmou a cura e saiu daqui -- producao nao emite som proprio.
+;
+; FAIL-SAFE: toda espera do protocolo IPL e' LIMITADA (teto por espera E
+; orcamento global agregado); estourou qualquer um dos dois -> volta com
+; carry set e o boot do renderer segue normalmente, no maximo sem som.
+; O que o timeout deixa para tras depende de ONDE ele acontece:
+;   - no "hello" (caso esperado: o S-SMP nao esta' no IPL) o APU fica
+;     EXATAMENTE como estava -- nada foi escrito;
+;   - no meio da transferencia, a ARAM a partir de $0300 fica PARCIALMENTE
+;     escrita e o IPL fica parado esperando o proximo indice. E' inofensivo
+;     (o stub nunca chega a executar, o DSP continua no mute em que ja'
+;     estava, e nada mais no renderer fala com o APU), mas NAO e' "intocado"
+;     -- e nao ha' retry: quem quiser recuperar precisa resetar o console.
+;
+; Este arquivo NAO e' compartilhado com o harness bsnes (o harness linka so'
+; nes_data/nes_render/nes_boot -- ver o Makefile de nes/tests/renderer-
+; harness/); e' chamado so' pelo caminho DEVICE, de nes_snes.a65.
+
+.link page $00
+
+; ---------------------------------------------------------------------------
+; Portas de I/O do APU (lado S-CPU do mailbox de 4 bytes com o S-SMP).
+; Definidas aqui e nao em nes_equates.i65 porque este e' o unico consumidor
+; -- o resto do renderer usa registrador de hardware por literal ($2100,
+; $4200, ...).  APUIO3 entra por completude do bloco (nao e' usado: o IPL
+; so' precisa de APUIO0-2 no protocolo de upload+execucao).
+; ---------------------------------------------------------------------------
+#define APUIO0 $2140
+#define APUIO1 $2141
+#define APUIO2 $2142
+#define APUIO3 $2143
+
+; ---------------------------------------------------------------------------
+; O payload e' codigo puro (sem tabela de sample, sem dados), entao sobe e
+; EXECUTA em $0300 direto -- mesmo endereco de destino e de entrada, igual
+; ao stub do menu (que usa $0200). Os 82 bytes sao identicos aos de
+; sfx_dsp_stub_code em snes/sfx.a65; mexeu la', mexa aqui.
+; ---------------------------------------------------------------------------
+#define NES_APU_STUB_ADDR   $0300
+#define NES_APU_EXEC_ADDR   $0300
+#define NES_APU_STUB_LEN    82
+
+; Teto POR espera individual e orcamento GLOBAL agregado (em polls). O
+; caminho de sucesso gasta ~1-5 polls por byte; estes numeros so' existem
+; para o caso do S-SMP nao estar no IPL (ex.: ainda rodando um .spc do menu
+; porque o reset do console nao chegou nele) -- ai a rotina desiste em vez
+; de pendurar o boot.
+#define NES_APU_WAIT_POLLS  2048
+#define NES_APU_POLL_BUDGET $ffff
+
+.as : .xl
+
+; ===========================================================================
+; nes_apu_unmute -- sobe nes_apu_stub_code pro IPL e manda executar.
+;
+; Contrato de entrada (verdadeiro no ponto de chamada em nes_snes.a65,
+; imediatamente antes de 'jsr nes_boot_init'):
+;   - modo NATIVO, DBR=0 (o reset do 65816 forca DB=$00 e o RESET de
+;     nes_header.a65 nao o altera; todo acesso a $21xx aqui e' absoluto)
+;   - NMI DESLIGADA ($4200=$00 apos o reset; so' e' ligada no fim do boot)
+;   - A em 8 bits, X/Y em 16 bits (a rotina re-declara os dois mesmo assim)
+;
+; Saida: carry CLEAR = stub rodando; carry SET = abortou por timeout (ver o
+; cabecalho do arquivo p/ o que sobra em cada caso). A em 8 bits, X/Y em 16.
+; ===========================================================================
+nes_apu_unmute:
+        sep #$20 : .as
+        rep #$10 : .xl
+
+        ldy #NES_APU_POLL_BUDGET  ; orcamento global, consumido por TODAS as
+                                   ; esperas (Y atravessa a rotina inteira)
+
+        ; --- 1) espera o IPL publicar o "hello" $BBAA em $2140/$2141 ---
+        ; (spc_begin_upload faz 'cpy APUIO0' com Y=$bbaa, um compare de 16
+        ;  bits; aqui Y carrega o orcamento, entao sao dois compares de 8
+        ;  bits -- mesma condicao, sem gastar o registrador.)
+        ldx #$4000                ; hello: teto proprio, ~5x o dos handshakes
+                                   ; -- o IPL gasta ~2.4ms limpando a pagina
+                                   ; zero antes de publicar $BBAA; 2048 polls
+                                   ; (~12.8ms) dao so' 5x de margem, e um
+                                   ; timeout aqui e' indistinguivel de "o
+                                   ; gate analogico nao era a causa"
+nes_apu_hello:
+        lda APUIO0
+        cmp #$aa
+        bne nes_apu_hello_next
+        lda APUIO1
+        cmp #$bb
+        beq nes_apu_hello_ok
+nes_apu_hello_next:
+        dey
+        beq nes_apu_fail          ; orcamento global estourou
+        dex
+        bne nes_apu_hello
+        bra nes_apu_fail          ; teto desta espera estourou
+nes_apu_hello_ok:
+
+        ; --- 2) abre a transferencia (espelha spc_begin_upload) ---
+        ; APUIO1 so' precisa ser NAO-ZERO p/ iniciar; o menu manda $cc nas
+        ; duas portas e e' esse o valor validado em hardware -- mantido.
+        ldx #NES_APU_STUB_ADDR
+        stx APUIO2                ; $2142/$2143 = endereco de destino
+        lda #$cc
+        sta APUIO1
+        sta APUIO0
+        jsr nes_apu_wait          ; espera o eco de $cc
+        bcs nes_apu_fail
+
+        ; --- 3) payload byte a byte (espelha spc_upload_byte) ---
+        ; X e' ao mesmo tempo o indice na tabela e o indice do protocolo
+        ; (o payload tem 82 bytes < 256, entao o indice nunca da a volta).
+        ldx #$0000
+nes_apu_send:
+        lda @nes_apu_stub_code,x
+        sta APUIO1                ; dado
+        txa                       ; indice (byte baixo de X)
+        sta APUIO0
+        jsr nes_apu_wait          ; espera o eco do indice
+        bcs nes_apu_fail
+        inx
+        cpx #NES_APU_STUB_LEN
+        bne nes_apu_send
+
+        ; --- 4) fim de transferencia: endereco de execucao + indice+2 ---
+        ldx #NES_APU_EXEC_ADDR
+        stx APUIO2
+        stz APUIO1                ; 0 = "executa", nao ha' mais blocos
+        lda APUIO0
+        inc
+        inc                       ; ultimo indice ($51) + 2 = $53, nunca 0
+        sta APUIO0
+        jsr nes_apu_wait
+        bcs nes_apu_fail
+        clc
+        rts
+
+nes_apu_fail:
+        sec
+        rts
+
+; ---------------------------------------------------------------------------
+; nes_apu_wait -- espera APUIO0 == A, com teto DUPLO.
+;   entra: A(8) = valor esperado, Y(16) = orcamento global restante
+;   sai:   carry clear = eco chegou / carry set = estourou
+;          A e X preservados; Y = orcamento restante
+; ---------------------------------------------------------------------------
+nes_apu_wait:
+        phx
+        ldx #NES_APU_WAIT_POLLS
+nes_apu_wait_poll:
+        cmp APUIO0
+        beq nes_apu_wait_ok
+        dey
+        beq nes_apu_wait_to       ; orcamento global estourou
+        dex
+        bne nes_apu_wait_poll
+nes_apu_wait_to:
+        plx
+        sec
+        rts
+nes_apu_wait_ok:
+        plx
+        clc
+        rts
+
+; ===========================================================================
+; Codigo de maquina SPC700 abaixo desta linha -- 82 bytes, copia BYTE A BYTE
+; de sfx_dsp_stub_code (snes/sfx.a65), executado em $0300.
+;
+; A ordem e' o ponto todo: unmutar antes de zerar as vozes solta o lixo de
+; power-on dos registradores de voz/echo no mix (estalos continuos ja'
+; observados no Mk.II). Por isso o DSP e' mantido MUDO durante o scrub e o
+; unmute e' o ULTIMO write. O passthrough do DAC do cartucho depende so' de
+; FLG, nao do mix de voz -- zerar as vozes nao custa nada ao audio do NES.
+; ===========================================================================
+nes_apu_stub_code:
+  ; --- mantem o DSP MUDO enquanto o scrub roda (sem transiente na entrada) ---
+        .byt $8f, $6c, $f2   ; mov $f2,#$6c    DSP addr = FLG
+        .byt $8f, $60, $f3   ; mov $f3,#$60    soft-reset off, MUTE ON, echo-write off
+  ; --- key off em tudo ---
+        .byt $8f, $5c, $f2   ; mov $f2,#$5c    DSP addr = KOFF
+        .byt $8f, $ff, $f3   ; mov $f3,#$ff    key off nas 8 vozes
+        .byt $8f, $4c, $f2   ; mov $f2,#$4c    DSP addr = KON
+        .byt $8f, $00, $f3   ; mov $f3,#$00    nenhum key-on
+  ; --- mata o caminho de echo inteiro (ESA e' lixo no cold boot) ---
+        .byt $8f, $4d, $f2   ; mov $f2,#$4d    DSP addr = EON
+        .byt $8f, $00, $f3   ; mov $f3,#$00    nenhuma voz alimenta o echo
+        .byt $8f, $2c, $f2   ; mov $f2,#$2c    DSP addr = EVOL_L
+        .byt $8f, $00, $f3   ; mov $f3,#$00
+        .byt $8f, $3c, $f2   ; mov $f2,#$3c    DSP addr = EVOL_R
+        .byt $8f, $00, $f3   ; mov $f3,#$00
+        .byt $8f, $0d, $f2   ; mov $f2,#$0d    DSP addr = EFB
+        .byt $8f, $00, $f3   ; mov $f3,#$00    sem realimentacao de echo
+  ; --- zera o volume L/R de TODA voz (regs $00/$01,$10/$11,..$70/$71) ---
+        .byt $8d, $00        ; mov y,#$00      Y = o valor 0 a escrever
+        .byt $e8, $00        ; mov a,#$00      A = endereco corrente de reg DSP
+        ; vol_loop:                            (corpo = 16 bytes, ver offset do bne)
+        .byt $c4, $f2        ; mov $f2,a       DSP addr = A  -> VOL_L desta voz
+        .byt $cb, $f3        ; mov $f3,y       = 0
+        .byt $bc             ; inc a           -> endereco de VOL_R
+        .byt $c4, $f2        ; mov $f2,a
+        .byt $cb, $f3        ; mov $f3,y       = 0
+        .byt $60             ; clrc
+        .byt $88, $0f        ; adc a,#$0f      A += 15 -> VOL_L da proxima voz
+        .byt $68, $80        ; cmp a,#$80      passou da voz 7?
+        .byt $d0, $f0        ; bne vol_loop    (-16)
+  ; --- volume principal de volta, e SO' ENTAO o unmute (mix ja' silencioso) ---
+  ; bit5 de FLG (echo-write DISABLED) e' OBRIGATORIO: ninguem administra a
+  ; ARAM num jogo de NES, e um ESA de lixo com escrita de echo ligada
+  ; corromperia a ARAM.
+        .byt $8f, $0c, $f2   ; mov $f2,#$0c    DSP addr = MVOL_L
+        .byt $8f, $7f, $f3   ; mov $f3,#$7f
+        .byt $8f, $1c, $f2   ; mov $f2,#$1c    DSP addr = MVOL_R
+        .byt $8f, $7f, $f3   ; mov $f3,#$7f
+        .byt $8f, $6c, $f2   ; mov $f2,#$6c    DSP addr = FLG
+        .byt $8f, $20, $f3   ; mov $f3,#$20    soft-reset off, MUTE OFF, echo-write off
+        .byt $2f, $fe        ; bra *           idle para sempre
