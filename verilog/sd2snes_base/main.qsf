@@ -521,14 +521,12 @@ set_global_assignment -name VERILOG_FILE clk_test.v
 set_global_assignment -name VERILOG_FILE cheat.v
 set_global_assignment -name VERILOG_FILE bsx.v
 set_global_assignment -name VERILOG_FILE address.v
-set_global_assignment -name QIP_FILE pll.qip
-set_global_assignment -name QIP_FILE snescmd_buf.qip
-set_global_assignment -name QIP_FILE msu_databuf.qip
-set_global_assignment -name QIP_FILE dac_buf.qip
+set_global_assignment -name QIP_FILE ip/mk3/pll.qip
+set_global_assignment -name QIP_FILE ip/mk3/snescmd_buf.qip
+set_global_assignment -name QIP_FILE ip/mk3/msu_databuf.qip
+set_global_assignment -name QIP_FILE ip/mk3/dac_buf.qip
 set_global_assignment -name SDC_FILE main.sdc
-set_global_assignment -name QIP_FILE tap_pll.qip
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
-set_global_assignment -name SLD_FILE db/stp1_auto_stripped.stp
 # SEED 2: the default fitter seed violates HOLD on the pre-existing PLL->CLKIN CDC
 # of the RTC data path (mcu_cmd|rtc_data_out_buf -> rtc|rtc_data_r), a placement
 # lottery unrelated to any logic change.  Do not remove without re-checking hold.

@@ -1,3 +1,4 @@
+// `default_nettype none
 `timescale 1 ns / 1 ns
 //////////////////////////////////////////////////////////////////////////////////
 // Company: Rehkopf
@@ -1528,9 +1529,9 @@ assign ROM_DATA[7:0] = (ROM_ADDR0 || (!SD_DMA_TO_ROM && CTX_HIT && CTX_ROM_WORDr
                        ?(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
                                        : CTX_WR_HIT ? CTX_ROM_DATAr[15:8]  // ctx snapshot write (mk3)
                                        : DMA_WR_HIT ? DMA_ROM_DATAr[15:8]
-                                       : (ROM_HIT
-                                         & ~IS_SAVERAM
-                                         & ~SNES_WRITE) ? SNES_DATA
+//                                       : (ROM_HIT
+//                                         & ~IS_SAVERAM
+//                                         & ~SNES_WRITE) ? SNES_DATA
                                        : MCU_WR_HIT ? MCU_DOUT : 8'bZ
                         )
                        :8'bZ;
@@ -1541,9 +1542,9 @@ assign ROM_DATA[15:8] = ROM_ADDR0
                         :(SD_DMA_TO_ROM ? (!MCU_WRITE_1 ? MCU_DOUT : 8'bZ)
                                         : CTX_WR_HIT ? CTX_ROM_DATAr[7:0]  // ctx snapshot write (mk3)
                                         : DMA_WR_HIT ? DMA_ROM_DATAr[7:0]
-                                        : (ROM_HIT
-                                          & ~IS_SAVERAM
-                                          & ~SNES_WRITE) ? SNES_DATA
+//                                        : (ROM_HIT
+//                                          & ~IS_SAVERAM
+//                                          & ~SNES_WRITE) ? SNES_DATA
                                         : MCU_WR_HIT ? MCU_DOUT
                                         : 8'bZ
                          );

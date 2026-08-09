@@ -495,7 +495,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     /* DSPx / ST0010 firmware. DSP1 may fall back to dsp1b.bin (see below). */
     if(romprops.has_dspx && romprops.dsp_fw) {
       if(!file_exists((const char*)romprops.dsp_fw)
-         && !(romprops.dsp_fw == DSPFW_1 && file_exists((const char*)DSPFW_1B))) {
+         && !(romprops.dsp_fw == DSPFW_DSP1 && file_exists((const char*)DSPFW_DSP1B))) {
         return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
                                   basename_of((const char*)romprops.dsp_fw));
       }
@@ -685,8 +685,8 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     printf("DSPx game. Loading firmware image %s...\n", romprops.dsp_fw);
     load_dspx(romprops.dsp_fw, romprops.fpga_features);
     /* fallback to DSP1B firmware if DSP1.bin is not present */
-    if(file_res && romprops.dsp_fw == DSPFW_1) {
-      load_dspx(DSPFW_1B, romprops.fpga_features);
+    if(file_res && romprops.dsp_fw == DSPFW_DSP1) {
+      load_dspx(DSPFW_DSP1B, romprops.fpga_features);
     }
     if(file_res) {
       snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)romprops.dsp_fw);
@@ -1374,6 +1374,7 @@ uint32_t load_sram(uint8_t* filename, uint32_t base_addr) {
 
   set_mcu_addr(base_addr);
   file_open((uint8_t*)filename, FA_READ);
+  filesize = file_handle.fsize;
   if(file_res) {
     printf("load_sram: could not open %s, res=%d\n", filename, file_res);
     return 0;
