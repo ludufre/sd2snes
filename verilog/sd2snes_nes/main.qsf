@@ -518,10 +518,10 @@ set_global_assignment -name VERILOG_FILE dcm.v
 set_global_assignment -name VERILOG_FILE dac.v
 set_global_assignment -name SDC_FILE main.sdc
 set_global_assignment -name VERILOG_FILE address.v
-set_global_assignment -name QIP_FILE dac_buf.qip
-set_global_assignment -name QIP_FILE msu_databuf.qip
-set_global_assignment -name QIP_FILE pll.qip
-set_global_assignment -name QIP_FILE snescmd_buf.qip
+set_global_assignment -name QIP_FILE ip/mk3/dac_buf.qip
+set_global_assignment -name QIP_FILE ip/mk3/msu_databuf.qip
+set_global_assignment -name QIP_FILE ip/mk3/pll.qip
+set_global_assignment -name QIP_FILE ip/mk3/snescmd_buf.qip
 # NES core (replaces sgb.v/sgb_cpu.v/sgb_icd2.v/cheat.v/dec_table.qip/
 # vram.qip/oam.qip/hram.qip/row_buf.qip from sd2snes_sgb -- those were the
 # SGB video/VRAM/OAM/HRAM pipeline, not applicable here). See nes_wrap.v for
