@@ -1008,7 +1008,11 @@ assign p113_out = 1'b0;
 
 snescmd_buf snescmd (
   .clka(CLK2), // input clka
-  .wea(SNES_WR_end & ((snescmd_unlock | feat_cmd_unlock | map_snescmd_wr_unlock_r) & snescmd_enable)), // input [0 : 0] wea
+  // write window permanently open: the only SNES-side program under this core
+  // is the sms_snes.bin player, which writes MCU_CMD ($2A00) directly for the
+  // pad-combo IGR -- no NMI hook runs here to raise snescmd_unlock (mirrors
+  // sd2snes_nes/main.v, where snescmd_unlock is hardwired 1'b1)
+  .wea(SNES_WR_end & snescmd_enable), // input [0 : 0] wea
   .addra(SNES_ADDR[9:0]), // input [9 : 0] addra
   .dina(SNES_DATA), // input [7 : 0] dina
   .douta(snescmd_dout), // output [7 : 0] douta
@@ -1041,7 +1045,11 @@ assign ROM_2CE = ~ROM_ADDR22;
 
 snescmd_buf snescmd (
   .clock(CLK2), // input clka
-  .wren_a(SNES_WR_end & ((snescmd_unlock | feat_cmd_unlock | map_snescmd_wr_unlock_r) & snescmd_enable)), // input [0 : 0] wea
+  // write window permanently open: the only SNES-side program under this core
+  // is the sms_snes.bin player, which writes MCU_CMD ($2A00) directly for the
+  // pad-combo IGR -- no NMI hook runs here to raise snescmd_unlock (mirrors
+  // sd2snes_nes/main.v, where snescmd_unlock is hardwired 1'b1)
+  .wren_a(SNES_WR_end & snescmd_enable), // input [0 : 0] wea
   .address_a(SNES_ADDR[9:0]), // input [8 : 0] addra
   .data_a(SNES_DATA), // input [7 : 0] dina
   .q_a(snescmd_dout), // output [7 : 0] douta

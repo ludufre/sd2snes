@@ -273,6 +273,66 @@ nes_dev_send_pad:
         sep #$20 : .as
         rts
 
+; ============================================================
+; nes_dev_igr_check -- IGR por combo de pad, paridade com o chassi.
+; O core NES nao tem cheat.v (detector de combos removido), entao a
+; deteccao vive AQUI: le o pad16 cru {$4219,$4218} (o auto-read ja'
+; terminou -- chamada logo apos nes_dev_send_pad na NMI) e compara
+; EXATO com as mesmas mascaras do cheat.v dos outros cores:
+;   $3030 = L+R+Start+Select -> $80 (SNES_CMD_RESET, reinicia o jogo)
+;   $2070 = L+R+Select+X     -> $81 (SNES_CMD_RESET_TO_MENU)
+; Match exato de proposito (cheat.v usa case() do word inteiro; botao
+; extra segurado quebra o combo) -- e X/Y/L/R nem chegam ao core NES
+; (nes_dev_map_pad1 os descarta), zero colisao com gameplay.
+; O comando vai direto em MCU_CMD $2A00 (NES_MCU_CMD; unlock da BRAM
+; e' hardwired neste core) e o game loop da MCU o serve como serve o
+; nmihook num jogo SNES. Latch anti-refire em nes_dev_pad1_state:
+; dispara SO' na transicao solto->combo e o latch nasce ARMADO no
+; boot -- um $80 com o combo ainda segurado reseta o SNES, o renderer
+; reboota e sem o latch armado re-dispararia em loop ate' soltar.
+; ============================================================
+nes_dev_igr_check:
+        rep #$20 : .al
+        lda $4218                 ; pad16 cru {$4219,$4218}
+        cmp #$3030                ; L+R+Start+Select?
+        beq nes_igr_m_reset
+        cmp #$2070                ; L+R+Select+X?
+        beq nes_igr_m_menu
+        cmp #$1830                ; L+R+Start+Up: repinta a paleta a partir
+        beq nes_igr_palrf         ; do snapshot do renderer (combo de servico)
+        lda #$0000                ; nenhum combo -> re-arma a borda
+        sta @nes_dev_pad1_state
+        sep #$20 : .as
+        rts
+; re-arma o gate de CGRAM: o proximo commit real re-aplica a paleta inteira
+; do master snapshot (nes_fb_pd_acc e' honrado em nfc_commit).  Serve de
+; discriminador de campo para tela com paleta presa: se repintar conserta,
+; o master do renderer esta' certo (o defeito e' no gate/apply); se nao
+; conserta, a entrega bridge->renderer nunca trouxe os valores.  Segurar o
+; combo so' reescreve a mesma flag -- inofensivo, sem latch.
+nes_igr_palrf:
+        sep #$20 : .as
+        lda #$01
+        sta @nes_fb_pd_acc
+        rts
+nes_igr_m_reset:
+        sep #$20 : .as
+        lda #$80
+        bra nes_igr_fire
+nes_igr_m_menu:
+        sep #$20 : .as
+        lda #$81
+nes_igr_fire:
+        xba                       ; cmd no byte alto de A
+        lda @nes_dev_pad1_state   ; ja' disparado neste hold?
+        bne nes_igr_held
+        lda #$01
+        sta @nes_dev_pad1_state
+        xba                       ; cmd de volta
+        sta NES_MCU_CMD           ; banco 0 absoluto (DB=0, como o control block)
+nes_igr_held:
+        rts
+
 ; ------------------------------------------------------------
 ; nes_dev_map_pad1 -- devolve em A(8b) o byte NES mapeado do P1 SNES.
 ; ------------------------------------------------------------

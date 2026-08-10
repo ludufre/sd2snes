@@ -44,6 +44,14 @@
                                              * So' o transporte DEVICE escreve; o harness nao
                                              * tem control block (no-op la'). */
 
+/* MCU_CMD do protocolo SNES<->MCU do fork (snescmd BRAM $2A00, src/snes.h
+ * SNESCMD_MCU_CMD -- o MESMO byte que o control block foi movido para NAO
+ * sombrear). Neste core o unlock de escrita da BRAM e' hardwired (main.v
+ * snescmd_unlock=1'b1), entao o renderer PODE escrever aqui: usado pelo IGR
+ * de pad ($80=reset, $81=menu; nes_dev_igr_check). A MCU faz poll no game
+ * loop e zera apos servir. So' o transporte DEVICE escreve. */
+#define NES_MCU_CMD        $2A00
+
 /* Mailbox (bridge real): janela SNES $6000-$7FFF, banco 0, 8 KiB, double-
  * buffer selecionado por NES_BUF_SEL (NES-BRIDGE-SPEC SS3.1). Leitura
  * registrada -> preferir DMA da janela inteira p/ WRAM (SS3.1). */

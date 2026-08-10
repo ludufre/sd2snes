@@ -101,6 +101,7 @@ nmi_wait_pad:
         and #$01
         bne nmi_wait_pad
         jsr nes_dev_send_pad
+        jsr nes_dev_igr_check    ; IGR por combo (o auto-read acabou de terminar)
 
         ; ============================================================
         ; v2.11 -- LATCH VISUAL DO INSTRUMENTO (opt-in, nasce DESLIGADO).
@@ -191,8 +192,12 @@ nes_snes_start:
         rep #$20 : .al
         lda #$0000
         sta @nes_dev_last_seq
-        sta @nes_dev_pad1_state
         sta @nes_dev_pad2_state
+        lda #$0001
+        sta @nes_dev_pad1_state  ; latch do IGR nasce ARMADO: um combo ainda
+                                  ; segurado atraves de um reset ($80) nao
+                                  ; re-dispara -- exige soltar e re-apertar
+                                  ; (ver nes_dev_igr_check)
         sep #$20 : .as
         ; nes_nmi_busy e' .byt, entao entra AQUI (8 bits), nao no bloco de
         ; .word acima.  E TEM de ser zerado: e' um GATE LIDO-ANTES-DE-ESCRITO

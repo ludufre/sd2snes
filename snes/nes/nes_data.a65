@@ -81,8 +81,11 @@ nes_frame_valid      .byt 0   ; !=0 -> parse do frame corrente terminou sem abor
 ; --- handshake do transporte DEVICE (control block $2BD0 -- realocado de
 ;     $2A00, ver nota do NES_CB_BASE em nes_equates.i65; NES-BRIDGE-SPEC SS3.3) ---
 nes_dev_last_seq     .word 0  ; ultimo NES_FRAME_SEQ ja consumido (espelha NES_FRAME_ACK)
-nes_dev_pad1_state   .word 0  ; ultimo valor de auto-joypad P1 (mapeado p/ NES) enviado
-nes_dev_pad2_state   .word 0
+nes_dev_pad1_state   .word 0  ; latch anti-refire do IGR de pad (nes_dev_igr_check):
+                              ; !=0 = combo ja disparado neste hold; nasce ARMADO no
+                              ; boot (nes_snes.a65) p/ combo segurado nao re-disparar
+nes_dev_pad2_state   .word 0  ; reservado (nunca lido; manter p/ nao deslocar os
+                              ; enderecos do harness abaixo)
 
 ; --- handshake do transporte HARNESS (nes-tests/renderer-harness/) ---
 nes_harness_next_idx .word 0  ; proximo indice de frame embutido a aplicar (0-based)

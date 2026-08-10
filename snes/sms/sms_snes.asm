@@ -40,6 +40,11 @@ Reset:
     tcd
     sep #$20
 
+    lda.b #$01
+    sta $04             ; IGR edge latch, born ARMED: a combo still held
+                        ; through the $80 reset must be released before it
+                        ; can fire again (see the IGR block in the NMI)
+
     lda.b #$8F
     sta $2100
     stz $4200
@@ -219,6 +224,48 @@ TmColSkip:
     sta.l $EF0000       ; JOY1L (A X L R)
     lda $4219
     sta.l $EF0001       ; JOY1H (B Y Sel St U D L R)
+
+    ; --- IGR pad combos (chassis parity). This core keeps cheat.v, but the
+    ;     NMI hook that feeds its combo detector never runs under the player,
+    ;     so the match lives here. Exact 16-bit compare of {JOY1H,JOY1L},
+    ;     same values as cheat.v's case():
+    ;       $3030 = L+R+Start+Select -> $80 (reset the game)
+    ;       $2070 = L+R+Select+X     -> $81 (back to the menu)
+    ;     Neither Select/Start/X/L/R reaches the SMS pad translation, so the
+    ;     combos can't collide with gameplay. The command byte goes straight
+    ;     to the fork's MCU_CMD mailbox ($2A00, snescmd BRAM -- write window
+    ;     opened for this core in main.v) and the MCU game loop serves it.
+    ;     DP $04 = edge latch: fire only on release->press (armed at Reset).
+IgrWaitPad:
+    lda $4212           ; guard: $4218 mid auto-read is garbage and a reset
+    lsr                 ; must never fire off a misread -- by this point the
+    bcs IgrWaitPad      ; DMA work above outlasted the read, so this falls through
+    rep #$20
+    lda $4218           ; raw pad16 {JOY1H,JOY1L}
+    cmp.w #$3030
+    beq IgrReset
+    cmp.w #$2070
+    beq IgrMenu
+    sep #$20
+    stz $04             ; no combo held -> re-arm the edge
+    bra IgrDone
+IgrReset:
+    sep #$20
+    lda.b #$80
+    bra IgrFire
+IgrMenu:
+    sep #$20
+    lda.b #$81
+IgrFire:
+    xba                 ; park the command in B
+    lda $04             ; already fired during this hold?
+    bne IgrDone
+    lda.b #$01
+    sta $04
+    xba                 ; command back
+    sta.l $002A00       ; MCU_CMD
+IgrDone:
+    sep #$20
 
     ; --- double-buffer: done reading the front -> swap if the FPGA has a ready back ---
     sta.l $EF0005
