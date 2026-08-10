@@ -480,6 +480,7 @@ text_favorites_full .byt "Favorites list full", 0
 ; ($FF1001). Keep <= 26 cols (text_err_ budget in build_const.py WIDTH_LIMITS).
 text_err_supplfile  .byt "Required file not found:", 0
 text_err_noimpl     .byt "Chip not supported:", 0
+text_err_nohw       .byt "Requires Mk.III hardware:", 0
 text_err_generic    .byt "Load error:", 0
 text_system         .byt "CPU/PPU1/PPU2: a/b/c        VMode: x0Hz",0
 

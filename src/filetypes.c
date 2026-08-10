@@ -185,13 +185,12 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
   if(!strcasecmp(ext+1, "SKIN") || !strcasecmp(ext+1, "THM")) {
     return TYPE_SKIN;   /* menu theme file (see theme.c) */
   }
-#ifndef CONFIG_MK2
-  /* .nes (iNES) -- core NES, mk3-only: no mk2 fica TYPE_UNKNOWN (nao listado),
-     mesmo com o menu pedindo TYPE_NES no READDIR (menu binario e' compartilhado). */
+  /* .nes (iNES) -- core NES, mk3-only. Listed on mk2 too: load_rom() aborts
+     there with a clear MENU_ERR_NOHW popup instead of the file silently not
+     appearing in the browser (looked like a scan bug to users). */
   if(!strcasecmp(ext+1, "NES")) {
     return TYPE_NES;
   }
-#endif
   return TYPE_UNKNOWN;
 }
 

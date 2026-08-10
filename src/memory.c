@@ -368,6 +368,24 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     printf(" OK.\n");
   }
 
+#ifdef CONFIG_MK2
+  /* NES/SMS cores are mk3-only (no Spartan-3 build). The files ARE listed in
+     the browser on mk2 so the user gets a clear "needs mk3" popup here instead
+     of .nes silently missing from the listing, or a .sms dying later with a
+     misleading missing-file popup for fpga_sms.bit / booting the header as a
+     SNES ROM. Abort before any detect/stage work touches state. */
+  {
+    char *mk2_ext = strrchr((char*)filename, '.');
+    if (mk2_ext && (!strcasecmp(mk2_ext + 1, "nes")
+                 || !strcasecmp(mk2_ext + 1, "sms"))) {
+      file_close();
+      sms_active = 0;  /* returning before sms_id() would leave a stale flag */
+      return load_abort_missing(flags, MENU_ERR_NOHW,
+                                basename_of((const char*)filename));
+    }
+  }
+#endif
+
   /* SGB detect and file management */
   uint8_t *sgb_filename = filename;
   DWORD sgb_filesize = file_handle.fsize;

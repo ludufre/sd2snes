@@ -214,6 +214,7 @@ TRANSLATIONS = {
     'text_favorites_full': 'Favoritenliste voll',
     'text_err_supplfile': 'Datei nicht gefunden:',
     'text_err_noimpl': 'Nicht unterstuetzt:',
+    'text_err_nohw': 'Nur mit Mk.III-Hardware:',
     'text_err_generic': 'Ladefehler:',
     'text_on_p1': 'Ein: P1',
     'text_on_p2': 'Ein: P2',

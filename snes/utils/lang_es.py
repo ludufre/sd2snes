@@ -212,6 +212,7 @@ TRANSLATIONS = {
     'text_favorites_full': 'Favoritos lleno',
     'text_err_supplfile': 'Archivo no hallado:',
     'text_err_noimpl': 'Chip no soportado:',
+    'text_err_nohw': 'Requiere hardware Mk.III:',
     'text_err_generic': 'Error al cargar:',
     'text_on_p1': 'Sí: P1',
     'text_on_p2': 'Sí: P2',

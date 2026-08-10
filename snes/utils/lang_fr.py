@@ -210,6 +210,7 @@ TRANSLATIONS = {
     'text_favorites_full': 'Liste des favoris pleine',
     'text_err_supplfile': 'Fichier requis manquant:',
     'text_err_noimpl': 'Puce non prise en charge :',
+    'text_err_nohw': 'Matériel Mk.III requis :',
     'text_err_generic': 'Erreur de chargement :',
     'text_on_p1': 'On: J1',
     'text_on_p2': 'On: J2',

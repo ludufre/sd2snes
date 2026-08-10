@@ -2161,6 +2161,8 @@ show_error_msg:
   beq show_error_tpl_supplfile
   cmp #MENU_ERR_NOIMPL
   beq show_error_tpl_noimpl
+  cmp #MENU_ERR_NOHW
+  beq show_error_tpl_nohw
   rep #$20 : .al
   lda #!text_err_generic
   sta print_src
@@ -2182,6 +2184,14 @@ show_error_tpl_noimpl:
   sta print_src
   sep #$20 : .as
   lda #^text_err_noimpl
+  sta print_bank
+  bra show_error_tpl_done
+show_error_tpl_nohw:
+  rep #$20 : .al
+  lda #!text_err_nohw
+  sta print_src
+  sep #$20 : .as
+  lda #^text_err_nohw
   sta print_bank
 show_error_tpl_done:
   lda print_bank          ; resolve language + measure to center (as show_empty_msg)
