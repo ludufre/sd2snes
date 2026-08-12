@@ -947,14 +947,17 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     uint8_t patch_ok = 0;                      /* patch_apply succeeded */
     if(ips_pending_index > 0) {
       /* On a recore reload, fpga_pgm() above wiped all of SDRAM, including the
-         patch list that ips_find_patches() staged once at SRAM_IPS_LIST_ADDR
-         before LOADROM.  The patch's full path survives in MCU RAM as
-         current_ips_srm_source, so re-stage it into SDRAM at the same slot
-         patch_apply() reads, otherwise the re-patch would open an empty path
-         and silently leave the ROM unpatched. */
+         patch list that ips_find_patches() staged once before LOADROM.  The
+         patch's full path survives in MCU RAM as current_ips_srm_source, so
+         re-stage it into SDRAM at the same slot patch_apply() reads, otherwise
+         the re-patch would open an empty path and silently leave the ROM
+         unpatched.  The scan scratch behind patch_basename_at() is gone for good
+         though, so drop the scan: a CMD_PATCH_META_SAVE arriving afterwards must
+         not pair this ROM's flags with another ROM's basenames. */
       if(ips_recore_active && current_ips_srm_source[0]) {
+        ips_scan_count = 0;
         sram_writeblock(current_ips_srm_source,
-                        SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
+                        SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE
                           + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
                         (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
         /* The header-mode override sits in the same wiped region; restage it too

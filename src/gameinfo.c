@@ -205,7 +205,7 @@ static int gi_cov_to_gcv(uint32_t scratch_base) {
      As plain statics these 560 B shrank the tiny LPC1756 main-SRAM budget (which
      also holds the stack) just enough that the USB command server went silent on
      real hardware (INFO/PUT returned 0 bytes; menu still worked). AHB SRAM is the
-     right home for main-loop-only scratch (like ptrcache/ips_entries): these are
+     right home for main-loop-only scratch (like ptrcache): these are
      touched ONLY here (gameinfo_load path, SPI PIO), never from an IRQ. All three
      are fully written before read (covpal/blockmap via sram_readblock, gcvpal via
      memset), so the NOLOAD/no-zero-init of .ahbram is fine. See IN_AHBRAM (config.h). */

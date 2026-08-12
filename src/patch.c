@@ -18,6 +18,7 @@
 #include "crc32.h"
 #include "cfg.h"
 
+#include <stddef.h>
 #include <string.h>
 
 extern cfg_t CFG;
@@ -32,17 +33,33 @@ extern cfg_t CFG;
 
 uint8_t ips_pending_index = 0;
 
-/* The staged list must fit between SRAM_IPS_LIST_ADDR ($FF5000) and the
-   favorites mirror ($FF6000).  These fire at compile time so a bumped
-   IPS_MAX_PATCHES can never silently start clobbering the favorites. */
-_Static_assert(IPS_NAME_BASE + IPS_MAX_PATCHES * IPS_NAME_LEN <= IPS_FLAGS_BASE,
-               "IPS display slots overlap the flags region");
-_Static_assert(IPS_FLAGS_BASE + IPS_MAX_PATCHES <= IPS_PATH_BASE,
-               "IPS flags region overlaps the path slots");
-_Static_assert(IPS_PATH_BASE + IPS_MAX_PATCHES * IPS_PATH_LEN <= 4096,
-               "IPS list overflows $FF5000..$FF5FFF into the favorites mirror");
+/* Both halves of the staged list have to stay inside the region they were given:
+   the flags below the favorites mirror at $FF6000, the names and paths inside bank
+   $D9, the scan scratch inside bank $DA.  These fire at compile time so a bumped
+   IPS_MAX_PATCHES can never silently start clobbering a neighbour. */
+_Static_assert(IPS_FLAGS_BASE + IPS_MAX_PATCHES <= IPS_LIST_SIZE,
+               "IPS flags overflow $FF5000..$FF5FFF into the favorites mirror");
+_Static_assert(IPS_NAME_BASE + IPS_MAX_PATCHES * IPS_NAME_LEN <= IPS_PATH_BASE,
+               "IPS display slots overlap the path slots");
+_Static_assert(IPS_PATH_BASE + IPS_MAX_PATCHES * IPS_PATH_LEN <= IPS_TEXT_SIZE,
+               "IPS paths overflow the bank at SRAM_IPS_TEXT_ADDR");
+/* The name slots are addressed by the 65816 as a 16-bit idx*IPS_NAME_LEN plus
+   !IPS_NAMES with the bank fixed at ^IPS_NAMES (patchsel_slot_addr), so they may
+   not cross a bank; same for the flags, indexed as @IPS_FLAGS,x. */
+_Static_assert(IPS_NAME_BASE + IPS_MAX_PATCHES * IPS_NAME_LEN <= 0x10000,
+               "IPS display slots cross a bank boundary");
+/* num_patches + 1 (the "[No patch]" row) is computed in an 8-bit register on the
+   menu side, and the selected index travels back in the single MCU_PARAM+7 byte. */
+_Static_assert(IPS_MAX_PATCHES <= 254,
+               "IPS_MAX_PATCHES + 1 must fit in a byte for the menu side");
 _Static_assert(IPS_NAME_BADGE + 4 <= IPS_NAME_LEN,
                "IPS badge does not fit in the display slot");
+/* The scan scratch layout is an ABI written into PSRAM, not just a local array:
+   sizeof/offsetof drive the stride and the field offsets read back below. */
+_Static_assert(sizeof(patch_entry_t) == PATCH_BASENAME_LEN + 1,
+               "patch_entry_t grew padding; the PSRAM scratch stride assumes none");
+_Static_assert(IPS_MAX_PATCHES * (PATCH_BASENAME_LEN + 1) <= 0x10000,
+               "scan scratch overflows the bank at SRAM_IPS_SCRATCH_ADDR");
 
 /* Case-insensitive prefix check: does str start with the first prefix_len
    characters of prefix?  Returns 1 on match, 0 otherwise. */
@@ -70,19 +87,43 @@ static int istrcmp(const char *a, const char *b) {
     return *a ? 1 : -1;
 }
 
-/* Scratch storage for up to IPS_MAX_PATCHES entries.  Placed in AHB RAM to avoid
-   overflowing the small 16 KB main RAM.  AHB RAM is not zero-initialised;
-   entries are fully written before being read.
-   Only the BASENAME is kept here, never the full path: the patches always live
-   next to the ROM (cfg_parse_patch_entry already relies on that), so the
-   directory is recomputed once at publish time.  At IPS_MAX_PATCHES=16 an entry
-   array holding full paths would be ~3 KB and blow the AHB region, which has
-   roughly a hundred bytes of slack left (see the manual.c note). */
-patch_entry_t ips_entries[IPS_MAX_PATCHES] __attribute__((section(".ahbram")));
+/* Alphabetical order of the scan, as INDICES into the PSRAM scratch (which the
+   directory walk fills in FAT arrival order).  Sorting index bytes instead of
+   129-byte entries is what makes 254 patches affordable: the entries themselves
+   live in PSRAM at SRAM_IPS_SCRATCH_ADDR, so the only MCU RAM this costs is one
+   byte per patch.  The array it replaces -- patch_entry_t ips_entries[16], 2064
+   bytes -- sat in a 16 KB AHB region with a few hundred bytes to spare and could
+   never have held 254 of anything.
+   AHB RAM is not zero-initialised, which is fine: entries 0..count-1 are fully
+   written by the scan before anything reads them, and it is never a DMA target. */
+static uint8_t patch_order[IPS_MAX_PATCHES] __attribute__((section(".ahbram")));
 
 /* How many entries the last scan staged; CMD_PATCH_META_SAVE writes the yml
    back from these without touching the card again. */
 uint8_t ips_scan_count = 0;
+
+/* The scan scratch, addressed in ARRIVAL order (patch_order[] maps display index
+   -> arrival index).  Interleaving these FPGA/PSRAM transfers with an open FatFs
+   handle is established practice -- cheat_yaml_load does exactly the same while
+   its yml is open -- because the sram_* helpers own the chip-select discipline. */
+static void scan_entry_write(uint8_t i, patch_entry_t *e) {
+    sram_writeblock(e, SRAM_IPS_SCRATCH_ADDR + (uint32_t)i * sizeof(patch_entry_t),
+                    (uint16_t)sizeof(patch_entry_t));
+}
+
+/* Basename only, and with readstrn rather than a fixed 129-byte block read: a
+   basename is typically ~40 characters, and this runs once per comparison of the
+   sort (about 1770 of them at 254 patches). */
+static void scan_name_read(uint8_t i, char *out, uint16_t len) {
+    sram_readstrn(out, SRAM_IPS_SCRATCH_ADDR + (uint32_t)i * sizeof(patch_entry_t)
+                       + offsetof(patch_entry_t, basename), len);
+}
+
+int patch_basename_at(uint8_t i, char *out, uint16_t len) {
+    if (i >= ips_scan_count) { if (len) out[0] = 0; return 0; }
+    scan_name_read(patch_order[i], out, len);
+    return 1;
+}
 
 int patch_display_name(char *out, int outlen, const char *patch_basename,
                        unsigned stem_len) {
@@ -183,10 +224,11 @@ int patch_belongs_to_rom(const char *fn, const char *romfile, unsigned stem_len)
     return ptype;
 }
 
-/* Scan the ROM's directory for matching patches into ips_entries[].  Kept in its
-   own frame (dirpath[256] + DIR + FILINFO) so it never coexists on the stack
-   with the YAML parser's ~272-byte token -- the LPC175x has ~2.5 KB of stack
-   headroom and that pair has overflowed into .bss before (cheat menu hang). */
+/* Scan the ROM's directory for matching patches into the PSRAM scratch, building
+   patch_order[] as it goes.  Kept in its own frame (dirpath[256] + DIR + FILINFO
+   + the one patch_entry_t it stages and compares through) so it never coexists on
+   the stack with the YAML parser's ~272-byte token -- the LPC175x has ~2.5 KB of
+   stack headroom and that pair has overflowed into .bss before (cheat menu hang). */
 static uint8_t patch_scan_dir(const uint8_t *rom_path) {
     const char *path = (const char *)rom_path;
 
@@ -264,35 +306,45 @@ static uint8_t patch_scan_dir(const uint8_t *rom_path) {
             continue;
         }
 
-        strcpy(ips_entries[count].basename, fn);
-        ips_entries[count].flags = (uint8_t)ptype;
+        /* Stage the entry in PSRAM at its arrival index and slot that index into
+           patch_order[] so the published list comes out alphabetical -- an
+           insertion sort where only INDEX BYTES move.  The comparisons read the
+           already-staged basenames back over the FPGA link, which is
+           O(count*log count) short reads; sorting the 129-byte entries in place
+           would instead be O(count^2) block moves through PSRAM, several
+           megabytes of traffic at the top of the range. */
+        patch_entry_t ent;
+        uint8_t lo = 0, hi = count;
+
+        memset(&ent, 0, sizeof(ent));
+        strcpy(ent.basename, fn);
+        ent.flags = (uint8_t)ptype;
+        scan_entry_write(count, &ent);
+
+        while (lo < hi) {
+            uint8_t mid = (uint8_t)(lo + (hi - lo) / 2);
+            /* ent.basename is free again -- the entry it held is already staged */
+            scan_name_read(patch_order[mid], ent.basename, sizeof(ent.basename));
+            if (istrcmp(ent.basename, fn) > 0) hi = mid;
+            else                               lo = (uint8_t)(mid + 1);
+        }
+        memmove(&patch_order[lo + 1], &patch_order[lo], (size_t)(count - lo));
+        patch_order[lo] = count;
         count++;
     }
     f_closedir(&dir);
 
-    /* Insertion sort by basename, ascending, case-insensitive */
-    for (uint8_t i = 1; i < count; i++) {
-        patch_entry_t tmp;
-        memcpy(&tmp, &ips_entries[i], sizeof(tmp));
-        int8_t j = (int8_t)i - 1;
-        while (j >= 0 && istrcmp(ips_entries[j].basename, tmp.basename) > 0) {
-            memcpy(&ips_entries[j + 1], &ips_entries[j], sizeof(patch_entry_t));
-            j--;
-        }
-        memcpy(&ips_entries[j + 1], &tmp, sizeof(tmp));
-    }
-
     return count;
 }
 
-/* Stage the scanned entries into the SNES-visible list: display name, badge,
-   flags byte and full path per slot.  The path is assembled straight into the
-   write buffer instead of being cached per entry, which is what keeps
-   ips_entries[] small enough for the AHB region.  noinline is load-bearing: the
-   whole point of the three-frame split is that this 192-byte buffer is NOT live
-   while patch_scan_dir's ~490-byte frame or the YAML token are, and inlining it
-   into ips_find_patches puts it back on the same frame (measured: 776 bytes of
-   peak instead of ~500, on a stack with about 2.4 KB to spare). */
+/* Stage the scanned entries into the SNES-visible list, in DISPLAY order: display
+   name, badge, flags byte and full path per slot.  The path is assembled straight
+   into the write buffer instead of being cached per entry, which is what keeps the
+   scan scratch down to a basename each.  noinline is load-bearing: the whole point
+   of the three-frame split is that this 192-byte buffer is NOT live while
+   patch_scan_dir's ~490-byte frame or the YAML token are, and inlining it into
+   ips_find_patches puts it back on the same frame (measured: 776 bytes of peak
+   instead of ~500, on a stack with about 2.4 KB to spare). */
 __attribute__((noinline))
 static void patch_publish(const uint8_t *rom_path, uint32_t sram_addr,
                           uint8_t count) {
@@ -314,23 +366,34 @@ static void patch_publish(const uint8_t *rom_path, uint32_t sram_addr,
     }
     buf[dirlen] = '/';
 
+    /* patch_order[] turns the arrival order the scan wrote into display order, so
+       everything published here -- names, flags AND paths -- is already sorted and
+       no consumer needs an indirection to find patch N. */
     for (uint8_t i = 0; i < count; i++) {
-        uint32_t slot = sram_addr + IPS_NAME_BASE + (uint32_t)i * IPS_NAME_LEN;
+        uint32_t slot = SRAM_IPS_TEXT_ADDR + IPS_NAME_BASE + (uint32_t)i * IPS_NAME_LEN;
+        uint32_t ent  = SRAM_IPS_SCRATCH_ADDR
+                        + (uint32_t)patch_order[i] * sizeof(patch_entry_t);
         char name[IPS_NAME_BADGE];
         char badge[4];
+        uint8_t flags;
         int n;
 
-        n = patch_display_name(name, sizeof(name), ips_entries[i].basename, stem_len);
+        /* Read the basename back straight into the path buffer behind
+           "<dirpath>/", so this loop needs no patch_entry_t of its own -- the
+           scan already proved dirlen + 1 + strlen(basename) < IPS_PATH_LEN. */
+        sram_readstrn(buf + dirlen + 1, ent + offsetof(patch_entry_t, basename),
+                      (uint16_t)(IPS_PATH_LEN - dirlen - 1));
+        flags = sram_readbyte(ent + offsetof(patch_entry_t, flags));
+
+        n = patch_display_name(name, sizeof(name), buf + dirlen + 1, stem_len);
         sram_writeblock(name, slot, (uint16_t)(n + 1));
 
-        memcpy(badge, (ips_entries[i].flags & PATCH_FLAG_TYPE_MASK) == PATCH_TYPE_BPS
+        memcpy(badge, (flags & PATCH_FLAG_TYPE_MASK) == PATCH_TYPE_BPS
                           ? "BPS" : "IPS", 4);
         sram_writeblock(badge, slot + IPS_NAME_BADGE, sizeof(badge));
-        sram_writebyte(ips_entries[i].flags, sram_addr + IPS_FLAGS_BASE + i);
+        sram_writebyte(flags, sram_addr + IPS_FLAGS_BASE + i);
 
-        /* dirlen + 1 + strlen(basename) < IPS_PATH_LEN was checked by the scan */
-        strcpy(buf + dirlen + 1, ips_entries[i].basename);
-        sram_writeblock(buf, sram_addr + IPS_PATH_BASE + (uint32_t)i * IPS_PATH_LEN,
+        sram_writeblock(buf, SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE + (uint32_t)i * IPS_PATH_LEN,
                         (uint16_t)(strlen(buf) + 1));
     }
 }
@@ -349,10 +412,12 @@ uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
     count = patch_scan_dir(rom_path);
     if (!count) return 0;
     patch_publish(rom_path, sram_addr, count);
-    patchmeta_apply(rom_path, ips_entries, count, sram_addr);
+    /* ips_scan_count has to be live BEFORE the overlay runs: patchmeta_apply
+       reaches the entries through patch_basename_at, which range-checks against it. */
+    ips_scan_count = count;
+    patchmeta_apply(rom_path, sram_addr, count);
 
     sram_writebyte(count, sram_addr);
-    ips_scan_count = count;
     printf("ips_find_patches: %d patch(es) for %s\n", count, rom_path);
     return count;
 }
@@ -552,7 +617,7 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
     /* Read the full IPS file path from SRAM */
     uint8_t ips_path[IPS_PATH_LEN];
     psram_readstrn(ips_path,
-                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(ips_path));
 
     /* Header convention for this patch: AUTO (detect) unless the user pinned it
@@ -702,8 +767,10 @@ uint32_t ips_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
        over ALL records (pass 1 scans the same sequence pass 2 applies), so
        this one check covers the zero-fill below and every pass-2 record.  A
        corrupt IPS could otherwise write over the menu image / SaveRAM /
-       staging banks above the ROM area (24-bit offsets reach the whole map). */
-    if (adj_max_end > SRAM_SAVE_ADDR - rom_base_addr) {
+       staging banks above the ROM area (24-bit offsets reach the whole map).
+       The ceiling is SRAM_PATCH_TOP, not SRAM_SAVE_ADDR: the cheat records and
+       the patch list itself live below the SaveRAM region. */
+    if (adj_max_end > SRAM_PATCH_TOP - rom_base_addr) {
         printf("ips_apply: patch exceeds ROM region (end 0x%lx)\n",
                (unsigned long)adj_max_end);
         file_close();
@@ -1067,7 +1134,7 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
 
     uint8_t bps_path[IPS_PATH_LEN];
     psram_readstrn(bps_path,
-                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(bps_path));
 
     printf("Applying BPS: %s\n", bps_path);
@@ -1146,12 +1213,12 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
      * SourceCopy reads from the original source ROM, but those SRAM bytes
      * may have already been overwritten by a previous TargetRead or TargetCopy.
      * Fix: copy the source ROM to a scratch area above the target region
-     * (rom_base_addr + target_size, safely below SRAM_SAVE_ADDR) and use
+     * (rom_base_addr + target_size, safely below SRAM_PATCH_TOP) and use
      * that read-only backup for all SourceCopy reads. */
     uint32_t source_base_addr = rom_base_addr + target_size;
     /* Safety bound (mirrors bps_probe_header): never let the backup window
-       reach the SaveRAM region. */
-    if (source_base_addr + original_rom_size > SRAM_SAVE_ADDR) {
+       reach the staging banks -- cheat records, the patch list, SaveRAM. */
+    if (source_base_addr + original_rom_size > SRAM_PATCH_TOP) {
         printf("bps_apply: backup window exceeds ROM region\n");
         file_close();
         return 0;
@@ -1312,7 +1379,7 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
 
     uint8_t bps_path[IPS_PATH_LEN];
     psram_readstrn(bps_path,
-                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(bps_path));
     if (patch_io_err) return 0;
 
@@ -1363,10 +1430,10 @@ uint32_t bps_probe_header(uint32_t sram_addr, uint8_t index,
     uint32_t scratch_base = rom_base_addr
         + ((target_size > original_rom_size) ? target_size : original_rom_size);
 
-    /* Safety bound: never let the probe window reach the SaveRAM region.  For a
+    /* Safety bound: never let the probe window reach the staging banks.  For a
      * pathologically large image (or an unusual combo load_address) just bail —
      * the caller's post-patch smc re-detection still handles it correctly. */
-    if (scratch_base + out_limit > SRAM_SAVE_ADDR) { file_close(); return 0; }
+    if (scratch_base + out_limit > SRAM_PATCH_TOP) { file_close(); return 0; }
 
     uint32_t action_end = file_handle.fsize - 12;
 
@@ -1404,7 +1471,7 @@ static uint32_t patch_apply_impl(uint32_t sram_addr, uint8_t index,
     patch_io_err = 0; /* PR#292 fix #1: clear before the first SDRAM access */
     uint8_t path[IPS_PATH_LEN];
     psram_readstrn(path,
-                  sram_addr + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
+                  SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE + (uint32_t)(index - 1) * IPS_PATH_LEN,
                   sizeof(path));
     if (patch_io_err) { /* SDRAM stalled before we could even read the path */
         printf("patch_apply: FPGA MCU_RDY timeout reading patch path\n");

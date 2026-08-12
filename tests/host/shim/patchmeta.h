@@ -9,7 +9,6 @@
 #include <stdint.h>
 #include "patch.h"
 
-int patchmeta_apply(const uint8_t *rom_path, patch_entry_t *ents, uint8_t count,
-                    uint32_t sram_addr);
+int patchmeta_apply(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count);
 
 #endif

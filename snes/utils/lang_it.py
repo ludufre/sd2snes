@@ -295,7 +295,7 @@ TRANSLATIONS = {
     'text_patch_hdr_auto': 'auto  ',
     'text_patch_hdr_on': 'intest',
     'text_patch_hdr_off': 'grezzo',
-    'text_patch_footer': 'A:Gioca  Y:Altro  B:Indietro',
+    'text_patch_footer': 'A:Gioca  Y:Altro  B:Indietro  <>:Pag  LR:Ini/Fine',
     'text_patch_creating': 'Creo la ROM patchata...',
     'text_err_patchexport': 'Impossibile creare ROM',
     'text_patch_export_ok': 'ROM patchata creata',

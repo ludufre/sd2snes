@@ -34,13 +34,14 @@
 
 #define PATCH_BASEDIR ("/sd2snes/patches/")
 
-/* Overlay the sidecar onto a freshly scanned list.  Reads Header: into
-   ents[i].flags and writes a Name: override straight into the staged display
-   slot at sram_addr, so no per-entry name buffer has to be kept around.
+/* Overlay the sidecar onto a freshly scanned list.  Reads Header: into the staged
+   flags byte and writes a Name: override straight into the staged display slot at
+   sram_addr, so no per-entry name buffer has to be kept around.  The scan itself
+   is reached through patch_basename_at(), not through an array parameter -- the
+   entries live in PSRAM (see patch.h).
    Silently does nothing when there is no sidecar (the normal case).
    Returns 1 if a sidecar was read, 0 otherwise. */
-int patchmeta_apply(const uint8_t *rom_path, patch_entry_t *ents, uint8_t count,
-                    uint32_t sram_addr);
+int patchmeta_apply(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count);
 
 /* Rewrite the sidecar from the live scan, pruning entries whose files are gone.
    Deletes the file outright when nothing is worth remembering (every patch on
@@ -50,8 +51,7 @@ int patchmeta_apply(const uint8_t *rom_path, patch_entry_t *ents, uint8_t count,
    a hand-authored Name: longer than a menu row can show comes back shortened.
    See the note at the truncation in patchmeta_apply for why it is not round-tripped
    verbatim (single ystate global vs. the write path's stack). */
-void patchmeta_save(const uint8_t *rom_path, const patch_entry_t *ents,
-                    uint8_t count);
+void patchmeta_save(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count);
 
 /* Flags byte for a single patch, for the recents/favorites relaunch path where
    no directory scan happens.  patch_type is PATCH_TYPE_IPS/PATCH_TYPE_BPS.

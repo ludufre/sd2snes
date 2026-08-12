@@ -294,7 +294,7 @@ TRANSLATIONS = {
     'text_patch_hdr_auto': 'auto  ',
     'text_patch_hdr_on': 'cabec.',
     'text_patch_hdr_off': 'crudo ',
-    'text_patch_footer': 'A:Jugar  Y:Mas  B:Volver',
+    'text_patch_footer': 'A:Jugar  Y:Mas  B:Volver  <>:Pag  LR:Ini/Fin',
     'text_patch_creating': 'Creando ROM con parche...',
     'text_err_patchexport': 'No se pudo crear la ROM',
     'text_patch_export_ok': 'ROM con parche creada',

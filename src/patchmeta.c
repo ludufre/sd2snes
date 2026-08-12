@@ -38,6 +38,12 @@ static uint8_t pm_hdr_mode(const char *s) {
    by path_asset before being read, and it is never a DMA target. */
 static char pm_path[256] IN_AHBRAM;
 
+/* Basename scratch, IN_AHBRAM for the same reason as pm_path and then some: the
+   one place that needs it (pm_find) is called from inside patchmeta_apply, whose
+   frame already carries a ~272-byte yaml_token_t.  A 128-byte array on top of that
+   is exactly the stack pairing that has hung the cheat menu before. */
+static char pm_leaf[PATCH_BASENAME_LEN] IN_AHBRAM;
+
 /* Build the sidecar path and open it for reading.
    Returns 1 when a sidecar was opened. */
 static int patchmeta_open(const uint8_t *rom_path) {
@@ -60,31 +66,46 @@ static unsigned pm_stem_len(const uint8_t *rom_path) {
   return dot ? (unsigned)(dot - leaf) : (unsigned)strlen(leaf);
 }
 
+/* Where pm_find starts looking.  patchmeta_save writes the items in the same
+   alphabetical order the scan produces, so for a sidecar this firmware wrote the
+   next lookup is the next entry and the search is O(1) -- which matters now that
+   each comparison is a PSRAM read rather than an array index.  A hand-edited or
+   reordered yml just falls back to walking the whole list once. */
+static uint8_t pm_cursor;
+
 /* Index of the scanned entry whose basename matches, or -1 (an orphan). */
-static int pm_find(const patch_entry_t *ents, uint8_t count, const char *basename) {
-  for(uint8_t i = 0; i < count; i++)
-    if(!strcasecmp(ents[i].basename, basename)) return (int)i;
+static int pm_find(uint8_t count, const char *basename) {
+  for(uint8_t n = 0; n < count; n++) {
+    uint8_t i = (uint8_t)((pm_cursor + n) % count);
+    if(!patch_basename_at(i, pm_leaf, sizeof(pm_leaf))) break;
+    if(!strcasecmp(pm_leaf, basename)) {
+      pm_cursor = (uint8_t)((i + 1) % count);
+      return (int)i;
+    }
+  }
   return -1;
 }
 
-int patchmeta_apply(const uint8_t *rom_path, patch_entry_t *ents, uint8_t count,
-                    uint32_t sram_addr) {
+int patchmeta_apply(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count) {
   yaml_token_t tok;
 
+  if(!count) return 0;
+  pm_cursor = 0;
   if(!patchmeta_open(rom_path)) return 0;
 
   while(yaml_next_item()) {
     int idx;
     if(!yaml_get_itemvalue("Patch", &tok)) continue;
     yaml_decode_entities(tok.stringvalue);
-    idx = pm_find(ents, count, tok.stringvalue);
+    idx = pm_find(count, tok.stringvalue);
     if(idx < 0) continue;  /* patch deleted from the card: ignore, prune on save */
 
     if(yaml_get_itemvalue("Header", &tok)) {
       uint8_t mode = pm_hdr_mode(tok.stringvalue);
-      ents[idx].flags = (ents[idx].flags & ~PATCH_FLAG_HDR_MASK)
-                      | (uint8_t)(mode << PATCH_FLAG_HDR_SHIFT);
-      sram_writebyte(ents[idx].flags, sram_addr + IPS_FLAGS_BASE + idx);
+      uint8_t flags = sram_readbyte(sram_addr + IPS_FLAGS_BASE + idx);
+      flags = (uint8_t)((flags & ~PATCH_FLAG_HDR_MASK)
+                        | (mode << PATCH_FLAG_HDR_SHIFT));
+      sram_writebyte(flags, sram_addr + IPS_FLAGS_BASE + idx);
     }
 
     /* A Name: takes precedence over the derived suffix.  It is written straight
@@ -104,7 +125,7 @@ int patchmeta_apply(const uint8_t *rom_path, patch_entry_t *ents, uint8_t count,
       yaml_decode_entities(tok.stringvalue);
       tok.stringvalue[IPS_NAME_BADGE - 1] = 0;
       sram_writeblock(tok.stringvalue,
-                      sram_addr + IPS_NAME_BASE + (uint32_t)idx * IPS_NAME_LEN,
+                      SRAM_IPS_TEXT_ADDR + IPS_NAME_BASE + (uint32_t)idx * IPS_NAME_LEN,
                       (uint16_t)(strlen(tok.stringvalue) + 1));
     }
   }
@@ -135,8 +156,7 @@ uint8_t patchmeta_flags_for(const uint8_t *rom_path, const char *patch_basename,
   return flags;
 }
 
-void patchmeta_save(const uint8_t *rom_path, const patch_entry_t *ents,
-                    uint8_t count) {
+void patchmeta_save(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count) {
   char cur[IPS_NAME_BADGE];   /* display name as currently staged */
   char def[IPS_NAME_BADGE];   /* what the derivation alone would produce */
   unsigned stem_len = pm_stem_len(rom_path);
@@ -148,13 +168,15 @@ void patchmeta_save(const uint8_t *rom_path, const patch_entry_t *ents,
   /* Only remember what cannot be re-derived.  Without this every ROM the user
      merely opens the patch dialog for would leave a redundant yml behind. */
   for(uint8_t i = 0; i < count && !worth_saving; i++) {
-    if(PATCH_HDR_MODE(ents[i].flags) != PATCH_HDR_AUTO) worth_saving = 1;
+    if(PATCH_HDR_MODE(sram_readbyte(sram_addr + IPS_FLAGS_BASE + i)) != PATCH_HDR_AUTO)
+      worth_saving = 1;
   }
   if(!worth_saving) {
     for(uint8_t i = 0; i < count; i++) {
-      sram_readstrn(cur, SRAM_IPS_LIST_ADDR + IPS_NAME_BASE + (uint32_t)i * IPS_NAME_LEN,
+      if(!patch_basename_at(i, pm_leaf, sizeof(pm_leaf))) break;
+      sram_readstrn(cur, SRAM_IPS_TEXT_ADDR + IPS_NAME_BASE + (uint32_t)i * IPS_NAME_LEN,
                     sizeof(cur));
-      patch_display_name(def, sizeof(def), ents[i].basename, stem_len);
+      patch_display_name(def, sizeof(def), pm_leaf, stem_len);
       if(strcmp(cur, def)) { worth_saving = 1; break; }
     }
   }
@@ -191,11 +213,14 @@ void patchmeta_save(const uint8_t *rom_path, const patch_entry_t *ents,
 
   f_puts("---\n# Generated by sd2snes\n", &file_handle);
   for(uint8_t i = 0; i < count; i++) {
-    uint8_t mode = PATCH_HDR_MODE(ents[i].flags);
+    uint8_t mode;
 
-    sram_readstrn(cur, SRAM_IPS_LIST_ADDR + IPS_NAME_BASE + (uint32_t)i * IPS_NAME_LEN,
+    if(!patch_basename_at(i, pm_leaf, sizeof(pm_leaf))) break;
+    mode = PATCH_HDR_MODE(sram_readbyte(sram_addr + IPS_FLAGS_BASE + i));
+
+    sram_readstrn(cur, SRAM_IPS_TEXT_ADDR + IPS_NAME_BASE + (uint32_t)i * IPS_NAME_LEN,
                   sizeof(cur));
-    patch_display_name(def, sizeof(def), ents[i].basename, stem_len);
+    patch_display_name(def, sizeof(def), pm_leaf, stem_len);
     if(mode == PATCH_HDR_AUTO && !strcmp(cur, def)) continue;  /* nothing to remember */
 
     /* EVERY item carries ALL THREE keys, even when a value is the default.  This is
@@ -205,7 +230,7 @@ void patchmeta_save(const uint8_t *rom_path, const patch_entry_t *ents,
        silently skips it and drops its overrides, and the next save then prunes them
        from the file for good.  cheat_yaml_save avoids this the same way. */
     f_puts("- Patch: \"", &file_handle);
-    yaml_puts_escaped(&file_handle, ents[i].basename);
+    yaml_puts_escaped(&file_handle, pm_leaf);
     f_puts("\"\n", &file_handle);
     f_puts("  Name: \"", &file_handle);
     yaml_puts_escaped(&file_handle, cur);

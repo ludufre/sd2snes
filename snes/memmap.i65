@@ -476,28 +476,42 @@
 #define WIFI_OFF_REQ_SSID           340  /* char[33] - menu writes (CONNECT) */
 #define WIFI_OFF_REQ_PASS           373  /* char[64] - menu writes (CONNECT) */
 
-/* IPS/BPS patch list staged by the MCU (ips_find_patches).  Layout, region
-   $FF5000..$FF5F1F, below FAVORITE_GAMES $FF6000:
-     +0                                u8  num_patches
-     +IPS_NAME_BASE + N*IPS_NAME_LEN   48B display slot: name (NUL-term) at +0,
-                                           "IPS"/"BPS" badge at +IPS_NAME_BADGE
-     +IPS_FLAGS_BASE + N               u8  flags: bits0-1 type (0 IPS, 1 BPS),
+/* IPS/BPS patch list staged by the MCU (ips_find_patches).  It lives in TWO
+   regions, and the split is forced by hardware:
+
+     IPS_LIST $FF5000 (BSRAM, the menu can WRITE here)
+       +0                              u8  num_patches
+       +IPS_FLAGS_BASE + N             u8  flags: bits0-1 type (0 IPS, 1 BPS),
                                            bits2-3 header mode (0 auto, 1 headered,
                                            2 headerless)
-     +800 (MCU only)                       full SD paths, 16*192
+     IPS_TEXT $D90000 (PSRAM, read-only for the menu)
+       +IPS_NAME_BASE + N*IPS_NAME_LEN 48B display slot: name (NUL-term) at +0,
+                                           "IPS"/"BPS" badge at +IPS_NAME_BADGE
+       +$3000 (MCU only)                   full SD paths, 254*192
+
+   In menu mode the FPGA only makes banks $F0-$FF writable by the SNES (mapper 7:
+   IS_SAVERAM = &SNES_ADDR[23:20] in address.v).  The flags byte is the one field
+   the menu also WRITES -- the Y context menu cycles the header mode, and
+   patchsel_persist_meta hands it back via CMD_PATCH_META_SAVE -- so it has to stay
+   at $FF5000.  Anywhere else the sta is swallowed and the override silently never
+   persists; CHEAT_FLAGS $FF0500 exists for exactly the same reason.  Reading $D9
+   is fine: the menu already reads CHEAT_TITLE at $D80000.
+   The names are 12 KB at 254 patches and could not stay in the 4096 bytes below
+   FAVORITE_GAMES $FF6000 -- that budget is exactly what used to cap the list at 16.
+   Everything is in DISPLAY order (alphabetical), which is also what the 1-based
+   index the menu writes to MCU_PARAM+7 refers to.
    The display name arrives already resolved (yml Name: override or the cleaned
-   suffix after the ROM stem) so the menu only renders.  The flags byte is the
-   one field the menu also WRITES -- left/right on the patch screen cycles the
-   header mode, and patchsel_persist_meta hands it back via CMD_PATCH_META_SAVE.
-   Lockstep with src/patch.h (offsets) and src/memory.h (region comment). */
-#define IPS_LIST                    $FF5000  /* IPS patch list written by MCU */
-#define IPS_NAME_BASE               16       /* offset of the first display slot */
+   suffix after the ROM stem) so the menu only renders.
+   Lockstep with src/patch.h (offsets) and src/memory.h (region comments). */
+#define IPS_LIST                    $FF5000  /* count + flags, SNES-writable */
+#define IPS_TEXT                    $D90000  /* names + paths, SNES read-only */
+#define IPS_FLAGS_BASE              16       /* offset of the per-patch flag bytes in IPS_LIST */
+#define IPS_NAME_BASE               0        /* offset of the first display slot in IPS_TEXT */
 #define IPS_NAME_LEN                48       /* bytes per display slot */
 #define IPS_NAME_BADGE              42       /* badge offset inside a display slot */
-#define IPS_FLAGS_BASE              784      /* offset of the per-patch flag bytes */
-#define IPS_MAX_PATCHES             16       /* maximum patches per ROM */
-#define IPS_NAMES                   $FF5010  /* = IPS_LIST + IPS_NAME_BASE, spelled out because snescom will not size-infer an immediate like #(!IPS_LIST + IPS_NAME_BASE) */
-#define IPS_FLAGS                   $FF5310  /* = IPS_LIST + IPS_FLAGS_BASE, spelled out so it can be indexed (lda @IPS_FLAGS,x) */
+#define IPS_MAX_PATCHES             254      /* maximum patches per ROM; 254 and not 255 because listsel_max = num_patches+1 is a byte */
+#define IPS_NAMES                   $D90000  /* = IPS_TEXT + IPS_NAME_BASE, spelled out because snescom will not size-infer an immediate like #(!IPS_TEXT + IPS_NAME_BASE) */
+#define IPS_FLAGS                   $FF5010  /* = IPS_LIST + IPS_FLAGS_BASE, spelled out so it can be indexed (lda @IPS_FLAGS,x) */
 #define LOAD_NACK                   $FF071D /* 1 = the MCU refused this game load (missing chip BIOS / unimplemented chip). The $aa it also writes to SNES_CMD is TRANSIENT -- the menu loop re-arms MCU_CMD_RDY ($55, which doubles as the ACK) microseconds later -- so it cannot be observed by a poll that starts after the iris animation. This byte is written BEFORE that $aa and never re-armed, so game_handshake can test it at its leisure. Cleared by the SNES right before it sends the load command. Lockstep with SRAM_LOAD_NACK_ADDR in src/memory.h. */
 #define EXPORT_RESULT               $FF071E /* "create patched ROM" outcome, shown after the menu reload: 0 none, 1 written, 2 failed, 3 written but a sidecar that existed did not copy, 4 refused because the .sfc already exists (checked before anything ran; delete the old file first to regenerate). Values are the PATCH_EXPORT_* constants in src/patch.h. The export holds the SNES in reset the whole time, so this is the only way to tell the user anything. Read+cleared by export_result_check (snes/patch.a65) once the browser has repainted. Lockstep with SRAM_EXPORT_RESULT_ADDR in src/memory.h. */
 #define PATCH_HDR_SEL               $FF071C  /* scratch byte the patch context menu edits as a plain 0/1/2 header mode (MTYPE_VALUE + kv_patch_hdrmode); patchsel_contextmenu seeds it from the patch's flags byte and folds the result back. Free $FF0701..$FF07FF gap, after SS_STAGED_SLOT. Lockstep with SRAM_PATCH_HDR_SEL_ADDR in src/memory.h. */
@@ -582,7 +596,7 @@
 #define CFG_ENABLE_SRAM_SLOTS           CFG_ADDR+$0146 /* multi-slot battery SRAM -- ALWAYS ON since 2.15 (the EnableSramSlots YAML flag + menu toggle were retired; cfg.c forces the byte to 1, kept at $0146 for offset stability). The SAVES tab is the 4-slot selector. Lockstep with src/cfg.h. */
 
 #define MENU_ENTRY_SIZE             23
-#define PATCHSEL_VISMAX             15 /* max patch-selector rows shown at once (incl. the "[No patch]" row). NOT IPS_MAX_PATCHES+1: window_h = vis+4, and the window cannot start above row 9 -- rows 0..8 are the baked logo, which the per-frame DMA never re-uploads for BG1 (do_screen_dma, snes/reset.a65). 9 + (15+4) = 28 exactly, so 15 is the tallest that still ends inside the 28-row screen. With 16 patches the list therefore scrolls and listsel_scrollbar finally draws. */
+#define PATCHSEL_VISMAX             14 /* max patch-selector rows shown at once (incl. the "[No patch]" row). Nothing to do with IPS_MAX_PATCHES (254): window_h = vis+4, and the window cannot start above row 9 -- rows 0..8 are the baked logo, which the per-frame DMA never re-uploads for BG1 (do_screen_dma, snes/reset.a65). 9 + (14+4) = 27, so the window ends on row 26 and leaves the status bar row 27 alone, exactly like FAV_VISMAX. 15 also "fits" the 28-row screen but ends ON row 27, where printtime repaints the clock over the bottom border every frame -- invisible while the list could never scroll, permanent once it can. Anything longer than vis scrolls and listsel_scrollbar draws. */
 #define FAV_VISMAX                  13/* max favorites rows shown at once (window at last_win_y=12 -> rows 12..26, status bar 27); the rest scroll */
 #define MENU_VISMAX                 12 /* settings menu (show_menu): max entry rows shown before the viewport scrolls. Deepest scrolling submenu opens at window_y=13 (mm 11 -> cfg 12 -> submenu 13); window_h=(vis-1)*step+3 so bottom=window_y+vis+1 -> vis=12 is the max that keeps the bottom border at row 26 (status bar = 27); the description box then shows ABOVE (rows 9..12). Must be >= the largest CURRENTLY-fitting menu's entry count (cfg=10) so those never start scrolling. Do NOT raise above 12, and keep scrolling menus at window_y<=13. */
 

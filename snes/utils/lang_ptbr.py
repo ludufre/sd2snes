@@ -290,7 +290,7 @@ TRANSLATIONS = {
     'text_patch_hdr_auto': 'autom.',
     'text_patch_hdr_on': 'cabeç.',
     'text_patch_hdr_off': 'cru   ',
-    'text_patch_footer': 'A:Jogar  Y:Mais  B:Voltar',
+    'text_patch_footer': 'A:Jogar  Y:Mais  B:Voltar  <>:Pag  LR:Ini/Fim',
     'text_patch_creating': 'Criando ROM com patch...',
     'text_err_patchexport': 'Falha ao gravar a ROM',
     'text_patch_export_ok': 'ROM com patch criada',

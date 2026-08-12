@@ -169,16 +169,44 @@ extern char current_filename[];
    0xFF4B00..0xFF4FFF has to check all three. */
 #define SRAM_BROWSER_DIR_ADDR        (0xFF4B00L)
 #define SRAM_BROWSER_FILE_ADDR       (0xFF4C00L)
-/* IPS/BPS patch list staged by ips_find_patches(). Layout (authoritative copy of the
-   comment lives in src/patch.h): +0 num_patches, +IPS_NAME_BASE(16) display slots
-   (16*IPS_NAME_LEN=768 -> [16,784); each slot is a 42-byte name plus an "IPS"/"BPS"
-   badge at +IPS_NAME_BADGE), +IPS_FLAGS_BASE(784) one flags byte per patch
-   (PATCH_FLAG_* -- type and the user's header-mode override), +IPS_PATH_BASE(800)
-   full SD paths (16*IPS_PATH_LEN=3072 -> [800,3872) = 0xFF5000..0xFF5F1F). Ends below
-   the favorites mirror at 0xFF6000 (224 bytes of slack); _Static_asserts in patch.c
-   enforce that. Lockstep with IPS_LIST in snes/memmap.i65: the menu reads the name and
-   badge slots and READS+WRITES the flags byte, while the paths stay MCU-only. */
+/* IPS/BPS patch list staged by ips_find_patches(), SNES-WRITABLE half: +0 num_patches,
+   +1..15 reserved, +IPS_FLAGS_BASE(16) one flags byte per patch (PATCH_FLAG_* -- type
+   and the user's header-mode override), 254 of them -> 0xFF5000..0xFF510D. The rest of
+   0xFF5000..0xFF5FFF is free (this used to be the WHOLE list, and its 4096-byte budget
+   under the favorites mirror at 0xFF6000 is exactly what capped it at 16 patches).
+   THE FLAGS CANNOT MOVE OUT OF 0xF0-0xFF. In menu mode (mapper 7) the FPGA only makes
+   banks $F0-$FF writable by the SNES -- address.v, IS_SAVERAM = &SNES_ADDR[23:20], and
+   IS_PATCH needs an unlock that only the in-game hooks raise. The menu's Y context menu
+   WRITES this byte (sta @IPS_FLAGS,x in snes/patch.a65), so anywhere else the store is
+   swallowed and the header-mode override silently never persists. Same reason
+   SRAM_CHEAT_FLAGS_ADDR 0xFF0500 exists instead of the SNES poking 0xD00000 directly.
+   Lockstep with IPS_LIST in snes/memmap.i65 and the layout comment in src/patch.h. */
 #define SRAM_IPS_LIST_ADDR           (0xFF5000L)
+/* The read-only half of the same list: +IPS_NAME_BASE(0) display slots
+   (254*IPS_NAME_LEN=12192; each slot is a 42-byte name plus an "IPS"/"BPS" badge at
+   +IPS_NAME_BADGE), +IPS_PATH_BASE(0x3000) full SD paths (254*IPS_PATH_LEN=48768 -> ends
+   at 61056, inside the bank). Names are 12 KB and could never have fitted the 4096 bytes
+   at 0xFF5000; banks $D9..$DF are free (cheat records D0..D3, code strings D4..D7,
+   CHEAT_TITLE 64B at D80000, save at 0xE00000) and the whole 0xC00000..0xFFFFFF PSRAM
+   window maps 1:1 onto SNES banks $C0..$FF, which the menu already READS from ($C90000
+   covers, $D00000 cheats, $D80000 cheat title). One bank also keeps every 16-bit offset
+   the 65816 computes (patchsel_slot_addr does idx*48 + !IPS_NAMES) in range. The paths
+   are MCU-only. Lockstep with IPS_NAMES in snes/memmap.i65. */
+#define SRAM_IPS_TEXT_ADDR           (0xD90000L)
+/* Scan scratch for ips_find_patches(): IPS_MAX_PATCHES patch_entry_t in DIRECTORY
+   ARRIVAL order, read back through patch_order[] (patch.c) to get alphabetical order.
+   MCU-only, the menu never reads it. This is where the old ips_entries[] AHB array
+   went: at 129 bytes an entry it could not hold 254 of them (the AHB region is 16 KB
+   with a few hundred bytes to spare). Valid until the next scan, same as ips_scan_count.
+   Bank $DA, right above the text half. */
+#define SRAM_IPS_SCRATCH_ADDR        (0xDA0000L)
+/* Ceiling for every write the patcher makes into the staged ROM image. It used to be
+   SRAM_SAVE_ADDR, which let a malformed IPS offset or an absurd BPS target_size scribble
+   over the cheat records at 0xD00000 -- and, once the patch list moved down here, over
+   the list itself while the very same patch is being applied. Nothing legitimate comes
+   close: the largest SNES ROM is 8 MB, and the BPS source backup lands at
+   rom_base + target_size. */
+#define SRAM_PATCH_TOP               (SRAM_CHEAT_ADDR)
 /* packed gameinfo_meta_t for the pre-boot info screen (see gameinfo.h). Sits AFTER the
    favorites mirror (0xFF6000..0xFF73FF) -- it must NOT overlap it, or opening a favorite's
    info panel clobbers the favorites list (lockstep with GAMEINFO in snes/memmap.i65). */

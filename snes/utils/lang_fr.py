@@ -292,7 +292,7 @@ TRANSLATIONS = {
     'text_patch_hdr_auto': 'auto  ',
     'text_patch_hdr_on': 'en-tet',
     'text_patch_hdr_off': 'brut  ',
-    'text_patch_footer': 'A:Jouer  Y:Plus  B:Retour',
+    'text_patch_footer': 'A:Jouer  Y:Plus  B:Retour  <>:Page  LR:Début/Fin',
     'text_patch_creating': 'Création de la ROM...',
     'text_err_patchexport': 'Échec écriture ROM',
     'text_patch_export_ok': 'ROM patchée créée',

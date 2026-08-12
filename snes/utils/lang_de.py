@@ -294,7 +294,7 @@ TRANSLATIONS = {
     'text_patch_hdr_auto': 'Auto  ',
     'text_patch_hdr_on': 'Header',
     'text_patch_hdr_off': 'Roh   ',
-    'text_patch_footer': 'A:Start  Y:Mehr  B:Zurueck',
+    'text_patch_footer': 'A:Start  Y:Mehr  B:Zurueck  <>:Seite  LR:Enden',
     'text_patch_creating': 'Erstelle gepatchte ROM...',
     'text_err_patchexport': 'Schreiben fehlgeschlagen',
     'text_patch_export_ok': 'Gepatchte ROM erstellt',

@@ -114,8 +114,11 @@ static void stage_patch_from_entry(char *entry) {
   strncpy((char*)current_ips_srm_source, patchpath, sizeof(current_ips_srm_source) - 1);
   current_ips_srm_source[sizeof(current_ips_srm_source) - 1] = '\0';
   /* Stage the patch path where patch_apply()/bps_probe_header() read it, exactly
-     as ips_find_patches() would have for a normal LOADROM (slot index 1). */
-  sram_writeblock(current_ips_srm_source, SRAM_IPS_LIST_ADDR + IPS_PATH_BASE,
+     as ips_find_patches() would have for a normal LOADROM (slot index 1).  No
+     directory scan runs on this path, so drop whatever scan was live: its scratch
+     describes some other ROM, and CMD_PATCH_META_SAVE reads basenames from it. */
+  ips_scan_count = 0;
+  sram_writeblock(current_ips_srm_source, SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE,
                   (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
   /* No directory scan happens on this path, so the header-mode override has to
      come straight from the sidecar -- `entry` is the base ROM path by now, which
@@ -316,7 +319,7 @@ static uint8_t patch_export_command(uint8_t xidx) {
 
     ips_pending_index = xidx;
     sram_readstrn(current_ips_srm_source,
-                  SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
+                  SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE
                   + (uint32_t)(xidx - 1) * IPS_PATH_LEN,
                   sizeof(current_ips_srm_source));
 
@@ -699,7 +702,7 @@ int main(void) {
           current_ips_flags = 0;
           if(ips_pending_index > 0 && ips_pending_index <= IPS_MAX_PATCHES) {
             sram_readstrn(current_ips_srm_source,
-                          SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
+                          SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE
                           + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
                           sizeof(current_ips_srm_source));
             /* Kept in MCU RAM so a recore reload can re-stage it (see memory.c). */
@@ -754,16 +757,15 @@ int main(void) {
           break;
         }
         case SNES_CMD_PATCH_META_SAVE:
-          /* The menu edited the header-mode field of the staged flags bytes; fold
-             those back into the scan we still hold and rewrite the sidecar (which
-             also prunes entries whose patch has since been deleted).  Guard on the
-             scan being live so a stale ips_entries[] can never be written out
-             under some other ROM's name. */
+          /* The menu edited the header-mode field of the staged flags bytes; rewrite
+             the sidecar from the scan we still hold (which also prunes entries whose
+             patch has since been deleted).  patchmeta_save pairs each staged flags
+             byte with its basename through patch_basename_at, so nothing has to be
+             folded back by hand here.  Guard on the scan being live so a stale one
+             can never be written out under some other ROM's name. */
           if(ips_scan_count) {
             get_selected_name(file_lfn);
-            for(uint8_t i = 0; i < ips_scan_count; i++)
-              ips_entries[i].flags = sram_readbyte(SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE + i);
-            patchmeta_save(file_lfn, ips_entries, ips_scan_count);
+            patchmeta_save(file_lfn, SRAM_IPS_LIST_ADDR, ips_scan_count);
           }
           snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
           cmd = 0; /* stay in menu loop */
@@ -784,7 +786,7 @@ int main(void) {
           get_selected_name(file_lfn);
           if(cidx >= 1 && cidx <= IPS_MAX_PATCHES && !path_is_gb((char*)file_lfn)) {
             sram_readstrn(current_ips_srm_source,
-                          SRAM_IPS_LIST_ADDR + IPS_PATH_BASE
+                          SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE
                           + (uint32_t)(cidx - 1) * IPS_PATH_LEN,
                           sizeof(current_ips_srm_source));
             /* patch_export_exists also stages the existing path in

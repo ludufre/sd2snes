@@ -8,43 +8,65 @@
 #include <stdint.h>
 
 /* ---------------------------------------------------------------------------
- * Layout of the patch list the MCU stages at SRAM_IPS_LIST_ADDR ($FF5000).
- * The budget is $FF5000..$FF6000 (4096 bytes) -- SRAM_FAVORITEGAMES_ADDR sits
- * immediately above and must never be touched.  LOCKSTEP with the IPS_* defines
- * in snes/memmap.i65 and with the layout comment on SRAM_IPS_LIST_ADDR
- * (src/memory.h).  Changing any offset here without the mirror makes the menu
- * render garbage and the MCU open a junk path.
+ * Layout of the patch list the MCU stages for the menu.  It lives in TWO
+ * regions, and the split is forced by hardware, not taste:
  *
- *   +0                                   u8   num_patches (0..IPS_MAX_PATCHES)
- *   +1 .. +15                                 reserved
- *   +IPS_NAME_BASE  + N*IPS_NAME_LEN     48 B per-patch display slot:
+ *   SRAM_IPS_LIST_ADDR ($FF5000, 4096 B) -- the SNES-WRITABLE half
+ *     +0                                 u8   num_patches (0..IPS_MAX_PATCHES)
+ *     +1 .. +15                               reserved
+ *     +IPS_FLAGS_BASE + N                u8   per-patch flags (PATCH_FLAG_*)
+ *
+ *   SRAM_IPS_TEXT_ADDR ($D90000, 64 KB)  -- read-only for the SNES
+ *     +IPS_NAME_BASE  + N*IPS_NAME_LEN   48 B per-patch display slot:
  *                        +0 .. +41            display name, NUL-terminated
  *                        +IPS_NAME_BADGE(42)  "IPS"/"BPS" badge, NUL-terminated
- *   +IPS_FLAGS_BASE + N                  u8   per-patch flags (PATCH_FLAG_*)
- *   +IPS_PATH_BASE  + N*IPS_PATH_LEN    192 B full SD path, NUL-terminated
+ *     +IPS_PATH_BASE  + N*IPS_PATH_LEN  192 B full SD path, NUL-terminated
+ *                                             (MCU-only, the menu never reads it)
+ *
+ * In menu mode the FPGA only lets the SNES WRITE banks $F0-$FF (address.v:
+ * IS_SAVERAM = &SNES_ADDR[23:20] for mapper 7; IS_PATCH needs an unlock that only
+ * the in-game hooks raise).  The flags byte is the one field the menu also writes
+ * -- the Y context menu cycles the header mode -- so it has to stay at $FF5000
+ * even though the names no longer fit there.  Do NOT "simplify" this back into
+ * one region: the store would be swallowed and the override would silently never
+ * persist.  SRAM_CHEAT_FLAGS_ADDR $FF0500 exists for exactly the same reason.
+ *
+ * Everything is in DISPLAY order (alphabetical), which is also the order the
+ * 1-based index in MCU_PARAM+7 refers to.
+ *
+ * LOCKSTEP with the IPS_* defines in snes/memmap.i65 and with the layout comments
+ * on SRAM_IPS_LIST_ADDR / SRAM_IPS_TEXT_ADDR (src/memory.h).  Changing any offset
+ * here without the mirror makes the menu render garbage and the MCU open a junk
+ * path.
  *
  * The display name is resolved by the MCU (yml Name: override, else the cleaned
  * suffix after the ROM stem) so the 65816 side only ever renders.  The badge
  * lives inside the name slot on purpose: "IPS"/"BPS" are language-neutral, so a
  * menu-side string would land in bank $C0, which is ~90% full.
- *
- * The flags byte is the one field the SNES also WRITES (left/right cycles the
- * header mode on the patch screen).  Precedent: SRAM_CHEAT_FLAGS_ADDR $FF0500,
- * the mirror the in-game cheat overlay writes back.
  * ------------------------------------------------------------------------- */
 
-/* Maximum number of patches listed for one ROM */
-#define IPS_MAX_PATCHES  16
-/* Byte offset of the first display slot (past the count byte + reserved bytes) */
-#define IPS_NAME_BASE    16
+/* Maximum number of patches listed for one ROM.  254, not 255: the menu builds
+   listsel_max = num_patches + 1 (row 0 is "[No patch]") in an 8-bit register, and
+   the selected index travels back in the single byte at MCU_PARAM+7.  In practice
+   that is no limit at all -- the old ceiling was 16, and it was pure arithmetic:
+   48 name + 1 flags + 192 path = 241 bytes each against the 4096-byte budget the
+   whole list used to have at $FF5000. */
+#define IPS_MAX_PATCHES  254
+/* Bytes available at SRAM_IPS_LIST_ADDR before the favorites mirror ($FF6000) */
+#define IPS_LIST_SIZE    4096
+/* Bytes the text half owns at SRAM_IPS_TEXT_ADDR (one full PSRAM/SNES bank) */
+#define IPS_TEXT_SIZE    0x10000
+/* Byte offset of the per-patch flag bytes within the list (past the count byte) */
+#define IPS_FLAGS_BASE   16
+/* Byte offset of the first display slot within the text half */
+#define IPS_NAME_BASE    0
 /* Bytes reserved per display slot (name + badge) */
 #define IPS_NAME_LEN     48
 /* Offset of the "IPS"/"BPS" badge inside a display slot */
 #define IPS_NAME_BADGE   42
-/* Byte offset within the list where the per-patch flag bytes begin */
-#define IPS_FLAGS_BASE   784
-/* Byte offset within the list where the full-path slots begin */
-#define IPS_PATH_BASE    800
+/* Byte offset of the full-path slots within the text half.  Rounded up from the
+   end of the name slots (254*48 = 12192) to a tidy 0x3000. */
+#define IPS_PATH_BASE    0x3000
 /* Bytes reserved per full-path slot (191 usable chars + NUL).  A patch whose
    full path does not fit is SKIPPED by the scan rather than truncated -- a
    truncated path would make f_open() hit a different (or missing) file. */
@@ -65,8 +87,11 @@
 /* Bytes reserved for a patch file name (no directory part) in the scan scratch */
 #define PATCH_BASENAME_LEN     128
 
-/* One scanned patch.  Deliberately holds the BASENAME and not the full path:
-   at IPS_MAX_PATCHES=16 an array of full paths would not fit the AHB region. */
+/* One scanned patch.  Deliberately holds the BASENAME and not the full path: the
+   scan keeps IPS_MAX_PATCHES of these and patch_publish reassembles
+   "<dirpath>/<basename>" straight into the write buffer.
+   The array of these lives in PSRAM at SRAM_IPS_SCRATCH_ADDR, not in MCU RAM --
+   see the comment on patch_order[] in patch.c. */
 typedef struct {
     char    basename[PATCH_BASENAME_LEN];
     uint8_t flags;
@@ -103,11 +128,23 @@ extern uint8_t ips_pending_index;
  */
 uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr);
 
-/* The most recent scan: how many entries ips_find_patches() staged and the
-   scratch behind them, so CMD_PATCH_META_SAVE can write the sidecar back
-   without touching the card again.  Valid only until the next scan. */
+/* How many entries the most recent ips_find_patches() staged, so
+   CMD_PATCH_META_SAVE can write the sidecar back without touching the card
+   again.  Valid only until the next scan. */
 extern uint8_t ips_scan_count;
-extern patch_entry_t ips_entries[IPS_MAX_PATCHES];
+
+/*
+ * patch_basename_at
+ *   Basename of entry <i> (0-based) of the most recent scan, in DISPLAY order,
+ *   read out of the PSRAM scan scratch through patch_order[].  This is what
+ *   patchmeta needs to pair a staged flags byte with the patch file it belongs
+ *   to, and it replaces the ips_entries[] array that used to be handed around
+ *   (2064 bytes of AHB that could never have grown past 16 patches).
+ *   The live flags byte is NOT returned here -- read it straight from
+ *   SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE + i, which is the copy the menu edits.
+ *   Writes an empty string and returns 0 when i is out of range.
+ */
+int patch_basename_at(uint8_t i, char *out, uint16_t len);
 
 /*
  * patch_display_name

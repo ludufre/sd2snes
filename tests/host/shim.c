@@ -79,6 +79,18 @@ void sram_readblock(void *buf, uint32_t addr, uint16_t size) {
   for (uint16_t i = 0; i < size; i++)
     ((uint8_t *)buf)[i] = host_sdram[(addr + i) & SDRAM_MASK];
 }
+/* NUL-terminated read, capped at size bytes INCLUDING the terminator -- same
+   contract as the firmware's memory.c version. */
+void sram_readstrn(void *buf, uint32_t addr, uint16_t size) {
+  uint16_t i = 0;
+  if (!size) return;
+  for (; i < (uint16_t)(size - 1); i++) {
+    uint8_t c = host_sdram[(addr + i) & SDRAM_MASK];
+    ((uint8_t *)buf)[i] = c;
+    if (!c) return;
+  }
+  ((uint8_t *)buf)[i] = 0;
+}
 
 /* ---- fileops/FatFs over stdio ------------------------------------------- */
 BYTE    file_buf[512];
@@ -219,8 +231,7 @@ FRESULT f_unlink(const TCHAR *path) { (void)path; return FR_OK; }
 /* ---- patch metadata sidecar (no SD card on the host) -------------------- */
 /* patch.c calls this after staging the scan results; with no card there is
    nothing to overlay, and the harness writes the flags byte itself. */
-int patchmeta_apply(const uint8_t *rom_path, patch_entry_t *ents, uint8_t count,
-                    uint32_t sram_addr) {
-  (void)rom_path; (void)ents; (void)count; (void)sram_addr;
+int patchmeta_apply(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count) {
+  (void)rom_path; (void)sram_addr; (void)count;
   return 0;
 }

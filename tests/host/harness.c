@@ -47,12 +47,18 @@ static uint32_t load_file(const char *path, uint32_t addr) {
   return (uint32_t)sz;
 }
 
-/* The patcher may legally touch [SRAM_ROM_ADDR, SRAM_SAVE_ADDR) (ROM image,
- * BPS source backup, probe scratch) and the IPS list page we staged. Anything
- * else it writes is region corruption (menu image, SaveRAM, cfg staging). */
+/* The patcher may legally touch [SRAM_ROM_ADDR, SRAM_PATCH_TOP) (ROM image, BPS
+ * source backup, probe scratch) and the two IPS list pages we staged. Anything
+ * else it writes is region corruption (cheat records, the patch list's own text
+ * half, the menu image, SaveRAM, cfg staging).  The ceiling is SRAM_PATCH_TOP
+ * and not SRAM_SAVE_ADDR on purpose: everything from the cheat records upwards
+ * is staging the patcher has no business in, and the patch list itself now sits
+ * in there -- a bound that lets a patch overwrite its own path slot is not a
+ * bound. */
 static int region_is_legal(uint32_t a) {
-  if (a < SRAM_SAVE_ADDR) return 1;
-  if (a >= SRAM_IPS_LIST_ADDR && a < SRAM_IPS_LIST_ADDR + 0x1000) return 1;
+  if (a < SRAM_PATCH_TOP) return 1;
+  if (a >= SRAM_IPS_LIST_ADDR && a < SRAM_IPS_LIST_ADDR + IPS_LIST_SIZE) return 1;
+  if (a >= SRAM_IPS_TEXT_ADDR && a < SRAM_IPS_TEXT_ADDR + IPS_TEXT_SIZE) return 1;
   return 0;
 }
 
@@ -76,14 +82,14 @@ int main(int argc, char **argv) {
   /* stage the patch path in slot 1, like ips_find_patches would */
   size_t plen = strlen(patch) + 1;
   if (plen > IPS_PATH_LEN) { fprintf(stderr, "patch path too long\n"); return 99; }
-  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + IPS_PATH_BASE, patch, plen);
+  memcpy(host_sdram + SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE, patch, plen);
   host_sdram[SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE] =
       (uint8_t)((!strcmp(hmode, "on")  ? PATCH_HDR_HEADERED :
                  !strcmp(hmode, "off") ? PATCH_HDR_HEADERLESS :
                                          PATCH_HDR_AUTO) << PATCH_FLAG_HDR_SHIFT);
 
   /* canary-fill every region the patcher must not touch */
-  for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
+  for (uint32_t a = SRAM_PATCH_TOP; a < 0x1000000u; a++)
     if (!region_is_legal(a)) host_sdram[a] = CANARY;
 
   signal(SIGALRM, on_alarm);
@@ -107,7 +113,7 @@ int main(int argc, char **argv) {
   }
   alarm(0);
 
-  for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++) {
+  for (uint32_t a = SRAM_PATCH_TOP; a < 0x1000000u; a++) {
     if (!region_is_legal(a) && host_sdram[a] != CANARY) {
       fprintf(stderr, "OVERFLOW: wrote outside the ROM window at 0x%06x\n", a);
       return 125;

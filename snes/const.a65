@@ -626,7 +626,7 @@ text_ips_nopatch .byt "[No patch]", 0
 text_patch_hdr_auto .byt "auto  ", 0
 text_patch_hdr_on   .byt "header", 0
 text_patch_hdr_off  .byt "raw   ", 0
-text_patch_footer   .byt "A:Play  Y:More  B:Back", 0
+text_patch_footer   .byt "A:Play  Y:More  B:Back  <>:Page  LR:Ends", 0
 text_patch_creating .byt "Creating patched ROM...", 0
 text_err_patchexport .byt "Cannot write patched ROM", 0
 text_patch_export_ok .byt "Patched ROM created", 0

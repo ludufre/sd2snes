@@ -239,7 +239,9 @@ ipm_vis_ok:
     ; splits every character across BG1 and BG2 -- a window drawn up there shows only
     ; its BG2 halves: a shredded top border and a missing title row.  That is why no
     ; other dialog starts above 9 either (sysinfo_win_y is exactly 9).
-    ; PATCHSEL_VISMAX is capped so the tallest window still ends by row 27.
+    ; PATCHSEL_VISMAX is capped so the tallest window (window_h = 14+4 = 18, pinned
+    ; at window_y = 9) ends on row 26 and leaves row 27 to the status bar, which
+    ; printtime repaints under us every frame of the navigation loop.
     lda #$1c                    ; 28 SNES tile rows
     sec
     sbc window_h
@@ -381,7 +383,7 @@ patchsel_draw_footer:
 
 
 ; ===========================================================================
-; patchsel_slot_addr -- X = IPS_LIST low word of the display slot for the entry
+; patchsel_slot_addr -- X = IPS_TEXT low word of the display slot for the entry
 ; in A (8-bit, 0-based patch index).  Slot stride is IPS_NAME_LEN = 48 = 16+32.
 ; Enters .as/.xl, returns .as/.xl with X set.
 ; ===========================================================================
@@ -395,7 +397,7 @@ patchsel_slot_addr:
     clc
     adc pat_slot                ; idx * 48
     clc
-    adc #!IPS_NAMES             ; = IPS_LIST + IPS_NAME_BASE
+    adc #!IPS_NAMES             ; = IPS_TEXT + IPS_NAME_BASE
     tax
     sep #$20 : .as
     rts
@@ -435,7 +437,7 @@ psdrow_patch:
     dec                         ; A = 0-based patch index
     jsr patchsel_slot_addr      ; X = slot low word
     stx print_src
-    lda #^IPS_LIST
+    lda #^IPS_NAMES             ; the TEXT half ($D9), not IPS_LIST ($FF)
     sta print_bank
     lda #PS_COL_NAME
     sta print_x
@@ -456,7 +458,7 @@ psdrow_patch:
     tax
     sep #$20 : .as
     stx print_src
-    lda #^IPS_LIST
+    lda #^IPS_NAMES             ; the TEXT half ($D9), not IPS_LIST ($FF)
     sta print_bank
     lda #PS_COL_BADGE
     sta print_x
@@ -541,8 +543,8 @@ psdh_out:
 
 ; ===========================================================================
 ; patchsel_draw_rows -- paint the pat_visible visible rows starting at pat_top,
-; then the scroll indicator.  listsel_scrollbar self-gates, so at the current
-; IPS_MAX_PATCHES (where the whole list always fits) it draws nothing.
+; then the scroll indicator.  listsel_scrollbar self-gates, so a ROM whose whole
+; list fits the window (up to PATCHSEL_VISMAX rows) gets no bar at all.
 ; ===========================================================================
 patchsel_draw_rows:
     php
@@ -566,7 +568,15 @@ psdr_row:
     sta lsb_vis
     lda pat_top
     sta lsb_top
+    ; listsel_scrollbar paints rows window_y+1 .. window_y+lsb_vis, which is right
+    ; for favorites (items start at window_y+1) but one row high here: our items
+    ; start at window_y+2, because window_y+1 is the ROM name.  Borrow window_y for
+    ; the call rather than teach the shared helper an offset -- a new WRAM byte
+    ; would come up $55 out of clear_wram and need zeroing in the other three
+    ; callers.  lsb_col reads window_x/window_w only, so nothing else shifts.
+    inc window_y
     jsr listsel_scrollbar
+    dec window_y
     plp
     rts
 
@@ -613,10 +623,12 @@ patchsel_bar_y:
 ; scrolling path repaints through show_menu_scroll_repaint, which is wired to
 ; the menudata tables, and every settings menu depends on its exact behaviour.
 ;
-; Left/Right are deliberately NOT bound: the list only DISPLAYS the header mode,
-; and changing it goes through the Y context menu.  Driving a persisted per-patch
+; Left/Right must never EDIT anything: the list only DISPLAYS the header mode, and
+; changing it goes through the Y context menu.  Driving a persisted per-patch
 ; setting from the same d-pad that scrolls the list made it far too easy to alter
-; a patch while merely passing over it.
+; a patch while merely passing over it.  They page the viewport instead, and L/R
+; jump to the ends -- the same bindings the file browser uses (filesel_key_left/
+; right/l/r), which is what a list that can now be 254 entries long needs.
 ;
 ; listsel_sel is the ABSOLUTE selection (0..listsel_max-1), pat_top the first
 ; visible row.  Returns the selection in A (or $ff) with listsel_pickbutton =
@@ -644,6 +656,26 @@ psn_loop:
     bne psn_up
     lda pad_down
     bne psn_down
+    ; The four viewport keys sit AHEAD of the A/Y/B tests on purpose: bytes added
+    ; before a branch cost that branch nothing, so the reach of the three that
+    ; follow is untouched.  Their own handlers live past psn_exit, well out of
+    ; branch range, hence the inverted-branch + jmp form.
+    lda pad_left
+    beq psn_chk_right
+    jmp psn_pgup
+psn_chk_right:
+    lda pad_right
+    beq psn_chk_l
+    jmp psn_pgdn
+psn_chk_l:
+    lda pad_l
+    beq psn_chk_r
+    jmp psn_home
+psn_chk_r:
+    lda pad_r
+    beq psn_chk_a
+    jmp psn_end
+psn_chk_a:
     lda pad_a
     bne psn_btn_a
     lda pad_y
@@ -651,35 +683,22 @@ psn_loop:
     lda pad_b
     bne psn_btn_b
     jmp psn_loop
+; Every key that moves the selection just computes the row it wants and hands it
+; to psn_setsel, which owns the click, the viewport and the repaint.  Sharing that
+; tail is not only tidiness: bank $C0 is the scarce one in this menu, and folding
+; the single-step path into it is what pays for the four viewport keys below.
 psn_up:
     lda listsel_sel
-    beq psn_loop                ; already at the first row
-    jsr snd_fx_cursor
-    dec listsel_sel
-    lda listsel_sel
-    cmp pat_top
-    bcs psn_up_bar              ; still visible -> just move the bar
-    dec pat_top
-    jsr patchsel_scroll_redraw
-psn_up_bar:
-    jsr patchsel_bar_y
-    jmp psn_loop
+    beq psn_nomove              ; already at the first row
+    dec
+    bra psn_setsel
 psn_down:
     lda listsel_sel
     inc
     cmp listsel_max
-    beq psn_loop                ; already at the last row
-    jsr snd_fx_cursor
-    inc listsel_sel
-    lda listsel_sel
-    sec
-    sbc pat_top
-    cmp pat_visible
-    bcc psn_dn_bar              ; still visible -> just move the bar
-    inc pat_top
-    jsr patchsel_scroll_redraw
-psn_dn_bar:
-    jsr patchsel_bar_y
+    bcs psn_nomove              ; already at the last row
+    bra psn_setsel
+psn_nomove:
     jmp psn_loop
 psn_btn_a:
     jsr snd_fx_confirm
@@ -707,6 +726,71 @@ psn_btn_b:
 psn_exit:
     plp
     rts
+
+
+; ---------------------------------------------------------------------------
+; psn_setsel -- A = the absolute row the user wants, already inside
+; 0..listsel_max-1.  Drags pat_top along by the same two edge rules the
+; single-step path always used (sel above the window -> park it on the first
+; visible row; sel at or past the bottom -> park it on the last) and repaints
+; only when the viewport actually moved.  Because a page jump lands at most one
+; page away, those rules double as the clamp: pat_top can never end up past
+; listsel_max - pat_visible, so no separate bounds check is needed.
+; A row that equals the current one costs nothing, not even the click -- which
+; is what lets the callers below skip their own end-of-list guards.
+; ---------------------------------------------------------------------------
+psn_setsel:
+    cmp listsel_sel
+    beq psn_nomove
+    sta listsel_sel
+    jsr snd_fx_cursor
+    lda listsel_sel
+    cmp pat_top
+    bcs psn_ss_below
+    sta pat_top                 ; scrolled off the top
+    jsr patchsel_scroll_redraw
+    bra psn_ss_bar
+psn_ss_below:
+    sec
+    sbc pat_top
+    cmp pat_visible
+    bcc psn_ss_bar              ; still inside the window: only the bar moves
+    lda listsel_sel
+    sec
+    sbc pat_visible
+    inc                         ; sel - pat_visible + 1: selection on the last row
+    sta pat_top
+    jsr patchsel_scroll_redraw
+psn_ss_bar:
+    jsr patchsel_bar_y
+    jmp psn_loop
+
+; Left: one page up, floored at the first row.
+psn_pgup:
+    lda listsel_sel
+    sec
+    sbc pat_visible
+    bcs psn_setsel              ; no underflow
+    lda #$00
+    bra psn_setsel
+
+; Right: one page down, capped at the last row (which is also where R goes).
+psn_pgdn:
+    lda listsel_sel
+    clc
+    adc pat_visible
+    bcs psn_end                 ; wrapped past 255
+    cmp listsel_max
+    bcc psn_setsel
+psn_end:
+    lda listsel_max
+    dec
+    bra psn_setsel
+
+; L: jump to the top of the list.
+psn_home:
+    lda #$00
+    bra psn_setsel
 
 
 ; ===========================================================================

@@ -40,11 +40,12 @@
 static void on_alarm(int sig) { (void)sig; _exit(124); }
 
 /* legal-to-touch window, identical to the test harness: the ROM image + BPS
- * source backup + probe scratch live below SRAM_SAVE_ADDR; the staged IPS-list
- * page is the only thing the patcher may write up high. */
+ * source backup + probe scratch live below SRAM_PATCH_TOP; the two staged
+ * IPS-list regions are the only things the patcher may write above it. */
 static int region_is_legal(uint32_t a) {
-  if (a < SRAM_SAVE_ADDR) return 1;
-  if (a >= SRAM_IPS_LIST_ADDR && a < SRAM_IPS_LIST_ADDR + 0x1000) return 1;
+  if (a < SRAM_PATCH_TOP) return 1;
+  if (a >= SRAM_IPS_LIST_ADDR && a < SRAM_IPS_LIST_ADDR + IPS_LIST_SIZE) return 1;
+  if (a >= SRAM_IPS_TEXT_ADDR && a < SRAM_IPS_TEXT_ADDR + IPS_TEXT_SIZE) return 1;
   return 0;
 }
 
@@ -53,7 +54,7 @@ static int quiet = 0;
 
 /* (Re)initialize the fake SDRAM for one apply run: fresh 16 MB, ROM image at
  * SRAM_ROM_ADDR, the patch path staged in IPS slot 1, and the no-touch region
- * above SRAM_SAVE_ADDR canary-filled.  --copier runs this twice (reference, then
+ * above SRAM_PATCH_TOP canary-filled.  --copier runs this twice (reference, then
  * copier) so each run starts from an identical slate. */
 /* PATCH_HDR_AUTO / _HEADERED / _HEADERLESS, staged in the patch's flags byte the
    same way ips_find_patches would (--header-mode). */
@@ -62,10 +63,10 @@ static uint8_t hdr_mode = PATCH_HDR_AUTO;
 static void setup_sdram(const uint8_t *rombuf, uint32_t romsize, const char *patch) {
   host_sdram_init();
   memcpy(host_sdram + SRAM_ROM_ADDR, rombuf, romsize);
-  memcpy(host_sdram + SRAM_IPS_LIST_ADDR + IPS_PATH_BASE, patch, strlen(patch) + 1);
+  memcpy(host_sdram + SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE, patch, strlen(patch) + 1);
   host_sdram[SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE] =
       (uint8_t)(hdr_mode << PATCH_FLAG_HDR_SHIFT);
-  for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
+  for (uint32_t a = SRAM_PATCH_TOP; a < 0x1000000u; a++)
     if (!region_is_legal(a)) host_sdram[a] = CANARY;
 }
 
@@ -167,7 +168,7 @@ int main(int argc, char **argv) {
     if (!cop) { fprintf(stderr, "copier apply FAILED (returned 0 / list full)\n"); return 1; }
     host_copier_replay();   /* run the emitted descriptors like the menu copier */
 
-    for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++)
+    for (uint32_t a = SRAM_PATCH_TOP; a < 0x1000000u; a++)
       if (!region_is_legal(a) && host_sdram[a] != CANARY) {
         fprintf(stderr, "OVERFLOW (copier): wrote outside ROM window at 0x%06x\n", a);
         return 125;
@@ -221,7 +222,7 @@ int main(int argc, char **argv) {
   alarm(0);
 
   /* ---- check the patcher stayed inside the legal window ---- */
-  for (uint32_t a = SRAM_SAVE_ADDR; a < 0x1000000u; a++) {
+  for (uint32_t a = SRAM_PATCH_TOP; a < 0x1000000u; a++) {
     if (!region_is_legal(a) && host_sdram[a] != CANARY) {
       fprintf(stderr, "OVERFLOW: patcher wrote outside the ROM window at 0x%06x\n", a);
       return 125;
