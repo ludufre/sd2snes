@@ -8,11 +8,48 @@
 #define CS_LOAD_REQ   $FE1001
 #define CS_SAVE_INPUT $FE1002
 #define CS_LOAD_INPUT $FE1004
-#define CS_INPUT_NEXT $FE1006
+// Was CS_INPUT_NEXT (the pad staged on entry and copied into CS_INPUT_CUR further
+// down).  The handler no longer needs that hop -- the fast reject keeps the pad in A
+// -- so the word now holds the INVERTED pad of the current entry, which turns every
+// "are all bits of this combo held" test into a single AND with a zero result instead
+// of a load/and/cmp triple.  X and Y cannot be used for this: the hook runs before the
+// game's ISR has saved anything, so only A and P (pushed by the nmihook stub) may be
+// destroyed.
+#define CS_PAD_INV    $FE1006
 #define CS_INPUT_CUR  $FE1008
 #define CS_INPUT_PREV $FE100A
 #define CS_STATE      $FE100C
 #define SS_DIAG_REJECT $FF0C00
+// Pad breadcrumbs of the partial-sample gate (ss_input), one word each, cleared
+// per game load by ss_init.  SS_DIAG_PARTIAL = the last stub sample the gate
+// proved to be a mid-fill auto-joypad read (pad >> k); written UPSTREAM of the
+// fast reject, because a shifted pad has lost the mask bits the reject tests and
+// would otherwise never get there.  SS_DIAG_WHOLE = the last COMPLETE pad that
+// also carried a mask bit, i.e. the last value the save/load/overlay matcher was
+// allowed to see.  Read by USB after a failed combo attempt: a WHOLE that carries
+// the gesture means complete pads reach the matcher in that scene; a PARTIAL that
+// is a right-shifted copy of the gesture (X+R -> $0001 ten bits in) with WHOLE
+// still $0000 means the scene never produces one on its own and the bounded wait
+// is what has to deliver it.
+// $FF0C00/01 is the reject counter + the resume-watchdog breadcrumb; the area now
+// runs to $FF0C07 (see SS_FILL_TICK), which is where the next allocation starts.
+#define SS_DIAG_WHOLE   $FF0C02
+#define SS_DIAG_PARTIAL $FF0C04
+// Throttle counter of the bounded auto-joypad fill wait in ss_input: it is bumped
+// on every entry whose stub sample is PROVEN mid-fill and only the entry that
+// wraps it to zero is allowed to wait.  Read/written 16-bit (the high byte at
+// $FF0C07 stays zero), cleared per game load by ss_init like the breadcrumbs.
+#define SS_FILL_TICK    $FF0C06
+// One entry in four may pay the wait: the counter is MASKED, not compared, so
+// this is (period - 1) and the period must stay a power of two.  A gesture is
+// held for many frames and one complete sample is enough for the matcher, so a
+// period of four costs at most ~67ms of latency.
+#define SS_FILL_MASK    $0003
+// Iteration cap of that wait, ~15 cycles each => ~300 cycles, about 7 auto-joypad
+// bit periods (~44 cycles each).  Yoshi's Island mid-level needs ~4 of them, i.e.
+// ~12 iterations.  Blowing the cap drops the frame exactly like refusing the
+// sample did before, so this bounds cost only, never correctness.
+#define SS_FILL_SPIN    $0014
 #define CS_DELAY      $FE100E
 #define CS_SLOT       $FE100F
 #define CS_SLOT_INPUT $FE1010

@@ -18,7 +18,15 @@ D17C: XR,XL     #dkc1 v1.1 (US)
 35CE: XR,XL     #dkc2 (JP)
 B28C: XR,XL     #dkc3 (US)
 E545: XR,XL     #dkc3 (JP)
-5E32: XR,XL     #yoshi's island (US rev 1) - Start pauses the game, so the default combo saves a paused state
+# yoshi's island (US rev 1) - Start pauses the game, so the default combo saves a
+# paused state. Its pre-vblank VRAM DMA queue delays NMI into the auto-joypad read
+# window, where the stub reads a partial (right-shifted) pad and X+A can look like
+# X+L; the handler re-reads $4218 once the window has closed and refuses a save/load
+# whose pad does not match the complete one (ss_pad_confirm in snes/savestate.a65),
+# so a 2-button combo is safe here again.
+# (keep every line in this file under ~250 chars: the yml parser reads 256-byte
+# chunks and a longer line silently swallows the NEXT entry as its value)
+5E32: XR,XL
 F8DF: sYR,sYL   #super metroid (*)
 #A0DA: XR,XL    #smw (US)
 #8C80: XR,XL    #smw (JP)

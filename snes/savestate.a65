@@ -30,8 +30,40 @@ savestate_handler:
 	; probe only needs the once-per-frame vblank entry (NMI or vblank IRQ).
 	sep #$20 : .as
 	lda @$004212
-	bmi ss_state_entry           ; vblank entry -> full probe (named label: the
-	                             ; anonymous + below now belongs to the pre-check)
+	bpl ss_midframe_entry        ; not vblank -> mid-frame IRQ pre-check (below).
+	                             ; The vblank path falls through on purpose: it runs
+	                             ; on EVERY frame a button is held, so every branch
+	                             ; on it is paid ~60 times a second.
+; --- Vblank entry ------------------------------------------------------------
+; $4212 bit0 = the auto-joypad shift register is BUSY.  The stub at nmihook.a65:9
+; sampled $4218 ~25-30 cycles into the interrupt; the hardware starts filling that
+; register 18us (~386 master cycles, "48 machine cycles with 2.68MHz") after
+; vblank begins and the read runs for ~215us (~4610 master, "3.4 scanning
+; lines"), so on a PUNCTUAL entry the stub reads BEFORE the fill starts and gets
+; the complete pad of the previous frame, while a read taken during the fill
+; returns the pad SHIFTED RIGHT by the bits that have not arrived yet (dev manual
+; book1 2-13-1: the register "cannot be read properly" there, and $4212 bit0 is
+; the flag that says so).
+;   That question is NOT answered here any more.  It used to be captured in the
+; CARRY and carried down to the gate in ss_input, and that channel had three
+; writers -- this entry, the cooldown branch (cmp #$01 leaves C SET), the
+; mid-frame pre-check (clc) -- plus a first entry per game load on which ss_init
+; runs several hundred cycles in between.  The flag that reached the gate was
+; therefore often neither fresh nor the one this path set, and the gate has no way
+; to tell.  ss_input reads $4212 itself now, once, immediately before it touches
+; $4218: same two instructions, no cross-path state, and the answer is the one
+; that holds at the instant it is acted on.
+;   X and Y are NOT usable as scratch anywhere on this path: the hook runs before
+; the game's own ISR has saved anything, so the only registers we may destroy are
+; the ones the stub already pushed (A and P).  That is why the pad travels through
+; memory below and not in a register; the bounded wait in ss_input borrows X
+; through the stack (phx/plx), which leaves the game's value untouched.
+	rep #$20 : .al
+savestate_start:
+	jmp ss_init
+
+ss_midframe_entry:
+	.as : .xl                    ; reached with A still 8-bit from the $4212 read
 	; Savestate in flight (CS_STATE != 0): do NOT fast-exit.  The resume-wait
 	; loop needs the NEXT hook entry to bump CS_STATE, and in IRQ-driven scenes
 	; that entry can be a MID-FRAME IRQ (e.g. an SA-1 RPC IRQ left pending across
@@ -43,8 +75,10 @@ savestate_handler:
 	; anti-freeze fast path only matters when CS_STATE == 0.
 	lda @CS_STATE
 	beq ++                       ; not in flight -> normal fast-exit checks
-	jmp ss_state_entry           ; in flight -> full path (ss_irq_inc handles it)
+	rep #$20 : .al
+	jmp savestate_start          ; in flight -> full path (ss_irq_inc handles it)
 ++
+	.as : .xl
 	; Mid-frame entry (IRQ).  Games like Star Ocean run with NMI OFF and a V-IRQ at
 	; V=0 as the frame tick (measured: 58/58 handler entries at V=0, 0% in vblank),
 	; so the vblank gate alone rejects every entry and the overlay can never open.
@@ -88,14 +122,15 @@ ss_precheck_fail16:
 ss_precheck_fail:
 	jmp ss_exit
 ss_precheck_pass:
-	sep #$20 : .as
-ss_state_entry:
+	; Mid-frame entries need no auto-read arbitration and get none: the ~4200-cycle
+	; window only exists at the top of vblank (this path is only reached with the
+	; vblank flag CLEAR), so $4212 bit0 reads 0 when ss_input samples it and the pad
+	; is taken from the settled $4218 -- or from the stub's manual $4016 read when
+	; auto-joypad is off.  The bounded wait in ss_input is therefore unreachable
+	; from here, which matters: mid-frame the HDMA is fetching tables through the
+	; open IS_PATCH window and the handler must stay short.
 	rep #$20 : .al
-	; nmihook already handled button input
-	lda @NMI_PAD
-	sta @CS_INPUT_NEXT
-savestate_start:
-	jmp ss_init
+	jmp savestate_start
 
 save_write_table
 	; Disable DMA
@@ -260,11 +295,57 @@ return_enable_nmi
 	lda @$004210 ; ack NMI
 	lda #$81     ; mask off IRQ enables
 	and @SRAM_OTH_BANK ; stored $4200 flags
+	; The wait below is fed by the NEXT NMI, so the NMI enable is NOT optional for
+	; the duration of that wait -- and SRAM_OTH_BANK is the $4200 of the state being
+	; RESTORED, not of the scene we were called from.  On a cross-scene load (state
+	; taken where the game ran on IRQ with NMI off, e.g. a Super Mario RPG field
+	; scene, replayed from an NMI entry such as the title/map/menu) the mask above
+	; comes back with bit7 CLEAR, no NMI can ever fire, the nested entry that bumps
+	; CS_STATE to 2 never arrives and the handler parks in return_wait_irq forever
+	; with the PPU still force-blanked: black screen, CS_STATE stuck at 1, only
+	; MENU_RESET recovers.  Force the bit while we wait; the untouched saved value
+	; is written back below, before the game gets control, so the mask the game sees is
+	; unchanged either way.  When the saved mask already has NMI on -- every
+	; same-scene load, i.e. everything validated so far -- this is a no-op.
+	;   The NMI it lets through never reaches the game: the FPGA redirects it into
+	; this handler, which takes the CS_STATE==1 arm (ss_irq_inc) and RTIs straight
+	; back into the loop below.
+	ora #$80
 	sta @$4200
 return_wait_irq:
--	lda @CS_STATE
+	; BOUNDED wait for the nested entry that bumps CS_STATE to 2.  It used to be an
+	; unbounded spin on an event that only the FPGA can deliver (NMI redirected into
+	; the hook AND branch1 routed to the savestate arm, which with the buttons long
+	; released depends on savestate_force_entry still being latched in cheat.v), and
+	; every way that delivery can fail turns into the same dead end: PPU force-blanked,
+	; coprocessor still frozen, CS_STATE stuck at 1, MENU_RESET the only way out --
+	; measured in hardware on SMRPG/SA-1.  The re-entry is at most one frame away when
+	; the protocol is working, so ~65535 iterations (~0.25 s, 15 NTSC frames) is more
+	; than an order of magnitude of margin and can never fire on a healthy resume.
+	;   X still belongs to the GAME here (register_restore_return pulled it), hence the
+	; push/pull around the loop; the nested entry touches neither X nor Y, so it is
+	; safe to hold the counter across it.  A stays 8-bit throughout, which is what the
+	; release block below expects.
+	phx
+	ldx #$ffff
+ss_wait_loop:
+	lda @CS_STATE
 	cmp #$2
-	bne -
+	beq ss_wait_done
+	dex
+	bne ss_wait_loop
+	; Timed out.  ss_wait_bail ($C1) disarms interrupts, lands on the next vblank
+	; edge so the game ISR still starts at the top of a frame, acks the NMI it just
+	; armed past and forces CS_STATE to the post-resume cooldown -- WITHOUT that last
+	; part the next hook entry would take ss_irq_inc outside a nested interrupt, strip
+	; 9 bytes off the stack and RTI into hyperspace.  Then we fall into the SAME
+	; release/restore tail as the successful path, so the worst case is one frame
+	; resumed a little late instead of a hung console.  It also leaves a breadcrumb in
+	; SS_DIAG_REJECT+1 saying the wait died and whether the restored $4200 had NMI on.
+	jsl @ss_wait_bail
+	.as : .xl
+ss_wait_done:
+	plx
 
 	; SA-1: release the halt only NOW, at the real game resume, so the SA-1
 	; wakes in lockstep with the SNES from the captured/restored state (it was
@@ -287,9 +368,24 @@ return_wait_irq:
 	; re-enable all interrupts
 	lda @SRAM_OTH_BANK
 	sta @$4200
-	;lda !SRAM_OTH_BANK|$C
-	;stz $420C
-	
+	; Re-arm HDMA with the pre-freeze $420C, exactly like the direct-IRQ resume above.
+	; The save/load write tables cleared $420C and register_restore_return deliberately
+	; skips it, so until now the NMI resume path handed the game back with HDMA OFF and
+	; relied on the scene rewriting $420C on its next frame. NMI-driven scenes that do
+	; rewrite it every frame never noticed (this is a no-op for them); a scene that arms
+	; HDMA only on scene events comes back with the register file restored to the LAST
+	; SCANLINE values its HDMA had left ($2126/$2127 = an empty inverted window with
+	; $212E set) and no HDMA to move them again -- the whole screen stays masked, i.e. a
+	; BLACK picture with the game running fine underneath. That is the same failure the
+	; IRQ path was fixed for in SMRPG field scenes; the NMI path kept the old commented
+	; -out stub. We are a few cycles into vblank here (the nested entry that bumped
+	; CS_STATE to 2 can only have been the NMI -- the IRQ enables were masked off above),
+	; which is the safe edge to arm $420C: arming mid-frame would run the rest of the
+	; frame off the game's STALE A2A, and the channel files were already restored by
+	; load_dma_regs_start / the save path snapshot.
+	lda @SRAM_OTH_BANK|$C
+	sta @$00420C
+
 ; Code to run before returning back to the game
 ss_exit
 	rep #$30 : .al : .xl : pla : plp
@@ -313,18 +409,19 @@ ss_init
 	lda #ss_start
 	sta @savestate_start+1
 
-	sep #$20 : .as
-	; save/load state machine
-	lda #$00
-	sta @CS_STATE
-	
 	rep #$20 : .al
+	; save/load state machine.  16-bit store on purpose: ss_start reads CS_STATE as a
+	; WORD (one 6-cycle access instead of sep + 8-bit load + rep on the path every
+	; held-button frame walks), so the unallocated byte above it must be zero.  The
+	; firmware only clears the low byte ($FE100C, savestate.c), and this runs before
+	; any word read of it -- savestate_start reaches ss_init first on every game load.
+	lda #$0000
+	sta @CS_STATE
 
 ; removed game specific controller RAM location injection here:
 ; 1. with IRQ support it now works OOTB without specific workarounds
 ; 2. should a workaround be required it will be prepared by firmware before runtime
 
-	lda #$0000
 	sta @CS_SAVE_REQ
 	; Clear the combo probe's edge state on first handler entry of this game load.
 	; These live in PSRAM and survive menu resets/game reloads; a stale CUR equal to
@@ -335,15 +432,43 @@ ss_init
 	; Clear both diagnostic counters (16-bit store covers the pair). PSRAM survives
 	; resets, so without this they would carry over from the previous game.
 	sta @SS_DIAG_REJECT
+	; Same for the two pad breadcrumbs the partial-sample gate keeps (one word each,
+	; adjacent, so two stores cover both): a value left over from the previous game
+	; would read as evidence about this one.
+	sta @SS_DIAG_WHOLE
+	sta @SS_DIAG_PARTIAL
+	; And for the throttle counter of the bounded fill wait (word store; the high
+	; byte has to be zero because ss_input reads and masks the pair 16-bit).
+	sta @SS_FILL_TICK
+
+; --- Build the hot-path mask (see ss_hot_mask) -------------------------------
+; One bit that EVERY armed gesture requires, OR'd together, patched straight into
+; the immediate operand of the fast reject.  Lives in $C1 (savestate_cx4.a65, the
+; same annex the CX4 routines use) because it is init-time only and the $C0 page
+; is the scarce one; this call site is 4 bytes.
+	jsl @ss_hot_mask_build
+	.al : .xl
+	sta @ss_hot_mask+1           ; builder returns the mask in A; the +1 store is
+	                             ; done HERE so the symbol+addend stays same-object
+
 	ply
 	plx
 	pla
-	
-ss_start:
-	sep #$20 : .as  
 
+ss_start:
+	; A/X/Y are 16 bits wide here.  Nothing on this path carries flags any more:
+	; ss_input samples $4212 itself, so the cmp #$01 below and the cooldown branch
+	; are free to clobber the carry (they always did -- the gate simply used to
+	; believe them).
+	; CS_STATE is read as a WORD (ss_init keeps the byte above it zero): one 6-cycle
+	; access instead of sep + 8-bit load + rep, on the path every held-button frame
+	; walks.  It has to stay AHEAD of the fast reject below: a savestate in flight
+	; resumes through the nested entry that bumps CS_STATE, and that entry arrives
+	; with the buttons RELEASED (forced by the FPGA), which the reject would drop;
+	; and the post-save cooldown only drains on entries that get here.
 	lda @CS_STATE
-	beq +
+	beq ss_input
+	sep #$20 : .as
 	cmp #$01
 	bne ss_start_skip
 
@@ -384,16 +509,165 @@ ss_start_skip
 	; FIXME: get controls working where we don't repeat when holding buttons
 	and #$0F
 	sta @CS_STATE
-	
-; input handling
-+	rep #$30 : .al : .xl
-	;%cgram()
+	rep #$30 : .al : .xl
 
+; input handling
+ss_input:
+	;%cgram()
+; --- Take a COMPLETE pad for this entry -------------------------------------
+; This runs BEFORE the fast reject on purpose, and that ordering is the whole
+; point: the reject tests one bit that every armed gesture requires, and a pad
+; sampled inside the auto-joypad fill has been SHIFTED RIGHT past that bit.
+; Yoshi's Island mid-level measures X+R ($0050) as $0050>>6 = $0001 -- no X, no L,
+; no Select -- so with the gate placed after the reject the frame died at the
+; reject and the gate never ran at all (hardware: SS_DIAG_PARTIAL stayed $0000
+; while every gesture and the overlay combo were dead).  Nothing downstream may
+; see a value that has not passed this block.
+;   $4212 bit0 = the auto-joypad shift register is filling RIGHT NOW.  Read here,
+; two instructions before the register it describes, rather than inherited from
+; the handler entry: see the banner up there for why the carry was not a usable
+; channel.  A is 16 bits, so the load also picks up $4213 in the high byte; the
+; lsr shifts it out of the way and it is discarded with A on the next load.
+	lda @$004212
+	lsr                          ; C = the auto-joypad window is running now
+	bcs ss_pad_filling
+; Window NOT running: $4218 holds a COMPLETE pad this instant -- either the fill
+; has not opened yet (and it is last frame's settled read) or it has already
+; closed (and it is this frame's).  Both are usable, and taking the live register
+; is what makes a punctual entry and a very late one behave the same.
+;   Auto-joypad OFF is the exception: bit0 never sets, $4218 is a stale leftover
+; and the stub's manual $4016 read in NMI_PAD is the only truth, so the live $4200
+; shadow decides ($F90700, the same read save_state uses to preserve the
+; auto-joypad bit while it masks off NMI/IRQ).
+	lda @$F90700                 ; A is 16-bit here: $F90700/01 = $4200/$4201 shadow
+	and #$0001
+	beq ss_pad_from_stub
+	lda @$004218
+	bra ss_pad_have
+ss_pad_from_stub:
+	lda @NMI_PAD
+	bra ss_pad_have
+ss_pad_filling:
+; Window RUNNING: $4218 is unusable and the only candidate is the stub's sample
+; from ~80 cycles ago.  It is complete exactly when it PREDATES the fill, and that
+; is decidable without waiting for anything: a sample taken inside THIS fill can
+; only have grown since ($4218_now = A<<d | new bits, d >= 1 because ~80 cycles is
+; longer than the ~44-cycle bit period), so A < $4218_now PROVES the stub read
+; inside the fill, and A >= $4218_now means it predates it -- the healthy case
+; every working combo has always run on, since the register only holds a couple of
+; top bits at this point while a complete pad with any button held is >= $0010.
+;   Accepting the A == $4218_now tie as "predates" is deliberate: on the first
+; frame of a press the previous pad is $0000 and the young fill reads $0000 too,
+; and treating that as complete costs one frame of latency on a gesture the user
+; is holding, while spinning on it would tax every button press in a punctual game
+; (the fighting-game case that must never pay anything here).
+	lda @NMI_PAD
+	cmp @$004218
+	bcs ss_pad_have
+; --- Proven mid-fill sample: finish the read instead of losing the frame -----
+; This is the state Yoshi's Island sits in permanently once a level is populated:
+; its VRAM DMA queue runs in a V=216 IRQ that overruns the top of vblank by the
+; same amount every frame, so the stub always lands ~10 bits into the fill and a
+; complete sample never happens.  Dropping the frame (what this code did before)
+; is therefore not "wait for a better frame", it is "never again": save, load and
+; the overlay combo were all dead mid-level while working at level start.
+;   The fill ends at a FIXED point in the frame (~830 CPU cycles into vblank), so
+; waiting it out does not add a variable delay -- it moves the handler's return to
+; an absolute instant less than four scanlines into a 38-line vblank, and only for
+; entries that were ALREADY inside the window, i.e. already late.  A punctual
+; entry never reaches this code at all (its sample predates the fill), which is
+; what keeps the tight-vblank games that the old 219-cycle hot path used to shake
+; at exactly the cost they have today.
+;   Two bounds keep the worst case small:
+;   - SS_FILL_SPIN iterations (~15 cycles each) cap one wait at ~300 cycles, about
+;     7 bit periods.  Yoshi's Island needs ~4 (measured: 6 bits missing at the stub
+;     read, ~1.5 of them arriving before this point).  A wait that blows the cap
+;     drops the frame exactly as before, so the cap can only ever cost time, never
+;     correctness.
+;   - the wait runs at most once every SS_FILL_MASK+1 entries.  The reject cannot
+;     be consulted first (a shifted pad has no mask bit -- that is the bug this
+;     block exists to fix), so there is no way to know whether a gesture is under
+;     the shifted value; the throttle bounds the cost instead of guessing.  A
+;     gesture is HELD, and one complete sample is all the matcher needs since the
+;     two-frame rule is gone, so sampling one entry in four costs at most ~67ms of
+;     latency and divides the added cost by four.
+	sta @SS_DIAG_PARTIAL         ; breadcrumb: the shifted value we could not use
+	lda @SS_FILL_TICK            ; 16-bit: the high byte stays 0 through the and
+	inc
+	and #SS_FILL_MASK
+	sta @SS_FILL_TICK
+	bne ss_pad_drop
+	phx                          ; X belongs to the game; borrow it through the stack
+	ldx #SS_FILL_SPIN
+ss_fill_wait:
+	lda @$004212
+	lsr
+	bcc ss_fill_done
+	dex
+	bne ss_fill_wait
+	plx                          ; capped out: the fill had further to go than we
+	                             ; are willing to wait -- drop the frame as before
+ss_pad_drop:
+	lda @NMI_PAD                 ; deliberate reload (A was clobbered above): CUR
+	sta @CS_INPUT_CUR            ; must NOT be written before ss_hot_full, or PREV
+	                             ; inherits the shifted value and the overlay edge
+	                             ; check degenerates into auto-repeat
+	pla                          ; same tail as the fast reject below
+	plp
+	rtl
+ss_fill_done:
+	plx
+	lda @$004218                 ; the pad the hardware has just finished assembling
+ss_pad_have:
+; --- Fast reject: the pad cannot complete ANY armed gesture ------------------
+; The FPGA calls this handler on EVERY interrupt with ANY button held, so in a
+; game where something is pressed most frames (a fighting game, a platformer with
+; run held) everything below is added to the game's NMI latency 60 times a second.
+; A game whose vblank DMA queue already ends near the end of vblank then pushes
+; its tail into active display and the picture jitters -- so the common case has
+; to be cheap.  ss_init pre-computed one bit that every armed gesture REQUIRES;
+; if the pad carries none of them nothing below can fire, and the frame costs
+; ~80 cycles instead of ~219.
+;   BIT #imm is used rather than AND so the pad survives in A for the store.
+;   CS_INPUT_CUR is still written, so a rejected frame is remembered honestly: it
+; becomes PREV on the next frame that gets past this test, which is what makes the
+; overlay combo edge-triggered (a frame that carried no mask bit certainly did not
+; carry the overlay combo either).  CS_INPUT_PREV is NOT shifted here on purpose --
+; it only ever has to hold the frame before a frame that reaches the matcher, and
+; that frame does the shift itself (below) from the CUR this path keeps up to date.
+;   The pad this path records is a COMPLETE controller read: the block above
+; guarantees it, and it has to, because a shifted sample loses exactly the mask
+; bits this test looks for.
+; NOTE: the programmable trigger (CS_SAVE_REQ, below) is dead code today (its only
+; writer is cleared by ss_init before it can ever be seen), but if it is ever
+; revived it sits BEHIND this reject: a pad carrying no mask bit will never reach
+; it. Re-arming it means adding its own bit to the mask builder.
+ss_hot_mask:
+	bit #$FFFF                   ; operand patched per game load by ss_init
+	bne ss_hot_full
+	sta @CS_INPUT_CUR
+	pla                          ; same tail as ss_exit; A/X/Y are already 16-bit,
+	plp                          ; so its rep #$30 would be dead weight
+	rtl
+ss_hot_full:
+	sta @SS_DIAG_WHOLE           ; breadcrumb: the last COMPLETE pad that carried a
+	                             ; mask bit, i.e. the last value the matcher was
+	                             ; allowed to see.  Reading it after a failed combo
+	                             ; attempt says whether a complete pad carrying the
+	                             ; gesture ever reached this point in that scene.
+	                             ; Its counterpart SS_DIAG_PARTIAL is written in
+	                             ; ss_input, upstream of the reject, because a
+	                             ; shifted sample cannot get this far.
+	; Shift the history and publish ~pad in CS_PAD_INV: every "are all bits of MASK
+	; held" test below is then one AND against the mask with a zero result, which is
+	; an instruction shorter and 6 cycles cheaper than the old load/and/cmp triple.
+	sta @CS_PAD_INV
 	lda @CS_INPUT_CUR
 	sta @CS_INPUT_PREV
-controller_reg
-	lda @CS_INPUT_NEXT
+	lda @CS_PAD_INV
 	sta @CS_INPUT_CUR
+	eor #$FFFF
+	sta @CS_PAD_INV
 
 ; --- Cheat overlay entry: software combo L+R+Y+Left ($4230) -> ss_overlay.
 ;     The in-game savestate handler runs every frame; we detect the combo here
@@ -407,13 +681,12 @@ controller_reg
 ;     Left but NO Select, so it can't match. Left is also NOT an overlay nav key
 ;     (only Up/Down scroll the list), so holding it as the overlay opens doesn't
 ;     auto-scroll. Bits: L=$0020 R=$0010 Y=$4000 Left=$0200 -> $4230. ---
-	lda @CS_INPUT_CUR
+	lda @CS_PAD_INV              ; ~pad: zero after the AND means every bit is held
 	and #$4230
-	cmp #$4230
 	bne ss_probe_done
 	lda @CS_INPUT_PREV
+	eor #$FFFF
 	and #$4230
-	cmp #$4230
 	beq ss_probe_done
 	; Gated: the firmware arms CHEAT_OVL_GATE at game load to CFG.enable_cheat_overlay
 	; (src/cheat.c). The real per-core gate is in savestate.c (core_has_snapshot):
@@ -485,14 +758,18 @@ ss_actions_on:
 
 checkslot
 ; loadstate input check
-	lda @CS_INPUT_CUR
+	lda @CS_PAD_INV              ; ~pad
 	and @CS_SLOT_INPUT
-	cmp @CS_SLOT_INPUT
 	bne skipslot
-	lda @CS_INPUT_PREV           ; two-frame rule -- see the note below skipslot
-	and @CS_SLOT_INPUT
-	cmp @CS_SLOT_INPUT
-	bne skipslot
+	; Pad-source validity (see the routine at the end of this file).  A rejected pad
+	; drops the WHOLE frame, not just the slot: nothing read this frame can be
+	; trusted.  Named label + jmp because the tail is far out of branch range; A/X/Y
+	; are already 16-bit, which is what ss_exit expects.
+	lda @CS_SLOT_INPUT
+	jsr ss_pad_confirm
+	bcs ss_slot_ok
+	jmp ss_exit
+ss_slot_ok:
 	sep #$20 : .as
 	lda @CS_INPUT_CUR+1
 	bit #$08 : beq + : lda #$01 : bra loadslot
@@ -510,20 +787,17 @@ skipslot
 	rep #$30 : .al : .xl
 
 ; savestate input check
-	lda @CS_INPUT_CUR
+	lda @CS_PAD_INV              ; ~pad
 	and @CS_SAVE_INPUT
-	cmp @CS_SAVE_INPUT
 	beq ss_match_save
 
 ; loadstate input check
-	lda @CS_INPUT_CUR
+	lda @CS_PAD_INV
 	and @CS_LOAD_INPUT
-	cmp @CS_LOAD_INPUT
-	bne +
-	bra ss_match_load
+	beq ss_match_load
 
 	; check programmable trigger
-+	lda @CS_SAVE_REQ ; loads both
+	lda @CS_SAVE_REQ ; loads both
 	beq save_state_jump_exit
 	phx
 	tax
@@ -535,24 +809,26 @@ skipslot
 	bne save_state
 	jmp load_state
 
-; Pad-matched save/load: require the same match on the previous frame.  The
-; programmable trigger above skips this on purpose -- it comes from the MCU, not
-; from a controller read.
+; Pad-matched save/load.  ONE frame is enough, on purpose: the pad that got here
+; is a complete controller read (the partial-sample gate in ss_input either waited
+; the fill out or dropped the frame), so the shifted-read forgeries the old
+; two-frame rule existed to
+; swallow -- Down+Right or A+L reading as X+R, X+A reading as X+L -- can no longer
+; reach this point at all.  Requiring two frames on top of that was not extra
+; safety, it was the bug: in a scene where the NMI is chronically late the complete
+; samples are the RARE ones and never land back to back, so the rule rejected the
+; genuine gesture forever (Yoshi's Island mid-level: five rejects, zero saves).
+; ss_pad_confirm still runs as the second opinion for the window that is still
+; filling when we look.
 ss_match_save
-	lda @CS_INPUT_PREV
-	and @CS_SAVE_INPUT
-	cmp @CS_SAVE_INPUT
-	beq save_state
-	jsr ss_pad_reject
+	lda @CS_SAVE_INPUT
+	jsr ss_pad_confirm
+	bcs save_state
 	bra save_state_jump_exit
 ss_match_load
-	lda @CS_INPUT_PREV
-	and @CS_LOAD_INPUT
-	cmp @CS_LOAD_INPUT
-	beq ss_match_load_go
-	jsr ss_pad_reject
-	bra save_state_jump_exit
-ss_match_load_go
+	lda @CS_LOAD_INPUT
+	jsr ss_pad_confirm
+	bcc save_state_jump_exit
 	jmp load_state
 
 save_state_jump_exit
@@ -1608,6 +1884,81 @@ ss_pad_reject
 	inc
 	sta @SS_DIAG_REJECT
 	rep #$20 : .al
+	rts
+
+; --- Pad-source validity, checked ONLY when a save/load/slot combo matched ----
+; The value the match was computed from came from the stub at nmihook.a65:9, which
+; samples $4218 in the first instructions of the interrupt.  The console starts
+; filling that register 48 master cycles into vblank and needs ~4224 more; a read
+; taken while it fills returns the pad SHIFTED RIGHT by the bits that have not
+; arrived yet.  A shifted read of one button pair looks exactly like another pair
+; (X+A read one bit late IS X+L), so a game whose NMI is chronically late -- a
+; pre-vblank DMA queue that overruns the same amount every frame -- forges the
+; same wrong combo frame after frame and defeats the two-frame rule.  That is the
+; Yoshi Island case; the same shape produced the "Mega Man X2 loads by itself"
+; report (Down+Right, Right+X and A+L all forge X+R).
+;   The test that closes it costs nothing and waits for nothing: if $4212 bit0 is
+; CLEAR the fill is over, so $4218 holds the COMPLETE pad right now.  Compare it
+; with what we matched on.  Equal means the stub read a whole pad and the match is
+; real (a held combo does not change between the two reads).  Different means the
+; stub read a partial one -- so take the complete pad, re-run the SAME test on it,
+; and only then decide: still holding the gesture means it was genuine and merely
+; sampled late (that is what makes a 2-button combo usable in a game whose NMI is
+; chronically late), not holding it means the match was a forgery and the frame is
+; dropped.  Either way CS_INPUT_CUR keeps the truth for the next frame.
+;   If bit0 is SET the register is mid-fill and there is nothing to compare
+; against, so the match stands as before.  That used to be the hole the two-frame
+; rule half-covered; it is now closed upstream of here instead, by the
+; partial-sample gate in ss_input -- a match can only be computed from a pad that
+; predates the fill (the previous frame's settled read), from one taken after it,
+; or from one the bounded wait there let the hardware finish, so what reaches this
+; routine is never a shifted value in the first place.  This routine is what is left of the guard: the free second opinion for
+; the frames whose fill happens to end while the handler is still running.
+;   Auto-joypad OFF is the third case: bit0 never sets, $4218 is a stale leftover
+; and NMI_PAD came from the stub's manual $4016 read, so the comparison must not
+; run at all -- the live $4200 shadow decides.
+; in:  A = the combo mask that matched; A/X/Y 16-bit; CS_INPUT_CUR = the value the
+;      match was computed from
+; out: C set = go ahead; C clear = drop this frame (SS_DIAG_REJECT bumped)
+; clobbers A and CS_PAD_INV (rebuilt from CS_INPUT_CUR before returning, so the
+; tests after a slot load keep working).
+ss_pad_confirm
+	.al : .xl
+	sta @CS_PAD_INV                    ; scratch
+	sep #$20 : .as
+	lda @$004212
+	lsr                                ; C = auto-joypad still filling
+	bcs ss_pad_confirm_yes
+	lda @$F90700                       ; live $4200 shadow
+	and #$01
+	bne ss_pad_confirm_late
+ss_pad_confirm_yes:                    ; mid-fill, or auto-joypad off: nothing to
+	rep #$20 : .al                     ; compare against -- behave as before
+	sec
+	bra ss_pad_confirm_out
+ss_pad_confirm_late:
+	rep #$20 : .al
+	lda @$004218                       ; fill is over: this is the complete pad
+	cmp @CS_INPUT_CUR
+	beq ss_pad_confirm_yes2            ; stub read a whole pad -> match is real
+	sta @CS_INPUT_CUR                  ; partial read: keep the truth instead ...
+	eor #$FFFF
+	and @CS_PAD_INV                    ; ... and re-run the SAME test on it
+	beq ss_pad_confirm_yes2            ; really held -> the gesture is genuine, the
+	                                   ; stub just sampled it late (this is what
+	                                   ; makes a 2-button combo usable again in a
+	                                   ; game whose NMI is chronically late)
+	jsr ss_pad_reject
+	clc
+	bra ss_pad_confirm_out
+ss_pad_confirm_yes2:
+	sec
+ss_pad_confirm_out:
+	php                                ; the rebuild must not disturb the verdict
+	lda @CS_INPUT_CUR
+	eor #$FFFF
+	sta @CS_PAD_INV
+	plp
 	rts
 
 .byt "SAVESTATE_END"

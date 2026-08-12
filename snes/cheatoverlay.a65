@@ -624,6 +624,31 @@ ss_ovl_vsync2:
 	; --- HDMA enable, brightness, interrupt enable; then resume ---
 	lda @SRAM_OTH_BANK|$000C : sta @$00420c   ; game's $420C
 	lda @SRAM_PPU_BANK : sta @$002100         ; game's brightness (unblank)
+	; --- per-game APU resync, before the game's interrupts come back ---
+	; The overlay never touches the APU, but it does stop the S-CPU for seconds while the
+	; SPC700 keeps running, and a game whose interrupt handler waits on a WRAM shadow of
+	; the $214x handshake with an UNBOUNDED spin deadlocks there on resume if the two
+	; drifted. Star Ocean is exactly that shape: its V-IRQ handler ($C0:0221) reaches
+	; three copies of  lda $2140 : cmp $2140 : bne * : eor $4A : bpl *  with no timeout,
+	; and $4A is the byte its savestate_fixes.yml entry (13B8) rewrites. That blob has
+	; run on savestate save/load since forever (audio_fix in savestate.a65); running it
+	; here as well makes the spin pass once, which is all it needs -- the game
+	; re-establishes the phase itself with the next command it sends.
+	; Gated per game by the firmware (SS_OVL_APUFIX_GATE, src/savestate.c) because a blob
+	; is free-form code: some entries write immediates, one writes $2140 itself.
+	; MUST run BEFORE the game's $4200 is re-armed below: I in P does NOT mask NMI --
+	; only the still-disarmed $4200 keeps the blob (whose 13B8 spin is unbounded) from
+	; being preempted. $420C/$2100 are already back, which is all the blob could care
+	; about. NOTE the DBR/DP context differs from the other call site (audio_fix runs
+	; with the handler's DBR/DP; here the game's DBR is already restored) -- fine for
+	; blobs that are 100% long-addressing like 13B8, but a future blob using DP would
+	; only break here. Contract: A 8-bit / X 16-bit / long addressing / ends in rtl.
+	; Both widths hold here and the rep #$30 below re-establishes them regardless.
+	lda @SS_OVL_APUFIX_GATE
+	beq ss_ovl_no_apufix
+	jsl @CS_FIXES
+	.as : .xl
+ss_ovl_no_apufix:
 	; ACK the pending NMI (the vsync wait above left us at vblank start, so $4210.7 is
 	; set) before re-enabling $4200: otherwise enabling NMI here would fire an interrupt
 	; IMMEDIATELY and preempt the resume tail (combo clear + ss_exit) mid-code. With the

@@ -76,6 +76,27 @@ void savestate_program() {
     }
   }
   sram_writebyte(scene_gate, SS_SCENE_GATE_ADDR);
+  /* Overlay close-time APU resync.  savestate_fixes.yml entries re-synchronise a WRAM
+     shadow of the APU handshake with the live $214x port, and so far they only ran on
+     savestate save/load (audio_fix in snes/savestate.a65).  The cheat overlay freezes
+     the S-CPU for seconds too, and a game whose interrupt handler waits on that shadow
+     with an UNBOUNDED spin deadlocks on resume if it drifted.  Star Ocean is exactly
+     that shape: its V-IRQ handler ($C0:0221) reaches three copies of
+       LDA $2140 : CMP $2140 : BNE * : EOR $4A : BPL *
+     with no timeout, and $4A is the shadow its 13B8 entry rewrites.  The reported
+     symptom matches: closing the overlay in a field scene leaves the restored picture
+     on screen with every sprite gone (OAM is deliberately not restored -- the game is
+     supposed to repopulate it) and the game never runs again.
+     Keyed on the header checksum ALONE, deliberately: the yml itself is keyed that way,
+     so gate and blob can never disagree about which game they mean.  Everything else
+     gets 0 and behaves exactly as before -- opt-in per game because a blob is free-form
+     code (several entries write immediates and one writes $2140 itself), so running it
+     on every overlay close library-wide would be a much wider behaviour change.
+     Cleared HERE on every load so it can never go stale, and only raised further down,
+     AFTER savestate_set_fixes() has actually deployed this game's code at CS_FIXES --
+     in overlay-only mode the fix area is never written, so the gate must stay 0 there
+     rather than point the overlay at the previous game's blob. */
+  sram_writebyte(0, SS_OVL_APUFIX_GATE_ADDR);
   /* The cheat overlay needs, on the FPGA core: the NMI/IRQ savestate hook + the $C0-FF
      IS_PATCH identity window (so the handler executes from menu PSRAM) + a shadow of the
      write-only $21xx/$42xx registers read back at $F90500/$F90700.  VRAM/CGRAM it reads
@@ -194,6 +215,19 @@ void savestate_program() {
     sram_writebyte(0, SS_OBC1_GATE_ADDR);
     sram_writebyte(0, SS_SDD1_GATE_ADDR);
     sram_writebyte(0, SS_CX4_GATE_ADDR);
+    /* Deploy the per-game fix blob here too: the overlay-close APU resync below
+       needs it, and the user running overlay-only (savestates off) is exactly the
+       audience of the Star Ocean close-freeze. Cheap -- with no yml match it just
+       writes the terminating rtl. */
+    savestate_set_fixes();
+  }
+  /* Now that this game's fix code really is deployed at CS_FIXES (both branches),
+     allow the overlay to re-run it on close for the games that need it (see the
+     comment at the early clear above). Checksum-keyed exactly like
+     savestate_fixes.yml; both the stock JP ROM and the DeJap-patched dump carry
+     chk 13B8 in the header field (read from both files), so one key covers both. */
+  if((savestate_ok || overlay_only) && romprops.header.chk == 0x13B8) {
+    sram_writebyte(1, SS_OVL_APUFIX_GATE_ADDR);
   }
 }
 
