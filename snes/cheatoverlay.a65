@@ -44,7 +44,10 @@
 ;     capture window misses a fixed fraction), leaving the mirror stale and
 ;     corrupting the restore -- readback is byte-exact on every core. The register
 ;     shadows ($21XX/$420X) still come from the mirror (write-only, no readback).
-;     WRAM, OAM and APU are never touched, so they need no save/restore.
+;       OAM   real readback via $2138                -> $F40200  (544 bytes)
+;     OAM IS touched (the takeover hides the game's sprites and the shell parks the
+;     table on every tab switch), so it is snapshotted and DMAd back like VRAM/CGRAM.
+;     WRAM (beyond the few bytes borrowed below) and APU are never touched.
 ;
 ;     Draw: force blank, DMA the menu font (bank ^font) to VRAM $0000, mode 0 /
 ;     BG1 only / tilemap @ word $1000 / char base $0000, clear the map to spaces,
@@ -170,6 +173,28 @@ ss_ovl_cgrb:
 	inx
 	cpx #$0200
 	bne ss_ovl_cgrb
+	; --- OAM: real readback via $2138 -> $F40200 (544 bytes) ---
+	; The takeover HIDES the game's sprites (ss_ovl_oamclr below) and the shell
+	; re-parks the whole table on every tab switch (ig_obj_tabbar), so the OAM the
+	; game had is GONE by the time we resume. The old assumption -- "the game
+	; re-populates OAM from its own NMI" -- does NOT hold: a game that uploads OAM
+	; without re-writing OAMADDR first lands its DMA wherever the shell left the
+	; address (ig_obj_tabbar leaves word $100 = the HIGH table on the Cheats tab),
+	; so its low table stays parked forever and EVERY sprite disappears until a
+	; savestate load rewrites the table. Proven in hardware on A.S.P. Air Strike
+	; Patrol: plane + shadow gone, BGs fine, and no amount of gameplay brings them
+	; back. So snapshot the real OAM here and DMA it back on exit, exactly like
+	; save_state does ($2138 has no dummy-read quirk, unlike $2139; the auto-
+	; increment walks the 512-byte low table then the 32-byte high table).
+	lda #$00 : sta @$002102               ; OAMADDL = 0
+	sta @$002103                          ; OAMADDH = 0 (word addr 0, no priority rotation)
+	ldx #$0000
+ss_ovl_oamrb:
+	lda @$002138
+	sta @$F40200, x
+	inx
+	cpx #$0220
+	bne ss_ovl_oamrb
 
 ; ---- take over the display (force-blank + GP-DMA/HDMA already off above) ----
 	lda #$00
@@ -210,8 +235,9 @@ ss_ovl_ch7rst:
 	;     hi-res garble: the game's sprites (in OAM) steal PPU sprite-fetch bandwidth, which
 	;     in mode 5 hi-res starves the BG1 (4bpp) tile fetch and truncates it on some rows
 	;     (proven: clearing OAM makes every row render clean). The menu never hits this
-	;     because setup_gfx clears OAM (oamhide). No save/restore: the game re-populates OAM
-	;     from its own NMI on resume (confirmed the game never breaks on exit).
+	;     because setup_gfx clears OAM (oamhide). The game's OAM was snapshotted to $F40200
+	;     above and is DMAd back by ss_overlay_restore (do NOT rely on the game re-populating
+	;     it: see the A.S.P. note at the snapshot).
 	;     HIDE: main table (512 B) = $F0 -> Y=240 (off the 224-line screen). HIGH table (32 B)
 	;     = $00, NOT $F0: $F0 sets the per-sprite SIZE bit -> a LARGE sprite at Y=240 wraps
 	;     past 256 back onto the top of the screen (still visible!) -> garble returns. $00 =
@@ -535,7 +561,7 @@ ss_overlay_restore:
 ss_ovl_hdmarst:
 	lda @$F48140, x : sta @$7E0000, x
 	inx : cpx #$0005 : bne ss_ovl_hdmarst
-	; (OAM is NOT restored -- the game re-populates it from its own NMI on resume.)
+	; (OAM is restored further down, together with VRAM/CGRAM, by GP-DMA from $F40200.)
 	; --- full VRAM: $F20000 -> VRAM $0000 (64KB) via GP-DMA ch1 ---
 	lda #$80 : sta @$002115
 	rep #$20 : .al
@@ -563,6 +589,28 @@ ss_ovl_hdmarst:
 	lda #$0200 : sta @$004315              ; size 512
 	sep #$20 : .as
 	lda #$02 : sta @$00420b                ; trigger ch1
+	; --- full OAM: $F40200 -> OAM (544 bytes) via GP-DMA ch1. Mirrors the OAM block
+	;     of load_write_table. This has to happen HERE, inside the restore, because
+	;     ss_ovl_rr below skips $2102/$2103/$2104 -- so the OAM address is ours to
+	;     leave in a sane state, and word 0 is what save_state's load table leaves
+	;     too. Without this the game resumes with the shell's parked table AND a
+	;     stale OAMADDR pointing at the high table. ---
+	rep #$20 : .al
+	lda #$0000 : sta @$002102              ; OAM word addr 0 (writes $2102+$2103)
+	sep #$20 : .as
+	lda #$00 : sta @$004310                ; mode 0 (1 reg), A->B
+	lda #$04 : sta @$004311                ; B = $2104
+	rep #$20 : .al
+	lda #$0200 : sta @$004312              ; A addr $xx0200
+	sep #$20 : .as
+	lda #$f4 : sta @$004314                ; A bank $F4
+	rep #$20 : .al
+	lda #$0220 : sta @$004315              ; size 544 (512 low + 32 high)
+	sep #$20 : .as
+	lda #$02 : sta @$00420b                ; trigger ch1
+	rep #$20 : .al
+	lda #$0000 : sta @$002102              ; leave OAMADDR at word 0 (the DMA walked it)
+	sep #$20 : .as
 	; --- restore ALL 8 DMA/HDMA channels from snapshot (11 bytes each, skip the gap;
 	;     was ch0/ch1 only). So when $420C re-enables HDMA below, the game's full
 	;     per-scanline state (ch2/ch3 + the tail of ch1, incl. indirect bank $43x7)
@@ -599,10 +647,40 @@ ss_ovl_rr_s:
 	iny
 	cpy #$0034
 	bne ss_ovl_rr
-	; --- restore $420X (skip $4201, $420B GP-DMA trig, $420C HDMA en) ---
+	; --- restore $420X (skip $4201, $420B GP-DMA trig, $420C HDMA en, and the
+	;     mult/div OPERANDS $4202-$4206 -- see below). Leaves $4207-$420A (IRQ
+	;     H/V time) and $420D (MEMSEL/FastROM), which DO need restoring. ---
+	;
+	; WHY $4202-$4206 ARE SKIPPED (do NOT "fix" this by restoring them):
+	;   $4216/$4217 (RDMPY) is SHARED between the two units: it holds the product
+	;   of the 8x8 multiply (armed by writing $4203) OR the remainder of the 16/8
+	;   divide (armed by writing $4206) -- whichever fired last. Walking this loop
+	;   in ascending order therefore armed a multiply and then immediately clobbered
+	;   its result with a divide remainder, so the game always resumed with RDMPY =
+	;   remainder of a re-run divide, never the product it was about to read. A game
+	;   interrupted between `sta $4203` and `lda $4216` read garbage.
+	;   Nothing here needs restoring: the operands are WRITE-ONLY (the game never
+	;   reads them back), freezing the SNES does not disturb $4214-$4217, and no code
+	;   that runs while the game is frozen touches the mult/div unit -- the viewer says
+	;   so explicitly (manviewer.i65: "those belong to the frozen game") and the list
+	;   uses software multiply / subtract-based divide for exactly this reason. So NOT
+	;   writing them is strictly better than writing them: the game's own $4214-$4217
+	;   survive the freeze untouched.
+	;   Extra hazard removed: the $F90700 shadow is PSRAM the MCU never clears, so on a
+	;   game that never wrote $4204-$4206 this loop used to push stale bytes from an
+	;   earlier session and fire a spurious divide.
+	;   (register_restore_return in savestate.a65 keeps writing them ON PURPOSE: a state
+	;   LOAD rebuilds the machine from a file, where re-arming the operands is the only
+	;   way to approximate $4214-$4217. That trade-off does not exist here -- we resume
+	;   the very instant we froze.)
 	ldx #$0001
 ss_ovl_oth:
 	cpx #$0001 : beq ss_ovl_oth_s
+	cpx #$0002 : beq ss_ovl_oth_s          ; $4202/$4203 WRMPYA/B -- would arm a multiply
+	cpx #$0003 : beq ss_ovl_oth_s
+	cpx #$0004 : beq ss_ovl_oth_s          ; $4204-$4206 WRDIV* -- would arm a divide and
+	cpx #$0005 : beq ss_ovl_oth_s          ;   overwrite RDMPY with the remainder
+	cpx #$0006 : beq ss_ovl_oth_s
 	cpx #$000B : beq ss_ovl_oth_s
 	cpx #$000C : beq ss_ovl_oth_s
 	lda @SRAM_OTH_BANK, x : sta $4200, x
