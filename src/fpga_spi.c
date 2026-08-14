@@ -66,6 +66,10 @@
                                 tt = target (see above)
                                 i = increment (see above)
 
+        D6        cccc          set in-game menu combo mask (SA-1 mk3 only; every
+                                other core ignores the opcode, which is what makes
+                                it safe to send unconditionally)
+
         E0        ssrr          set MSU-1 status register (=FPGA status [7:0])
                                 ss = bits to set in status register (1=set)
                                 rr = bits to reset in status register (1=reset)
@@ -494,6 +498,17 @@ void fpga_set_features(uint16_t feat) {
   FPGA_TX_BYTE((feat) & 0xff);
   FPGA_DESELECT();
   current_features = feat;
+}
+
+/* Only the SA-1 mk3 core decodes this; it arms the IRQ redirect while the buttons are held,
+   which is what lets the menu open with NMI off.  Other cores drop the bytes. */
+void fpga_set_ovl_combo(uint16_t combo) {
+  printf("set in-game menu combo: %04x\n", combo);
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_SET_OVL_COMBO);
+  FPGA_TX_BYTE((combo >> 8) & 0xff);
+  FPGA_TX_BYTE((combo) & 0xff);
+  FPGA_DESELECT();
 }
 
 void fpga_set_213f(uint8_t data) {

@@ -161,6 +161,9 @@ wire [3:0]  SA1_XXB_EN;
 wire [15:0] featurebits;
 wire feat_cmd_unlock = featurebits[5];
 
+// MCU-programmable in-game menu combo (CMD 0xd6, src/cheat.c).  Powers up at $4230.
+wire [15:0] ovl_combo;
+
 wire [23:0] MAPPED_SNES_ADDR;
 wire ROM_ADDR0;
 
@@ -791,6 +794,7 @@ mcu_cmd snes_mcu_cmd(
   .sa1_config_data_in(sa1_config_data),
   // ^^ config data in ^^
   .featurebits_out(featurebits),
+  .ovl_combo_out(ovl_combo),
   .mcu_rrq(MCU_RRQ),
   .mcu_wrq(MCU_WRQ),
   .mcu_rq_rdy(MCU_RDY),
@@ -1054,22 +1058,33 @@ wire rs_snoop_pawr_oe  = ~SNES_PAWR & (SNES_PA < 8'h40);
 `ifndef MK2
 // Hook-arming combos for IRQ scenes (SMRPG field runs vblank on IRQ with NMI
 // off, and the IRQ redirect is combo-gated as the anti-freeze defense): the
-// overlay combo L+R+Y+Left, plus the savestate DEFAULT inputs so save/load
-// work in the field too -- Start+R (save), Start+L (load), Select+dpad (slot
-// load).  Custom inputs from savestate_inputs.yml are NOT known to the FPGA;
-// those only trigger in NMI scenes.  Same safety property: the redirect only
-// exists while a combo is physically held.
+// in-game menu combo, plus the savestate DEFAULT inputs so save/load work in
+// the field too -- Start+R (save), Start+L (load), Select+dpad (slot load).
+// The MENU term's mask is programmable (CMD 0xd6) so a combo remapped in
+// config.yml arms the redirect too; the other three stay hardcoded, so custom
+// save/load/slot inputs remain unknown to the FPGA and only fire in NMI scenes.
 // Two pad sources, matched independently: the ctx $4218 store-sniff (scene
 // dependent: some SMRPG areas/world map never use the LDA/STA idiom) and the
 // IRAM $3010 forwarding snoop from sa1.v (works in every SMRPG scene).
-assign overlay_combo = ((ctx_pad1 & 16'h4230) == 16'h4230)
+//   A 0 mask folds back to $4230: (pad & 0) == 0 holds for every pad value,
+// including the zero both sources decay to on expiry, so it would leave the
+// redirect permanently armed.
+wire [15:0] ovl_mask = |ovl_combo ? ovl_combo : 16'h4230;
+
+// Registered: the variable-mask comparators add LUT levels to what was a 4-input
+// AND, and cheat.v only samples this at a vector fetch, so the latency is free.
+reg overlay_combo_r = 1'b0;
+always @(posedge CLK2) begin
+  overlay_combo_r <= ((ctx_pad1 & ovl_mask) == ovl_mask)
                    | ((ctx_pad1 & 16'h1010) == 16'h1010)
                    | ((ctx_pad1 & 16'h1020) == 16'h1020)
                    | (ctx_pad1[13] & |ctx_pad1[11:8])
-                   | ((sa1_iram_pad & 16'h4230) == 16'h4230)
+                   | ((sa1_iram_pad & ovl_mask) == ovl_mask)
                    | ((sa1_iram_pad & 16'h1010) == 16'h1010)
                    | ((sa1_iram_pad & 16'h1020) == 16'h1020)
                    | (sa1_iram_pad[13] & |sa1_iram_pad[11:8]);
+end
+assign overlay_combo = overlay_combo_r;
 `else
 // mk2 has no ctx: no FPGA-side combo detect; the NMI-scene hook still opens the
 // overlay (battles/menus). IRQ/field opening on mk2 would need a standalone

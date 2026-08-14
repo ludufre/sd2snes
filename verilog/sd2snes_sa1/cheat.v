@@ -45,7 +45,8 @@ module cheat(
   input branch3_enable,
   input pad_latch,
   input snes_ajr,
-  input overlay_combo,   // FPGA-detected L+R+Y+Left (from ctx JOY1 capture): gate the IRQ hook
+  input overlay_combo,   // FPGA-detected in-game menu combo (from ctx JOY1 capture; mask is
+                         // MCU-programmable via CMD 0xd6, default $4230): gate the IRQ hook
   input SNES_cycle_start,
   input [2:0] pgm_idx,
   input pgm_we,

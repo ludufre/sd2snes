@@ -325,8 +325,11 @@ ss_cx4_bw_out:
 ;   Bit choice: save and load are always the same gesture with one button swapped
 ; (Start+R/Start+L, X+R/X+L, Select+Y+R/Select+Y+L, ...), so the bits they SHARE
 ; are the modifier button -- the rare one -- and the lowest of those covers both
-; combos with a single bit.  The overlay combo is the constant $4230, so any one
-; of its four bits does; L is used because it is never a d-pad direction.
+; combos with a single bit.  The menu combo is armed per game load, so its bit is picked at
+; run time: every bit of it is REQUIRED (the probe matches a subset), and a shoulder is
+; preferred because it is held far less often in play than A/B/X/Y or a direction.
+;   This routine is also the single resolver of that combo, which keeps ~20 bytes of the
+; scarce $C0 page free.  OUT: A = fast-reject mask, X = resolved combo (never 0).
 ;   Lives here rather than in $C0 purely for space, like the CX4 routines above.
 ; Runs with A/X/Y 16-bit and clobbers A and X (ss_init has pushed both).
 ; Accumulates in a LOCAL word and returns the finished mask in A: the caller in
@@ -338,12 +341,37 @@ ss_cx4_bw_out:
 ; frame, which is correct: nothing below the reject can fire in that config.
 ss_hot_mask_build:
 	.al : .xl
+	; --- Resolve the armed in-game menu combo -> ss_hmb_ovl ----------------------
+	; Published per game load as a word plus its complement: a new m3nu.bin can run against
+	; an old MCU that never writes here, so a nonzero word proves nothing on its own.
+	lda @MENU_COMBO
+	beq ss_hmb_combo_dflt        ; never published (old firmware)
+	eor @MENU_COMBO_INV          ; the firmware also wrote ~combo, so this is $FFFF ...
+	inc                          ; ... and this wraps to 0 exactly when the pair is intact
+	bne ss_hmb_combo_dflt
+	lda @MENU_COMBO
+	bra ss_hmb_combo_have
+ss_hmb_combo_dflt:
+	lda #$4230                   ; L=$0020 R=$0010 Y=$4000 Left=$0200
+ss_hmb_combo_have:
+	sta @ss_hmb_ovl
 	lda #$0000
 	sta @ss_hmb_acc
 	lda @CHEAT_OVL_GATE
 	and #$00FF
 	beq ss_hmb_ctrl
-	lda #$0020                   ; L, one of the four bits of $4230
+	; Prefer a shoulder, L before R, so the default $4230 still yields $0020 (ss_hmb_lowbit
+	; would pick R: $0010 is the lower bit).
+	lda @ss_hmb_ovl
+	beq ss_hmb_all               ; cannot happen (resolved above) -- never filter if it does
+	and #$0020                   ; L?
+	bne ss_hmb_ovl_have          ; A = $0020
+	lda @ss_hmb_ovl
+	and #$0010                   ; R?
+	bne ss_hmb_ovl_have          ; A = $0010
+	lda @ss_hmb_ovl              ; no shoulder in this combo: any required bit will do
+	jsr ss_hmb_lowbit
+ss_hmb_ovl_have:
 	sta @ss_hmb_acc
 ss_hmb_ctrl:
 	lda @CS_CTRL
@@ -366,11 +394,16 @@ ss_hmb_all:
 	lda #$FFFF                   ; unexpected input config -> every frame takes the
 	sta @ss_hmb_acc              ; full path, exactly like before this optimisation
 ss_hmb_done:
-	lda @ss_hmb_acc              ; return the mask in A
+	lda @ss_hmb_ovl              ; OUT: X = resolved combo.  Staged here, after the last
+	tax                          ; ss_hmb_lowbit call, which pops into X and would clobber
+	                             ; it.  No long-addressed LDX exists, hence lda/tax.
+	lda @ss_hmb_acc              ; OUT: A = the fast-reject mask
 	rtl
 
 ss_hmb_acc:
 	.word 0                      ; builder scratch, only live during ss_init
+ss_hmb_ovl:
+	.word 0                      ; builder INPUT (the combo passed in A), same lifetime
 
 ; A = lowest set bit of A (v & -v), 16-bit.  Clobbers X (pushed by ss_init).
 ss_hmb_lowbit:

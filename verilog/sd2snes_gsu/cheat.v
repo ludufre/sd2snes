@@ -55,7 +55,8 @@ reg holdoff_enable = 0; // temp disable hooks after reset
 reg buttons_enable = 0;
 reg wram_present = 0;
 // In-game hooks: route the NMI/IRQ hook to the savestate handler (nmi_savestate)
-// for the overlay probe (L+R+Y+Left) AND the full savestate combos -- the GSU
+// for the in-game menu probe (default combo L+R+Y+Left) AND the full savestate
+// combos -- the GSU
 // supports full save/load states (mk2 and mk3), so the complete force-entry
 // latch machinery is required here (see below), same as the base core.
 reg savestate_enable = 0;

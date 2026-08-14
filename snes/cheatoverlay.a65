@@ -1,6 +1,6 @@
 ; In-game cheat overlay - split out of savestate.a65 for clarity.
 ;
-; Pauses the running game (combo L+R+Y+Left), takes over the PPU to draw a navigable
+; Pauses the running game (the armed in-game menu combo, default L+R+Y+Left), takes over the PPU to draw a navigable
 ; cheat list with live ON/OFF toggles, then restores the COMPLETE PPU/VRAM/CGRAM
 ; state and resumes. The combo *probe* still lives in savestate.a65's in-game input
 ; flow (it runs every NMI as part of the savestate handler) and reaches here with a
@@ -476,7 +476,8 @@ ovl_failsafe:
 	lda #$0f : sta @$002100               ; unblank to full brightness
 
 ; ---- input loop: edge-detected pad. ovl_pprev was seeded with the opening
-;      combo, so the still-held L+R+Y+Left produces no fresh edge (no instant
+;      combo -- it samples the LIVE pad, so it works for ANY armed combo -- and the
+;      still-held buttons therefore produce no fresh edge (no instant
 ;      exit/toggle, no drain needed).
 ;        Up/Down = move cursor   A = toggle ON/OFF   B = close + apply ----
 ss_overlay_loop:

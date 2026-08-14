@@ -95,6 +95,7 @@
 #define FPGA_CMD_CHEAT_WRITE     (0xd3)
 #define FPGA_CMD_DMA_OP          (0xd4) /* MCU-driven copier: 10 param bytes -> dma_r[0..9], dma_r[9]=opcode|trig starts it */
 #define FPGA_CMD_DMA_BUSY        (0xd5) /* read: bit0 = copier still running */
+#define FPGA_CMD_SET_OVL_COMBO   (0xd6) /* 2 param bytes MSB first: in-game menu combo mask. SA-1 mk3 only (arms its IRQ redirect); dropped by every other core, so no per-core gate is needed. Further bytes left free for the save/load/slot masks. */
 #define FPGA_CMD_MSUSETBITS      (0xe0)
 #define FPGA_CMD_DACPAUSE        (0xe1)
 #define FPGA_CMD_DACPLAY         (0xe2)
@@ -166,6 +167,7 @@ void fpga_dspx_reset(uint8_t reset);
 void fpga_dspx_ss_halt(uint8_t halt);
 void fpga_set_dac_boost(uint8_t boost);
 void fpga_set_features(uint16_t feat);
+void fpga_set_ovl_combo(uint16_t combo);
 void fpga_set_213f(uint8_t data);
 void fpga_set_snescmd_addr(uint16_t addr);
 void fpga_write_snescmd(uint8_t data);

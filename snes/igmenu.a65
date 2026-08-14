@@ -449,7 +449,8 @@ igm_no_slotpos:
 	jsr ig_bar_sync                          ; place the selection BAR before the $420C arm: the
 	                                         ;   restored tab's enter has run, so its cursor vars
 	                                         ;   are live and the bar is right on the FIRST frame
-	; --- seed pprev with the held opening combo so L+R+Y+Left makes no fresh edge ---
+	; --- seed pprev with the held opening combo so it makes no fresh edge.  Samples the
+	;     LIVE pad, so it is agnostic to which combo is armed (IngameButtonsMenu). ---
 	lda @$004218 : sta @ovl_pprev
 	; --- arm the theme's HDMA channels. LAST thing before the unblank, not inside
 	;     ig_theme_init: HDMA keeps running in forced blank, so an armed gradient channel

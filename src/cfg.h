@@ -48,6 +48,7 @@
 #define CFG_INGAME_BUTTONS_SAVE_STATE    ("IngameButtonsSaveState")
 #define CFG_INGAME_BUTTONS_LOAD_STATE    ("IngameButtonsLoadState")
 #define CFG_INGAME_BUTTONS_CHANGE_STATE  ("IngameButtonsChangeState")
+#define CFG_INGAME_BUTTONS_MENU          ("IngameButtonsMenu")
 // TODO #define CFG_INGAME_BUTTONS_SAVESTATES_EXCLUSIVE
 #define CFG_SGB_ENABLE_INGAME_HOOK       ("SGBEnableIngameHook")
 #define CFG_SGB_ENABLE_STATE             ("SGBEnableState")
@@ -75,6 +76,8 @@
 #define CFG_CLEAR_PPU_ON_BOOT            ("ClearPpuOnBoot")
 #define CFG_BUS_COMPAT                   ("BusCompat")
 #define CFG_ENABLE_GAME_MANUAL           ("EnableGameManual")
+
+#define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
 typedef enum {
   VIDMODE_60 = 0,
@@ -131,7 +134,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_menu_sfx;         /* CFG @ $BB: menu navigation sound effects (MSU-1 DAC, /sd2snes/sfx_*.pcm) */
   uint8_t  bgm_name[128];           /* CFG @ $BC: full SD path of the chosen background-music .spc ("" = use /sd2snes/menu.spc fallback) */
   uint8_t  sort_favorites;          /* CFG @ $13C: show the Favorites list alphabetically (display-only; the .cfg keeps recency order) */
-  uint8_t  enable_cheat_overlay;    /* CFG @ $13D: in-game cheat overlay (pause via L+R+Y+Left to toggle cheats live). This byte carries the user toggle only; the per-core gate is core_has_snapshot in savestate.c, which installs the handler carrying the probe. It runs on base, DSP1-4, SA-1, GSU, OBC1, S-DD1 and CX4 -- only SPC7110 and SGB still lack the machinery it reuses. */
+  uint8_t  enable_cheat_overlay;    /* CFG @ $13D: in-game menu (pause via the combo armed from ingame_buttons_menu below, default L+R+Y+Left, to toggle cheats live). This byte carries the user toggle only; the per-core gate is core_has_snapshot in savestate.c, which installs the handler carrying the probe. It runs on base, DSP1-4, SA-1, GSU, OBC1, S-DD1 and CX4 -- only SPC7110 and SGB still lack the machinery it reuses. */
   uint8_t  show_game_info;          /* CFG @ $13E: pre-boot game info screen (cover/screenshot/metadata). 0 = off, 1 = on (auto-show before boot), 2 = context (no auto-show; the ROM's Y context menu gains a "Game info" entry instead). A ROM with no /sd2snes/info entry is NOT skipped: it still gets a filename title, "-" fields and its sibling .cov (gameinfo_load always reports OK on every config; GAMEINFO_STATUS_NONE is unreachable). */
   uint8_t  enable_wifi;             /* CFG @ $13F: RESERVED WiFi companion master switch (0=off). No ESP link in this branch; placed here (NOT $BD: that overlapped bgm_name @ $BC) so the future Companion port has no cfg-offset drift. */
   uint8_t  game_info_video;         /* CFG @ $140: play the animated .fmv clip on the game info screen (off -> static .gss snapshot) */
@@ -141,6 +144,10 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  bus_compat;              /* CFG @ $144: bus-timing compat mode. ON restores the pre-1.11.1 (56dd166-reverted) pulse-end-strobe time sharing -> releases the cart databus EARLIER, avoiding bus contention on timing-sensitive 1-CHIP consoles (fixes games that hang or glitch there, e.g. DKC — the Nintendo-logo freeze is just the easiest repro; = v1.11.0 behavior). Default OFF (the wider window mrehkopf reverted TO, which most units need). Drives FPGA featurebits[13] via fpga_set_features. */
   uint8_t  enable_game_manual;      /* CFG @ $145: in-game MANUAL tab. ON -> at game load manual_stage_meta probes /sd2snes/info/<C>/<stem>.man (same bucket as the game-info assets) and, if valid, the in-game viewer can page through it (staged a page at a time via SNES_CMD_MANUAL_S1PAGE / SNES_CMD_MANUAL_ZPAGE). Default ON; off -> the tab shows "not found". */
   uint8_t  enable_sram_slots;       /* CFG @ $146: multi-slot battery SRAM -- ALWAYS ON since 2.15 (the EnableSramSlots YAML flag and menu toggle were retired; the byte stays at $146 for CFG offset stability and is forced to 1). The in-game SAVES tab selects an active slot (deferred: applies on the next game load), saves route to <stem>.srm (slot 1) / <stem>.0N.srm (slots 2-4) via the /sd2snes/saves/<stem>.slot sidecar. The live session slot is IMMUTABLE (set once at game load) so an in-game switch can never misroute an autosave. */
+  uint16_t ingame_buttons_menu;     /* CFG @ $147: pad combo that opens the in-game menu. Default $4230 =
+     L+R+Y+Left. YAML only (no menu entry); the UI strings keep showing the default. Sanitised by
+     cfg_check_menu_combo() in cfg.c -- a 0 mask would match every mid-frame IRQ. Armed at game load by
+     cheat_program(), not savestate_set_inputs() (that one skips overlay-only mode). */
 } cfg_t;
 
 int cfg_save(void);

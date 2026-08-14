@@ -85,15 +85,22 @@ ss_midframe_entry:
 	; Cheap pre-check on the pad the nmihook stub just stored to NMI_PAD: only a
 	; deliberately-held savestate GESTURE proceeds to the full probe; anything else
 	; exits as fast as before (~20-40 cycles), preserving the anti-freeze property
-	; for raster-H-IRQ games (the SMRPG class).  The gesture is the overlay combo OR
-	; the ARMED save/load/slot combo -- without the latter, save/load/slot were
+	; for raster-H-IRQ games (the SMRPG class).  The gesture is the ARMED in-game menu
+	; combo OR the ARMED save/load/slot combo -- without the latter, save/load/slot were
 	; swallowed on every mid-frame IRQ entry, so X+R/X+L never fired in IRQ-driven
 	; scenes (e.g. Yoshi's Island on the GSU).  Masked match: extra held bits are
-	; ignored.  SEP only sets P bits, so a 16-bit CMP's Z survives a following sep.
+	; ignored, and "all mask bits held" == (~pad & mask) == 0.
+	;   MENU_COMBO is read here rather than patched like the probe below: this path can run
+	; before ss_init, so a patched operand would deadlock a remapped combo in an IRQ-only
+	; frame loop.  A zero word (old MCU) must not be used as a mask.
 	rep #$20 : .al
-	lda @NMI_PAD
-	and #$4230                   ; L+R+Y+Left overlay combo -> always allowed
-	cmp #$4230
+	lda @MENU_COMBO
+	bne ss_pre_combo_have        ; named label: the anonymous +/- chains here must not shift
+	lda #$4230                   ; unpublished -> historical L+R+Y+Left
+ss_pre_combo_have:
+	eor #$FFFF                   ; ~combo: the ORA below is $FFFF iff every bit is held
+	ora @NMI_PAD
+	inc                          ; $FFFF -> 0
 	beq ss_precheck_pass
 	; save/load/slot: only while savestates are active (CS_CTRL != 0) and only for
 	; the ARMED value (a 0 mask would match every frame and defeat the fast-exit).
@@ -441,15 +448,20 @@ ss_init
 	; byte has to be zero because ss_input reads and masks the pair 16-bit).
 	sta @SS_FILL_TICK
 
-; --- Build the hot-path mask (see ss_hot_mask) -------------------------------
+; --- Build the hot-path mask and arm the in-game menu combo ------------------
 ; One bit that EVERY armed gesture requires, OR'd together, patched straight into
 ; the immediate operand of the fast reject.  Lives in $C1 (savestate_cx4.a65, the
 ; same annex the CX4 routines use) because it is init-time only and the $C0 page
 ; is the scarce one; this call site is 4 bytes.
+;   The builder also resolves the menu combo and returns it in X (it needs the combo for the
+; mask anyway, and resolving in the annex keeps ~20 bytes of $C0 free).  All three +1 addends
+; are same-object stores, done here for that reason.
 	jsl @ss_hot_mask_build
 	.al : .xl
-	sta @ss_hot_mask+1           ; builder returns the mask in A; the +1 store is
-	                             ; done HERE so the symbol+addend stays same-object
+	sta @ss_hot_mask+1           ; A = fast-reject mask
+	txa                          ; X = the resolved combo
+	sta @ss_ovl_mask_cur+1       ; probe: is every combo bit held THIS frame?
+	sta @ss_ovl_mask_prev+1      ; probe: was it NOT already held last frame? (edge)
 
 	ply
 	plx
@@ -669,24 +681,22 @@ ss_hot_full:
 	eor #$FFFF
 	sta @CS_PAD_INV
 
-; --- Cheat overlay entry: software combo L+R+Y+Left ($4230) -> ss_overlay.
+; --- In-game menu entry: software combo -> ss_overlay. ------------------------
 ;     The in-game savestate handler runs every frame; we detect the combo here
 ;     (edge-detected via CUR vs PREV, fires once per press) and jump into the
-;     overlay. The accumulator is 16-bit here; MASKED match (and/cmp) so extra
-;     held bits are ignored. Collision-free with every reserved gesture because it
-;     carries Y — a button NO reserved gesture uses — so reset/save/load/slot can
-;     never *produce* this combo, and it is a superset of none of them: the FPGA
-;     in-game reset is L+R+Select+X (no Select/X here), savestate save/load are
-;     Start+R/Start+L (no Start here), and slot-load is Select+<d-pad> — this has
-;     Left but NO Select, so it can't match. Left is also NOT an overlay nav key
-;     (only Up/Down scroll the list), so holding it as the overlay opens doesn't
-;     auto-scroll. Bits: L=$0020 R=$0010 Y=$4000 Left=$0200 -> $4230. ---
+;     overlay. The accumulator is 16-bit here; MASKED match so extra held bits are
+;     ignored.
+;     The mask is the ARMED combo (config.yml: IngameButtonsMenu), patched into both
+;     operands by ss_init. The default $4230 = L+R+Y+Left carries Y, which no reserved
+;     gesture uses; a custom combo gets that property from cfg_check_menu_combo(). ---
 	lda @CS_PAD_INV              ; ~pad: zero after the AND means every bit is held
-	and #$4230
+ss_ovl_mask_cur:
+	and #$4230                   ; ARMED combo; operand patched per game load by ss_init
 	bne ss_probe_done
 	lda @CS_INPUT_PREV
 	eor #$FFFF
-	and #$4230
+ss_ovl_mask_prev:
+	and #$4230                   ; same operand, patched by ss_init (edge: NOT held last frame)
 	beq ss_probe_done
 	; Gated: the firmware arms CHEAT_OVL_GATE at game load to CFG.enable_cheat_overlay
 	; (src/cheat.c). The real per-core gate is in savestate.c (core_has_snapshot):

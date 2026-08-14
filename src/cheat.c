@@ -130,6 +130,14 @@ void cheat_program() {
      core (e.g. Super Mario Kart) even though savestates are not. */
   sram_writebyte(CFG.enable_cheat_overlay ? 1 : 0, SRAM_CHEAT_OVL_GATE_ADDR);
 
+  /* Combo plus its complement: a new m3nu.bin can run against an old MCU that never writes
+     here, so ss_init needs a way to tell a real publication from leftovers. */
+  sram_writeshort(CFG.ingame_buttons_menu, SRAM_MENU_COMBO_ADDR);
+  sram_writeshort((uint16_t)~CFG.ingame_buttons_menu, SRAM_MENU_COMBO_INV_ADDR);
+
+  /* The SA-1 core arms its IRQ redirect on this; other cores ignore the command. */
+  fpga_set_ovl_combo(CFG.ingame_buttons_menu);
+
   /* Mirror of the master cheat switch for the in-game CHEATS tab (X). The switch
      itself lives in the FPGA (cheat_enable, set above); this byte only lets the
      shell draw the current state and toggle from it. Re-published here so a

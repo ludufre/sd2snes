@@ -30,6 +30,7 @@ _Static_assert(offsetof(cfg_t, clear_ppu_on_boot) == 0x143, "cfg_t.clear_ppu_on_
 _Static_assert(offsetof(cfg_t, bus_compat) == 0x144, "cfg_t.bus_compat must stay at CFG_ADDR+$144");
 _Static_assert(offsetof(cfg_t, enable_game_manual) == 0x145, "cfg_t.enable_game_manual must stay at CFG_ADDR+$145");
 _Static_assert(offsetof(cfg_t, enable_sram_slots) == 0x146, "cfg_t.enable_sram_slots must stay at CFG_ADDR+$146");
+_Static_assert(offsetof(cfg_t, ingame_buttons_menu) == 0x147, "cfg_t.ingame_buttons_menu must stay at CFG_ADDR+$147");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -88,13 +89,55 @@ cfg_t CFG_DEFAULT = {
   .clear_ppu_on_boot = 0,
   .bus_compat = 0,
   .enable_game_manual = 1,
-  .enable_sram_slots = 1
+  .enable_sram_slots = 1,
+  .ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_Y | SNES_BUTTON_LEFT
 };
 
 cfg_t CFG;
 extern mcu_status_t STM;
 
 char *button_names = "BYsSudlrAXLR";
+
+/* Gestures the FPGA decodes by exact equality of the pad word (see any core's cheat.v). */
+static const uint16_t cfg_reserved_gestures[] = {
+  SNES_BUTTON_LRET, SNES_BUTTON_LREX, SNES_BUTTON_LRSA,
+  SNES_BUTTON_LRSB, SNES_BUTTON_LRSY, SNES_BUTTON_LRSX
+};
+
+static uint8_t cfg_bitcount16(uint16_t v) {
+  uint8_t n = 0;
+  while(v) { n += v & 1; v >>= 1; }
+  return n;
+}
+
+/* A combo that is a subset of a reserved gesture opens the menu a frame before that gesture
+   completes, leaving the reset to land on an already frozen game. */
+static uint16_t cfg_check_menu_combo(uint16_t combo) {
+  const char *why = NULL;
+  if(!combo) {
+    why = "empty";
+  } else if(cfg_bitcount16(combo) < CFG_MENU_COMBO_MIN_BUTTONS) {
+    why = "too few buttons";
+  } else {
+    for(unsigned i = 0; i < sizeof(cfg_reserved_gestures)/sizeof(cfg_reserved_gestures[0]); i++) {
+      if((cfg_reserved_gestures[i] & combo) == combo) {
+        why = "subset of a reserved gesture";
+        break;
+      }
+    }
+  }
+  if(why) {
+    printf("cfg: menu combo %04X rejected (%s), using %04X\n",
+           combo, why, CFG_DEFAULT.ingame_buttons_menu);
+    return CFG_DEFAULT.ingame_buttons_menu;
+  }
+  if((CFG.ingame_buttons_savestate   & combo) == combo
+  || (CFG.ingame_buttons_loadstate   & combo) == combo
+  || (CFG.ingame_buttons_changestate & combo) == combo) {
+    printf("cfg: menu combo %04X shadows a savestate combo (menu probe runs first)\n", combo);
+  }
+  return combo;
+}
 
 int cfg_save() {
   int err = 0;
@@ -204,8 +247,14 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_SFX, CFG.enable_menu_sfx ? "true" : "false");
   f_printf(&file_handle, "#  %s: Show the Favorites list in alphabetical order (display only)\n", CFG_SORT_FAVORITES);
   f_printf(&file_handle, "%s: %s\n", CFG_SORT_FAVORITES, CFG.sort_favorites ? "true" : "false");
-  f_printf(&file_handle, "#  %s: In-game cheat overlay (pause via L+R+Y+Left to toggle cheats). Off on special-chip games.\n", CFG_ENABLE_CHEAT_OVERLAY);
+  f_printf(&file_handle, "#  %s: In-game menu (pause with the combo below to toggle cheats, savestates, saves and guides).\n", CFG_ENABLE_CHEAT_OVERLAY);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEAT_OVERLAY, CFG.enable_cheat_overlay ? "true" : "false");
+  cfg_buttons_bits2string(CFG.ingame_buttons_menu, buttons);
+  f_printf(&file_handle, "#  %s: Buttons that open the in-game menu (buttons: BYsSudlrAXLR, default: L+R+Y+Left (YlLR)).\n", CFG_INGAME_BUTTONS_MENU);
+  f_printf(&file_handle, "#    Min %d buttons, must include no reserved combo (L+R+Start+Select, L+R+Select+X, L+R+Start+A/B/X/Y);\n", CFG_MENU_COMBO_MIN_BUTTONS);
+  f_printf(&file_handle, "#    a rejected value reverts to the default here on the next boot. Include L or R: the handler\n");
+  f_printf(&file_handle, "#    filters frames on a shoulder bit. The in-game CONTROLS tab still shows the default combo.\n");
+  f_printf(&file_handle, "%s: %s\n", CFG_INGAME_BUTTONS_MENU, buttons);
   f_printf(&file_handle, "#  %s: Apply BPS patches via the FPGA copier (fast). LoROM/HiROM without special chips only; others fall back to byte-by-byte.\n", CFG_ENABLE_BPS_COPIER);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_BPS_COPIER, CFG.enable_bps_copier ? "true" : "false");
   f_printf(&file_handle, "#  %s: Clear VRAM/CGRAM/OAM before booting a patched ROM (for romhacks that skip PPU init). Only when an IPS/BPS patch was applied.\n", CFG_CLEAR_PPU_ON_BOOT);
@@ -387,6 +436,9 @@ int cfg_load() {
     if(yaml_get_itemvalue(CFG_ENABLE_CHEAT_OVERLAY, &tok)) {
       CFG.enable_cheat_overlay = tok.boolvalue ? 1 : 0;
     }
+    if(yaml_get_itemvalue(CFG_INGAME_BUTTONS_MENU, &tok)) {
+      CFG.ingame_buttons_menu = cfg_buttons_string2bits(tok.stringvalue);
+    }
     if(yaml_get_itemvalue(CFG_ENABLE_BPS_COPIER, &tok)) {
       CFG.enable_bps_copier = tok.boolvalue ? 1 : 0;
     }
@@ -428,6 +480,7 @@ int cfg_load() {
     }
   }
   yaml_file_close();
+  CFG.ingame_buttons_menu = cfg_check_menu_combo(CFG.ingame_buttons_menu);
   return err;
 }
 

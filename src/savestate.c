@@ -149,7 +149,8 @@ void savestate_program() {
      SA1_SS_MK2 in the sa1 core) overmaps the xc3s400 by ~2,200 logic LUTs (8,842/7,168
      = 123%), with no recoverable lever (MSU-1 was already cut from the mk2 sa1 build by
      upstream in 2019). So sa1_ok stays gated under !CONFIG_MK2.
-     The overlay probe (L+R+Y+Left) lives inside this handler, so the handler must be
+     The in-game menu probe (default combo L+R+Y+Left; armed per game load from
+     CFG.ingame_buttons_menu) lives inside this handler, so the handler must be
      installed whenever the overlay is usable -- even with savestates OFF. */
   int dsp_ok = (romprops.fpga_conf == FPGA_DSP) && !romprops.has_st0010;
 #ifndef CONFIG_MK2
