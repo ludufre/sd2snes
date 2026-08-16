@@ -559,6 +559,8 @@ reg [3:0] rs_pawr_cnt;   initial rs_pawr_cnt   = 0;
 reg       rs_pawr_end;   initial rs_pawr_end   = 0;
 reg       rs_pawr_end_r; initial rs_pawr_end_r = 0;
 reg [7:0] rs_data_r;     initial rs_data_r     = 0;
+reg       rs_abus_rd;    initial rs_abus_rd    = 0;
+reg       rs_abus_rd_r;  initial rs_abus_rd_r  = 0;
 always @(posedge CLK2) begin
   if (rs_pawr_end)               rs_pawr_cnt <= 0;
   else if (rs_pawr_start_early)  rs_pawr_cnt <= 1;
@@ -566,6 +568,11 @@ always @(posedge CLK2) begin
   rs_pawr_end   <= (rs_pawr_cnt == 4'd4);
   rs_pawr_end_r <= rs_pawr_end;      // ctx.v registers the strobe once more...
   rs_data_r     <= SNES_DATAr[0];    // ...and the data tap with it (2-cyc align)
+  // accumulate over the same window the counter above measures, then pipeline the
+  // verdict one cycle so it lines up with rs_pawr_end_r / rs_data_r
+  if      (rs_pawr_start_early)  rs_abus_rd <= ~SNES_READ;
+  else if (|rs_pawr_cnt)         rs_abus_rd <= rs_abus_rd | ~SNES_READ;
+  rs_abus_rd_r  <= rs_abus_rd;
 end
 // PPU (B-bus) -> the ctx-aligned captured byte; CPU ($42xx, A-bus/SNES_WR_end) uses
 // raw SNES_DATA (the native snes_ajr capture pattern).
@@ -588,8 +595,10 @@ wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0100, SNES_ADDR[4:0]}
                                             : {2'b00,  SNES_ADDR[6:0]};
 regshadow snes_regshadow(
   .clk(CLK2),
-  // PPU strobe = the ctx-style counter end (count==4 from write start).
-  .pawr_end(rs_pawr_end_r),
+  // PPU strobe = the ctx-style counter end (count==4 from write start), QUALIFIED to
+  // CPU writes only: DMA/HDMA-issued B-bus writes are dropped (rs_abus_rd_r, see the
+  // discriminator above) so per-scanline HDMA never poisons the restore.
+  .pawr_end(rs_pawr_end_r & ~rs_abus_rd_r),
   .wr_end(SNES_WR_end),
   .snes_addr(SNES_ADDR),
   .snes_pa(SNES_PA),
