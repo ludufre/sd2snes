@@ -634,6 +634,20 @@ menu_enttab_chip:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_a26_width
+ .byt  ^mtext_a26_width
+ .word !kv_a26_width
+ .byt  ^kv_a26_width
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_A26_VIDEO_WIDTH
+ .byt  ^CFG_A26_VIDEO_WIDTH
+ .word !mdesc_a26_width
+ .byt  ^mdesc_a26_width
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt 0
 
 menu_enttab_sgb:
@@ -1373,6 +1387,15 @@ kv_cx4_speed:
 kv_gsu_speed:
 .word $0000, !text_normal : .byt ^text_normal
 .word $0001, !text_fast : .byt ^text_fast
+.word $ffff
+
+; Atari 2600 picture width, shipped to the core as feat16[5]: 0 = the native
+; 160 px TIA raster 1:1 (pillarboxed), 1 = 256 px (5 source pixels stretched to
+; 8) filling the screen. cfg_load clamps A26VideoWidth into 0..1, so the
+; "value not in the table -> first row" fallback is unreachable; numeric order.
+kv_a26_width:
+.word $0000, !text_a26_w160 : .byt ^text_a26_w160
+.word $0001, !text_a26_w256 : .byt ^text_a26_w256
 .word $ffff
 
 kv_sgb_clock:

@@ -54,6 +54,7 @@ memory.c: RAM operations
 #include "sgb.h"
 #include "nes.h"
 #include "sms.h"
+#include "atari.h"
 #include "patch.h"
 #include "patch_copier.h"
 
@@ -369,7 +370,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   }
 
 #ifdef CONFIG_MK2
-  /* NES/SMS cores are mk3-only (no Spartan-3 build). The files ARE listed in
+  /* NES/SMS/Atari cores are mk3-only (no Spartan-3 build). The files ARE listed in
      the browser on mk2 so the user gets a clear "needs mk3" popup here instead
      of .nes silently missing from the listing, or a .sms dying later with a
      misleading missing-file popup for fpga_sms.bit / booting the header as a
@@ -377,14 +378,22 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   {
     char *mk2_ext = strrchr((char*)filename, '.');
     if (mk2_ext && (!strcasecmp(mk2_ext + 1, "nes")
-                 || !strcasecmp(mk2_ext + 1, "sms"))) {
+                 || !strcasecmp(mk2_ext + 1, "sms")
+                 || !strcasecmp(mk2_ext + 1, "a26"))) {
       file_close();
       sms_active = 0;  /* returning before sms_id() would leave a stale flag */
+      a26_romprops.has_a26 = 0;   /* same: returning before a26_id() leaves it stale */
       return load_abort_missing(flags, MENU_ERR_NOHW,
                                 basename_of((const char*)filename));
     }
   }
 #endif
+
+  /* Atari 2600: capture the booted name at the TOP of the chain. a26_id() runs after
+     the SGB/NES/SMS blocks below, and each of those may already have swapped
+     `filename` for its own SNES-side player -- the detect must see the file the user
+     actually picked. */
+  uint8_t *a26_filename = filename;
 
   /* SGB detect and file management */
   uint8_t *sgb_filename = filename;
@@ -428,12 +437,48 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     file_offset = 0;
   }
 
+  /* Atari 2600 (experimental): a .a26 boots the SNES-side player; the cartridge image
+     is staged separately into PSRAM (a26_load_rom below). Mirrors the SMS file swap.
+     A bankswitch scheme outside the v0 set (or a size we cannot map) -> NOIMPL popup
+     + NACK BEFORE the ACK, same rule as the prerequisite check: the menu stays alive,
+     no reset. */
+  a26_id(&a26_romprops, a26_filename);
+  if (a26_romprops.has_a26 && a26_romprops.error == MENU_ERR_NOIMPL) {
+    file_close();
+    return load_abort_missing(flags, MENU_ERR_NOIMPL,
+                              (const char*)a26_romprops.error_param);
+  }
+  /* SNES-side player (a26_snes.bin) missing -> message + NACK */
+  if (!a26_update_file(&filename)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
+                              basename_of((const char*)A26_PLAYER_FILE));
+  }
+  /* the swap changed the open file (player); refresh smc_id's view of it */
+  if (a26_romprops.has_a26) {
+    file_close();
+    file_open(filename, FA_READ);
+    if (file_res) {
+      return load_abort_missing(flags, MENU_ERR_FS,
+                                basename_of((const char*)A26_PLAYER_FILE));
+    }
+    file_offset = 0;
+  }
+
   filesize = file_handle.fsize;
   smc_id(&romprops, file_offset);
   /* the player is a plain LoROM; force the SMS core + drop any chip the header faked */
   if (sms_active) {
     romprops.fpga_conf = FPGA_SMS;
     romprops.has_dspx = 0; romprops.has_gsu = 0; romprops.has_sa1 = 0;
+    romprops.error = MENU_ERR_OK;
+  }
+  /* same for the Atari player. The list is CLOSED (see ATARI-CORE-CONTRACT sec. 7):
+     anything the LoROM header of the player could fake has to be dropped here, or the
+     prerequisite check below would demand a chip BIOS for a cartridge that has none. */
+  if (a26_romprops.has_a26) {
+    romprops.fpga_conf = FPGA_A26;
+    romprops.has_dspx = 0; romprops.has_gsu = 0; romprops.has_sa1 = 0;
+    romprops.fpga_dspfeat = 0;
     romprops.error = MENU_ERR_OK;
   }
   /* On a recore reload, the file still holds the UNPATCHED header, so smc_id()
@@ -745,6 +790,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   /* SMS: stage the .sms ROM into PSRAM (FPGA Z80 fetches it) before the SNES boots */
   sms_load_rom();
 
+  /* Atari 2600: stage the .a26 image into PSRAM before the SNES boots (the core copies
+     it into BRAM at reset and never reads PSRAM again).  No-op without a .a26. */
+  a26_load_rom();
+
   /* SGB update local file properties */
   if (sgb_romprops.has_sgb) {
     /* reset the filename to match the GB file */
@@ -778,6 +827,22 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     romprops.sramsize_bytes = 0;
     rammask = 0;
     rommask = nes_romprops.prgsize_bytes ? (nes_romprops.prgsize_bytes - 1) : 0;
+  }
+
+  /* Atari 2600 update local file properties (mirrors the NES block above) */
+  if (a26_romprops.has_a26) {
+    /* point saves/cheats/game-info assets back at the .a26 instead of the player */
+    filename = a26_filename;
+
+    /* no SaveRAM: no scheme in the v0 set is battery backed (the Superchip RAM lives
+       in the core).  rommask is deliberately NOT touched: unlike the NES stub (which
+       is relocated to the 512KB RAM), the player IS the booted LoROM image in PSRAM,
+       so the mask smc_id computed for it has to stand -- masking it down to the size
+       of the .a26 would cut the player's own ROM. */
+    romprops.ramsize_bytes  = 0;
+    romprops.srambase       = 0;
+    romprops.sramsize_bytes = 0;
+    rammask = 0;
   }
 
   /* SGB load GB RTC */
@@ -877,7 +942,11 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
      deassert_reset abaixo -- o core NES so' sai do reset (SNES_reset_strobe no
      retorno do clock do SNES) com os flags ja' estaveis, e o firmware NUNCA os
      reprograma com o core rodando. */
-  fpga_set_chipfeat(nes_romprops.has_nes ? nes_romprops.mapper_flags16
+  /* Atari: the chipfeat (0xef) carries scheme/superchip/size_class/video width
+     (a26_feat_out; ATARI-CORE-CONTRACT sec. 7).  Same invariant as the NES above --
+     written BEFORE the reset below, never with the core already running. */
+  fpga_set_chipfeat(a26_romprops.has_a26 ? a26_romprops.feat16
+                    : nes_romprops.has_nes ? nes_romprops.mapper_flags16
                     : sgb_romprops.has_sgb ? sgb_romprops.fpga_sgbfeat
                                            : romprops.fpga_dspfeat);
   nes_dbg_log("POST_CHIPFEAT");        /* nesdbg: no-op fora de um load .nes */

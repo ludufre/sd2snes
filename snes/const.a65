@@ -353,6 +353,7 @@ mtext_ingame_autosave_msu1        .byt " ",129,"MSU-1 Autosave", 0
 mtext_chip_cx4_speed              .byt "Cx4 speed", 0
 mtext_chip_gsu_speed              .byt "SuperFX speed", 0
 mtext_chip_msu1_volume_boost      .byt "MSU-1 volume boost", 0
+mtext_a26_width                   .byt "Atari 2600 video width", 0
 
 mdesc_mm_last                     .byt "Show up to 10 most recently played games", 0
 mdesc_mm_favorites                .byt "Show up to 20 favorite games", 0
@@ -419,6 +420,7 @@ mdesc_ingame_autosave_msu1        .byt "MSU-1: Take some opportunities to auto-s
 mdesc_chip_cx4_speed              .byt "Set speed of Cx4 soft core", 0
 mdesc_chip_gsu_speed              .byt "Set speed of SuperFX soft core", 0
 mdesc_chip_msu1_volume_boost      .byt "Set volume boost for MSU1 audio if your sd2snes is too quiet (Rev. E-G)", 0
+mdesc_a26_width                   .byt "Atari 2600 picture width: 160 is native 1:1, 256 fills the screen", 0
 mdesc_cx4_speed_fast              .byt "Run as fast as possible", 0
 mdesc_cx4_speed_normal            .byt "Run at approx. original speed", 0
 mdesc_gsu_speed_fast              .byt "Run as fast as possible", 0
@@ -528,6 +530,10 @@ text_enabled    .byt "Enabled", 0
 text_disabled   .byt "Disabled", 0
 text_normal     .byt "Normal", 0
 text_fast       .byt "Fast", 0
+; Atari 2600 picture width values. text_a26_w160 is language-neutral (like
+; text_50Hz/text_60Hz above) and stays out of the lang dicts.
+text_a26_w160   .byt "160 (1:1)", 0
+text_a26_w256   .byt "256 (wide)", 0
 text_rtc        .byt "Real-time", 0
 text_custom     .byt "Custom", 0
 text_yes        .byt "Yes", 0

@@ -31,6 +31,7 @@ _Static_assert(offsetof(cfg_t, bus_compat) == 0x144, "cfg_t.bus_compat must stay
 _Static_assert(offsetof(cfg_t, enable_game_manual) == 0x145, "cfg_t.enable_game_manual must stay at CFG_ADDR+$145");
 _Static_assert(offsetof(cfg_t, enable_sram_slots) == 0x146, "cfg_t.enable_sram_slots must stay at CFG_ADDR+$146");
 _Static_assert(offsetof(cfg_t, ingame_buttons_menu) == 0x147, "cfg_t.ingame_buttons_menu must stay at CFG_ADDR+$147");
+_Static_assert(offsetof(cfg_t, a26_video_width) == 0x149, "cfg_t.a26_video_width must stay at CFG_ADDR+$149");
 
 cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -90,7 +91,8 @@ cfg_t CFG_DEFAULT = {
   .bus_compat = 0,
   .enable_game_manual = 1,
   .enable_sram_slots = 1,
-  .ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_Y | SNES_BUTTON_LEFT
+  .ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_Y | SNES_BUTTON_LEFT,
+  .a26_video_width = 0
 };
 
 cfg_t CFG;
@@ -262,6 +264,8 @@ int cfg_save() {
   f_printf(&file_handle, "%s: %s\n", CFG_BUS_COMPAT, CFG.bus_compat ? "true" : "false");
   f_printf(&file_handle, "#  %s: show the in-game MANUAL tab (pages a <rom>.man from /sd2snes/info)\n", CFG_ENABLE_GAME_MANUAL);
   f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_GAME_MANUAL, CFG.enable_game_manual ? "true" : "false");
+  f_printf(&file_handle, "#  %s: Atari 2600 picture width (0: 160 native 1:1, 1: 256 stretched)\n", CFG_A26_VIDEO_WIDTH);
+  f_printf(&file_handle, "%s: %d\n", CFG_A26_VIDEO_WIDTH, CFG.a26_video_width);
   f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
   f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
   f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
@@ -450,6 +454,16 @@ int cfg_load() {
     }
     if(yaml_get_itemvalue(CFG_ENABLE_GAME_MANUAL, &tok)) {
       CFG.enable_game_manual = tok.boolvalue ? 1 : 0;
+    }
+    if(yaml_get_itemvalue(CFG_A26_VIDEO_WIDTH, &tok)) {
+      /* Written as a number, but accept a hand-edited true/false as well. The type
+         check is MANDATORY on the numeric branch: the token is reused across keys and
+         yaml_detect_value only fills boolvalue in its BOOL branches. */
+      if(tok.type == YAML_BOOL) {
+        CFG.a26_video_width = tok.boolvalue ? 1 : 0;
+      } else {
+        CFG.a26_video_width = tok.longvalue > 1 ? 0 : (uint8_t)tok.longvalue;  /* 0: 160 (1:1), 1: 256 */
+      }
     }
     if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
       strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);

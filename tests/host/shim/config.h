@@ -15,4 +15,7 @@
 
 #define __attribute__(x)
 
+/* firmware-only placement macro (real config.h): a no-op on the host */
+#define IN_AHBRAM
+
 #endif

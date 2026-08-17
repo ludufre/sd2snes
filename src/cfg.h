@@ -76,6 +76,7 @@
 #define CFG_CLEAR_PPU_ON_BOOT            ("ClearPpuOnBoot")
 #define CFG_BUS_COMPAT                   ("BusCompat")
 #define CFG_ENABLE_GAME_MANUAL           ("EnableGameManual")
+#define CFG_A26_VIDEO_WIDTH              ("A26VideoWidth")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -148,6 +149,11 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      L+R+Y+Left. YAML only (no menu entry); the UI strings keep showing the default. Sanitised by
      cfg_check_menu_combo() in cfg.c -- a 0 mask would match every mid-frame IRQ. Armed at game load by
      cheat_program(), not savestate_set_inputs() (that one skips overlay-only mode). */
+  uint8_t  a26_video_width;         /* CFG @ $149 (first byte after the WORD at $147): Atari 2600 picture
+     width. 0 = 160 px, the native TIA raster 1:1, pillarboxed on the 256 px screen; 1 = 256 px, every 5
+     source pixels stretched to 8 so the picture fills the screen. Global toggle, read at .a26 load time
+     and shipped to the core as feat16[5] of CHIPFEAT $EF (src/atari.c); the core resamples, so the SNES
+     side never sees the difference. mk3-only -- the mk2 a26 stubs never look at it. Default 0. */
 } cfg_t;
 
 int cfg_save(void);

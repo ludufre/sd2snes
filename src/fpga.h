@@ -59,6 +59,9 @@ extern uint8_t fpga_boot_led;
 #define FPGA_NES ((const uint8_t*)"/sd2snes/fpga_nes." FPGA_CONF_EXT)
 #define FPGA_SPC7110 ((const uint8_t*)"/sd2snes/fpga_spc7110." FPGA_CONF_EXT)
 #define FPGA_SMS ((const uint8_t*)"/sd2snes/fpga_sms." FPGA_CONF_EXT)
+/* Atari 2600 core (verilog/sd2snes_a26) -- mk3-only, like NES/SMS: only fpga_a26.bi3
+   exists, no mk2 .bit is planned (see atari.c). */
+#define FPGA_A26 ((const uint8_t*)"/sd2snes/fpga_a26." FPGA_CONF_EXT)
 #define FPGA_BASE ((const uint8_t*)"/sd2snes/fpga_base." FPGA_CONF_EXT)
 #define FPGA_DSP ((const uint8_t*)"/sd2snes/fpga_dsp." FPGA_CONF_EXT)
 /* mk2: boot-display bootstrap config ("fpga_mini"), loaded from SD instead of
