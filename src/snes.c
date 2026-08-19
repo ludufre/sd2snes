@@ -43,6 +43,7 @@
 #include "cfg.h"
 #include "usbinterface.h"
 #include "sgb.h"
+#include "spc7110rtc.h"
 #include "version.h"
 #include "hwinfo.h"
 #include "msu1.h"   /* menu_sfx_* : menu sound effects via the MSU-1 DAC */
@@ -310,6 +311,13 @@ uint8_t snes_main_loop() {
 
   /* save the GB RTC if enabled */
   sgb_gtc_save(file_lfn);
+
+#ifndef CONFIG_MK2
+  /* keep the SPC7110 RTC-4513 backup in step; writes the card only on a change
+     (the SPC7110 core is mk3 only, and this gate is what lets --gc-sections
+     drop the whole object on mk2) */
+  spc7110_rtc_save(file_lfn);
+#endif
 
   if(romprops.sramsize_bytes && CFG.enable_autosave) {
     uint32_t crc_bytes = min(romprops.sramsize_bytes - saveram_offset, SRAM_REGION_SIZE);

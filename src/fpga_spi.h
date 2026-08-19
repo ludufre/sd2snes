@@ -96,15 +96,25 @@
 #define FPGA_CMD_DMA_OP          (0xd4) /* MCU-driven copier: 10 param bytes -> dma_r[0..9], dma_r[9]=opcode|trig starts it */
 #define FPGA_CMD_DMA_BUSY        (0xd5) /* read: bit0 = copier still running */
 #define FPGA_CMD_SET_OVL_COMBO   (0xd6) /* 2 param bytes MSB first: in-game menu combo mask. SA-1 mk3 only (arms its IRQ redirect); dropped by every other core, so no per-core gate is needed. Further bytes left free for the save/load/slot masks. */
+#define FPGA_CMD_SETDROMBASE     (0xd7) /* SPC7110 core only: 3 param bytes MSB first -> PSRAM base of the data ROM (every other core drops the bytes) */
+#define FPGA_CMD_SETDROMMASK     (0xd8) /* SPC7110 core only: 3 param bytes MSB first -> power-of-two size mask of the data ROM */
 #define FPGA_CMD_MSUSETBITS      (0xe0)
 #define FPGA_CMD_DACPAUSE        (0xe1)
 #define FPGA_CMD_DACPLAY         (0xe2)
 #define FPGA_CMD_DACSETPTR       (0xe3)
 #define FPGA_CMD_MSUSETPTR       (0xe4)
 #define FPGA_CMD_RTCSET          (0xe5)
-#define FPGA_CMD_RTCGET          (0xe6) /* TODO remap - SGB only */
+#define FPGA_CMD_RTCGET          (0xe6) /* TODO remap - SGB, and the SPC7110 core (see below) */
 #define FPGA_CMD_BSXSETBITS      (0xe6)
 #define FPGA_CMD_SRTCRESET       (0xe7)
+/* SPC7110 core only: RTC-4513 battery backup, eight bytes in both directions -
+   one status byte {stopped, weekday written, weekday} followed by the seven
+   packed BCD time bytes of $e5.  $e6 reads the state the cartridge is showing,
+   $e7 puts it back; every other core drops the bytes ($e7 there is the S-RTC
+   reset, which the SPC7110 core does not have). */
+#define FPGA_CMD_SPC7110RTCGET   (0xe6)
+#define FPGA_CMD_SPC7110RTCSET   (0xe7)
+#define FPGA_SPC7110_RTC_LEN     (8)
 #define FPGA_CMD_DSPRESETPTR     (0xe8)
 #define FPGA_CMD_DSPWRITEPGM     (0xe9)
 #define FPGA_CMD_DSPWRITEDAT     (0xea)
@@ -149,6 +159,8 @@ void set_msu_status(uint16_t status);
 void set_saveram_base(uint8_t);
 void set_saveram_mask(uint32_t);
 void set_rom_mask(uint32_t);
+void set_drom_base(uint32_t);
+void set_drom_mask(uint32_t);
 void set_mapper(uint8_t val);
 void fpga_sddma(uint8_t tgt, uint8_t partial);
 void fpga_set_sddma_range(uint16_t start, uint16_t end);
@@ -158,6 +170,8 @@ uint32_t get_msu_offset(void);
 uint32_t get_snes_sysclk(void);
 void set_fpga_time(uint64_t time);
 uint64_t get_fpga_time(void);
+void get_spc7110_rtc(uint8_t *state);
+void set_spc7110_rtc(const uint8_t *state);
 void set_bsx_regs(uint8_t set, uint8_t reset);
 void fpga_reset_srtc_state(void);
 void fpga_reset_dspx_addr(void);
