@@ -782,15 +782,24 @@ wram_load_ultra16_cfg_src:
   sta @ST_U16_CFG
   rtl
 
+; fork: bank-$C1 entry point for bgm_clear_aram_for_launch, which is a near (rts) routine
+; in this bank.  A in, A out (the launch command), exactly like the wipe itself.
+gh_bcal_trampoline:
+  jsr bgm_clear_aram_for_launch
+  rtl
+
 game_handshake:
-  jsr bgm_clear_aram_for_launch ; fork (issue #3): if the menu music is playing,
-                            ; warm-reset first so the launched game inherits a clean
-                            ; ARAM (no leftover echo buffer -> no MSU-1 crackle).
-                            ; Transparent: no-op unless music is playing, and it
-                            ; preserves A (the command) + MCU_PARAM across the reset.
+; fork: the ARAM wipe that used to run HERE (issue #3, clean echo buffer for the launched
+; game) is a WARM RESET -- it clears VRAM and re-inits the menu.  Run before the iris, it
+; destroyed whatever the iris was about to close over: with the game-info ficha up, the
+; reset also zeroed screen_dma_disable, so the iris picked the MENU HDMA set and closed
+; over a freshly booted menu that had not repainted its list yet ("the list empties before
+; the iris").  It now runs AFTER iris_out, when the screen is already in forced blank and
+; the wipe is invisible -- see gh_deferred_launch (bank $C1).  The MCU must not be mid-load
+; when the reset fires, so the launch command travels with it.
   php
   sep #$20 : .as
-  pha
+  sta @gh_cmd_bak           ; launch command (was: pha -- it now has to survive the reset)
 ; fork: freeze the browser list tile DMA for the WHOLE load (BEFORE draw_loading_window) so
 ; the NMI's per-frame BG1/BG2 DMA can't race push/pop_window and glitch a frame -- the
 ; 1-frame black flash on GI-off loads (content gone, backdrop gradient intact). reset.a65's
@@ -807,13 +816,18 @@ game_handshake:
   jsr hide_cursor
   jsr draw_loading_window
   jsr waitblank
-; send initial request to MCU
+; send initial request to MCU -- unless the ARAM wipe is pending (menu music playing), in
+; which case both it and this command are deferred past the iris by gh_deferred_launch.
+  lda @BGM_STATE
+  cmp #$01
+  beq gh_cmd_deferred
   lda #$00
   sta @SNES_CMD
-  pla
+  lda @gh_cmd_bak
   sta @MCU_CMD
   lda #$00
   sta @LOAD_NACK            ; clear the refusal flag: anything set from here on is OURS
+gh_cmd_deferred:
 ; fork: START THE IRIS NOW, before waiting for the ACK, so its ~0.6 s of animation
 ; OVERLAPS the MCU's work instead of queueing behind it.  That work is not shavable --
 ; it opens the ROM (a linear long-name scan in a directory with hundreds of entries),
@@ -846,6 +860,11 @@ gh_iris_set:
   jsl iris_out  ; fork: iris-out (closing black circle) over the still-displayed menu
                 ; before the boot reset zeroes the PPU. NMI/IRQ are off; the MCU is
                 ; spinning on the boot it already ACKed, so the ~0.6 s is safe.
+; fork: screen is black now -- safe to warm-reset for the ARAM wipe and only then hand the
+; MCU the launch command.  Costs the iris/MCU overlap, but ONLY when the menu music is on,
+; which is the only case that needs the wipe at all.
+  jsl gh_deferred_launch      ; no-op unless the wipe was deferred (it tests BGM_STATE itself:
+                              ; $C0 has no room left for the test, $C1 has plenty)
 ; fork: hand the fadeloop a screen that is ALREADY black.  iris_out ends in forced
 ; blank ($2100 = $80), but the fadeloop that runs later (WRAM_ROUTINE -> BRAM_ROUTINE,
 ; after the FPGA reconfig) starts from `ldx cur_bright` and writes $2100 every frame --

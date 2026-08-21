@@ -1,0 +1,81 @@
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (the
+; last '.link page' wins and they emit no bytes) so every byte lands in bank $C1.
+.link page $c1
+
+; ===========================================================================
+; ghlaunch.a65 -- the deferred half of game_handshake (snes/main.a65).
+;
+; When the menu music is playing, the launched game must not inherit a live echo
+; buffer in ARAM (issue #3), and the only way to wipe ARAM is a WARM RESET of the
+; SNES.  That reset clears VRAM and re-inits the menu, so where it used to run --
+; at the very top of game_handshake -- it destroyed the screen the iris was about
+; to close over.  With the game-info ficha up it was worse: the re-init also zeroed
+; screen_dma_disable, so the iris picked the MENU HDMA set ($5F) instead of the
+; ficha one ($4E) and closed over a just-booted menu whose list had not been
+; repainted yet.  That is the "the list empties before the iris" report.
+;
+; So the wipe now happens AFTER iris_out, with the screen already in forced blank,
+; where nothing it destroys is visible.  The MCU cannot be mid-load when the reset
+; fires, so the launch command is deferred with it and issued here.
+;
+; The cost is the iris/MCU overlap: with music on, the ~0.6 s of animation no longer
+; hides the MCU's work.  It is paid ONLY in that case -- with music off the wipe is a
+; no-op and game_handshake sends the command before the iris exactly as before.
+;
+; Lives in $C1 because $C0 has about thirty bytes left; only the two-instruction
+; branch and the trampoline stayed there.
+; ===========================================================================
+
+; ===========================================================================
+; gh_deferred_launch -- warm-reset for the ARAM wipe, then hand the MCU the launch
+; command.  Called with jsl from bank $C0 straight after iris_out, with NMI off,
+; IRQs masked and the screen in forced blank.  Called UNCONDITIONALLY and returns at
+; once when no wipe is pending: bank $C0 has single-digit bytes free, so the
+; BGM_STATE test that gates it lives here rather than at the call site.
+; ===========================================================================
+gh_deferred_launch:
+    php
+    phb
+    sep #$20 : rep #$10 : .as : .xl
+
+    ; Nothing was deferred unless the music is playing -- the caller cannot afford the
+    ; two-instruction test in bank $C0, so it lives here and the call is unconditional.
+    lda @BGM_STATE
+    cmp #$01
+    beq gh_dl_run
+    plb
+    plp
+    rtl
+gh_dl_run:
+    lda #$00
+    pha
+    plb                         ; DB = 0: the $21xx/$42xx writes below are absolute,
+                                ; and bank $C1 has no register mirror
+
+    lda @gh_cmd_bak
+    jsl gh_bcal_trampoline      ; warm reset (no-op if the music stopped meanwhile);
+                                ; returns A = the launch command it carried across
+    sta @gh_cmd_bak
+
+    ; The warm boot ran the menu's own init, which turned the screen and the NMI back
+    ; on and re-armed HDMA.  Put the PPU back exactly as iris_out left it, or the boot
+    ; that follows flashes a freshly drawn menu for a few frames.
+    sei
+    stz $4200                   ; NMI/auto-joypad off
+    stz $420c                   ; all HDMA off
+    lda #$80
+    sta $2100                   ; forced blank
+
+    ; Now it is safe to start the MCU.
+    lda #$00
+    sta @SNES_CMD
+    lda @gh_cmd_bak
+    sta @MCU_CMD
+    lda #$00
+    sta @LOAD_NACK              ; refusal flag: anything set from here on is OURS
+
+    plb
+    plp
+    rtl
