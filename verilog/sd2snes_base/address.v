@@ -34,6 +34,9 @@ module address(
   input [7:0] SAVERAM_BASE,
   input [23:0] SAVERAM_MASK,
   input [23:0] ROM_MASK,
+  /* Sufami Turbo: Slot B is a separate minicart with its own sizes, hence its own masks. */
+  input [23:0] ROM_MASK_B,
+  input [23:0] SAVERAM_MASK_B,
   input  map_unlock,
   input  map_Ex_rd_unlock,
   input  map_Ex_wr_unlock,
@@ -97,9 +100,30 @@ wire [23:0] SAVERAM_ADDR = {4'hE,1'b0,SAVERAM_BASE,11'h0};
       001      LoROM
       010      ExHiROM (48-64Mbit)
       011      BS-X
+      101      Sufami Turbo (Bandai BANDAI-PT-923)
       110      brainfuck interleaved 96MBit Star Ocean =)
       111      menu (ROM in upper SRAM)
 */
+
+/* Sufami Turbo cartridge map, per the ares board database (board BANDAI-PT-923,
+   ISC-licensed) cross-checked against fullsnes:
+
+     BIOS        $00-$1f,$80-$9f : 8000-ffff   (256 KB, mirrors)
+     Slot A ROM  $20-$3f,$a0-$bf : 8000-ffff
+     Slot B ROM  $40-$5f,$c0-$df : 0000-ffff   (LoROM halves)
+     Slot A RAM  $60-$6f,$e0-$ef : 0000-ffff
+     Slot B RAM  $70-$7d,$f0-$ff : 0000-ffff
+
+   SNES_ADDR[22:21] picks the quadrant (00 BIOS / 01 A ROM / 10 B ROM / 11 RAM)
+   and, inside the RAM quadrant, SNES_ADDR[20] picks slot A (0) from slot B (1).
+   The RAM windows cover the WHOLE bank -- there is deliberately no A15 guard,
+   because the ST BIOS dispatches into SaveRAM below $8000.
+
+   PSRAM layout: BIOS at 0, Slot A ROM at $100000, Slot B ROM at $700000, and the two
+   SaveRAMs 512 KB apart so neither slot can alias onto the other.  SAVERAM_ADDR has
+   bit 19 hardwired to 0 ({4'hE,1'b0,...}), so the Slot B base is a plain OR -- cheaper
+   than a second adder on the Spartan-3. */
+wire [23:0] ST_SAVERAM_B = SAVERAM_ADDR | 24'h080000;
 
 /* HiROM:   SRAM @ Bank 0x30-0x3f, 0xb0-0xbf
             Offset 6000-7fff */
@@ -128,6 +152,14 @@ assign IS_SAVERAM_pre = (~map_unlock & SAVERAM_MASK[0])
                       :(MAPPER_DEC[3'b011])
                       ? ((SNES_ADDR_early[23:19] == 5'b00010)
                          & (SNES_ADDR_early[15:12] == 4'b0101)
+                        )
+/*  Sufami Turbo: Slot A SRAM @ 0x60-0x6f (+ 0xe0-0xef), Slot B @ 0x70-0x7d (+ 0xf0-0xff),
+ *  whole banks.  The outer SAVERAM_MASK[0] gate covers Slot A (always mapped); Slot B
+ *  gets its own so an EMPTY slot is open bus instead of aliasing to offset 0. */
+                      :(MAPPER_DEC[3'b101])
+                      ? ((SNES_ADDR_early[22:21] == 2'b11)
+                         & (~SNES_ROMSEL)
+                         & (~SNES_ADDR_early[20] | SAVERAM_MASK_B[0])
                         )
 /*  Menu mapper: 8Mbit "SRAM" @ Bank 0xf0-0xff (entire banks!) */
                       :(MAPPER_DEC[3'b111])
@@ -231,6 +263,21 @@ assign SRAM_SNES_ADDR = IS_PATCH
                               ? (24'h900000 + {bs_page,bs_page_offset})
                               : (BSX_ADDR & 24'h0fffff)
                            )
+                           :(MAPPER_DEC[3'b101])  /* Sufami Turbo */
+                           ?(IS_SAVERAM
+                             ? (SNES_ADDR[20]
+                                ? (ST_SAVERAM_B + ({SNES_ADDR[19:16], SNES_ADDR[15:0]}
+                                                 & SAVERAM_MASK_B))
+                                : (SAVERAM_ADDR + ({SNES_ADDR[19:16], SNES_ADDR[15:0]}
+                                                 & SAVERAM_MASK)))
+                             : (SNES_ADDR[22:21] == 2'b00)   /* ST BIOS, 256 KB */
+                             ? ({4'b0, SNES_ADDR[20:16], SNES_ADDR[14:0]} & 24'h03ffff)
+                             : (SNES_ADDR[22:21] == 2'b01)   /* Slot A ROM */
+                             ? (24'h100000 | ({4'b0, SNES_ADDR[20:16], SNES_ADDR[14:0]}
+                                            & ROM_MASK))
+                             : (24'h700000 | ({4'b0, SNES_ADDR[20:16], SNES_ADDR[14:0]}
+                                            & ROM_MASK_B))  /* Slot B ROM; mask 0 = empty slot */
+                            )
                            :(MAPPER_DEC[3'b110])
                            ?(IS_SAVERAM
                              ? SAVERAM_ADDR + ((SNES_ADDR[14:0] - 15'h6000)

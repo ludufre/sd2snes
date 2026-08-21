@@ -177,6 +177,14 @@ int path_is_gb(const char *name) {
   return dot && (dot[1] | 32) == 'g' && (dot[2] | 32) == 'b';
 }
 
+/* THE Sufami Turbo test, for the same reason path_is_gb exists: without a namespace
+   of its own "Tetris.st" and "Tetris.sfc" would share one .srm/.yml/.state.  Exact
+   match -- unlike .gb, ".st" has no family of longer relatives to cover. */
+int path_is_st(const char *name) {
+  const char *dot = strrchr(name, '.');
+  return dot && (dot[1] | 32) == 's' && (dot[2] | 32) == 't' && dot[3] == 0;
+}
+
 /* Build "<root>[sgb/]<BB>/<stem><ext>" into buf. `root` MUST end in '/'.
  * The bucket AND the stem come from the SAME `src` leaf -- never split those across two strings,
  * or a patched game's .srm and .state land in different buckets (see memory.c/savestate.c, which
@@ -213,6 +221,16 @@ int path_asset(char *buf, int buflen, const char *root, const char *src, const c
   if(path_is_gb(leaf)) {
     if(n > buflen - 9) { buf[0] = 0; return -1; }  /* no room for "sgb/" + "BB/" + NUL */
     memcpy(buf + n, "sgb/", 4);
+    n += 4;
+  } else if(path_is_st(leaf)) {
+    /* Sufami Turbo minicarts, same rationale as sgb/ above (a Slot B .srm comes
+       through here from the COMPANION cart's path -- see sufami.c).
+       "sft/" and not "st/": FAT is case-insensitive, so a two-letter namespace IS
+       the two-letter bucket of every game starting with those letters -- "st/" and
+       the "ST" bucket would be one directory.  Three letters cannot collide, which
+       is why sgb/ is three as well. */
+    if(n > buflen - 9) { buf[0] = 0; return -1; }  /* no room for "sft/" + "BB/" + NUL */
+    memcpy(buf + n, "sft/", 4);
     n += 4;
   }
 

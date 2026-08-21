@@ -1,0 +1,75 @@
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (the
+; last '.link page' wins and they emit no bytes) so every byte lands in bank $C1.
+.link page $c1
+
+; ===========================================================================
+; stdlg.a65 -- wording for the pre-boot selection dialog (snes/patch.a65).
+;
+; The dialog picks an IPS/BPS patch normally, and the Slot B companion cart for a
+; Sufami Turbo minicart.  Both lists have the SAME shape -- a count plus name slots
+; at IPS_NAMES -- because the firmware publishes the minicarts through the patch
+; contract (sufami_query_slotb in src/sufami.c), so only the words differ and that
+; is all this file supplies.  Living in $C1 GIVES $C0 back: the caller loses its
+; inline title block.
+; ===========================================================================
+
+; ===========================================================================
+; st_dlg_strings -- point the dialog at the right wording for this load.
+; Called with jsl from bank $C0 before the window is drawn.
+; ===========================================================================
+st_dlg_strings:
+    php
+    sep #$20 : rep #$10 : .as : .xl
+
+    lda @IPS_DLGMODE
+    cmp #IPS_DLGMODE_SLOTB
+    beq stdlg_slotb
+
+    ; ---- patch selection (the default) ----
+    lda #^text_ips_header
+    sta window_tbank
+    lda #^text_ips_nopatch
+    sta dlg_row0_bank
+    lda #^text_patch_footer
+    sta dlg_footer_bank
+    rep #$20 : .al
+    lda #!text_ips_header
+    sta window_taddr
+    lda #!text_ips_nopatch
+    sta dlg_row0_addr
+    lda #!text_patch_footer
+    sta dlg_footer_addr
+    sep #$20 : .as
+    lda #$01                    ; Y opens the per-patch context menu
+    sta dlg_pickbutton
+    sta dlg_badge               ; ...and the IPS/BPS badge column is drawn
+    lda #PS_CNT_NAME
+    sta dlg_name_cnt
+    plp
+    rtl
+
+stdlg_slotb:
+    ; ---- Sufami Turbo Slot B ----
+    lda #^text_st_slotb_title
+    sta window_tbank
+    lda #^text_st_slotb_none
+    sta dlg_row0_bank
+    lda #^text_st_slotb_footer
+    sta dlg_footer_bank
+    rep #$20 : .al
+    lda #!text_st_slotb_title
+    sta window_taddr
+    lda #!text_st_slotb_none
+    sta dlg_row0_addr
+    lda #!text_st_slotb_footer
+    sta dlg_footer_addr
+    sep #$20 : .as
+    lda #$00                    ; nothing for Y to edit on a cart entry, so the legend
+    sta dlg_pickbutton          ; below drops the Y hint too
+    sta dlg_badge               ; every entry is a minicart: an "ST" column says nothing
+    lda #PS_CNT_SLOTB           ; ...and the name gets that width back
+    sta dlg_name_cnt
+    plp
+    rtl

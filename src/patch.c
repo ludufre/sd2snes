@@ -401,8 +401,13 @@ static void patch_publish(const uint8_t *rom_path, uint32_t sram_addr,
 uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr) {
     uint8_t count;
 
-    /* Zero the count byte up front so callers always see a valid value */
+    /* Zero the count byte up front so callers always see a valid value, and stamp
+       the dialog mode in the same breath -- the pre-boot dialog is shared with the
+       Sufami Turbo Slot B picker, and a stale IPS_DLGMODE_SLOTB from a previous load
+       would word this list as one.  Both have to happen BEFORE the early return
+       below, which is the path a ROM with no patches takes. */
     sram_writebyte(0, sram_addr);
+    sram_writebyte(IPS_DLGMODE_PATCH, sram_addr + IPS_DLGMODE_OFFSET);
     ips_scan_count = 0;
 
     /* Three SIBLING frames, never nested: the directory scan (dirpath[256] +

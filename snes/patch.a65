@@ -203,8 +203,7 @@ ips_sf_cancel:
 ; ===========================================================================
 
 #define PS_COL_NAME   $04
-#define PS_CNT_NAME   42
-#define PS_COL_BADGE  47
+#define PS_COL_BADGE  47      ; unchanged: the badge is drawn at a fixed screen column
 #define PS_CNT_BADGE  3
 #define PS_COL_HDR    51
 #define PS_CNT_HDR    6
@@ -257,13 +256,9 @@ ipm_y_ok:
     lda #$3c                    ; 60 chars wide
     sta window_w
 
-    ; ---- Window title ----
-    lda #^text_ips_header
-    sta window_tbank
-    rep #$20 : .al
-    lda #!text_ips_header
-    sta window_taddr
-    sep #$20 : .as
+    ; Title and row-0 wording come from st_dlg_strings ($C1): the same dialog also
+    ; picks the Sufami Turbo Slot B cart.
+    jsl st_dlg_strings
 
     stz listsel_sel             ; start on "[No patch]"
     stz pat_top
@@ -276,8 +271,8 @@ ipm_y_ok:
     jsr patchsel_draw_rows
     jsr patchsel_draw_footer
 
-    lda #$01
-    sta listsel_pickbutton      ; allow Y (per-patch context menu)
+    lda dlg_pickbutton
+    sta listsel_pickbutton      ; Y opens the per-patch context menu; off for Slot B
 
 ips_pm_nav:
     jsr patchsel_navigate       ; A = selection or $ff, listsel_pickbutton = 00/01/ff
@@ -368,10 +363,10 @@ patchsel_draw_footer:
     lda #PS_COL_NAME
     sta print_x
     stz print_pal
-    lda #^text_patch_footer
+    lda dlg_footer_bank
     sta print_bank
     rep #$20 : .al
-    lda #!text_patch_footer
+    lda dlg_footer_addr
     tax
     sep #$20 : .as
     stx print_src
@@ -384,18 +379,15 @@ patchsel_draw_footer:
 
 ; ===========================================================================
 ; patchsel_slot_addr -- X = IPS_TEXT low word of the display slot for the entry
-; in A (8-bit, 0-based patch index).  Slot stride is IPS_NAME_LEN = 48 = 16+32.
+; in A (8-bit, 0-based patch index).  Slot stride is IPS_NAME_LEN = 64, a power of
+; two, so the index is a plain six-bit shift.
 ; Enters .as/.xl, returns .as/.xl with X set.
 ; ===========================================================================
 patchsel_slot_addr:
     rep #$20 : .al
     and #$00ff                  ; 16-bit AND: clears the hidden high byte that
                                 ; would otherwise ride into the multiply below
-    asl : asl : asl : asl       ; idx * 16
-    sta pat_slot
-    asl                         ; idx * 32
-    clc
-    adc pat_slot                ; idx * 48
+    asl : asl : asl : asl : asl : asl   ; idx * IPS_NAME_LEN (64)
     clc
     adc #!IPS_NAMES             ; = IPS_TEXT + IPS_NAME_BASE
     tax
@@ -415,18 +407,18 @@ patchsel_draw_row:
     lda pat_row_idx
     bne psdrow_patch
 
-    ; ---- row 0: "[No patch]" ----
+    ; ---- row 0: "[No patch]" / "[No cart in Slot B]" ----
     lda #PS_COL_NAME
     sta print_x
     stz print_pal               ; palette 0 = white
-    lda #^text_ips_nopatch
+    lda dlg_row0_bank
     sta print_bank
     rep #$20 : .al
-    lda #!text_ips_nopatch
+    lda dlg_row0_addr
     tax
     sep #$20 : .as
     stx print_src
-    lda #PS_CNT_NAME
+    lda dlg_name_cnt
     sta print_count
     jsr hiprint
     plp
@@ -443,11 +435,15 @@ psdrow_patch:
     sta print_x
     lda #$02
     sta print_pal
-    lda #PS_CNT_NAME
+    lda dlg_name_cnt
     sta print_count
     jsr hiprint
 
     ; ---- "IPS"/"BPS" badge, from +IPS_NAME_BADGE of the same slot ----
+    ; Skipped for the Slot B list: every entry there is a minicart, so the column
+    ; would carry no information and the name uses that width instead.
+    lda dlg_badge
+    beq psdrow_no_badge
     lda pat_row_idx
     dec
     jsr patchsel_slot_addr
@@ -469,6 +465,7 @@ psdrow_patch:
 
     ; ---- header-mode marker (.ips only; a .bps has no header convention) ----
     jsr patchsel_draw_hdr
+psdrow_no_badge:
     plp
     rts
 

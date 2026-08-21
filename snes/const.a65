@@ -626,6 +626,11 @@ text_cheat_noname .byt "(no name)", 0
 text_igm_cheat_noname .byt "(no name)", 0
 text_ips_header .byt "Patches", 0
 text_ips_nopatch .byt "[No patch]", 0
+
+; Sufami Turbo Slot B selection (wording picked by snes/stdlg.a65)
+text_st_slotb_title .byt "Sufami Turbo - Slot B", 0
+text_st_slotb_none .byt "[No cart in Slot B]", 0
+text_st_slotb_footer .byt "A:Play  B:Back  <>:Page  LR:Ends", 0
 ; Header-mode markers on the patch rows. PADDED TO 6 CHARACTERS in every
 ; language: patchsel_draw_one repaints only this field, so a shorter
 ; replacement would leave the tail of the previous marker on screen.

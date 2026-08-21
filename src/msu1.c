@@ -19,6 +19,7 @@
 #include "cheat.h"
 #include "cfg.h"
 #include "spc7110rtc.h"
+#include "sufami.h"
 #include "manual.h"
 
 FIL msudata;
@@ -97,6 +98,10 @@ void msu_savecheck(int immediate) {
      and must not be switched off with it.  Costs one branch when the cartridge
      is not an SPC7110, and writes the card only on a real change. */
   spc7110_rtc_save(file_lfn);
+  /* Same reasoning for the Sufami Turbo Slot B battery: this is the second game loop,
+     and a subsystem wired into only one of the two is dead in the other.  Above the
+     autosave gate because it carries its own CFG.enable_autosave check. */
+  sufami_slotb_autosave();
 #endif
   if(!cfg_is_msu1_autosave_enabled()) {
     return;

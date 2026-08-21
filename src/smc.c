@@ -34,6 +34,7 @@
 #include "fpga.h"
 #include "cfg.h"
 #include "memory.h"
+#include "sufami.h"
 
 extern cfg_t CFG;
 snes_romprops_t romprops;
@@ -103,6 +104,11 @@ static int smc_needs_bslorom(const uint8_t *name) {
   return 0;
 }
 
+int smc_is_sufami_minicart(const uint8_t *hdr) {
+  return !memcmp(hdr, "BANDAI SFC-ADX", 14)
+      &&  memcmp(hdr + 0x10, "SFC-ADX BACKUP", 14);
+}
+
 void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   uint8_t score, maxscore=1, score_idx=2; /* assume LoROM */
   uint8_t ext_coprocessor=0;
@@ -122,6 +128,7 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->has_sa1 = 0;
   props->has_sdd1 = 0;
   props->has_combo = 0;
+  props->has_sufami = 0;
   props->srambase = 0;
   props->sramsize_bytes = 0;
   props->fpga_features = 0;
@@ -132,6 +139,40 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
      valid game (the prereq check in load_rom reads romprops.error). */
   props->error = MENU_ERR_OK;
   props->error_param = NULL;
+
+  /* Sufami Turbo minicart, tested before the header scoring below (which would score
+     garbage on a 512 KB minicart).  Header per fullsnes: 0x36 = ROM in 128 KB units,
+     0x37 = SRAM in 2 KB units.
+     BARE dumps only.  The combined images that circulate (BIOS mirrored across a
+     megabyte, cart appended at +0x100000) are plain LoROM to the console and already
+     boot on stock firmware; they just cannot carry a second slot. */
+#ifndef CONFIG_MK2
+  {
+    uint8_t st_hdr[0x38];
+    uint32_t st_base = ((SMC_FSIZE() & 0xffff) == 0x200) ? 0x200 : 0;  /* copier header */
+
+    smc_readblock(st_hdr, st_base, sizeof(st_hdr), file_offset);
+    if(smc_is_sufami_minicart(st_hdr)) {
+      uint32_t sz = 1;
+      memset(header, 0, sizeof(snes_header_t));  /* romprops is global: no stale SNES header */
+      props->has_sufami   = 1;
+      props->mapper_id    = 5;                   /* FPGA Sufami Turbo map (address.v) */
+      props->load_address = SUFAMI_SLOTA_ROM_ADDR;
+      props->offset       = st_base;
+      props->header_address = 0;
+      while(sz < SMC_FSIZE() - st_base) sz <<= 1;
+      if(sz > SUFAMI_ROM_MASK_MAX + 1) sz = SUFAMI_ROM_MASK_MAX + 1;
+      props->romsize_bytes = sz;
+      /* 0 = no battery at all: the 8 KB the ST BIOS scribbles in stay mapped
+         (see load_rom), but no file is ever written. */
+      props->sramsize_bytes = props->ramsize_bytes = (uint32_t)st_hdr[0x37] * 2048;
+      props->region = 0;                         /* Japan only -> 60 Hz */
+      DBG_SUFAMI printf("Sufami Turbo: ROM=%ldKB SRAM=%ldKB\n", sz >> 10, props->sramsize_bytes >> 10);
+      return;
+    }
+  }
+#endif
+
   for(uint8_t num = 0; num < 6; num++) {
     score = smc_headerscore(hdr_addr[num], header, file_offset);
     //printf("%d: offset = %lX; score = %d\n", num, hdr_addr[num], score);

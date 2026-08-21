@@ -45,6 +45,7 @@ memory.c: RAM operations
 #include "diskio.h"
 #include "snesboot.h"
 #include "msu1.h"
+#include "sufami.h"
 #include "cli.h"
 #include "cheat.h"
 #include "igmenu.h"
@@ -380,7 +381,8 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     char *mk2_ext = strrchr((char*)filename, '.');
     if (mk2_ext && (!strcasecmp(mk2_ext + 1, "nes")
                  || !strcasecmp(mk2_ext + 1, "sms")
-                 || !strcasecmp(mk2_ext + 1, "a26"))) {
+                 || !strcasecmp(mk2_ext + 1, "a26")
+                 || !strcasecmp(mk2_ext + 1, "st"))) {
       file_close();
       sms_active = 0;  /* returning before sms_id() would leave a stale flag */
       a26_romprops.has_a26 = 0;   /* same: returning before a26_id() leaves it stale */
@@ -564,6 +566,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
                                   basename_of((const char*)romprops.dsp_fw));
       }
     }
+    /* The .st has no reset vector of its own: the BIOS boots and jumps into the slot. */
+    if(romprops.has_sufami && !file_exists((const char*)STBIOS_FW)) {
+      return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "stbios.bin");
+    }
     /* BS-X BIOS + data page (mapper_id 3 = BS-X Flash cart); both are loaded by
        the BS-X path below with their result ignored. */
     if(romprops.mapper_id == 3) {
@@ -745,6 +751,15 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
       set_fpga_time(get_bcdtime());
     }
   }
+#ifndef CONFIG_MK2
+  if(romprops.has_sufami) {
+
+    DBG_SUFAMI printf("Sufami Turbo. Loading BIOS %s...\n", STBIOS_FW);
+    load_sram_offload((uint8_t*)STBIOS_FW, SUFAMI_SLOTA_BIOS_ADDR, LOADRAM_AUTOSKIP_HEADER);
+    if(file_res) snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)STBIOS_FW);
+    sufami_stage_slotb_rom();
+  }
+#endif
   if(romprops.has_dspx) {
     printf("DSPx game. Loading firmware image %s...\n", romprops.dsp_fw);
     load_dspx(romprops.dsp_fw, romprops.fpga_features);
@@ -771,6 +786,13 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     romprops.srambase       = 0;
     romprops.sramsize_bytes = romprops.ramsize_bytes;
     rammask = 1;
+  } else if(romprops.has_sufami) {
+    /* MAPPED size, deliberately NOT the saveable size: the ST BIOS uses Slot A SaveRAM
+       as scratch and dispatches into it (below $8000), so the window must exist even
+       for a cart with no battery. sramsize_bytes stays 0 there, and that is the field
+       the autosave and the .srm writer key off. */
+    rammask = (romprops.ramsize_bytes > SUFAMI_SLOTA_SCRATCH_SIZE
+               ? romprops.ramsize_bytes : SUFAMI_SLOTA_SCRATCH_SIZE) - 1;
   } else if(romprops.header.ramsize == 0) {
     rammask = 0;
   } else {
@@ -858,6 +880,11 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
       set_saveram_base(ramslot);
   }
   set_rom_mask(rommask);
+  /* Sent on every load (0/0 when not a .st) so a previous minicart cannot leave a live
+     Slot B window behind; other cores drop the bytes. */
+  set_rom_mask_b(romprops.has_sufami ? sufami_rom_mask_b : 0);
+  set_saveram_mask_b((romprops.has_sufami && sufami_slotb_ramsize)
+                     ? (sufami_slotb_ramsize - 1) : 0);
   if(romprops.has_spc7110) {
     /* SPC7110: the ROM image is the program ROM followed by the data ROM.
        Hand the core the DROM window over PSRAM as base + power-of-two mask
@@ -894,7 +921,36 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
 
   printf("gsu=%x sa1=%x srambase=%lx sramsize=%lx\n", romprops.has_gsu, romprops.has_sa1, romprops.srambase, romprops.sramsize_bytes);
   if(flags & LOADROM_WITH_SRAM) {
-    if(romprops.ramsize_bytes) {
+    if(romprops.has_sufami) {
+      /* Slot A is cleared over the WHOLE mapped window, scratch included, or the ST
+         BIOS inherits the previous game's leftovers and hangs. */
+      sram_memset(SRAM_SAVE_ADDR, rammask + 1, 0xFF);
+      if(romprops.sramsize_bytes) {
+        migrate_and_load_srm(filename, SRAM_SAVE_ADDR);
+        if(file_res == FR_NO_FILE) file_res = 0;
+      }
+#ifndef CONFIG_MK2
+      if(sufami_slotb_ramsize) {
+        char slotb_srm[256];
+        sram_memset(SUFAMI_SLOTB_SAVE_ADDR, sufami_slotb_ramsize, 0xFF);
+        /* Named from the Slot B CART, not the loaded game: not migrate_and_load_srm,
+           whose derivation is tied to Slot A (patch source + battery-slot). */
+        if(path_asset(slotb_srm, sizeof(slotb_srm), SAVE_BASEDIR,
+                      sufami_slotb_path, ".srm") >= 0) {
+          load_sram((uint8_t*)slotb_srm, SUFAMI_SLOTB_SAVE_ADDR);
+          if(file_res == FR_NO_FILE) file_res = 0;
+        }
+      }
+#endif
+#ifndef CONFIG_MK2
+      sufami_slotb_crc_seed();
+#endif
+      /* Seed the Slot A scan too: snes.c skips it entirely when sramsize_bytes is 0. */
+      saveram_crc_old = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase,
+                                      romprops.sramsize_bytes, 0);
+      saveram_crc = 0;
+      saveram_offset = 0;
+    } else if(romprops.ramsize_bytes) {
       // powerslide relies on the init value to be 00.
       sram_memset(SRAM_SAVE_ADDR, romprops.ramsize_bytes, romprops.has_gsu ? 0x00 : 0xFF);
       if (romprops.sramsize_bytes) migrate_and_load_srm(filename, SRAM_SAVE_ADDR);

@@ -46,6 +46,24 @@ extern char current_filename[];
 
 #define SRAM_ROM_ADDR                (0x000000L)
 #define SRAM_SAVE_ADDR               (0xE00000L)
+/* Sufami Turbo Slot B battery SRAM: 512 KB above the Slot A window (SRAM_SAVE_ADDR)
+   so the two minicarts can never alias whatever sizes they declare.  address.v
+   derives the same base by ORing bit 19 into SAVERAM_ADDR, which has it hardwired
+   to 0.  Lockstep with ST_SAVERAM_B in verilog/sd2snes_base/address.v. */
+#define SUFAMI_SLOTB_SAVE_ADDR       (0xE80000L)
+/* Minicart ROM windows, one megabyte each, on boundaries the FPGA can OR in rather
+   than add.  The BIOS sits at 0 masked to its own 256 KB.
+   Lockstep with the 24'h100000 / 24'h700000 constants in address.v. */
+#define SUFAMI_SLOTA_ROM_ADDR        (0x100000L)
+#define SUFAMI_SLOTA_BIOS_ADDR       (0x000000L)
+#define SUFAMI_SLOTB_ROM_ADDR        (0x700000L)
+/* A minicart is at most 1 MB (header byte 0x36 counts 128 KB units); the FPGA ORs
+   the window base in, so a bigger mask would alias into it. */
+#define SUFAMI_ROM_MASK_MAX          (0x0FFFFFL)
+/* Even a minicart that declares no battery gets 8 KB mapped: the ST BIOS dispatches
+   INTO Slot A SaveRAM (below $8000), so an unmapped window hangs the boot.  Mapped is
+   not saved -- romprops.sramsize_bytes stays 0 and no file is made. */
+#define SUFAMI_SLOTA_SCRATCH_SIZE    (0x2000L)
 
 #define SRAM_MENU_ADDR               (0xC00000L)
 #define SRAM_DIR_ADDR                (0xC20000L)

@@ -169,6 +169,7 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
      ||(!strcasecmp(ext+1, "SGB"))
      ||(!strcasecmp(ext+1, "SMS"))   /* Sega Master System (experimental SMS core) */
      ||(!strcasecmp(ext+1, "A26"))   /* Atari 2600 (experimental A26 core) */
+     ||(!strcasecmp(ext+1, "ST"))    /* Sufami Turbo minicart (smc_id detects it by signature) */
     ) {
     return TYPE_ROM;
   }

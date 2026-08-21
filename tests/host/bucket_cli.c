@@ -36,6 +36,18 @@ static const char *SGB_CASES[][2] = {
   {"Tetris.sfc",  "/sd2snes/saves/TE/Tetris.srm"},
   {"Tetris",      "/sd2snes/saves/TE/Tetris.srm"},      /* no dot at all */
   {"foo.gb.sfc",  "/sd2snes/saves/FO/foo.gb.srm"},      /* last extension wins (strrchr) */
+  /* The Sufami Turbo namespace.  path_asset mirrors path_is_st (EXACT ".st"), which is
+   * also what decides where the Slot B companion cart's own .srm is written -- both
+   * slots name their save from their own cart path, through this one function. */
+  {"Poi Poi.st",  "/sd2snes/saves/sft/PO/Poi Poi.srm"},
+  {"Poi Poi.ST",  "/sd2snes/saves/sft/PO/Poi Poi.srm"},
+  {"Poi Poi.stx", "/sd2snes/saves/PO/Poi Poi.srm"},     /* prefix is NOT enough, unlike gb */
+  {"Poi Poi.s",   "/sd2snes/saves/PO/Poi Poi.srm"},
+  {"Tetris.st",   "/sd2snes/saves/sft/TE/Tetris.srm"}, /* never collides with Tetris.sfc */
+  /* Three letters on purpose: FAT is case-insensitive, so a "st/" namespace would BE
+     the "ST" bucket -- the one that holds Star Ocean and the ST010 carts. */
+  {"Star Ocean.sfc", "/sd2snes/saves/ST/Star Ocean.srm"},
+  {"Star Ocean.st",  "/sd2snes/saves/sft/ST/Star Ocean.srm"},
 };
 int main(void) {
   int bad = 0, i, n = (int)(sizeof(CASES)/sizeof(CASES[0]));
@@ -73,6 +85,7 @@ int main(void) {
     path_asset(p, sizeof p, "/sd2snes/states/", "A.gb", "01.state");
     if(strcmp(p, "/sd2snes/states/sgb/A_/A01.state")) { printf("FAIL sgb pad: %s\n", p); bad++; }
   }
+  n += (int)(sizeof(SGB_CASES)/sizeof(SGB_CASES[0]));   /* namespace rows count too */
   printf("%d/%d bucket cases OK%s\n", n - bad, n, bad ? " (WITH FAILURES)" : "");
   return bad ? 1 : 0;
 }

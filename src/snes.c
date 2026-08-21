@@ -51,6 +51,7 @@
 #include "cheat.h"
 #include "savestate.h"
 #include "manual.h"
+#include "sufami.h"
 
 uint32_t saveram_crc, saveram_crc_old;
 uint32_t bs_pack_crc, bs_pack_crc_old; /* BS Memory Pack autosave */
@@ -137,6 +138,11 @@ void prepare_reset() {
       writeled(0);
     }
   }
+  /* Sufami Turbo Slot B: the companion minicart's own battery, flushed here beside the
+     pack above because the SNES is already halted.  Only when it actually changed. */
+#ifndef CONFIG_MK2
+  sufami_slotb_flush_inreset();
+#endif
   // don't save SGB RTC since we are in reset and it may be undefined
   rdyled(1);
   readled(1);
@@ -146,6 +152,10 @@ void prepare_reset() {
   snes_reset(1);
   fpga_dspx_reset(1);
   delay_ms(200);
+  /* AFTER the flush above: clearing this first would throw away the Slot B save. */
+#ifndef CONFIG_MK2
+  sufami_clear();
+#endif
 }
 
 void snes_init() {
@@ -311,6 +321,13 @@ uint8_t snes_main_loop() {
 
   /* save the GB RTC if enabled */
   sgb_gtc_save(file_lfn);
+
+  /* Sufami Turbo Slot B battery.  A separate scan on purpose: the SaveRAM CRC below
+     covers Slot A only, so a linkable title writing into the companion cart -- the
+     whole point of the second slot -- would otherwise never reach the card. */
+#ifndef CONFIG_MK2
+  sufami_slotb_autosave();
+#endif
 
 #ifndef CONFIG_MK2
   /* keep the SPC7110 RTC-4513 backup in step; writes the card only on a change

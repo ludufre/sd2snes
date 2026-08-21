@@ -33,6 +33,7 @@
 #define DSPFW_DSP4 ((const uint8_t*)"/sd2snes/dsp4.bin")
 #define DSPFW_DSP1B ((const uint8_t*)"/sd2snes/dsp1b.bin")
 #define DSPFW_ST0010 ((const uint8_t*)"/sd2snes/st0010.bin")
+#define STBIOS_FW ((const uint8_t*)"/sd2snes/stbios.bin")
 #define DSPFW_ST0011 ((const uint8_t*)"/sd2snes/st0011.bin")
 // extern const uint8_t *DSPFW_PTRTEST=((uint8_t*)"/sd2snes/hurz");
 
@@ -91,6 +92,9 @@ typedef struct __attribute__ ((__packed__)) {
   uint8_t has_spc7110;        /* SPC7110 presence flag */
   uint8_t has_spc7110_rtc;    /* SPC7110 + RTC-4513 (carttype 0xf9) */
   uint8_t has_combo;          /* Multi game presence flag */
+  uint8_t has_sufami;         /* Sufami Turbo minicart (.st).  A flag and NOT mapper_id:
+                                 FPGA mapper 5 is shared with the SPC7110, which has its
+                                 own core, so mapper_id cannot tell them apart here. */
   uint32_t srambase;          /* saveram base address */
   uint32_t sramsize_bytes;    /* saveram size in bytes */
   uint16_t fpga_features;     /* feature/peripheral enable bits */
@@ -108,5 +112,11 @@ void smc_id_sdram(snes_romprops_t* props, uint32_t sram_base, uint32_t rom_size)
 void smc_id_sdram_window(snes_romprops_t* props, uint32_t sram_base,
                          uint32_t rom_size, uint32_t valid_bytes);
 uint8_t smc_headerscore(uint32_t addr, snes_header_t* header, uint32_t file_offset);
+
+/* THE Sufami Turbo minicart test.  The base cartridge BIOS carries the SAME signature at
+   0x00, so the 0x10 marker is what separates a real minicart from /sd2snes/stbios.bin (and
+   from the head of a combined image, which IS that BIOS).  Both slots go through this one
+   function -- Slot A in smc_id, Slot B in sufami_stage_slotb_rom -- so they cannot drift. */
+int smc_is_sufami_minicart(const uint8_t *hdr);
 
 #endif

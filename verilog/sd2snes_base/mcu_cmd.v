@@ -38,6 +38,10 @@ module mcu_cmd(
   output [7:0]  saveram_base_out,
   output [23:0] saveram_mask_out,
   output [23:0] rom_mask_out,
+  /* Sufami Turbo: the second slot is a separate cart with its own sizes, so one
+     shared mask cannot describe both.  See address.v. */
+  output [23:0] rom_mask_b_out,
+  output [23:0] saveram_mask_b_out,
 
   // SD "DMA" extension
   output SD_DMA_EN,
@@ -232,6 +236,10 @@ assign SD_DMA_PARTIAL_END = SD_DMA_PARTIAL_ENDr;
 reg [7:0]  SAVERAM_BASE; initial SAVERAM_BASE = 0;
 reg [23:0] SAVERAM_MASK;
 reg [23:0] ROM_MASK;
+/* Sufami Turbo Slot B.  Power-up 0 is the "empty slot" encoding: address.v gates the
+   window on SAVERAM_MASK_B[0], and a zero ROM mask collapses onto the first byte. */
+reg [23:0] ROM_MASK_B; initial ROM_MASK_B = 0;
+reg [23:0] SAVERAM_MASK_B; initial SAVERAM_MASK_B = 0;
 
 assign spi_data_out = MCU_DATA_IN_BUF;
 
@@ -352,6 +360,26 @@ always @(posedge clk) begin
           mcu_dma_we_out   <= 1'b1;
         end
       end
+      /* Sufami Turbo Slot B masks, 3 param bytes MSB first, same shape as the SPC7110
+         core's 0xd7/0xd8.  Cores that do not decode them drop the bytes. */
+      8'hd9:
+        case (spi_byte_cnt)
+          32'h2:
+            ROM_MASK_B[23:16] <= param_data;
+          32'h3:
+            ROM_MASK_B[15:8] <= param_data;
+          32'h4:
+            ROM_MASK_B[7:0] <= param_data;
+        endcase
+      8'hda:
+        case (spi_byte_cnt)
+          32'h2:
+            SAVERAM_MASK_B[23:16] <= param_data;
+          32'h3:
+            SAVERAM_MASK_B[15:8] <= param_data;
+          32'h4:
+            SAVERAM_MASK_B[7:0] <= param_data;
+        endcase
       8'he0:
         case (spi_byte_cnt)
           32'h2: begin
@@ -656,6 +684,8 @@ assign srtc_reset = srtc_reset_buf;
 assign mcu_data_out = SD_DMA_STATUS ? SD_DMA_SRAM_DATA : MCU_DATA_OUT_BUF;
 assign mcu_mapper = MAPPER_BUF;
 assign rom_mask_out = ROM_MASK;
+assign rom_mask_b_out = ROM_MASK_B;
+assign saveram_mask_b_out = SAVERAM_MASK_B;
 assign saveram_mask_out = SAVERAM_MASK;
 assign saveram_base_out = SAVERAM_BASE;
 

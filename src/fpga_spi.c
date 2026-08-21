@@ -251,6 +251,24 @@ void set_drom_mask(uint32_t mask) {
   FPGA_DESELECT();
 }
 
+void set_rom_mask_b(uint32_t mask) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_SETROMMASK_B);
+  FPGA_TX_BYTE((mask >> 16) & 0xff);
+  FPGA_TX_BYTE((mask >> 8) & 0xff);
+  FPGA_TX_BYTE((mask) & 0xff);
+  FPGA_DESELECT();
+}
+
+void set_saveram_mask_b(uint32_t mask) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_SETRAMMASK_B);
+  FPGA_TX_BYTE((mask >> 16) & 0xff);
+  FPGA_TX_BYTE((mask >> 8) & 0xff);
+  FPGA_TX_BYTE((mask) & 0xff);
+  FPGA_DESELECT();
+}
+
 void set_mapper(uint8_t val) {
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_SETMAPPER(val));

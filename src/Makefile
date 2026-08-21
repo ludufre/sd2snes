@@ -85,6 +85,10 @@ SRC += cfg.c cheat.c yaml.c savestate.c sgb.c sms.c atari.c nes.c nes_chr.c hwin
 # gated on CONFIG_MK2, so --gc-sections drops the whole object on mk2.
 SRC += spc7110rtc.c
 
+# Sufami Turbo Slot B autosave.  mk3 only in practice: .st is never detected under
+# CONFIG_MK2, so every call site is gated and --gc-sections drops the object on mk2.
+SRC += sufami.c
+
 SRC += usbdesc.c usbcore.c usbuser.c cdcuser.c usbinterface.c
 
 # List Assembler source files here.

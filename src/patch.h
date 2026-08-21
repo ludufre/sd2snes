@@ -17,9 +17,9 @@
  *     +IPS_FLAGS_BASE + N                u8   per-patch flags (PATCH_FLAG_*)
  *
  *   SRAM_IPS_TEXT_ADDR ($D90000, 64 KB)  -- read-only for the SNES
- *     +IPS_NAME_BASE  + N*IPS_NAME_LEN   48 B per-patch display slot:
+ *     +IPS_NAME_BASE  + N*IPS_NAME_LEN   64 B per-patch display slot:
  *                        +0 .. +41            display name, NUL-terminated
- *                        +IPS_NAME_BADGE(42)  "IPS"/"BPS" badge, NUL-terminated
+ *                        +IPS_NAME_BADGE(58)  "IPS"/"BPS" badge, NUL-terminated
  *     +IPS_PATH_BASE  + N*IPS_PATH_LEN  192 B full SD path, NUL-terminated
  *                                             (MCU-only, the menu never reads it)
  *
@@ -57,16 +57,25 @@
 /* Bytes the text half owns at SRAM_IPS_TEXT_ADDR (one full PSRAM/SNES bank) */
 #define IPS_TEXT_SIZE    0x10000
 /* Byte offset of the per-patch flag bytes within the list (past the count byte) */
+/* Byte +1 of the list header: which job this list is for.  The pre-boot dialog is
+   shared between picking a patch and picking the Sufami Turbo Slot B companion cart
+   (identical list shape), and this tells the menu which wording to use.
+   Lockstep with IPS_DLGMODE_* in snes/memmap.i65. */
+#define IPS_DLGMODE_OFFSET 1
+#define IPS_DLGMODE_PATCH  0
+#define IPS_DLGMODE_SLOTB  1
+
 #define IPS_FLAGS_BASE   16
 /* Byte offset of the first display slot within the text half */
 #define IPS_NAME_BASE    0
 /* Bytes reserved per display slot (name + badge) */
-#define IPS_NAME_LEN     48
+#define IPS_NAME_LEN     64
 /* Offset of the "IPS"/"BPS" badge inside a display slot */
-#define IPS_NAME_BADGE   42
+#define IPS_NAME_BADGE   58
 /* Byte offset of the full-path slots within the text half.  Rounded up from the
-   end of the name slots (254*48 = 12192) to a tidy 0x3000. */
-#define IPS_PATH_BASE    0x3000
+   end of the name slots (254*64 = 16256) to a tidy 0x4000.  Paths then end at
+   0x4000 + 254*192 = 0xFE80, still inside the bank. */
+#define IPS_PATH_BASE    0x4000
 /* Bytes reserved per full-path slot (191 usable chars + NUL).  A patch whose
    full path does not fit is SKIPPED by the scan rather than truncated -- a
    truncated path would make f_open() hit a different (or missing) file. */

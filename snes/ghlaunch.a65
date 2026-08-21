@@ -7,33 +7,23 @@
 ; ===========================================================================
 ; ghlaunch.a65 -- the deferred half of game_handshake (snes/main.a65).
 ;
-; When the menu music is playing, the launched game must not inherit a live echo
-; buffer in ARAM (issue #3), and the only way to wipe ARAM is a WARM RESET of the
-; SNES.  That reset clears VRAM and re-inits the menu, so where it used to run --
-; at the very top of game_handshake -- it destroyed the screen the iris was about
-; to close over.  With the game-info ficha up it was worse: the re-init also zeroed
-; screen_dma_disable, so the iris picked the MENU HDMA set ($5F) instead of the
-; ficha one ($4E) and closed over a just-booted menu whose list had not been
-; repainted yet.  That is the "the list empties before the iris" report.
+; With the menu music playing, the launched game must not inherit a live echo buffer
+; in ARAM, and wiping ARAM costs a WARM RESET of the SNES.  That reset clears VRAM
+; and re-inits the menu, so running it at the top of game_handshake destroyed the
+; screen the iris was about to close over (and zeroed screen_dma_disable, making the
+; iris pick the MENU HDMA set instead of the ficha one).  It now runs AFTER iris_out,
+; in forced blank, where nothing it destroys is visible -- and since the MCU must not
+; be mid-load when the reset fires, the launch command is deferred with it.
 ;
-; So the wipe now happens AFTER iris_out, with the screen already in forced blank,
-; where nothing it destroys is visible.  The MCU cannot be mid-load when the reset
-; fires, so the launch command is deferred with it and issued here.
-;
-; The cost is the iris/MCU overlap: with music on, the ~0.6 s of animation no longer
-; hides the MCU's work.  It is paid ONLY in that case -- with music off the wipe is a
-; no-op and game_handshake sends the command before the iris exactly as before.
-;
-; Lives in $C1 because $C0 has about thirty bytes left; only the two-instruction
-; branch and the trampoline stayed there.
+; Cost: with music on the iris no longer overlaps the MCU's work.  Music off, the
+; wipe is a no-op and the command goes out before the iris exactly as before.
 ; ===========================================================================
 
 ; ===========================================================================
-; gh_deferred_launch -- warm-reset for the ARAM wipe, then hand the MCU the launch
-; command.  Called with jsl from bank $C0 straight after iris_out, with NMI off,
-; IRQs masked and the screen in forced blank.  Called UNCONDITIONALLY and returns at
-; once when no wipe is pending: bank $C0 has single-digit bytes free, so the
-; BGM_STATE test that gates it lives here rather than at the call site.
+; gh_deferred_launch -- warm reset for the ARAM wipe, then hand the MCU the launch
+; command.  jsl from bank $C0 right after iris_out, NMI off, IRQs masked, screen in
+; forced blank.  Called UNCONDITIONALLY: $C0 cannot spare the gating test, so the
+; BGM_STATE check lives here and returns at once when no wipe is pending.
 ; ===========================================================================
 gh_deferred_launch:
     php

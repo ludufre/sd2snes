@@ -183,7 +183,13 @@ void savestate_program() {
      runs under the freeze.  Works on Mk.II and Mk.III alike (the ROM-cheat comparators
      were cut on Mk.II to make room -- see cheat_rom_psram_mode). */
   int cx4_ok = (romprops.fpga_conf == FPGA_CX4);
+  /* Sufami Turbo runs on the base core, so the core test below would pass -- but the
+     snapshot machinery assumes the ordinary single-cart map: under mapper 5 the ROM is
+     at 0x100000/0x700000 instead of 0 and there are TWO SaveRAM windows, so a restore
+     lands on the wrong regions and the game comes back black.  Overlay-only still
+     applies below, so the in-game menu and cheats keep working. */
   int savestate_ok = CFG.enable_ingame_savestate
+                  && !romprops.has_sufami
                   && (romprops.fpga_conf == NULL || romprops.fpga_conf == FPGA_BASE
                       || dsp_ok || sa1_ok || gsu_ok || obc1_ok || sdd1_ok || cx4_ok);
   int overlay_only = !savestate_ok

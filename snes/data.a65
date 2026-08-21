@@ -483,4 +483,15 @@ si_nd           .word 0    ; how many of si_dig are valid
 ; "Cheats for " (localized) + the ROM basename the firmware left in CHEAT_TITLE.
 cm_title_buf    .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
                 .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+;----------patch/Slot-B dialog strings (snes/stdlg.a65: st_dlg_strings) ----------
+; The selection dialog picks either an IPS/BPS patch or the Sufami Turbo Slot B cart;
+; both lists have the same shape, so only the wording differs.  These hold it.
+dlg_row0_addr   .word 0    ; "[No patch]" / "[No cart in Slot B]"
+dlg_row0_bank   .byt 0
+dlg_pickbutton  .byt 0     ; 1 = allow Y (per-patch context menu); 0 for Slot B
+dlg_footer_addr .word 0    ; button legend; the Slot B one has no Y hint
+dlg_footer_bank .byt 0
+dlg_name_cnt    .byt 0     ; characters a name may print (Slot B has no badge column)
+dlg_badge       .byt 0     ; 1 = draw the IPS/BPS badge column
+
 _END            .byt 0

@@ -59,6 +59,7 @@ uint8_t file_getc(void);
 /* Two-letter bucket layout (firmware 2.15+). See fileops.c for THE RULE and the two host mirrors
    that must match it (utils/sd_bucket.py, the Manager's sd-layout.ts). */
 int     path_is_gb(const char *name);                /* THE Game Boy test; .sgb does NOT match */
+int     path_is_st(const char *name);                /* THE Sufami Turbo test (.st only) */
 void    path_bucket2(const char *path, char *out);   /* writes 3 bytes: "SU\0" */
 int     path_asset(char *buf, int buflen, const char *root, const char *src, const char *ext);
 FRESULT path_asset_mkdir(char *path);

@@ -505,12 +505,28 @@
    The display name arrives already resolved (yml Name: override or the cleaned
    suffix after the ROM stem) so the menu only renders.
    Lockstep with src/patch.h (offsets) and src/memory.h (region comments). */
+/* Sufami Turbo Slot B: the same pre-boot dialog picks either an IPS/BPS patch or the
+   companion minicart, because the two lists have identical shape.  The firmware
+   publishes the minicarts through the patch contract below (sufami_query_slotb,
+   src/sufami.c) and flags which job this list is for in the reserved byte right after
+   the count; snes/stdlg.a65 turns that into the title and the row-0 wording.
+   Lockstep with IPS_DLGMODE_* in src/patch.h. */
+/* Name column widths, shared by snes/patch.a65 (draws) and snes/stdlg.a65 (picks).
+   The patch list keeps a badge column at PS_COL_BADGE; the Slot B list has none, so
+   the name runs to the window edge. */
+#define PS_CNT_NAME                 42
+#define PS_CNT_SLOTB                54      /* what fits between PS_COL_NAME and the window edge */
+
+#define IPS_DLGMODE                 $FF5001
+#define IPS_DLGMODE_PATCH           $00
+#define IPS_DLGMODE_SLOTB           $01
+
 #define IPS_LIST                    $FF5000  /* count + flags, SNES-writable */
 #define IPS_TEXT                    $D90000  /* names + paths, SNES read-only */
 #define IPS_FLAGS_BASE              16       /* offset of the per-patch flag bytes in IPS_LIST */
 #define IPS_NAME_BASE               0        /* offset of the first display slot in IPS_TEXT */
-#define IPS_NAME_LEN                48       /* bytes per display slot */
-#define IPS_NAME_BADGE              42       /* badge offset inside a display slot */
+#define IPS_NAME_LEN                64       /* bytes per display slot */
+#define IPS_NAME_BADGE              58       /* badge offset inside a display slot */
 #define IPS_MAX_PATCHES             254      /* maximum patches per ROM; 254 and not 255 because listsel_max = num_patches+1 is a byte */
 #define IPS_NAMES                   $D90000  /* = IPS_TEXT + IPS_NAME_BASE, spelled out because snescom will not size-infer an immediate like #(!IPS_TEXT + IPS_NAME_BASE) */
 #define IPS_FLAGS                   $FF5010  /* = IPS_LIST + IPS_FLAGS_BASE, spelled out so it can be indexed (lda @IPS_FLAGS,x) */

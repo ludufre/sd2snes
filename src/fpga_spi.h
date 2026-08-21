@@ -98,6 +98,8 @@
 #define FPGA_CMD_SET_OVL_COMBO   (0xd6) /* 2 param bytes MSB first: in-game menu combo mask. SA-1 mk3 only (arms its IRQ redirect); dropped by every other core, so no per-core gate is needed. Further bytes left free for the save/load/slot masks. */
 #define FPGA_CMD_SETDROMBASE     (0xd7) /* SPC7110 core only: 3 param bytes MSB first -> PSRAM base of the data ROM (every other core drops the bytes) */
 #define FPGA_CMD_SETDROMMASK     (0xd8) /* SPC7110 core only: 3 param bytes MSB first -> power-of-two size mask of the data ROM */
+#define FPGA_CMD_SETROMMASK_B    (0xd9) /* base core, Sufami Turbo only: 3 param bytes MSB first -> power-of-two size mask of the Slot B minicart ROM (0 = empty slot; every other core drops the bytes) */
+#define FPGA_CMD_SETRAMMASK_B    (0xda) /* base core, Sufami Turbo only: 3 param bytes MSB first -> size mask of the Slot B minicart SaveRAM. 0 disables the Slot B SaveRAM window (empty slot / no battery).  A SEPARATE register and not a slice of SAVERAM_MASK: one shared mask cannot describe two independent carts, and folding them together aliases Slot B onto Slot A whenever B declares no RAM. */
 #define FPGA_CMD_MSUSETBITS      (0xe0)
 #define FPGA_CMD_DACPAUSE        (0xe1)
 #define FPGA_CMD_DACPLAY         (0xe2)
@@ -159,6 +161,8 @@ void set_msu_status(uint16_t status);
 void set_saveram_base(uint8_t);
 void set_saveram_mask(uint32_t);
 void set_rom_mask(uint32_t);
+void set_rom_mask_b(uint32_t);
+void set_saveram_mask_b(uint32_t);
 void set_drom_base(uint32_t);
 void set_drom_mask(uint32_t);
 void set_mapper(uint8_t val);

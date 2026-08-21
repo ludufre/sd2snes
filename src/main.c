@@ -26,6 +26,7 @@
 #include "crc.h"
 #include "smc.h"
 #include "msu1.h"
+#include "sufami.h"
 #include "rtc.h"
 #include "sysinfo.h"
 #include "cfg.h"
@@ -83,6 +84,13 @@ static void revalidate_game_lists(void) {
   STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
   status_load_to_menu();
 }
+
+/* Sufami Turbo Slot B pick from the boot-time selector, latched out of MCU_PARAM+8
+   before get_selected_name overwrites the parameter area.  Only the browser path
+   sets it; the list-driven loads pass SUFAMI_SEL_SIDECAR explicitly. */
+#ifndef CONFIG_MK2
+static uint8_t sufami_sel_index;
+#endif
 
 /* Patch-aware Recents/Favorites: a list entry may be "<rom>\t<patch_basename>".
    Given such a raw entry, recover the patch, stage it where load_rom() expects
@@ -696,6 +704,17 @@ int main(void) {
              the lower 24 bits, so the index byte at offset +7 is safe. */
           ips_pending_index = snescmd_readbyte(SNESCMD_MCU_PARAM + 7);
           get_selected_name(file_lfn);
+#ifndef CONFIG_MK2
+          /* For a .st minicart that index is the Slot B pick, not a patch: the
+             pre-boot dialog is shared between the two jobs (see sufami_query_slotb).
+             Consume it here and clear the patch index so nothing downstream tries to
+             apply a patch that was never in the list. */
+          sufami_sel_index = SUFAMI_SEL_SIDECAR;
+          if(path_is_st((const char*)file_lfn)) {
+            sufami_sel_index = ips_pending_index;
+            ips_pending_index = 0;
+          }
+#endif
           printf("Selected name: %s (patch idx=%d)\n", file_lfn, ips_pending_index);
           /* Build the SRM-override path from the IPS file's full SD path. */
           current_ips_srm_source[0] = '\0';
@@ -731,6 +750,11 @@ int main(void) {
           } else {
             cfg_add_listed_game(LAST_FILE, file_lfn, true);
           }
+          /* MUST run before load_rom: it is what resolves and stages the Slot B path
+             the load then reads.  Also persists the A+B pair to the .stb sidecar. */
+#ifndef CONFIG_MK2
+          sufami_stage_slotb(file_lfn, sufami_sel_index);
+#endif
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
           if(filesize) break; /* ROM loaded and SNES reset, exit menu loop */
           /* load aborted (missing chip BIOS etc.): NACK so game_handshake_error
@@ -752,6 +776,15 @@ int main(void) {
           get_selected_name(qpath);
           current_ips_srm_source[0] = '\0';
           current_ips_flags = 0;
+#ifndef CONFIG_MK2
+          /* A Sufami Turbo minicart takes over this query: the very same dialog
+             picks its Slot B companion cart, so the firmware publishes the carts
+             through the patch contract and flags the list as IPS_DLGMODE_SLOTB.
+             A .st never carries a patch, so nothing is lost by not scanning. */
+          if(path_is_st((const char*)qpath)) {
+            sufami_query_slotb(qpath);
+          } else
+#endif
           ips_find_patches(qpath, SRAM_IPS_LIST_ADDR);
           cmd = 0; /* stay in menu loop */
           break;
@@ -863,6 +896,9 @@ int main(void) {
           printf("Selected name: %s\n", file_lfn);
           cfg_add_listed_game(LAST_FILE, file_lfn, true);
           stage_patch_from_entry((char*)file_lfn);
+#ifndef CONFIG_MK2
+          sufami_stage_slotb(file_lfn, SUFAMI_SEL_SIDECAR);
+#endif
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
           if(filesize) break; /* booted, exit menu loop */
           file_res = FR_OK;
@@ -875,6 +911,9 @@ int main(void) {
           printf("Selected name: %s\n", file_lfn);
           cfg_add_listed_game(LAST_FILE, file_lfn, true);   /* lands in recents too, tag intact */
           stage_patch_from_entry((char*)file_lfn);
+#ifndef CONFIG_MK2
+          sufami_stage_slotb(file_lfn, SUFAMI_SEL_SIDECAR);
+#endif
           filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
           if(filesize) break; /* booted, exit menu loop */
           file_res = FR_OK;
@@ -998,6 +1037,9 @@ int main(void) {
           if(file_lfn[0]) {
             cfg_add_listed_game(LAST_FILE, file_lfn, true);   /* keep the tag in recents */
             stage_patch_from_entry((char*)file_lfn);          /* re-apply patch; truncates to base */
+  #ifndef CONFIG_MK2
+          sufami_stage_slotb(file_lfn, SUFAMI_SEL_SIDECAR);
+#endif
             filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
             if(filesize) break; /* ROM loaded and SNES reset, exit menu loop */
           }
