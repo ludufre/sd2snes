@@ -185,6 +185,29 @@ int path_is_st(const char *name) {
   return dot && (dot[1] | 32) == 's' && (dot[2] | 32) == 't' && dot[3] == 0;
 }
 
+/* Case-insensitive compare of a NUL-terminated extension against a lowercase literal. */
+static int ext_is(const char *ext, const char *lit) {
+  while(*lit) { if((*ext | 32) != *lit) return 0; ext++; lit++; }
+  return *ext == 0;
+}
+
+static const struct { const char *ext; const char *ns; } ns_by_ext[] = {
+  { "nes", "nes" },
+  { "sms", "sms" },
+  { "a26", "a26" },
+};
+
+const char *path_ns(const char *name) {
+  const char *dot = strrchr(name, '.');
+  unsigned i;
+  if(path_is_gb(name)) return "sgb";
+  if(path_is_st(name)) return "sft";
+  if(!dot) return 0;
+  for(i = 0; i < sizeof(ns_by_ext) / sizeof(ns_by_ext[0]); i++)
+    if(ext_is(dot + 1, ns_by_ext[i].ext)) return ns_by_ext[i].ns;
+  return 0;
+}
+
 /* Build "<root>[sgb/]<BB>/<stem><ext>" into buf. `root` MUST end in '/'.
  * The bucket AND the stem come from the SAME `src` leaf -- never split those across two strings,
  * or a patched game's .srm and .state land in different buckets (see memory.c/savestate.c, which
@@ -199,7 +222,7 @@ int path_is_st(const char *name) {
  * only the caller can report it. */
 int path_asset(char *buf, int buflen, const char *root, const char *src, const char *ext) {
   const char *leaf = strrchr(src, '/');
-  const char *dot;
+  const char *dot, *ns;
   int n = 0, stem_off, leaflen;
 
   if(buflen > 0) buf[0] = 0;                    /* every -1 below leaves this in place */
@@ -209,8 +232,7 @@ int path_asset(char *buf, int buflen, const char *root, const char *src, const c
 
   while(*root && n < buflen - 1) buf[n++] = *root++;
 
-  /* Game Boy gets a namespace of its own. A sidecar is named from the ROM's stem, so without this
-     "Tetris.gb" and "Tetris.sfc" would share one .srm/.yml/.state.
+  /* The system's namespace directory, if it has one (see path_ns above for why).
      Taken from `src` like the bucket and the stem, so the writer and the menu-side delete-SRM
      path (main.c) always agree: both start from the same string. sgb_romprops.has_sgb would NOT
      work here -- sgb_id() only runs inside load_rom, so in the menu it holds the LAST LOADED
@@ -218,19 +240,11 @@ int path_asset(char *buf, int buflen, const char *root, const char *src, const c
      Known wart: a patched .gb names its save from current_ips_srm_source (a .ips path), so the
      .srm falls outside sgb/ while sgb.c's .gtc stays in. That configuration is already
      non-functional -- the patch lands on the SGB SNES BIOS at 0x880000, not on the GB ROM at 0. */
-  if(path_is_gb(leaf)) {
-    if(n > buflen - 9) { buf[0] = 0; return -1; }  /* no room for "sgb/" + "BB/" + NUL */
-    memcpy(buf + n, "sgb/", 4);
-    n += 4;
-  } else if(path_is_st(leaf)) {
-    /* Sufami Turbo minicarts, same rationale as sgb/ above (a Slot B .srm comes
-       through here from the COMPANION cart's path -- see sufami.c).
-       "sft/" and not "st/": FAT is case-insensitive, so a two-letter namespace IS
-       the two-letter bucket of every game starting with those letters -- "st/" and
-       the "ST" bucket would be one directory.  Three letters cannot collide, which
-       is why sgb/ is three as well. */
-    if(n > buflen - 9) { buf[0] = 0; return -1; }  /* no room for "sft/" + "BB/" + NUL */
-    memcpy(buf + n, "sft/", 4);
+  ns = path_ns(leaf);
+  if(ns) {
+    if(n > buflen - 9) { buf[0] = 0; return -1; }  /* no room for "xxx/" + "BB/" + NUL */
+    memcpy(buf + n, ns, 3);
+    buf[n + 3] = '/';
     n += 4;
   }
 

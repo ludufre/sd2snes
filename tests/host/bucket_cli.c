@@ -48,6 +48,30 @@ static const char *SGB_CASES[][2] = {
      the "ST" bucket -- the one that holds Star Ocean and the ST010 carts. */
   {"Star Ocean.sfc", "/sd2snes/saves/ST/Star Ocean.srm"},
   {"Star Ocean.st",  "/sd2snes/saves/sft/ST/Star Ocean.srm"},
+
+  /* The mk3-only consoles.  Same reason as sgb/ and sft/: the stem drops the extension, so
+   * without these "Tetris (USA).nes" and "Tetris (USA).sfc" would share one cover, one .yml
+   * and one cheat file -- and cross-platform stems are the rule on these systems, not the
+   * exception (Tetris, Double Dragon, Mega Man, Battletoads...). */
+  {"Tetris (USA).nes",  "/sd2snes/saves/nes/TE/Tetris (USA).srm"},
+  {"Tetris (USA).sfc",  "/sd2snes/saves/TE/Tetris (USA).srm"},
+  {"Tetris (USA).NES",  "/sd2snes/saves/nes/TE/Tetris (USA).srm"},
+  {"Sonic.sms",         "/sd2snes/saves/sms/SO/Sonic.srm"},
+  {"Sonic.SMS",         "/sd2snes/saves/sms/SO/Sonic.srm"},
+  {"Pitfall!.a26",      "/sd2snes/saves/a26/PI/Pitfall!.srm"},
+  {"Pitfall!.A26",      "/sd2snes/saves/a26/PI/Pitfall!.srm"},
+  /* EXACT extensions, and this is the pair that makes it non-negotiable: ".smc" is a SNES ROM
+   * and must never be caught by the ".sms" rule. */
+  {"Sonic.smc",         "/sd2snes/saves/SO/Sonic.srm"},
+  {"Sonic.sm",          "/sd2snes/saves/SO/Sonic.srm"},
+  {"Sonic.smsx",        "/sd2snes/saves/SO/Sonic.srm"},
+  {"Doom.nesx",         "/sd2snes/saves/DO/Doom.srm"},
+  {"Doom.ne",           "/sd2snes/saves/DO/Doom.srm"},
+  {"Combat.a2",         "/sd2snes/saves/CO/Combat.srm"},
+  {"Combat.a260",       "/sd2snes/saves/CO/Combat.srm"},
+  /* Every namespace is three characters, so none of them can ever be a two-letter bucket. */
+  {"Nesting.sfc",       "/sd2snes/saves/NE/Nesting.srm"},
+  {"Smash.sfc",         "/sd2snes/saves/SM/Smash.srm"},
 };
 int main(void) {
   int bad = 0, i, n = (int)(sizeof(CASES)/sizeof(CASES[0]));

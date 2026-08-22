@@ -60,6 +60,9 @@ uint8_t file_getc(void);
    that must match it (utils/sd_bucket.py, the Manager's sd-layout.ts). */
 int     path_is_gb(const char *name);                /* THE Game Boy test; .sgb does NOT match */
 int     path_is_st(const char *name);                /* THE Sufami Turbo test (.st only) */
+/* The namespace directory this ROM's sidecars live under ("sgb"/"sft"/"nes"/"sms"/"a26"), always
+   THREE letters, or NULL for plain SNES. See the table in fileops.c. */
+const char *path_ns(const char *name);
 void    path_bucket2(const char *path, char *out);   /* writes 3 bytes: "SU\0" */
 int     path_asset(char *buf, int buflen, const char *root, const char *src, const char *ext);
 FRESULT path_asset_mkdir(char *path);

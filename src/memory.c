@@ -1634,7 +1634,7 @@ uint32_t load_bootrle(uint32_t base_addr) {
   return (uint32_t)filesize;
 }
 
-/* Build the bucketed SD save path "/sd2snes/saves/<BB>/<stem><ext>" into buf, honoring an active
+/* Build the bucketed SD save path "/sd2snes/saves/[<ns>/]<BB>/<stem><ext>" into buf, honoring an active
    IPS/BPS patch source -- shared by the .srm/.slot/.mpk paths so they can't drift.
    The bucket AND the stem come from the same `src`, so a patched game's saves and savestates
    always land in the same bucket (path_asset enforces this by taking one string).

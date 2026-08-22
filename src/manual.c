@@ -152,7 +152,7 @@ extern cfg_t CFG;
  * file_handle. The AHB guide table and the shared read buffer live IN_AHBRAM: the main LPC175x
  * SRAM is tight and a growing .bss can silently corrupt a global (and the mk2 AHB is tight too --
  * so NO persistent path buffer: the full guide path is built transiently in man_buf, and the
- * "/sd2snes/info/<C>/<stem>" base is re-derived on demand from the game path each time, never
+ * "/sd2snes/info/[<ns>/]<BB>/<stem>" base is re-derived on demand from the game path each time, never
  * retained; and NO per-guide title in RAM: titles are written straight through to the BSRAM guide
  * records during the probe). man_guides holds only the few fields the page stagers/HUD need
  * (nn/npages/nblocks/zoom) -- 8 * 5B. .ahbram is NOLOAD (not zeroed at boot), which is
@@ -208,7 +208,7 @@ static void man_close(void) {
   if(man_open) { f_close(&man_fil); man_open = 0; }
 }
 
-/* Re-derive "/sd2snes/info/<C>/<stem>" from `rom_path` into man_buf, append suffix(nn), and open
+/* Re-derive "/sd2snes/info/[<ns>/]<BB>/<stem>" from `rom_path` into man_buf, append suffix(nn), and open
    read-only (man_open/man_open_nn set on success). The path only has to live across f_open, so
    man_buf is safe to reuse for header/index/stream after. nn==0 -> ".man"; 2..8 -> ".0N.man".
    Bounded; 0 on error. */
@@ -309,7 +309,7 @@ void manual_stage_meta(uint8_t *rom_path) {
   { DIR      dir;
     FILINFO  fno;
     char    *lfn  = (char *)man_buf;                  /* 256B LFN work area */
-    char    *base = (char *)man_buf + 256;            /* "/sd2snes/info/<C>/<stem>" */
+    char    *base = (char *)man_buf + 256;            /* "/sd2snes/info/[<ns>/]<BB>/<stem>" */
     const char *leaf;
     int i, n, cut = -1, slen;
 

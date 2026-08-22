@@ -103,7 +103,7 @@ static int gi_font_flush(gi_font_state_t *st, uint8_t *out) {
   return 0;
 }
 
-/* Build "/sd2snes/info/<BB>/<stem>" into `out` (two-letter bucket, extension stripped). Thin
+/* Build "/sd2snes/info/[<ns>/]<BB>/<stem>" into `out` (namespace + bucket, extension stripped). Thin
  * wrapper over path_asset so THE bucket rule lives in exactly one place (fileops.c); the .man
  * viewer (manual.c) reaches the same layout through this. Callers that need the stem should take
  * the offset path_asset returns rather than computing it -- see gi_utf8_to_font below. Bounded. */
@@ -487,7 +487,7 @@ void gameinfo_load(uint8_t *rom_path) {
    * exists -- the OBJ box-art floated in the band where the .gd cover would be. */
   meta.status   = GAMEINFO_STATUS_OK;
 
-  /* build "/sd2snes/info/<BB>/<stem>" (two-letter bucket, extension stripped). stem_off is where
+  /* build "/sd2snes/info/[<ns>/]<BB>/<stem>" (namespace + bucket, extension stripped). stem_off is where
    * <stem> starts -- keep it instead of recomputing the prefix width later. */
   int stem_off = path_asset(base, sizeof(base), GAMEINFO_DIR, (const char *)rom_path, "");
   if(stem_off < 0) stem_off = 0;

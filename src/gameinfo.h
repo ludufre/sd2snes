@@ -108,7 +108,7 @@ typedef struct __attribute__((__packed__)) _gameinfo_meta {
   uint16_t fmv_frames;        /* +411 ($19B) total FMV frames (info/debug; the MCU loops) */
 } gameinfo_meta_t;            /* 413 bytes */
 
-/* Build "/sd2snes/info/[sgb/]<BB>/<stem>" into `out`: the shared derivation for every
+/* Build "/sd2snes/info/[<ns>/]<BB>/<stem>" into `out`: the shared derivation for every
  * /sd2snes/info asset. A thin wrapper over path_asset() (fileops.c), which owns the two-letter
  * bucket rule and the Game Boy sgb/ namespace. The in-game manual viewer (manual.c) reuses this
  * so its path logic can NEVER drift from the game-info one.
