@@ -11,16 +11,25 @@
 # renderer no longer receives pre-converted CHR for mapper 2/7 -- it takes raw
 # NES bytes in CMD_CHR_RUN ($41), keeps a shadow of the CHR-RAM, swizzles the
 # dirty tiles into packed BG/OBJ arrays during decode, and blits them with two
-# block DMAs in the NMI.  nes_chr_stage_cli.c is a transcription of that whole
-# path (shadow -> tile expansion -> swizzle -> $2118/$2119 DMA into a VRAM
-# model) and dumps the resulting VRAM in the SAME layout nes_chr_convert.py
-# emits; PASS is again a byte-exact `cmp`.  The second block below hammers the
-# parts that only the composition can get wrong: runs that are NOT tile
-# aligned (the shadow is what makes partial tiles work) and runs that fall
-# outside / straddle the 8KB CHR-RAM ceiling (the clamp).
+# block DMAs in the NMI.  That path lives in 65816 (snes/nes/nes_render.a65), and
+# is checked here twice:
+#
+#   * block 2 -- nes_chr_stage_cli.c is a C MODEL of the design.  It proves that
+#     shadow -> expand -> swizzle -> DMA meets the contract, and does not see the
+#     renderer: it stays green if the assembly changes.  Oracle, not gate.
+#   * block 3 -- nes_render_cli.c loads misc/nes_snes.bin into a 65816 interpreter
+#     (m65816.c) and EXECUTES the real routines against a VRAM/DMA model.  Any
+#     change to the swizzle, the tile range, the descriptor, the clamp or the DMA
+#     address/length changes the bytes that come out.
+#
+# Both dump VRAM in the SAME layout nes_chr_convert.py emits, and PASS is a
+# byte-exact cmp against it, over the two things only composition can get wrong:
+# runs that are NOT tile-aligned (the shadow is what makes a partial tile work)
+# and runs that fall outside or cross the 8KB CHR-RAM ceiling (the clamp).
 set -u
 cd "$(dirname "$0")"
 CC="${CC:-cc}"
+. ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
 PY="${PYTHON:-python3}"
 REPO_ROOT="../.."
 CONVERTER="$REPO_ROOT/utils/nes_chr_convert.py"
@@ -42,7 +51,7 @@ OBW=$(eq_def VRAM_OBJ_CHR_WORD)
 RAMB=$(eq_def NES_CHR_RAM_BYTES)
 NTIL=$(eq_def NES_CHR_TILES)
 for v in BGW OBW RAMB NTIL; do
-  eval "[ -n \"\$$v\" ]" || { echo "*** equate de layout ausente ($v) em $EQ"; exit 1; }
+  eval "[ -n \"\$$v\" ]" || { echo "*** layout equate missing ($v) in $EQ"; exit 1; }
 done
 echo "  layout (de $EQ): BG=$BGW OBJ=$OBW CHR-RAM=$RAMB tiles=$NTIL"
 $CC -O1 -g -fsanitize=address,undefined \
@@ -50,6 +59,13 @@ $CC -O1 -g -fsanitize=address,undefined \
     -DNES_CHR_RAM_BYTES=$RAMB -DNES_CHR_TILES=$NTIL \
     nes_chr_stage_cli.c -o build/nes_chr_stage_cli || exit 1
 PDCLI=./build/nes_chr_stage_cli
+# The executor of the REAL renderer (65816 interpreter + VRAM/DMA model).  Same
+# layout constants, by the same -D, for the same reason.
+$CC -O1 -g -fsanitize=address,undefined \
+    -DVRAM_BG_CHR_WORD=$BGW -DVRAM_OBJ_CHR_WORD=$OBW \
+    -DNES_CHR_RAM_BYTES=$RAMB -DNES_CHR_TILES=$NTIL \
+    nes_render_cli.c m65816.c -o build/nes_render_cli || exit 1
+RCLI=./build/nes_render_cli
 
 echo "== corpus =="
 $PY - "$REPO_ROOT" <<'EOF' || exit 1
@@ -113,7 +129,7 @@ else:
 print("corpus generated in corpus_chr/")
 EOF
 
-pass=0; fail=0
+pass=0; fail=0; skip=0
 
 check_bpp() { # <name.chr> <bpp> [--from-ines]
   local src=$1 bpp=$2 extra=${3:-}
@@ -178,7 +194,7 @@ fi
 # bytes que o run nao trouxe.  O `clamp` injeta runs FORA do teto de 8KB e um
 # que ATRAVESSA o teto.  O resultado tem que ser IDENTICO em todos: a VRAM
 # final nao pode depender de como o RTL picou o fluxo.
-echo "== shadow+swizzle+bloco (CHR-RAM, Fase 2.2-lite) =="
+echo "== block 2: C MODEL of the CHR-RAM path (oracle, never runs the renderer) =="
 
 check_planedma() { # <name.chr> <bpp> <split-desc> <split-args...>
   local src=$1 bpp=$2 desc=$3; shift 3
@@ -208,7 +224,10 @@ check_planedma() { # <name.chr> <bpp> <split-desc> <split-args...>
   rm -f /tmp/py_$$.log /tmp/pd_$$.log
 }
 
-# corpus truncado no teto da CHR-RAM (8KB)
+# Corpus truncated at the 8KB CHR-RAM ceiling.  The .8k.chr are DERIVED: erase
+# before regenerating, so an item removed from the corpus stops being tested and
+# the case count stays the same between a clean run and a re-run.
+rm -f corpus_chr/*.8k.chr
 for chr_file in corpus_chr/*.chr; do
   [ -e "$chr_file" ] || continue
   case "$chr_file" in *.8k.chr) continue;; esac
@@ -229,5 +248,132 @@ for chr_file in corpus_chr/*.8k.chr; do
   done
 done
 
-echo "== summary: $pass pass, $fail fail =="
+
+# ============================================================
+# BLOCK 3 -- the REAL renderer, executed
+# ============================================================
+# nes_render_cli.c loads the bytes of misc/nes_snes.bin into a 65816 interpreter
+# (m65816.c, with WRAM $7E/$7F, the LoROM in bank $00, the VRAM registers and
+# general purpose DMA) and CALLS the renderer routines -- nes_boot_init,
+# nes_chr_handle_run ($41), nes_chrq_publish, nes_chrq_service.  What comes out is
+# the VRAM the renderer's own DMAs wrote.
+#
+# ADDRESSES COME FROM THE BUILD: misc/nes_snes.map is generated by
+# snes/nes/gen_map.py from the sneslink link.log plus the snescom symbol logs, and
+# stamps the .bin's size and CRC32 beside it, so the CLI refuses a desynchronised
+# pair.  No routine or buffer address appears here or in C.
+#
+# SKIP: misc/nes_snes.bin is not versioned (it comes out of the remote build), so
+# a clean clone skips this block and the gate exits 0.  NES_BIN_REQUIRED=1 turns
+# every reason for checking nothing into a failure.
+echo "== block 3: REAL renderer (nes_snes.bin under a 65816 interpreter) =="
+
+# The model self-tests first: everything below is premised on an interpreter that
+# decodes correctly.  It does not need the .bin, so a clean clone still checks it.
+if out=$($RCLI --selftest 2>&1); then
+  echo "PASS  m65816 selftest (modelo do 65816 + barramento)"
+  pass=$((pass+1))
+else
+  echo "FAIL  m65816 selftest:"; echo "$out" | sed 's/^/      /'
+  fail=$((fail+1))
+fi
+
+NES_BIN="${NES_SNES_BIN:-$REPO_ROOT/misc/nes_snes.bin}"
+NES_MAP="${NES_SNES_MAP:-${NES_BIN%.bin}.map}"
+NES_REQUIRED="${NES_BIN_REQUIRED:-0}"
+
+# How many cases this block WOULD check, so a SKIP is never mute: the summary
+# line says how many were left unchecked.
+render_planned=$(( 5 * 2 * $(ls corpus_chr/*.8k.chr 2>/dev/null | wc -l | tr -d ' ') + 3 * 2 * 2 + 2 * 2 ))
+
+render_skip() { # <motivo>
+  if [ "$NES_REQUIRED" != "0" ]; then
+    echo "FAIL: $1" >&2
+    echo "      NES_BIN_REQUIRED is set, so not executing the renderer is a failure." >&2
+    echo "      Rode ./build.sh (que builda snes/nes no servidor e traz misc/nes_snes.{bin,map})," >&2
+    echo "      ou aponte \$NES_SNES_BIN/\$NES_SNES_MAP para um par valido." >&2
+    fail=$((fail+1))
+    return 1
+  fi
+  echo "SKIP  block 3 ($render_planned cases not checked): $1"
+  skip=$render_planned
+  return 1
+}
+
+run_render_block() {
+  [ -f "$NES_BIN" ] || { render_skip "misc/nes_snes.bin missing ($NES_BIN) -- not tracked, comes out of the remote build"; return; }
+  [ -f "$NES_MAP" ] || { render_skip "$NES_MAP missing -- produced by 'make -C snes/nes' and fetched with the .bin"; return; }
+  echo "  renderer: $NES_BIN ($(wc -c < "$NES_BIN" | tr -d ' ') B) + $(basename "$NES_MAP")"
+
+  check_render() { # <name.chr> <bpp> <desc> <args...>
+    local src=$1 bpp=$2 desc=$3; shift 3
+    local base pyout rout
+    base=$(basename "$src" | sed 's/\.[^.]*$//')
+    pyout="corpus_chr/${base}.py.bpp${bpp}.bin"
+    rout="corpus_chr/${base}.rr${desc}.bpp${bpp}.bin"
+
+    $PY "$CONVERTER" "$src" "$pyout" --bpp "$bpp" >/tmp/py_$$.log 2>&1
+    local pyrc=$?
+    $RCLI "$src" "$rout" --rom "$NES_BIN" --map "$NES_MAP" --bpp "$bpp" "$@" >/tmp/rr_$$.log 2>&1
+    local rrc=$?
+
+    if [ "$pyrc" -ne 0 ] || [ "$rrc" -ne 0 ]; then
+      echo "FAIL  $base bpp=$bpp regime=$desc: python rc=$pyrc renderer rc=$rrc"
+      echo "      python:   $(cat /tmp/py_$$.log)"
+      echo "      renderer: $(cat /tmp/rr_$$.log)"
+      fail=$((fail+1))
+    elif cmp -s "$pyout" "$rout"; then
+      echo "PASS  $base bpp=$bpp regime=$desc ($(wc -c < "$pyout" | tr -d ' ') B, byte-exact)"
+      pass=$((pass+1))
+    else
+      echo "FAIL  $base bpp=$bpp regime=$desc: outputs differ"
+      cmp "$pyout" "$rout" | sed 's/^/      /'
+      fail=$((fail+1))
+    fi
+    rm -f /tmp/py_$$.log /tmp/rr_$$.log
+  }
+
+  # SLICING -- depends on the PAYLOAD (an unaligned run only closes because the
+  # shadow holds the bytes the run did not bring), so it runs over the whole corpus.
+  for chr_file in corpus_chr/*.8k.chr; do
+    [ -e "$chr_file" ] || continue
+    for bpp in 2 4; do
+      check_render "$chr_file" "$bpp" 240   --split 240              # corte natural do RTL
+      check_render "$chr_file" "$bpp" 16    --split 16               # 1 tile por run
+      check_render "$chr_file" "$bpp" 13    --split 13               # DESALINHADO
+      check_render "$chr_file" "$bpp" rnd   --split-rand 0xA53C17    # comprimentos mistos
+      check_render "$chr_file" "$bpp" clamp --split 13 --clamp-probe # fora/atravessa o teto
+    done
+  done
+
+  # REGIME -- exercises the renderer's POLICY (which of the $41 dispatcher's three
+  # paths, when the NMI drains, when a full rebuild fires).  Policy looks at size
+  # and rhythm, never at the payload, and the CLI ABORTS if the requested path did
+  # not actually run, so two representatives are enough.
+  # (a) regimes valid at ANY size -- including the smallest possible, 1 tile.
+  for chr_file in corpus_chr/autoteste_tile.8k.chr corpus_chr/random_1024tiles.8k.chr; do
+    [ -e "$chr_file" ] || continue
+    for bpp in 2 4; do
+      check_render "$chr_file" "$bpp" fast     --path fast --split 240      # despejo rapido (tela apagada)
+      check_render "$chr_file" "$bpp" rebuild  --split 240 --rebuild-at 5   # rebuild total dirigido
+      check_render "$chr_file" "$bpp" byte     --split 1 --rpf 32           # byte a byte (pior caso)
+    done
+  done
+  # (b) regimes that only EXIST with volume: a 1-tile payload never overflows the
+  #     queue (192 tiles/buffer) nor survives a deferred vblank.  CHR-RAM full only.
+  for chr_file in corpus_chr/random_1024tiles.8k.chr; do
+    [ -e "$chr_file" ] || continue
+    for bpp in 2 4; do
+      # Declaring the overflow is mandatory: without --expect-drop the CLI refuses
+      # a drop, so no other regime can pass on a full rebuild hiding a broken drain.
+      check_render "$chr_file" "$bpp" overflow --split 240 --rpf 0 --expect-drop
+      # V that WALKS between vblanks: half the values make the NMI defer, and the
+      # CLI requires having seen one.  With V fixed this regime never defers.
+      check_render "$chr_file" "$bpp" vdefer   --split 240 --rpf 1 --v-walk
+    done
+  done
+}
+run_render_block
+
+echo "== summary: $pass pass, $fail fail, $skip skipped =="
 [ "$fail" -eq 0 ] || exit 1

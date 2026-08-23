@@ -305,6 +305,11 @@ uint32_t patch_apply_copier(uint32_t sram_addr, uint8_t index, uint32_t rom_base
  * for a half-copied set is how a user ends up with a ROM whose saves quietly did
  * not come along. */
 #define PATCH_EXPORT_NONE     0   /* nothing to report */
+#define PATCH_EXPORT_PROBE    0xFF /* RESERVED, menu-side only: patch_create_rom parks this in
+                                     SRAM_EXPORT_RESULT_ADDR before SNES_CMD_EXPORT_CHECK.  The
+                                     check handler overwrites it unconditionally, so an 0xFF that
+                                     survives means "this firmware has no export".  Never write it
+                                     from the firmware, never reuse the value. */
 #define PATCH_EXPORT_OK       1   /* ROM written and every sidecar that existed copied */
 #define PATCH_EXPORT_FAILED   2   /* no ROM written */
 #define PATCH_EXPORT_PARTIAL  3   /* ROM written, but a sidecar that existed did not copy */

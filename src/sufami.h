@@ -29,8 +29,8 @@
 #include "config.h"
 #include <stdint.h>
 
-/* Diagnostics, in the DBG_FS/DBG_YAML shape: on by default, dropped on the mk2 where the
-   flash has no room.  Define DEBUG_SUFAMI to force them back on there. */
+/* Diagnostics, in the DBG_FS/DBG_YAML shape: on by default, dropped on the mk2 to save
+   flash.  Define DEBUG_SUFAMI to force them back on. */
 #if defined(CONFIG_MK2) && !defined(DEBUG_SUFAMI)
 #define DBG_SUFAMI while(0)
 #else

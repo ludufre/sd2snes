@@ -1135,8 +1135,7 @@ menu_enttab_patch_context:
  .byt  ^mdesc_patch_create_rom
  .byt  0,0,0
  .byt  0,0,0
- .word !(mfunc_isenabled_patch_export-1)   ; greyed on the Mk.II (no export handler)
- .byt  ^(mfunc_isenabled_patch_export-1)
+ .byt  0,0,0                                ; no greying predicate: built on every config
  .byt  0
 
 menu_enttab_filesel_context_spc:

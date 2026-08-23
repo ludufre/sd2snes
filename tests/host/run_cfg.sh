@@ -4,37 +4,61 @@
 # of the fixtures in golden/.
 #
 # MODES
-#   --capture   (re)write golden/ from the current source.  Only ever run this
-#               after reading the diff: it is the moment the expectation is set.
-#   --check     (default) rebuild and compare against golden/.  Exit 0/1.
+#   --check       (default) rebuild and compare against golden/.  Exit 0/1.
+#   --capture     (re)write the golden .bin files from the current source.  It
+#                 deliberately does NOT touch the .yml goldens.
+#   --capture-yml [--force-yml[=<fixture>]]
+#                 write the golden .yml files as well.  An existing one is kept
+#                 unless --force-yml is passed too; a MISSING one is created,
+#                 which is how a new fixture is added.  --force-yml=<fixture>
+#                 forces only that one; bare --force-yml re-captures every anchor.
 #
-# THE FILTER
-#   The .yml goldens carry a comment banner cfg_save() no longer writes; yaml.c
-#   truncates comments before parsing, so the .yml cases compare filtered against
-#   filtered and what is pinned is the set of "Key: value" lines and their order.
-#   The .yml goldens are ANCHORS -- do NOT re-capture them to strip the comments.
-#   The .bin cases are compared raw -- no filter, no tolerance.
+# - Goldens are per config: SGBSprIncrease is the one key inside an
+#   "#ifdef CONFIG_MK3" in cfg_items[], so mk2 and mk3 genuinely disagree about
+#   the file.
+# - The .yml cases compare FILTERED against filtered (comment and blank lines
+#   dropped, everything else byte for byte), so what is pinned is the set of
+#   "Key: value" lines and their order.  The .bin cases are compared raw.
+# - The .yml goldens are ANCHORS carrying a comment banner this code never wrote;
+#   do NOT re-capture them.  A genuinely new or renamed key is added BY HAND.
+# - Fixtures: default (CFG_DEFAULT), allchanged (every serialized field off its
+#   default), alternating (every boolean set from the parity of its line in
+#   cfg_items[]) and altoffset (from the parity of its byte offset in cfg_t).
+#   The last two break the symmetry allchanged cannot: with every boolean equal,
+#   swapping two field names between CFGI lines changes nothing at all.
 #
 # WHAT IS COMPARED (per config, mk2 and mk3)
-#   yml-default        save-default            vs golden .yml   (filtered)
-#   yml-allchanged     save-allchanged         vs golden .yml   (filtered)
-#   bin-default        load-dump(golden .yml)  vs golden .bin   (raw)
-#   bin-allchanged     load-dump(golden .yml)  vs golden .bin   (raw)
-#   bin-legacy         load-dump(legacy .yml)  vs golden .bin   (raw)
-#   bin-illtyped       load-dump(illtyped .yml) vs golden .bin  (raw)
+#   yml-<fixture>      save-<fixture>          vs golden .yml   (filtered)
+#   bin-<fixture>      load-dump(golden .yml)  vs golden .bin   (raw)
+#   bin-legacy/illtyped/clamped/over           vs golden .bin   (raw)
 #   filter-neutral-*   load-dump(filtered)     vs golden .bin   (raw)
 #   roundtrip-*        load(filtered)+save     vs the filtered golden
 set -u
 cd "$(dirname "$0")"
 CC="${CC:-cc}"
+. ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
 MODE="${1:---check}"
+FORCE_YML="${2:-}"
 # The golden corpus is not part of this tree; point CFG_GOLDEN at it.
 GOLDEN="${CFG_GOLDEN:-}"
 GEN=build/cfg
 
 case "$MODE" in
-  --capture|--check) ;;
-  *) echo "usage: $0 [--capture|--check]" >&2; exit 2 ;;
+  --capture|--capture-yml|--check) ;;
+  *) echo "usage: $0 [--check|--capture|--capture-yml [--force-yml[=<fixture>]]]" >&2; exit 2 ;;
+esac
+case "$FORCE_YML" in
+  '') ;;
+  --force-yml|--force-yml=*)
+    [ "$MODE" = --capture-yml ] || { echo "--force-yml only applies to --capture-yml" >&2; exit 2; } ;;
+  *) echo "usage: $0 [--check|--capture|--capture-yml [--force-yml[=<fixture>]]]" >&2; exit 2 ;;
+esac
+# "" = force nothing, "*" = force every anchor, otherwise the one fixture named.
+FORCE_ONLY=${FORCE_YML#--force-yml}
+case "$FORCE_YML" in
+  '')            FORCE_ONLY= ;;
+  --force-yml)   FORCE_ONLY='*' ;;
+  *)             FORCE_ONLY=${FORCE_ONLY#=} ;;
 esac
 
 if [ -z "$GOLDEN" ] || [ ! -d "$GOLDEN" ]; then
@@ -90,13 +114,12 @@ for fn in bcdtime2srtctime srtctime2bcdtime; do
   exit 1
 done
 
-# cfg.c static-asserts that the favorites SRAM mirror stops short of the game
-# info block.  Both addresses live in src/memory.h, which the host build
-# replaces with a shim carrying only what the tests need, so lift the two values
-# out of the REAL header rather than transcribing them here -- same spirit as
-# the rtc extraction above.
+# Every BSRAM address cfg.c touches comes out of the REAL map header, never out
+# of a copy next to the tests that could drift while every case still passes.  A
+# missing symbol fails the build here rather than compiling against a stale one.
 MAPDEFS=
-for sym in SRAM_FAVORITEGAMES_ADDR SRAM_GAMEINFO_ADDR; do
+for sym in SRAM_FAVORITEGAMES_ADDR SRAM_GAMEINFO_ADDR \
+           SRAM_MENU_CFG_ADDR SRAM_LASTGAME_DIR_ADDR SRAM_LASTGAME_FILE_ADDR; do
   val=$(grep -hE "^#define[[:space:]]+$sym[[:space:]]" ../../src/memmap.h ../../src/memory.h 2>/dev/null | head -1 | awk '{print $3}')
   case "$val" in
     0[xX][0-9a-fA-F]*|\(0[xX][0-9a-fA-F]*) ;;
@@ -140,32 +163,60 @@ cmp_case() { # <name> <got> <want>
   fi
 }
 
-# The legacy input is hand-written and versioned: it carries the forms an older
-# config.yml (or a hand edit) can still contain, chosen so TODAY's cfg_load has
-# exactly one possible answer for each.  See the file's own header.
+# Hand-written, versioned inputs.  cfg_clamped.yml is split out of the legacy
+# file because yaml_get_value takes the FIRST occurrence of a key, and that file
+# already spells three of the clamped keys another way.  See each file's header.
 LEGACY="$GOLDEN/cfg_legacy_ok.yml"
-# Same idea, one step further out: every line of the ill-typed input hands a key
-# the wrong kind of scalar.  cfg_load states a type per key, so each one has a
-# single defined answer -- a number on a boolean key is true when non-zero, a
-# boolean on a numeric key is 1 or 0, and anything else leaves the default.
 ILLTYPED="$GOLDEN/cfg_illtyped.yml"
-for f in "$LEGACY" "$ILLTYPED"; do
+CLAMPED="$GOLDEN/cfg_clamped.yml"
+OVER="$GOLDEN/cfg_over.yml"
+for f in "$LEGACY" "$ILLTYPED" "$CLAMPED" "$OVER"; do
   [ -f "$f" ] && continue
   echo "!! missing $f (it is versioned input, not generated)" >&2
   exit 1
 done
 
-if [ "$MODE" = "--capture" ]; then
+# An existing .yml golden is an ANCHOR: regenerating it would replace the
+# expectation with the current output.  Creating a MISSING one is the opposite.
+# --force-yml takes a fixture name so overriding one does not re-capture the rest.
+yml_forced() { # <path>
+  case "$FORCE_ONLY" in
+    '')  return 1 ;;
+    '*') return 0 ;;
+  esac
+  case "$(basename "$1")" in
+    cfg_"$FORCE_ONLY".*) return 0 ;;
+  esac
+  return 1
+}
+
+capture_yml() { # <cli mode> <path>
+  if [ -f "$2" ] && ! yml_forced "$2"; then
+    echo "keep   $2 (anchor -- --capture-yml never overwrites one; --force-yml=<fixture> if you must)"
+    return 0
+  fi
+  $CLI "$1" "$2"
+}
+
+if [ "$MODE" = "--capture" ] || [ "$MODE" = "--capture-yml" ]; then
   echo "== capture =="
   for cfg in mk2 mk3; do
     CLI=./build/cfg_cli_$cfg
-    $CLI save-default    "$GOLDEN/cfg_default.$cfg.yml"    || exit 1
-    $CLI save-allchanged "$GOLDEN/cfg_allchanged.$cfg.yml" || exit 1
-    $CLI load-dump "$GOLDEN/cfg_default.$cfg.yml"    "$GOLDEN/cfg_default.$cfg.bin"    || exit 1
-    $CLI load-dump "$GOLDEN/cfg_allchanged.$cfg.yml" "$GOLDEN/cfg_allchanged.$cfg.bin" || exit 1
+    if [ "$MODE" = "--capture-yml" ]; then
+      capture_yml save-default     "$GOLDEN/cfg_default.$cfg.yml"     || exit 1
+      capture_yml save-allchanged  "$GOLDEN/cfg_allchanged.$cfg.yml"  || exit 1
+      capture_yml save-alternating "$GOLDEN/cfg_alternating.$cfg.yml" || exit 1
+      capture_yml save-altoffset   "$GOLDEN/cfg_altoffset.$cfg.yml"   || exit 1
+    fi
+    $CLI load-dump "$GOLDEN/cfg_default.$cfg.yml"     "$GOLDEN/cfg_default.$cfg.bin"     || exit 1
+    $CLI load-dump "$GOLDEN/cfg_allchanged.$cfg.yml"  "$GOLDEN/cfg_allchanged.$cfg.bin"  || exit 1
+    $CLI load-dump "$GOLDEN/cfg_alternating.$cfg.yml" "$GOLDEN/cfg_alternating.$cfg.bin" || exit 1
+    $CLI load-dump "$GOLDEN/cfg_altoffset.$cfg.yml"   "$GOLDEN/cfg_altoffset.$cfg.bin"   || exit 1
     $CLI load-dump "$LEGACY"   "$GOLDEN/cfg_legacy_ok.$cfg.bin" || exit 1
     $CLI load-dump "$ILLTYPED" "$GOLDEN/cfg_illtyped.$cfg.bin"  || exit 1
-    echo "captured $cfg: $(ls -1 $GOLDEN/cfg_*.$cfg.* | tr '\n' ' ')"
+    $CLI load-dump "$CLAMPED"  "$GOLDEN/cfg_clamped.$cfg.bin"   || exit 1
+    $CLI load-dump "$OVER"     "$GOLDEN/cfg_over.$cfg.bin"      || exit 1
+    echo "captured $cfg: $(ls -1 $GOLDEN/cfg_*.$cfg.bin | tr '\n' ' ')  (.yml anchors untouched)"
   done
   echo "== captured -- READ THE DIFF before committing =="
   exit 0
@@ -174,7 +225,7 @@ fi
 echo "== run =="
 for cfg in mk2 mk3; do
   CLI=./build/cfg_cli_$cfg
-  for which in default allchanged; do
+  for which in default allchanged alternating altoffset; do
     G_YML="$GOLDEN/cfg_$which.$cfg.yml"
     G_BIN="$GOLDEN/cfg_$which.$cfg.bin"
     if [ ! -f "$G_YML" ] || [ ! -f "$G_BIN" ]; then
@@ -205,11 +256,13 @@ for cfg in mk2 mk3; do
     cmp_case "roundtrip-$which-$cfg" "$GEN/rt_$which.$cfg.flt" "$GEN/gold_$which.$cfg.flt"
   done
 
-  # legacy / clamped forms, and ill-typed scalars -> one deterministic image each
-  for which in legacy_ok illtyped; do
+  # legacy / out-of-range forms, and ill-typed scalars -> one deterministic image each
+  for which in legacy_ok illtyped clamped over; do
     case "$which" in
       legacy_ok) IN="$LEGACY";   NAME=legacy ;;
       illtyped)  IN="$ILLTYPED"; NAME=illtyped ;;
+      clamped)   IN="$CLAMPED";  NAME=clamped ;;
+      over)      IN="$OVER";     NAME=over ;;
     esac
     G_BIN="$GOLDEN/cfg_$which.$cfg.bin"
     if [ ! -f "$G_BIN" ]; then

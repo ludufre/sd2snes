@@ -84,12 +84,12 @@ SRC += cfg.c cheat.c yaml.c savestate.c sgb.c sms.c atari.c nes.c nes_chr.c hwin
 # Shared helpers: menu command handlers, file->PSRAM streaming, string/path
 # utilities and the YAML sidecar writer.
 SRC += menucmd.c psram_io.c strutil.c yamlw.c
-# SPC7110 RTC-4513 battery backup.  mk3 only in practice: the call sites are
-# gated on CONFIG_MK2, so --gc-sections drops the whole object on mk2.
+# SPC7110 RTC-4513 battery backup.  mk3 only: the mk2 flavour of the SPC7110 core
+# has no virtual battery, so the call sites are gated on CONFIG_MK2 and
+# --gc-sections drops the whole object there.
 SRC += spc7110rtc.c
 
-# Sufami Turbo Slot B autosave.  mk3 only in practice: .st is never detected under
-# CONFIG_MK2, so every call site is gated and --gc-sections drops the object on mk2.
+# Sufami Turbo Slot B autosave.  Linked into every config.
 SRC += sufami.c
 
 SRC += usbdesc.c usbcore.c usbuser.c cdcuser.c usbinterface.c
@@ -386,6 +386,10 @@ clean_list :
 	$(Q)$(REMOVE) $(CSRC:.c=.s)
 	$(Q)$(REMOVE) $(CSRC:.c=.d)
 	$(Q)$(REMOVE) $(DEPDIR)/*
+# -fstack-usage drops a .su next to every .o, and the mk2 LTO link adds its own
+# obj-mk*/*.ltrans.su.  Sweep the whole object tree rather than $(OBJ:.o=.su), so a
+# .su left behind by a deleted source file is not read back as a current frame.
+	$(Q)$(REMOVE) $(addsuffix *.su,$(OBJDIRS))
 	-$(Q)rmdir --ignore-fail-on-non-empty -p $(OBJDIRS)
 
 # Include the dependency files.

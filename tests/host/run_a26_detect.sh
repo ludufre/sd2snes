@@ -7,8 +7,12 @@
 # manifest.  Nothing about the detector is duplicated on this side: a mismatch
 # means the firmware changed its mind about an image.
 #
-# CORPUS (default ../../../atari/tests/corpus, override with $1) -- it is
-# generated outside this repo, so an absent or empty directory is a SKIP:
+# CORPUS: $1, else $A26_CORPUS; without either the suite is skipped.  It is
+# generated outside this repo, so an absent or empty directory is a SKIP;
+# A26_CORPUS_REQUIRED=1 turns every reason for checking nothing into a failure.
+# Either way the last line states how many images were checked.
+#
+# Layout:
 #   <name>.a26     the image
 #   expected.txt   one line per image, '#' comments and blank lines ignored:
 #
@@ -31,11 +35,30 @@
 #                  because the manifest has gone stale -- drop the marker then.
 #
 # Without expected.txt the observed lines are printed instead (seed the manifest
-# from them AFTER checking each one by hand) and the gate exits 0.
+# from them AFTER checking each one by hand) and the gate exits 0 -- unless
+# A26_CORPUS_REQUIRED says otherwise.
 set -u
 cd "$(dirname "$0")"
 CC="${CC:-cc}"
-CORPUS="${1:-../../../atari/tests/corpus}"
+. ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
+CORPUS="${1:-${A26_CORPUS:-}}"
+REQUIRED="${A26_CORPUS_REQUIRED:-0}"
+nrom=0    # images FOUND; the summary reports it even when none were checked
+
+# Nothing to check: a skip when the corpus is optional, a failure when the
+# caller has declared it must be there.  Always states the count.
+nothing_checked() { # <reason>
+  if [ "$REQUIRED" != "0" ]; then
+    echo "FAIL: $1" >&2
+    echo "      A26_CORPUS_REQUIRED is set, so checking nothing is a failure." >&2
+    echo "      Point \$A26_CORPUS at the corpus, or unset A26_CORPUS_REQUIRED." >&2
+    echo "== summary: 0 of $nrom images checked ($CORPUS) -- REQUIRED =="
+    exit 1
+  fi
+  echo "SKIP: $1"
+  echo "== summary: 0 of $nrom images checked ($CORPUS) =="
+  exit 0
+}
 
 echo "== build =="
 mkdir -p build
@@ -48,15 +71,11 @@ $CC -O1 -g -fsanitize=address,undefined -I shim -I ../../src \
 CLI=./build/a26_detect_cli
 
 echo "== corpus ($CORPUS) =="
-if [ ! -d "$CORPUS" ]; then
-  echo "SKIP: no corpus directory $CORPUS (generated outside this repo)"
-  exit 0
-fi
+[ -d "$CORPUS" ] || nothing_checked "no corpus directory $CORPUS (it is generated outside this repo)"
 roms=$(ls -1 "$CORPUS"/*.a26 2>/dev/null)
-if [ -z "$roms" ]; then
-  echo "SKIP: no *.a26 in $CORPUS (generated outside this repo)"
-  exit 0
-fi
+[ -n "$roms" ] || nothing_checked "no *.a26 in $CORPUS (it is generated outside this repo)"
+nrom=$(printf '%s\n' "$roms" | wc -l | tr -d ' ')
+
 EXPECTED="$CORPUS/expected.txt"
 if [ ! -f "$EXPECTED" ]; then
   echo "no expected.txt in $CORPUS -- observed verdicts:"
@@ -64,7 +83,7 @@ if [ ! -f "$EXPECTED" ]; then
     got=$("$CLI" "$rom" 2>&1 | grep '^SCHEME=')
     echo "  $(basename "$rom")|$got"
   done
-  exit 0
+  nothing_checked "$nrom image(s) in $CORPUS but no expected.txt -- nothing to compare the verdicts against; seed it from the lines above AFTER checking each one by hand"
 fi
 
 pass=0; fail=0; miss=0; xfail=0
@@ -122,5 +141,5 @@ for rom in $roms; do
   fi
 done
 
-echo "== summary: $pass pass, $xfail xfail, $fail fail, $miss without expectation =="
+echo "== summary: $((pass + xfail + fail + miss)) of $nrom images checked ($CORPUS): $pass pass, $xfail xfail, $fail fail, $miss without expectation =="
 [ "$fail" -eq 0 ] && [ "$miss" -eq 0 ] || exit 1

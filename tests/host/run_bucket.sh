@@ -12,6 +12,7 @@
 set -u
 cd "$(dirname "$0")"
 CC="${CC:-cc}"
+. ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
 mkdir -p build
 
 awk '/^void path_bucket2/{p=1} /^\/\* mkdir -p of the directory portion/{p=0} p' \

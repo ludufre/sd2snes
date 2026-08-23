@@ -146,7 +146,6 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
      BARE dumps only.  The combined images that circulate (BIOS mirrored across a
      megabyte, cart appended at +0x100000) are plain LoROM to the console and already
      boot on stock firmware; they just cannot carry a second slot. */
-#ifndef CONFIG_MK2
   {
     uint8_t st_hdr[0x38];
     uint32_t st_base = ((SMC_FSIZE() & 0xffff) == 0x200) ? 0x200 : 0;  /* copier header */
@@ -171,7 +170,6 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
       return;
     }
   }
-#endif
 
   for(uint8_t num = 0; num < 6; num++) {
     score = smc_headerscore(hdr_addr[num], header, file_offset);

@@ -16,9 +16,10 @@
 #define SRAM_IPS_SCRATCH_ADDR (0xDA0000L)
 #define SRAM_PATCH_TOP      (SRAM_CHEAT_ADDR)
 #define SRAM_EXPORT_PATH_ADDR (0xFF4D00L)
-#define SRAM_MENU_CFG_ADDR    (0xFF0100L)
-#define SRAM_LASTGAME_DIR_ADDR  (0xFF1F00L)
-#define SRAM_LASTGAME_FILE_ADDR (0xFF4A00L)
+/* The BSRAM-map addresses cfg.c uses (SRAM_MENU_CFG_ADDR, SRAM_LASTGAME_*,
+   SRAM_FAVORITEGAMES_ADDR, SRAM_GAMEINFO_ADDR) are not transcribed here:
+   run_cfg.sh passes them with -D straight out of src/memmap.h, so there is no
+   second copy to drift.  Do not re-add them here. */
 #define SAVE_BASEDIR    ("/sd2snes/saves/")
 #define SRM_SLOT_COUNT  4
 

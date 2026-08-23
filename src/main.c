@@ -219,7 +219,7 @@ int main(void) {
     STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
     STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
 #ifdef CONFIG_MK2
-    STM.is_mk2 = 1;   /* greys + refuses "create patched ROM" only; see snes.h */
+    STM.is_mk2 = 1;   /* board identity; nothing in the menu gates on it today, see snes.h */
 #else
     STM.is_mk2 = 0;
 #endif

@@ -12,9 +12,11 @@
  * golden is wrong by a byte per line.
  *
  * Usage:
- *   cfg_cli size                        print sizeof(cfg_t)
- *   cfg_cli save-default    <out.yml>   fresh-card defaults -> cfg_save()
- *   cfg_cli save-allchanged <out.yml>   every serialized field off its default
+ *   cfg_cli size                         print sizeof(cfg_t)
+ *   cfg_cli save-default     <out.yml>   fresh-card defaults -> cfg_save()
+ *   cfg_cli save-allchanged  <out.yml>   every serialized field off its default
+ *   cfg_cli save-alternating <out.yml>   booleans alternate by table position
+ *   cfg_cli save-altoffset <out.yml>     ...and by their offset in cfg_t
  *   cfg_cli load-dump <in.yml> <out.bin>  cfg_load() -> raw cfg_t image
  *   cfg_cli roundtrip <in.yml> <out.yml>  cfg_load() then cfg_save()
  */
@@ -425,6 +427,146 @@ static void cfg_make_allchanged(void) {
   CFG.a26_video_width = 1;                       /* 256 px stretched */
 }
 
+/* ---- the alternating-booleans config ------------------------------------
+ * cfg_make_allchanged() moves every boolean to the SAME value, which hides one
+ * class of mistake: swap the field names between two CFGI lines whose booleans
+ * share a default and cfg_save/cfg_load swap with them, leaving file and image
+ * byte-identical -- one table drives both directions, so it cannot catch
+ * itself.
+ *
+ * Here each boolean alternates instead, so NEIGHBOURS hold different values and
+ * swapping the lines that name them changes both what cfg_save writes and what
+ * cfg_load stores.  "Neighbour" has two meanings and they do not coincide:
+ *
+ *   ALT_BY_INDEX    parity of the boolean's line in cfg_items[]: separates
+ *                   every pair of ADJACENT TABLE LINES.
+ *   ALT_BY_OFFSET   parity of its byte offset in cfg_t: separates every pair
+ *                   of ADJACENT STRUCT FIELDS.
+ *
+ * One boolean carries one bit, so no single fixture can do both; run_cfg.sh
+ * captures a golden along each axis and the pair of them is the gate.  Pairs
+ * that are neighbours in NEITHER order can still alias.
+ *
+ * The offsets are DISCOVERED, not transcribed: cfg_items[] is static to cfg.c
+ * and no header exposes it, so the CLI writes the defaults out, flips one
+ * "true"/"false" line at a time, loads the result and sees which byte of cfg_t
+ * moved.  The probe is itself a check: a boolean key that moves no byte, or
+ * more than one, stops the run.
+ */
+enum alt_axis { ALT_BY_INDEX, ALT_BY_OFFSET };
+#define ALT_MAX_LINES 128
+
+struct alt_line {
+  size_t off;    /* start of the line in alt_buf */
+  size_t len;    /* its length, EOL included */
+  size_t klen;   /* its length without the CR/LF */
+  size_t vlen;   /* length of the "true"/"false" literal, 0 if not a boolean */
+  int    val;
+};
+
+static char   alt_buf[8192];
+static size_t alt_len;
+static struct alt_line alt_lines[ALT_MAX_LINES];
+static int    alt_nlines;
+
+static int alt_slurp_cfgfile(void) {
+  FILE *f = fopen(host_path(CFG_FILE), "rb");
+  if (!f) { perror("config.yml"); return -1; }
+  alt_len = fread(alt_buf, 1, sizeof alt_buf, f);
+  fclose(f);
+  if (alt_len == sizeof alt_buf) {
+    fprintf(stderr, "cfg_cli: config.yml no longer fits alt_buf -- raise it\n");
+    return -1;
+  }
+  return 0;
+}
+
+static void alt_split(void) {
+  size_t i = 0;
+  alt_nlines = 0;
+  while (i < alt_len) {
+    /* Truncating here would silently drop the tail of config.yml from the
+       fixture -- the probe would still "succeed", just over fewer keys. */
+    if (alt_nlines == ALT_MAX_LINES) {
+      fprintf(stderr, "cfg_cli: config.yml has more than %d lines -- raise "
+                      "ALT_MAX_LINES\n", ALT_MAX_LINES);
+      exit(99);
+    }
+    struct alt_line *l = &alt_lines[alt_nlines];
+    size_t s = i, k;
+    while (i < alt_len && alt_buf[i] != '\n') i++;
+    if (i < alt_len) i++;                       /* take the LF with the line */
+    k = i - s;
+    while (k && (alt_buf[s + k - 1] == '\n' || alt_buf[s + k - 1] == '\r')) k--;
+    l->off = s; l->len = i - s; l->klen = k; l->vlen = 0; l->val = 0;
+    if (k >= 6 && !memcmp(alt_buf + s + k - 6, ": true", 6)) { l->vlen = 4; l->val = 1; }
+    else if (k >= 7 && !memcmp(alt_buf + s + k - 7, ": false", 7)) { l->vlen = 5; l->val = 0; }
+    alt_nlines++;
+  }
+}
+
+/* Write the slurped file back to the card, with the boolean on line `flip`
+   inverted (-1 = verbatim).  CRLF, like everything cfg_save emits. */
+static int alt_write(int flip) {
+  const char *hp = host_path(CFG_FILE);
+  FILE *f;
+  int i;
+  host_mkdir_for(hp);
+  f = fopen(hp, "wb");
+  if (!f) { perror(hp); return -1; }
+  for (i = 0; i < alt_nlines; i++) {
+    const char *p = alt_buf + alt_lines[i].off;
+    if (i == flip) {
+      fwrite(p, 1, alt_lines[i].klen - alt_lines[i].vlen, f);
+      fputs(alt_lines[i].val ? "false" : "true", f);
+      fputs("\r\n", f);
+    } else {
+      fwrite(p, 1, alt_lines[i].len, f);
+    }
+  }
+  return fclose(f) == 0 ? 0 : -1;
+}
+
+static int cfg_make_alternating(enum alt_axis axis) {
+  const uint8_t *dflt = (const uint8_t *)&CFG_DEFAULT;
+  long off[ALT_MAX_LINES];
+  int i, nbool = 0;
+
+  memcpy(&CFG, &CFG_DEFAULT, sizeof(cfg_t));
+  cfg_save();
+  if (alt_slurp_cfgfile()) return 1;
+  alt_split();
+
+  for (i = 0; i < alt_nlines; i++) {
+    size_t j;
+    unsigned hits = 0;
+    long where = -1;
+    if (!alt_lines[i].vlen) continue;
+    if (alt_write(i)) return 1;
+    cfg_load();
+    for (j = 0; j < sizeof(cfg_t); j++)
+      if (((const uint8_t *)&CFG)[j] != dflt[j]) { hits++; where = (long)j; }
+    if (hits != 1) {
+      fprintf(stderr, "cfg_cli: flipping the boolean on line %d moved %u byte(s) of"
+                      " cfg_t, expected exactly 1 -- a key whose CFGI line names the"
+                      " wrong field, or a non-boolean whose value spells true/false\n",
+              i, hits);
+      return 1;
+    }
+    off[nbool++] = where;
+  }
+  if (!nbool) {
+    fprintf(stderr, "cfg_cli: no boolean keys in config.yml -- the probe found nothing\n");
+    return 1;
+  }
+
+  memcpy(&CFG, &CFG_DEFAULT, sizeof(cfg_t));
+  for (i = 0; i < nbool; i++)
+    ((uint8_t *)&CFG)[off[i]] =
+        (uint8_t)(((axis == ALT_BY_INDEX ? (long)i : off[i])) & 1);
+  return 0;
+}
+
 /* ---- modes -------------------------------------------------------------- */
 static int mode_save_default(const char *out) {
   /* The fresh-card path verbatim: cfg_load() with no file on the card
@@ -443,6 +585,12 @@ static int mode_save_default(const char *out) {
 
 static int mode_save_allchanged(const char *out) {
   cfg_make_allchanged();
+  cfg_save();
+  return copy_file(host_path(CFG_FILE), out) == 0 ? 0 : 1;
+}
+
+static int mode_save_alternating(const char *out, enum alt_axis axis) {
+  if (cfg_make_alternating(axis)) return 1;
   cfg_save();
   return copy_file(host_path(CFG_FILE), out) == 0 ? 0 : 1;
 }
@@ -469,6 +617,7 @@ int main(int argc, char **argv) {
 
   if (argc < 2) {
     fprintf(stderr, "usage: %s size|save-default <out.yml>|save-allchanged <out.yml>|"
+                    "save-alternating <out.yml>|save-altoffset <out.yml>|"
                     "load-dump <in.yml> <out.bin>|roundtrip <in.yml> <out.yml>\n", argv[0]);
     return 2;
   }
@@ -481,6 +630,10 @@ int main(int argc, char **argv) {
   }
   if (!strcmp(mode, "save-default") && argc == 3)    return mode_save_default(argv[2]);
   if (!strcmp(mode, "save-allchanged") && argc == 3) return mode_save_allchanged(argv[2]);
+  if (!strcmp(mode, "save-alternating") && argc == 3)
+    return mode_save_alternating(argv[2], ALT_BY_INDEX);
+  if (!strcmp(mode, "save-altoffset") && argc == 3)
+    return mode_save_alternating(argv[2], ALT_BY_OFFSET);
   if (!strcmp(mode, "load-dump") && argc == 4)       return mode_load_dump(argv[2], argv[3]);
   if (!strcmp(mode, "roundtrip") && argc == 4)       return mode_roundtrip(argv[2], argv[3]);
 

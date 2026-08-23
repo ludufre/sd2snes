@@ -8,6 +8,7 @@
 set -u
 cd "$(dirname "$0")"
 CC="${CC:-cc}"
+. ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
 mkdir -p build
 
 awk '/^int patch_display_name/{p=1} p; /^}/{if(p) exit}' \

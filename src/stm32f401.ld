@@ -86,6 +86,19 @@ SECTIONS
 
   . = ALIGN(4);
 
+  /* Second BSS in the AHB-side scratch (IN_AHBRAM, config.h).  Declared even though
+     this part has one flat RAM: left as an orphan section ld makes it PROGBITS with an
+     LMA in flash, appending kilobytes of zeros that startup.c never copies.  NOLOAD is
+     also the contract the buffers are written against (see the .ahbram note in
+     lpc1756.ld): nothing in here is zeroed at boot. */
+  .ahbram (NOLOAD) :
+  {
+    __ahbram_start__ = .;
+    *(.ahbram)
+    *(.ahbram.*)
+    __ahbram_end__ = .;
+  } > ram
+
   /* BSS */
   .bss :
   {

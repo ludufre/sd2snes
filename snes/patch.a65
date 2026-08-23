@@ -186,12 +186,7 @@ ips_sf_cancel:
 ; B cancels.  The sidecar is written back once, on the way out, and only when
 ; something actually changed.
 ;
-; The context menu opens on the mk2 too.  Only its "create patched ROM" entry is
-; greyed out there (mfunc_isenabled_patch_export) -- the export handler is the part
-; that does not fit in the mk2's flash, while the header override and its sidecar
-; (CMD_PATCH_META_SAVE, patchmeta.c) are built for every config.  Hiding the whole
-; menu on the mk2 would have cost it the override, which is the escape hatch for a
-; patch the auto-detection reads wrong.
+; The context menu and both of its entries work on every config.
 ;
 ; Reads:   IPS_LIST + 0 = num_patches (must be >= 1 on entry)
 ; Returns: A = 0 (no patch selected)
@@ -704,10 +699,7 @@ psn_btn_a:
     lda listsel_sel
     jmp psn_exit
 psn_btn_y:
-    ; Opens on EVERY config.  The mk2 only lacks the export handler, and that one
-    ; entry greys itself out (mfunc_isenabled_patch_export); the header override it
-    ; also carries is built for every config, so gating the whole menu here -- which
-    ; is what this used to do -- took the override away from the mk2 along with it.
+    ; Opens on EVERY config, and so does everything inside it.
     lda listsel_pickbutton
     cmp #$01
     bne psn_loop                ; Y not allowed here
@@ -996,33 +988,6 @@ mfunc_isenabled_patch_hdr:
 
 
 ; ===========================================================================
-; mfunc_isenabled_patch_export -- greys out "Create patched ROM" on the Mk.II.
-; Carry SET = greyed out, carry CLEAR = selectable.
-;
-; The mk2's 122624-byte flash has no room for the export handler + the sidecar
-; copier, so SNES_CMD_EXPORT_PATCHED_ROM is compiled out there (#ifndef CONFIG_MK2
-; in main.c/patch.c).  m3nu.bin is ONE binary shared by every config, so the check
-; has to be at runtime -- ST_IS_MK2 is published by the firmware at boot.
-;
-; Only THIS entry is gated.  The other one (header mode) writes its sidecar through
-; CMD_PATCH_META_SAVE, which is built for every config, so the mk2 keeps the
-; override -- the escape hatch for an IPS whose header convention is auto-detected
-; wrong.  Greying rather than hiding because the menu has no hide mechanism: entries
-; run to a terminating MTYPE 0, so a shorter menu means a SECOND table, and bank $C0
-; is ~90% full.  The greying predicate slot is already reserved in every entry, so
-; this costs the table nothing.
-;
-; Four instructions, no stack, no index registers, long addressing -- same contract
-; as mfunc_isenabled_patch_hdr above (X is the live entry pointer; DB is $C0).
-; ===========================================================================
-mfunc_isenabled_patch_export:
-    .as
-    lda @ST_IS_MK2
-    cmp #$01                    ; 1 (mk2) -> C set = grey; 0 (mk3) -> C clear
-    rtl
-
-
-; ===========================================================================
 ; patch_create_rom -- context-menu action (MTYPE_FUNC_CLOSE): ask the MCU to
 ; write the ROM with this patch already applied next to the original.
 ;
@@ -1045,16 +1010,6 @@ patch_create_rom:
     phb
     sep #$20 : .as
     rep #$10 : .xl
-    ; HARD gate for the Mk.II, which has no export handler (SNES_CMD_EXPORT_PATCHED_ROM
-    ; is compiled out under #ifndef CONFIG_MK2).  mfunc_isenabled_patch_export greys the
-    ; entry, but greying in this menu is COSMETIC ONLY -- menu_check_disabled_func just
-    ; picks a palette, and neither show_menu's MTYPE_FUNC_CLOSE dispatch nor
-    ; menu_edit_value has an early-out for it.  Without this check an mk2 user could
-    ; still press A and send a command nothing answers, leaving the modal spinning.
-    lda @ST_IS_MK2
-    beq pcr_not_mk2
-    jmp pcr_out
-pcr_not_mk2:
     lda @pat_row_idx            ; NOT listsel_sel -- see mfunc_isenabled_patch_hdr.
                                 ; Long: a FUNC is dispatched with whatever data
                                 ; bank show_menu was using.
@@ -1077,6 +1032,16 @@ pcr_have:
     ; answer rides EXPORT_RESULT (persistent), NOT an $aa on SNES_CMD: the MCU's
     ; menu loop re-arms $55 microseconds after a NACK, the same race LOAD_NACK
     ; exists for.
+    ;
+    ; The $ff below is a CAPABILITY sentinel: a firmware that predates
+    ; CMD_EXPORT_CHECK falls into the dispatcher's default and re-arms $55 anyway,
+    ; so the ACK alone cannot tell "checked, nothing in the way" from "no handler".
+    ; The real handler ALWAYS writes EXPORT_RESULT before its $55 and never $ff
+    ; (PATCH_EXPORT_* are 0..4, src/patch.h), so an $ff surviving the ACK means
+    ; this firmware has no check and no export.  Waiting for the ACK is therefore
+    ; unconditional: every firmware answers it.
+    lda #$ff
+    sta @EXPORT_RESULT
     lda #$00
     sta @SNES_CMD
     lda #CMD_EXPORT_CHECK
@@ -1088,18 +1053,27 @@ pcr_chk_wait:
     lda #$55
     sta @MCU_CMD
     lda @EXPORT_RESULT
-    beq pcr_do_export
-    ; Exists: one-shot the flag (stale, it would pop the reload-path modal on the
-    ; next menu boot) and tell the user right here, over the intact dialog.
+    beq pcr_do_export           ; PATCH_EXPORT_NONE: the name is free, go ahead
+    cmp #$ff
+    bne pcr_exists
+    ; Sentinel intact: no handler on the other side.  text_si_updatefw is already
+    ; localised, so this branch costs no new string in either bank.
+    lda #^text_si_updatefw
+    ldx #!text_si_updatefw
+    bra pcr_modal
+pcr_exists:
+    ; PATCH_EXPORT_EXISTS: tell the user right here, over the intact dialog.
+    lda #^text_patch_export_exists
+    ldx #!text_patch_export_exists
+pcr_modal:
+    ; Shared tail.  A = message bank, X = message address (the 16-bit X from the
+    ; entry above is still in force).  Clearing EXPORT_RESULT is NOT optional on
+    ; either branch: the byte is persistent and export_result_check pops a modal for
+    ; anything non-zero after the next menu boot.
+    sta modal_bank
+    stx modal_src               ; NOT print_src: push_window/draw_window run first
     lda #$00
     sta @EXPORT_RESULT
-    lda #^text_patch_export_exists
-    sta modal_bank
-    rep #$20 : .al
-    lda #!text_patch_export_exists
-    tax
-    sep #$20 : .as
-    stx modal_src
     jsr show_modal_msg
     jmp pcr_out
 
@@ -1359,12 +1333,14 @@ show_modal_msg
     sta bar_xl
     sta bar_yl
     sta bar_wl
-    lda #18                     ; w=28 -> centred x=(64-28)/2=18
-    sta window_x
-    lda #12
-    sta window_y
-    lda #28
-    sta window_w
+    lda #13                     ; w=38 -> centred x=(64-38)/2=13.  draw_window puts
+    sta window_x                ; the borders at x and x+w-1 (13 and 50); the text
+    lda #12                     ; starts at x+2 = 15 and hiprint CLIPS at print_count
+    sta window_y                ; (never wraps), so 34 chars end at 48, one blank
+    lda #38                     ; column short of the border.  Sized for the longest
+    sta window_w                ; caller string, text_si_updatefw (34 in EN, 27-33
+                                ; translated; WIDTH_LIMITS allows 40 -- a longer
+                                ; translation would clip here).
     lda #$03
     sta window_h
     lda #^zero                  ; empty title -> closed top border
@@ -1385,7 +1361,7 @@ show_modal_msg
     sta print_bank
     ldx modal_src
     stx print_src
-    lda #26
+    lda #34
     sta print_count
     jsr hiprint
 smm_wait:

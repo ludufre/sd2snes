@@ -311,7 +311,6 @@ static NO_INLINE void browser_pos_save(const char *path) {
   STM.restore_browser = 1;
 }
 
-#ifndef CONFIG_MK2
 /* "Create patched ROM" (SNES_CMD_EXPORT_PATCHED_ROM).
  *
  * Lifted out of the command switch because it is a whole procedure rather than a
@@ -405,7 +404,6 @@ static uint8_t patch_export_command(uint8_t xidx) {
   current_ips_flags = 0;
   return result;
 }
-#endif /* !CONFIG_MK2 */
 
 /* SNES_CMD_QUERY_IPS_PATCHES: list the patches (or, for a .st, the Slot B carts) that
    go with the selected ROM.  Its own function so the 256-byte path below never lands in
@@ -427,16 +425,15 @@ static NO_INLINE void query_ips_patches(void) {
   get_selected_name(qpath);
   current_ips_srm_source[0] = '\0';
   current_ips_flags = 0;
-#ifndef CONFIG_MK2
   /* A Sufami Turbo minicart takes over this query: the very same dialog
      picks its Slot B companion cart, so the firmware publishes the carts
      through the patch contract and flags the list as IPS_DLGMODE_SLOTB.
      A .st never carries a patch, so nothing is lost by not scanning. */
   if(path_is_st((const char*)qpath)) {
     sufami_query_slotb(qpath);
-  } else
-#endif
-  ips_find_patches(qpath, SRAM_IPS_LIST_ADDR);
+  } else {
+    ips_find_patches(qpath, SRAM_IPS_LIST_ADDR);
+  }
 }
 
 /* Commands issued FROM the pre-boot info screen, i.e. the ones that must NOT stop a running FMV.
@@ -479,12 +476,10 @@ void menucmd_fmv_gate(uint8_t cmd) {
    SNES is still in the menu desyncs the two. */
 uint32_t menucmd_launch_rom(uint8_t cmd) {
   uint32_t filesize;
-#ifndef CONFIG_MK2
   /* Sufami Turbo Slot B pick from the boot-time selector, latched out of MCU_PARAM+7
      before get_selected_name overwrites the parameter area.  Only the browser path
      sets it; the list-driven loads leave it at SUFAMI_SEL_SIDECAR. */
   uint8_t sufami_sel = SUFAMI_SEL_SIDECAR;
-#endif
 
   /* Start from "no patch" on every path: autoboot relies on it when the stored entry
      is empty; the other three overwrite it below. */
@@ -497,7 +492,6 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
        the lower 24 bits, so the index byte at offset +7 is safe. */
     ips_pending_index = snescmd_readbyte(SNESCMD_MCU_PARAM + 7);
     get_selected_name(file_lfn);
-#ifndef CONFIG_MK2
     /* For a .st minicart that index is the Slot B pick, not a patch: the
        pre-boot dialog is shared between the two jobs (see sufami_query_slotb).
        Consume it here and clear the patch index so nothing downstream tries to
@@ -506,7 +500,6 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
       sufami_sel = ips_pending_index;
       ips_pending_index = 0;
     }
-#endif
     printf("Selected name: %s (patch idx=%d)\n", file_lfn, ips_pending_index);
     /* Build the SRM-override path from the IPS file's full SD path. */
     current_ips_flags = 0;
@@ -566,9 +559,7 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
 
   /* MUST run before load_rom: it is what resolves and stages the Slot B path
      the load then reads.  Also persists the A+B pair to the .stb sidecar. */
-#ifndef CONFIG_MK2
   sufami_stage_slotb(file_lfn, sufami_sel);
-#endif
   filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
   if(filesize) return filesize;   /* ROM loaded and SNES reset, leave the menu loop */
   /* load aborted (missing chip BIOS etc.): clear the file error state -- or the LED
@@ -582,7 +573,7 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
   switch(cmd) {
     case SNES_CMD_QUERY_IPS_PATCHES:
       query_ips_patches();
-      return 0; /* stay in menu loop */
+      return 0;
     case SNES_CMD_PATCH_META_SAVE:
       /* The menu edited the header-mode field of the staged flags bytes; rewrite
          the sidecar from the scan we still hold (which also prunes entries whose
@@ -595,13 +586,7 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
         patchmeta_save(file_lfn, SRAM_IPS_LIST_ADDR, ips_scan_count);
       }
       snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
-      return 0; /* stay in menu loop */
-#ifndef CONFIG_MK2
-    /* Not built on the mk2: its 122624-byte flash is full, and this handler plus
-       patch_export_write and the sidecar copier do not fit.  The menu greys the
-       "create patched ROM" entry there and patch_create_rom refuses it outright
-       (ST_IS_MK2), so neither command is ever sent. The REST of that context menu
-       does run on the mk2 -- CMD_PATCH_META_SAVE above is built for every config. */
+      return 0;
     case SNES_CMD_EXPORT_CHECK: {
       /* Pre-flight for the export below: answer "would it collide?" while the
          menu is still fully alive, so a refusal is a modal over the live patch
@@ -625,7 +610,7 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
          reads EXPORT_RESULT (and one-shots it) -- no transient-NACK race. */
       sram_writebyte(cres, SRAM_EXPORT_RESULT_ADDR);
       snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
-      return 0; /* stay in menu loop */
+      return 0;
     }
     case SNES_CMD_EXPORT_PATCHED_ROM: {
       /* Read the index BEFORE get_selected_name, same as LOADROM: that call
@@ -645,7 +630,6 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       *menu_reload = 1;
       return cmd;
     }
-#endif /* !CONFIG_MK2 */
     case SNES_CMD_LOAD_MENU_SPC:
       /* stage background menu music. Use the user-chosen .spc (CFG.bgm_name, a
          full SD path set via SNES_CMD_SET_MENU_SPC) when present, otherwise fall
@@ -709,7 +693,7 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       /* info-screen FMV pump: stream the next <rom>.fmv frame into the band tile
          bank ($CA0000). Bounded + fail-safe (no-op if no .fmv open); does NOT boot. */
       gameinfo_fmv_next();
-      return 0; /* stay in menu loop */
+      return 0;
     case SNES_CMD_GI_DESC_FULL:
       /* "full description" (Y) on the info screen: re-scan the last-loaded .yml and
          stage the COMPLETE (untruncated) description into $FF7600. Bounded + fail-safe
@@ -813,7 +797,7 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       uint32_t idx = snes_get_mcu_param() & 0xffff;
       printf("Toggle cheat idx=%lu\n", (unsigned long)idx);
       cheat_toggle_flag((int)idx);
-      return 0; /* stay in menu loop */
+      return 0;
     }
     case SNES_CMD_RESET_TO_MENU:
       /* USB-triggered menu reload: leave the menu loop so the outer loop

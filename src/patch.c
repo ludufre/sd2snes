@@ -1518,13 +1518,7 @@ uint32_t patch_apply_copier(uint32_t sram_addr, uint8_t index, uint32_t rom_base
 }
 
 /* --- Patched-ROM export ------------------------------------------------- */
-/* The whole export is Mk.III-only: the mk2's LPC1754 has 122624 bytes of flash and
-   this firmware already fills it.  The patch-selector context menu still OPENS on the
-   mk2 (its header-mode entry is built for every config); only the "create patched ROM"
-   entry is gated there -- greyed, and refused at the top of patch_create_rom, since
-   greying alone is cosmetic in that menu -- so nothing can reach these.  Gating a heavy
-   feature per config is the established escape hatch when the mk2 flash runs out. */
-#ifndef CONFIG_MK2
+/* Built for every config: the export behaves identically on both boards. */
 
 /* Name the exported ROM after the PATCH FILE, not after a composed label:
    "<dir>/Chrono Trigger (USA) - [BR].ips" -> "<dir>/Chrono Trigger (USA) - [BR].sfc".
@@ -1799,5 +1793,3 @@ int patch_export_copy_assets(const uint8_t *rom_path, const uint8_t *save_key) {
        does not have; .gtc is Game Boy only and .gb never reaches the export. */
     return bad == 0;
 }
-
-#endif /* !CONFIG_MK2 -- patched-ROM export */

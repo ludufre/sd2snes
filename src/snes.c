@@ -142,9 +142,7 @@ void prepare_reset() {
   }
   /* Sufami Turbo Slot B: the companion minicart's own battery, flushed here beside the
      pack above because the SNES is already halted.  Only when it actually changed. */
-#ifndef CONFIG_MK2
   sufami_slotb_flush_inreset();
-#endif
   // don't save SGB RTC since we are in reset and it may be undefined
   rdyled(1);
   readled(1);
@@ -155,9 +153,7 @@ void prepare_reset() {
   fpga_dspx_reset(1);
   delay_ms(200);
   /* AFTER the flush above: clearing this first would throw away the Slot B save. */
-#ifndef CONFIG_MK2
   sufami_clear();
-#endif
 }
 
 void snes_init() {
@@ -327,14 +323,14 @@ uint8_t snes_main_loop() {
   /* Sufami Turbo Slot B battery.  A separate scan on purpose: the SaveRAM CRC below
      covers Slot A only, so a linkable title writing into the companion cart -- the
      whole point of the second slot -- would otherwise never reach the card. */
-#ifndef CONFIG_MK2
   sufami_slotb_autosave();
-#endif
 
 #ifndef CONFIG_MK2
-  /* keep the SPC7110 RTC-4513 backup in step; writes the card only on a change
-     (the SPC7110 core is mk3 only, and this gate is what lets --gc-sections
-     drop the whole object on mk2) */
+  /* keep the SPC7110 RTC-4513 backup in step; writes the card only on a change.
+     The gate is the FPGA's, not the flash's: the mk2 flavour of the SPC7110 core
+     leaves the virtual-battery registers out and does not decode SPI $e6/$e7
+     (see the note at the spc7110_rtc_load call in memory.c).  It also happens to
+     be what lets --gc-sections drop the whole object on mk2. */
   spc7110_rtc_save(file_lfn);
 #endif
 

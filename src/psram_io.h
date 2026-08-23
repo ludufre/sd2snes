@@ -10,8 +10,9 @@
  * bounded by `buf`/`bufsz` -- never a whole-region RAM buffer, so the frame stays small
  * and the MCU cannot stall on one giant read. `pump`, when non-NULL, is called after
  * every chunk so a playing DAC effect stays fed. Returns 1 when the full `size` was
- * written, 0 on read error / short read; file_res receives f_read's result for that
- * chunk (FR_OK on a short read).
+ * written, 0 on read error / short read; file_res receives the FRESULT of the chunk
+ * that failed (FR_OK on a short read), so a caller reading file_res afterwards sees
+ * THIS result.
  *
  * `buf` may be file_buf (the SD DMA scratch) only where no other stream owns it --
  * manual.c passes its own man_buf for that reason. */

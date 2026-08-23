@@ -624,8 +624,10 @@ static void load_saveram(const load_ctx_t *c) {
       migrate_and_load_srm(filename, SRAM_SAVE_ADDR);
       if(file_res == FR_NO_FILE) file_res = 0;
     }
-#ifndef CONFIG_MK2
     if(sufami_slotb_ramsize) {
+      /* Costs load_rom no extra frame: load_saveram and recore_rom_fingerprint are
+         both inlined into it and their buffers have disjoint lifetimes, so they share
+         a slot.  Hoisting this into a noinline helper grows the frame instead. */
       char slotb_srm[256];
       sram_memset(SUFAMI_SLOTB_SAVE_ADDR, sufami_slotb_ramsize, 0xFF);
       /* Named from the Slot B CART, not the loaded game: not migrate_and_load_srm,
@@ -636,10 +638,7 @@ static void load_saveram(const load_ctx_t *c) {
         if(file_res == FR_NO_FILE) file_res = 0;
       }
     }
-#endif
-#ifndef CONFIG_MK2
     sufami_slotb_crc_seed();
-#endif
     /* Seed the Slot A scan too: snes.c skips it entirely when sramsize_bytes is 0. */
     saveram_crc_old = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase,
                                     romprops.sramsize_bytes, 0);
@@ -652,8 +651,10 @@ static void load_saveram(const load_ctx_t *c) {
     /* file not found error is ok (SRM file might not exist yet) */
     if(file_res == FR_NO_FILE) file_res = 0;
 #ifdef CONFIG_MK2
-    /* SPC7110 on mk2 has no virtual battery, so the factory check program's
-       RTC BACKUP test can never pass here.  Plant the retail signature that
+    /* The mk2 flavour of the SPC7110 core has no virtual battery (the $e6/$e7
+       handover is gated out of the bitstream, see the spc7110_rtc_load call
+       below), so the factory check program's RTC BACKUP test can never pass
+       here and this compensation stays.  Plant the retail signature that
        the check program itself writes on success ("SPC7110 CHECK OK", last
        16 bytes of SRAM) whenever it is absent, so a fresh cart boots retail
        instead of looping the factory ritual.  Only the RTC cart (carttype
@@ -817,7 +818,6 @@ static void load_stage_bios(tick_t ticksstart) {
       set_fpga_time(get_bcdtime());
     }
   }
-#ifndef CONFIG_MK2
   if(romprops.has_sufami) {
 
     DBG_SUFAMI printf("Sufami Turbo. Loading BIOS %s...\n", STBIOS_FW);
@@ -825,7 +825,6 @@ static void load_stage_bios(tick_t ticksstart) {
     if(file_res) snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)STBIOS_FW);
     sufami_stage_slotb_rom();
   }
-#endif
   if(romprops.has_dspx) {
     printf("DSPx game. Loading firmware image %s...\n", romprops.dsp_fw);
     load_dspx(romprops.dsp_fw, romprops.fpga_features);
@@ -982,10 +981,15 @@ static void load_setup_masks(load_ctx_t *c) {
        With a .rtc sidecar next to the save this restores what the cartridge
        battery would have kept - including a clock the game stopped - and
        without one it falls back to the console's own time, exactly as before. */
+    /* An FPGA gate, not a flash one: the Spartan-3 flavour of the SPC7110 core has
+       no virtual battery.  spc7110_rtcif/spc7110_regs/main.v put
+       bkp_time/bkp_flags/bkp_we behind `ifndef MK2` and mcu_cmd.v does not decode
+       SPI $e6/$e7 there, so a backup call would push $e7 into a core that drops it
+       and read $e6 back as whatever the SPI input latch last held.  Wall clock only
+       until the mk2 bitstream carries the registers. */
 #ifndef CONFIG_MK2
     spc7110_rtc_load(c->filename);
 #else
-    /* mk2 carries no virtual battery (MCU flash budget); wall clock only */
     set_fpga_time(get_bcdtime());
 #endif
   }
@@ -1053,8 +1057,7 @@ static uint32_t load_stage_consoles(load_ctx_t *c) {
     char *mk2_ext = strrchr((char*)filename, '.');
     if (mk2_ext && (!strcasecmp(mk2_ext + 1, "nes")
                  || !strcasecmp(mk2_ext + 1, "sms")
-                 || !strcasecmp(mk2_ext + 1, "a26")
-                 || !strcasecmp(mk2_ext + 1, "st"))) {
+                 || !strcasecmp(mk2_ext + 1, "a26"))) {
       file_close();
       sms_active = 0;  /* returning before sms_id() would leave a stale flag */
       a26_romprops.has_a26 = 0;   /* same: returning before a26_id() leaves it stale */
@@ -1274,7 +1277,7 @@ static uint32_t load_check_prereqs(load_ctx_t *c) {
 
 /* Swap the FPGA core in for this game.  The SNES is parked in game_handshake and
    the menu SFX teardown is deliberately deferred to here -- see inside. */
-static void load_reconfigure_fpga(load_ctx_t *c) {
+static void load_reconfigure_fpga(const load_ctx_t *c) {
 #if RECORE_PSRAM_KEEP
   uint32_t base_addr = c->base_addr;   /* only the fingerprint check below reads it */
 #endif

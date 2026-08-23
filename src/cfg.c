@@ -13,10 +13,55 @@
 #include "util.h"
 
 /* The SNES menu pokes config bytes by hard-coded offset (snes/memmap.i65,
-   CFG_*=CFG_ADDR+$nn).  Pin the C struct layout to that map so inserting or
-   resizing a field can never silently desync the menu from the firmware. */
+   CFG_*=CFG_ADDR+$nn).  Pinning the C layout to that map is what stops an
+   inserted or resized field from silently desyncing menu and firmware: without
+   it the menu keeps writing the old offsets, which is a wrong value at runtime,
+   not a build failure.  EVERY CFG_* in memmap.i65 has a line here and every
+   field has a CFG_*; add a field, add a line. */
+_Static_assert(offsetof(cfg_t, vidmode_menu) == 0x00, "cfg_t.vidmode_menu must stay at CFG_ADDR+$00");
+_Static_assert(offsetof(cfg_t, vidmode_game) == 0x01, "cfg_t.vidmode_game must stay at CFG_ADDR+$01");
+_Static_assert(offsetof(cfg_t, pair_mode_allowed) == 0x02, "cfg_t.pair_mode_allowed must stay at CFG_ADDR+$02");
+_Static_assert(offsetof(cfg_t, bsx_use_usertime) == 0x03, "cfg_t.bsx_use_usertime must stay at CFG_ADDR+$03");
+_Static_assert(offsetof(cfg_t, bsx_time) == 0x04, "cfg_t.bsx_time must stay at CFG_ADDR+$04");
+_Static_assert(offsetof(cfg_t, r213f_override) == 0x10, "cfg_t.r213f_override must stay at CFG_ADDR+$10");
+_Static_assert(offsetof(cfg_t, enable_ingame_hook) == 0x11, "cfg_t.enable_ingame_hook must stay at CFG_ADDR+$11");
+_Static_assert(offsetof(cfg_t, enable_ingame_buttons) == 0x12, "cfg_t.enable_ingame_buttons must stay at CFG_ADDR+$12");
+_Static_assert(offsetof(cfg_t, enable_hook_holdoff) == 0x13, "cfg_t.enable_hook_holdoff must stay at CFG_ADDR+$13");
+_Static_assert(offsetof(cfg_t, enable_screensaver) == 0x14, "cfg_t.enable_screensaver must stay at CFG_ADDR+$14");
+_Static_assert(offsetof(cfg_t, screensaver_timeout) == 0x15, "cfg_t.screensaver_timeout must stay at CFG_ADDR+$15");
+_Static_assert(offsetof(cfg_t, sort_directories) == 0x17, "cfg_t.sort_directories must stay at CFG_ADDR+$17");
+_Static_assert(offsetof(cfg_t, hide_extensions) == 0x18, "cfg_t.hide_extensions must stay at CFG_ADDR+$18");
+_Static_assert(offsetof(cfg_t, cx4_speed) == 0x19, "cfg_t.cx4_speed must stay at CFG_ADDR+$19");
+_Static_assert(offsetof(cfg_t, skin_name) == 0x1A, "cfg_t.skin_name must stay at CFG_ADDR+$1A");
+_Static_assert(offsetof(cfg_t, control_type) == 0x9A, "cfg_t.control_type must stay at CFG_ADDR+$9A");
+_Static_assert(offsetof(cfg_t, msu_volume_boost) == 0x9B, "cfg_t.msu_volume_boost must stay at CFG_ADDR+$9B");
+_Static_assert(offsetof(cfg_t, onechip_transient_fixes) == 0x9C, "cfg_t.onechip_transient_fixes must stay at CFG_ADDR+$9C");
+_Static_assert(offsetof(cfg_t, brightness_limit) == 0x9D, "cfg_t.brightness_limit must stay at CFG_ADDR+$9D");
+_Static_assert(offsetof(cfg_t, gsu_speed) == 0x9E, "cfg_t.gsu_speed must stay at CFG_ADDR+$9E");
+_Static_assert(offsetof(cfg_t, reset_to_menu) == 0x9F, "cfg_t.reset_to_menu must stay at CFG_ADDR+$9F");
+_Static_assert(offsetof(cfg_t, led_brightness) == 0xA0, "cfg_t.led_brightness must stay at CFG_ADDR+$A0");
+_Static_assert(offsetof(cfg_t, enable_cheats) == 0xA1, "cfg_t.enable_cheats must stay at CFG_ADDR+$A1");
+_Static_assert(offsetof(cfg_t, reset_patch) == 0xA2, "cfg_t.reset_patch must stay at CFG_ADDR+$A2");
+_Static_assert(offsetof(cfg_t, enable_ingame_savestate) == 0xA3, "cfg_t.enable_ingame_savestate must stay at CFG_ADDR+$A3");
+_Static_assert(offsetof(cfg_t, loadstate_delay) == 0xA4, "cfg_t.loadstate_delay must stay at CFG_ADDR+$A4");
+_Static_assert(offsetof(cfg_t, enable_savestate_slots) == 0xA5, "cfg_t.enable_savestate_slots must stay at CFG_ADDR+$A5");
+_Static_assert(offsetof(cfg_t, ingame_buttons_savestate) == 0xA6, "cfg_t.ingame_buttons_savestate must stay at CFG_ADDR+$A6");
+_Static_assert(offsetof(cfg_t, ingame_buttons_loadstate) == 0xA8, "cfg_t.ingame_buttons_loadstate must stay at CFG_ADDR+$A8");
+_Static_assert(offsetof(cfg_t, ingame_buttons_changestate) == 0xAA, "cfg_t.ingame_buttons_changestate must stay at CFG_ADDR+$AA");
+_Static_assert(offsetof(cfg_t, sgb_enable_ingame_hook) == 0xAC, "cfg_t.sgb_enable_ingame_hook must stay at CFG_ADDR+$AC");
+_Static_assert(offsetof(cfg_t, sgb_enable_state) == 0xAD, "cfg_t.sgb_enable_state must stay at CFG_ADDR+$AD");
+_Static_assert(offsetof(cfg_t, sgb_volume_boost) == 0xAE, "cfg_t.sgb_volume_boost must stay at CFG_ADDR+$AE");
+_Static_assert(offsetof(cfg_t, sgb_enh_override) == 0xAF, "cfg_t.sgb_enh_override must stay at CFG_ADDR+$AF");
+_Static_assert(offsetof(cfg_t, sgb_spr_increase) == 0xB0, "cfg_t.sgb_spr_increase must stay at CFG_ADDR+$B0");
+_Static_assert(offsetof(cfg_t, sgb_clock_fix) == 0xB1, "cfg_t.sgb_clock_fix must stay at CFG_ADDR+$B1");
+_Static_assert(offsetof(cfg_t, sgb_bios_version) == 0xB2, "cfg_t.sgb_bios_version must stay at CFG_ADDR+$B2");
+_Static_assert(offsetof(cfg_t, show_tribute) == 0xB3, "cfg_t.show_tribute must stay at CFG_ADDR+$B3");
+_Static_assert(offsetof(cfg_t, enable_autosave) == 0xB4, "cfg_t.enable_autosave must stay at CFG_ADDR+$B4");
+_Static_assert(offsetof(cfg_t, enable_autosave_msu1) == 0xB5, "cfg_t.enable_autosave_msu1 must stay at CFG_ADDR+$B5");
+_Static_assert(offsetof(cfg_t, show_covers) == 0xB6, "cfg_t.show_covers must stay at CFG_ADDR+$B6");
 _Static_assert(offsetof(cfg_t, language) == 0xB7, "cfg_t.language must stay at CFG_ADDR+$B7");
 _Static_assert(offsetof(cfg_t, patch_verify_integrity) == 0xB8, "cfg_t.patch_verify_integrity must stay at CFG_ADDR+$B8");
+_Static_assert(offsetof(cfg_t, enable_menu_music) == 0xB9, "cfg_t.enable_menu_music must stay at CFG_ADDR+$B9");
 _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists must stay at CFG_ADDR+$BA");
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
 _Static_assert(offsetof(cfg_t, bgm_name) == 0xBC, "cfg_t.bgm_name must stay at CFG_ADDR+$BC");
@@ -153,7 +198,6 @@ static uint16_t cfg_check_menu_combo(uint16_t combo) {
 typedef enum {
   CK_BOOL = 0,   /* uint8_t 0/1        <-> true / false */
   CK_NUM,        /* uint8_t            <-> decimal, optional clamp (see below) */
-  CK_NUMTRUNC,   /* uint8_t            <-> decimal, truncated to 8 bits BEFORE the clamp */
   CK_NIB,        /* uint8_t            <-> decimal, masked to 4 bits on load */
   CK_STR,        /* uint8_t[CFG_STR_LEN] <-> bare scalar */
   CK_BUTTONS,    /* uint16_t pad mask  <-> "BYsSudlrAXLR" letters */
@@ -161,9 +205,16 @@ typedef enum {
 } cfg_kind_t;
 
 /* clamp = (max << 4) | replacement, 0 = take whatever the file says.  Every max
-   and every replacement in use fits in a nibble.  The replacement is not always
-   zero: an out-of-range LEDBrightness means "maximum", an out-of-range
-   ShowCovers means "the default, on". */
+   and replacement in use fits in a nibble, and the replacement is not always zero:
+   an out-of-range LEDBrightness means "maximum", an out-of-range ShowCovers means
+   "the default, on".
+
+   RANGE-CHECKED ON THE long, BOTH WAYS, before anything is narrowed (see cfg_load).
+   The file is text and the destination is a uint8_t, so a test made after the
+   narrowing has a blind spot on one side: "> max" alone lets -1 through and stores
+   255, truncating first lets 256 through because it narrows to 0.  Either way the
+   card ships a byte the menu cannot name.  The cfg_clamped and cfg_over golden
+   fixtures pin one side each. */
 typedef struct {
   const char *key;
   uint16_t    off;    /* offsetof() into cfg_t -- the menu's CFG map, indirectly */
@@ -216,7 +267,7 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_ENABLE_SCREENSAVER,          enable_screensaver,         CK_BOOL,    0),
   CFGI(CFG_SORT_DIRECTORIES,            sort_directories,           CK_BOOL,    0),
   CFGI(CFG_HIDE_EXTENSIONS,             hide_extensions,            CK_BOOL,    0),
-  CFGI(CFG_LED_BRIGHTNESS,              led_brightness,             CK_NUMTRUNC, 0xFF),
+  CFGI(CFG_LED_BRIGHTNESS,              led_brightness,             CK_NUM,     0xFF),
   CFGI(CFG_CX4_SPEED,                   cx4_speed,                  CK_NUM,     0),
   CFGI(CFG_GSU_SPEED,                   gsu_speed,                  CK_NUM,     0),
   CFGI(CFG_MSU_VOLUME_BOOST,            msu_volume_boost,           CK_NUM,     0),
@@ -224,6 +275,8 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_ENABLE_AUTOSAVE_MSU1,        enable_autosave_msu1,       CK_BOOL,    0),
   CFGI(CFG_SHOW_COVERS,                 show_covers,                CK_NUM,     0x21),
   CFGI(CFG_COVERS_IN_LISTS,             covers_in_lists,            CK_BOOL,    0),
+  /* An unclamped value leaves cur_lang past the last column of every dispatch
+     table in the menu. */
   CFGI(CFG_LANGUAGE,                    language,                   CK_NUM,     0x50),
   CFGI(CFG_PATCH_VERIFY_INTEGRITY,      patch_verify_integrity,     CK_BOOL,    0),
   CFGI(CFG_ENABLE_MENU_MUSIC,           enable_menu_music,          CK_BOOL,    0),
@@ -259,7 +312,6 @@ int cfg_save() {
 
     switch(it->kind) {
       case CK_NUM:
-      case CK_NUMTRUNC:
       case CK_NIB:
         f_printf(&file_handle, "%s: %d\n", it->key, *p);
         continue;
@@ -336,10 +388,9 @@ int cfg_load() {
           else break;
           if(it->kind == CK_BOOL)     v = v ? 1 : 0;
           else if(it->kind == CK_NIB) v &= 0xf;
-          else {
-            if(it->kind == CK_NUMTRUNC) v = (uint8_t)v;
-            if(it->clamp && v > (long)(it->clamp >> 4)) v = it->clamp & 0xf;
-          }
+          /* Range check on the LONG, both ends, before the narrowing below: either
+             half alone has a blind spot (see the clamp note above). */
+          else if(it->clamp && (v < 0 || v > (long)(it->clamp >> 4))) v = it->clamp & 0xf;
           *p = (uint8_t)v;
           break;
       }

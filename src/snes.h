@@ -220,13 +220,10 @@ typedef struct __attribute__ ((__packed__)) _mcu_status {
   uint8_t restore_browser;         /* +7. 1 if this menu boot follows a theme/BGM change: reopen SRAM_BROWSER_DIR_ADDR
                                       and put the cursor on SRAM_BROWSER_FILE_ADDR (see browser_pos_save). One-shot,
                                       cleared in RAM right after status_load_to_menu() publishes it. */
-  uint8_t is_mk2;                  /* +8. 1 on Mk.II (LPC1754). The menu binary is shared across
-                                      configs, so features the mk2 firmware does not carry have
-                                      to be gated at RUNTIME -- currently the patch selector's
-                                      "create patched ROM" entry, whose handler is compiled out
-                                      there for lack of flash. The entry is greyed AND refused
-                                      in patch_create_rom (greying alone is cosmetic in this
-                                      menu); the rest of that context menu works on the mk2.
+  uint8_t is_mk2;                  /* +8. 1 on Mk.II (LPC1754). Board identity, published on
+                                      every boot: m3nu.bin is ONE binary shared across configs,
+                                      so anything the mk2 firmware cannot carry has to be gated
+                                      at RUNTIME from here. No menu code gates on it today.
                                       Lockstep with ST_IS_MK2. */
 } mcu_status_t;
 

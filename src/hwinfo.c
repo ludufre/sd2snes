@@ -5,7 +5,9 @@
 #include "hwinfo.h"
 
 static const char *const makername[10] = { "ikari_01", "KRIKzz", "Unsupported", [8]="RedScorpion", "Legacy" };
-uint8_t makernum[10] = { 0x00, 0xb0, 0x00, [8]=0x00, 0x00 };
+/* Base id of each maker's numbering, subtracted to get model/revision.  static const
+   so it lands in .rodata, not RAM. */
+static const uint8_t makernum[10] = { 0x00, 0xb0, 0x00, [8]=0x00, 0x00 };
 static const char *const hwinfo_model_name[] = { "sd2snes", "FXPAK Pro", "future Mk.4", "future Mk.5", "future Mk.6" };
 char revname[2];
 

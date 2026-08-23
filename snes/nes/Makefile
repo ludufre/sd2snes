@@ -25,12 +25,25 @@ O65 = nes_data.o65 nes_render.o65 nes_boot.o65 nes_transport_device.o65 nes_apu.
 IPS = nes_data_zp.ips nes_header.ips
 RAW = nes_snes_raw.sfc
 FINAL = ../../misc/nes_snes.bin
+# Mapa de simbolos do binario final (ver gen_map.py). Sai ao lado do .bin: o gate
+# de host tests/host/run_nes_chr.sh EXECUTA os bytes reais num interpretador 65816
+# e precisa dos dois juntos. O mapa carimba o CRC do .bin, entao um par
+# dessincronizado e' recusado em vez de virar lixo silencioso.
+MAP = $(FINAL:.bin=.map)
 
-all: $(FINAL)
+all: $(FINAL) $(MAP)
 
 $(FINAL): $(RAW) gen_lorom.py
 	@mkdir -p $(@D)
 	python3 gen_lorom.py $(RAW) $(FINAL) --pages 1 --romsize 0x05
+
+# O mapa sai DEPOIS do .bin: o CRC carimbado e' o do arquivo final, ja' fatiado e
+# com o checksum corrigido pelo gen_lorom.py. link.log e os *.o65.log/*.ips.log ja'
+# existem aqui: $(FINAL) depende do $(RAW), que e' quem os produz. A ORDEM dos
+# objetos tem que ser a MESMA do sneslink -- e' ela que casa cada objeto com o seu
+# 'object_<N>_code' no link.log.
+$(MAP): $(FINAL) gen_map.py
+	python3 gen_map.py link.log $(FINAL) $@ $(O65) $(IPS)
 
 $(RAW): $(O65) $(IPS)
 	sneslink -fsmc -o $@ $(O65) $(IPS) 2>&1 | tee link.log
@@ -77,7 +90,9 @@ nes_data.o65: nes_data.a65
 	@if grep -q "Error:" $(@:.log=).log; then \
 	  echo "*** snescom FAILED on $< (see $(@:.log=).log)"; rm -f $(@:.log=); exit 1; fi
 
+# O .bin sai JUNTO com o .map: sem o mapa o gate de host pula o bloco do renderer
+# e fica verde sem ter executado nada.
 clean:
-	rm -f *.o65 *.o65.log *.ips *.ips.log $(RAW) link.log
+	rm -f *.o65 *.o65.log *.ips *.ips.log $(RAW) link.log $(FINAL) $(MAP)
 
 .PHONY: all clean

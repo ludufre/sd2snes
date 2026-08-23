@@ -38,6 +38,25 @@ enum { PH_CMD, PH_A2, PH_A1, PH_A0, PH_WRITE, PH_READ };
 static int      fpga_phase = PH_CMD;
 static uint32_t fpga_cur;
 
+/* ---- MCU_RDY stall injection (see shim/fpga_spi.h) --------------------- */
+unsigned host_fpga_fault_after = 0;
+static unsigned hf_waits;         /* every bounded wait, faulted or not */
+static unsigned hf_writes_after;  /* window writes issued once the stall latched */
+static unsigned hf_reads_after;   /* and reads: harmless to the image, not to the clock */
+static int      hf_latched;
+
+int host_fpga_wait_to(void) {
+  hf_waits++;
+  if (hf_latched) return 1;                  /* a wedged FPGA does not recover */
+  if (!host_fpga_fault_after) return 0;
+  if (--host_fpga_fault_after == 0) { hf_latched = 1; return 1; }
+  return 0;
+}
+
+unsigned host_fpga_wait_count(void) { return hf_waits; }
+unsigned host_fpga_writes_after_fault(void) { return hf_writes_after; }
+unsigned host_fpga_reads_after_fault(void) { return hf_reads_after; }
+
 void host_fpga_select(void)   { fpga_phase = PH_CMD; }
 void host_fpga_deselect(void) { }
 
@@ -53,6 +72,7 @@ void host_fpga_tx(uint8_t b) {
     case PH_A1: fpga_cur |= (uint32_t)b << 8;  fpga_phase = PH_A0; break;
     case PH_A0: fpga_cur |= b; fpga_cur &= SDRAM_MASK; fpga_phase = PH_CMD; break;
     case PH_WRITE:
+      if (hf_latched) hf_writes_after++;
       host_sdram[fpga_cur] = b;
       fpga_cur = (fpga_cur + 1) & SDRAM_MASK;
       break;
@@ -63,6 +83,7 @@ void host_fpga_tx(uint8_t b) {
 
 uint8_t host_fpga_rx(void) {
   if (fpga_phase != PH_READ) { fprintf(stderr, "fpga shim: RX outside read mode\n"); exit(99); }
+  if (hf_latched) hf_reads_after++;
   uint8_t b = host_sdram[fpga_cur];
   fpga_cur = (fpga_cur + 1) & SDRAM_MASK;
   return b;

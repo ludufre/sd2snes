@@ -8,6 +8,7 @@
 set -u
 cd "$(dirname "$0")"
 CC="${CC:-cc}"
+. ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
 mkdir -p build
 
 SRC=../../src/patch.c

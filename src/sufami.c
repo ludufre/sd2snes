@@ -49,7 +49,7 @@ char sufami_slotb_path[256] IN_AHBRAM;
 static uint32_t slotb_crc, slotb_crc_old, slotb_offset;
 static uint32_t slotb_diff, slotb_same, slotb_didnotsave, slotb_save_failed;
 
-/* The A+B pair sidecar: /sd2snes/saves/st/<BB>/<stemA>.stb holds the full SD path of
+/* The A+B pair sidecar: /sd2snes/saves/sft/<BB>/<stemA>.stb holds the full SD path of
    the Slot B cart.  Same root and the same one-shot shape as the .slot sidecar that
    carries the battery-SRAM slot selection.  A real Sufami Turbo keeps both carts
    plugged in, so remembering the pair is the behaviour that matches the hardware. */

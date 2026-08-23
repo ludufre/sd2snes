@@ -8,11 +8,16 @@
  *   0   patcher succeeded (and the output matched <expected>, when given)
  *   1   patcher failed cleanly (returned 0)
  *   2   patcher "succeeded" but the output does not match <expected>
+ *   3   kept using the FPGA window after the injected stall latched
  *   124 HANG: the watchdog fired (the forbidden MCU failure mode)
  *   125 OVERFLOW: bytes outside the legal window were written
  *
  * usage: harness apply <patch> <source_rom> [expected_target]
  *        harness probe <patch> <source_rom>
+ *
+ * env: HOST_FPGA_FAULT_AFTER=<n>  make the nth bounded MCU_RDY wait time out
+ *      and stay timed out (a wedged core).  Every run prints "waits=<n> ...",
+ *      so the next one can be aimed at a wait that exists.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -24,6 +29,7 @@
 #include "ff.h"
 #include "fileops.h"
 #include "memory.h"
+#include "fpga_spi.h"
 #include "host.h"
 #include "patch.h"
 
@@ -62,6 +68,21 @@ static int region_is_legal(uint32_t a) {
   return 0;
 }
 
+/* Every exit path reports the wait/stall counters: the total says where a
+   fault can be injected, and any window traffic after the latch -- reads
+   included -- is exit 3, not a clean failure. */
+static int finish(int code) {
+  unsigned w = host_fpga_writes_after_fault(), r = host_fpga_reads_after_fault();
+  printf("waits=%u writes_after_fault=%u reads_after_fault=%u\n",
+         host_fpga_wait_count(), w, r);
+  if (w || r) {
+    fprintf(stderr, "STALLED-IO: %u byte(s) written and %u read through the "
+                    "window after the MCU_RDY stall latched\n", w, r);
+    return 3;
+  }
+  return code;
+}
+
 int main(int argc, char **argv) {
   if (argc < 4) {
     fprintf(stderr, "usage: %s apply|probe|copier <patch> <source_rom> "
@@ -76,6 +97,11 @@ int main(int argc, char **argv) {
   const char *hmode = (argc > 5) ? argv[5] : "auto";
 
   host_sdram_init();
+
+  {
+    const char *f = getenv("HOST_FPGA_FAULT_AFTER");
+    if (f) host_fpga_fault_after = (unsigned)strtoul(f, NULL, 10);
+  }
 
   uint32_t romsize = load_file(src, SRAM_ROM_ADDR);
 
@@ -120,7 +146,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (ret == 0) return 1;  /* clean failure */
+  if (ret == 0) return finish(1);  /* clean failure */
 
   if (expected) {
     FILE *fp = fopen(expected, "rb");
@@ -138,10 +164,10 @@ int main(int argc, char **argv) {
                   i, host_sdram[SRAM_ROM_ADDR + i], want[i]);
           break;
         }
-      return 2;
+      return finish(2);
     }
     free(want);
   }
   printf("ok: ret=0x%x\n", ret);
-  return 0;
+  return finish(0);
 }

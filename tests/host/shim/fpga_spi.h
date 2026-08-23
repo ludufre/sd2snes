@@ -24,9 +24,27 @@ uint8_t host_fpga_rx(void);
 #define FPGA_TX_BYTE(b)  host_fpga_tx((uint8_t)(b))
 #define FPGA_RX_BYTE()   host_fpga_rx()
 #define FPGA_WAIT_RDY()         do { } while (0)
-#define FPGA_WAIT_RDY_TO(err)   do { } while (0)
+#define FPGA_WAIT_RDY_TO(err)          do { if (host_fpga_wait_to()) (err) = 1; } while (0)
 /* The _INLINE spellings are the same waits kept as macros inside per-byte loops. */
 #define FPGA_WAIT_RDY_INLINE()         do { } while (0)
-#define FPGA_WAIT_RDY_TO_INLINE(err)   do { } while (0)
+#define FPGA_WAIT_RDY_TO_INLINE(err)   FPGA_WAIT_RDY_TO(err)
+
+/* ---- MCU_RDY stall injection -------------------------------------------
+ * The bounded waits are the only thing that can raise patch_io_err, so without
+ * injection every "if (patch_io_err) ..." path in patch.c is unreachable here.
+ * host_fpga_fault_after counts bounded waits down: 0 disables it, N makes the
+ * Nth wait time out.  The stall then LATCHES -- a deasserted MCU_RDY does not
+ * come back -- so code that clears patch_io_err mid-apply cannot "recover".
+ * The writes/reads-after-fault counters are the bytes moved through the window
+ * after the latch: the patcher must abort rather than keep driving an FPGA
+ * that is not acknowledging.  Reads count too, since a read loop that ignores
+ * the latch corrupts nothing and would leave no other trace.
+ * host_fpga_wait_count() is the total, so a caller can aim the fault at a wait
+ * that exists. */
+extern unsigned host_fpga_fault_after;
+int      host_fpga_wait_to(void);            /* 1 = this wait timed out */
+unsigned host_fpga_wait_count(void);
+unsigned host_fpga_writes_after_fault(void);
+unsigned host_fpga_reads_after_fault(void);
 
 #endif

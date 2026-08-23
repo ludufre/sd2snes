@@ -46,9 +46,10 @@ typedef struct {
 #define FA_CREATE_ALWAYS 0x08
 #define FA_OPEN_ALWAYS   0x10
 
-#define AM_DIR 0x10
+#define AM_RDO 0x01
 #define AM_HID 0x02
 #define AM_SYS 0x04
+#define AM_DIR 0x10
 
 #define f_eof(fp)   ((int)((fp)->fptr == (fp)->fsize))
 #define f_error(fp) ((fp)->err)
@@ -70,6 +71,8 @@ FRESULT f_write(FIL *fp, const void *buff, UINT btw, UINT *bw);
 FRESULT f_close(FIL *fp);
 FRESULT f_unlink(const TCHAR *path);
 FRESULT f_rename(const TCHAR *path_old, const TCHAR *path_new);
+FRESULT f_chmod(const TCHAR *path, BYTE value, BYTE mask);
+FRESULT f_truncate(FIL *fp);
 
 /* String functions (_USE_STRFUNC == 2): f_putc/f_puts/f_printf translate '\n'
    to CRLF and f_gets strips '\r'.  The host side has to keep that, or a golden

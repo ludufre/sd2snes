@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the host harness against the REAL src/patch.c, generate the corpus and
 # run every case. Exit codes from the harness:
-#   0 ok / 1 clean failure / 2 wrong output / 124 HANG / 125 region OVERFLOW
+#   0 ok / 1 clean failure / 2 wrong output / 3 wrote after an injected stall /
+#   124 HANG / 125 region OVERFLOW
 #
 # A case may carry an XFAIL=<code> marker: a known bug makes it currently exit
 # <code> instead of the wanted code. XFAIL cases don't fail the suite; once the
@@ -9,6 +10,7 @@
 set -u
 cd "$(dirname "$0")"
 CC="${CC:-cc}"
+. ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
 
 echo "== build =="
 # Quoted #includes resolve in the includer's own directory first, which would
@@ -29,6 +31,14 @@ run_case() { # <name> <want> <xfail-code|-> <mode> <patch> <rom> [expected_targe
   local out rc
   out=$(./harness "$mode" "corpus/$patch" "corpus/$rom" ${tgt:+corpus/$tgt} ${hm:+$hm} 2>&1)
   rc=$?
+  # ASan exits 1 by default and 1 is a WANTED code here, so a sanitizer report
+  # has to be its own verdict, before the exit code is consulted.
+  if san_report "$out"; then
+    echo "FAIL  $name: sanitizer report (exit $rc)"
+    echo "$out" | grep -E "Sanitizer|runtime error:" | sed 's/^/      /' | head -3
+    fail=$((fail+1))
+    return
+  fi
   if [ "$rc" -eq "$want" ]; then
     if [ "$xf" != "-" ]; then
       echo "XPASS $name (exit $rc) -- bug fixed, remove the XFAIL marker"
@@ -69,6 +79,61 @@ run_case ips-hdr-auto-literal 0   -      apply  headered.ips           rom4k.bin
 # BPS copier mode: descriptors for SourceCopy/TargetCopy must rebuild the exact
 # same image as the byte-by-byte apply (compared against the known-good target).
 run_case copier-ok-bps       0    -      copier ok-small.bps           rom4k.bin  ok-small.bps.target
+
+# --- injected FPGA stall (patch_io_err) ----------------------------------
+# HOST_FPGA_FAULT_AFTER=<n> makes the nth bounded SDRAM wait time out and STAY
+# timed out. The wait count is read from a clean run rather than pinned here, so
+# the aim survives a corpus change. n=1 stalls the address wait, n=2 the first
+# byte of the read loop -- different guards, both needed. The interior probes are
+# SEVENTHS: the per-byte loops alternate read/write in file_buf-sized (512) runs,
+# so a probe spaced by a power of two keeps landing in the same phase.
+# Wanted at every point: exit 1, i.e. the patcher REFUSED. Not 124 (wedged), not
+# 125 (ran off the region), not 3 (kept moving bytes), and no sanitizer report.
+run_fault_cases() { # <label> <patch> <rom>
+  local label=$1 patch=$2 rom=$3
+  local out rc total n k probes
+
+  out=$(./harness apply "corpus/$patch" "corpus/$rom" 2>&1)
+  rc=$?
+  total=$(printf '%s\n' "$out" | sed -n 's/^waits=\([0-9][0-9]*\).*/\1/p')
+  if san_report "$out"; then
+    echo "FAIL  stall-$label: sanitizer report on the clean baseline run"
+    echo "$out" | grep -E "Sanitizer|runtime error:" | sed 's/^/      /' | head -3
+    fail=$((fail+1))
+    return
+  fi
+  if [ "$rc" -ne 0 ] || [ -z "$total" ] || [ "$total" -lt 8 ]; then
+    echo "FAIL  stall-$label: clean run exit $rc, waits='$total' (need a passing apply with >= 8 waits)"
+    fail=$((fail+1))
+    return
+  fi
+
+  probes="1 2"
+  for k in 1 2 3 4 5 6; do probes="$probes $((total * k / 7))"; done
+  probes="$probes $((total - 1))"
+
+  for n in $probes; do
+    out=$(HOST_FPGA_FAULT_AFTER=$n ./harness apply "corpus/$patch" "corpus/$rom" 2>&1)
+    rc=$?
+    if san_report "$out"; then
+      echo "FAIL  stall-$label@$n/$total: sanitizer report (exit $rc)"
+      echo "$out" | grep -E "Sanitizer|runtime error:" | sed 's/^/      /' | head -3
+      fail=$((fail+1))
+      continue
+    fi
+    if [ "$rc" -eq 1 ]; then
+      echo "PASS  stall-$label@$n/$total (exit $rc)"
+      pass=$((pass+1))
+    else
+      echo "FAIL  stall-$label@$n/$total: exit $rc, want 1"
+      echo "$out" | sed 's/^/      /' | head -5
+      fail=$((fail+1))
+    fi
+  done
+}
+
+run_fault_cases ips ok-small.ips rom4k.bin
+run_fault_cases bps ok-small.bps rom4k.bin
 
 echo "== summary: $pass pass, $fail fail, $xfail xfail, $xpass xpass =="
 [ "$fail" -eq 0 ] || exit 1

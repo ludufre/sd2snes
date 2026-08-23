@@ -74,8 +74,13 @@ int  printf(const char *fmt, ...);
    printf() must see THIS header; including only <stdio.h> binds newlib's printf and
    links the whole stdio/syscall chain back in (mcu-check greps the Mk.II image for
    _printf_r/_write). */
-#if defined(DEBUG_USB) || defined(DEBUG_USBHW) || defined(CONFIG_CDC_DEBUG)
-#  error "DEBUG_USB / DEBUG_USBHW / CONFIG_CDC_DEBUG need CONFIG_UART_DEBUG: there is no console to print to"
+/* A DEBUG_* that fed a printf would otherwise compile to nothing and read as "debug
+   output is on and says nothing".  conf2h.awk comments a "= n" line out entirely, so
+   `defined` here is exactly "the config asked for it". */
+#if defined(DEBUG_USB) || defined(DEBUG_USBHW) || defined(CONFIG_CDC_DEBUG) \
+ || defined(DEBUG_FS) || defined(DEBUG_SD) || defined(DEBUG_SD_OFFLOAD) \
+ || defined(DEBUG_IRQ) || defined(DEBUG_MSU1) || defined(DEBUG_YAML)
+#  error "a DEBUG_* / CONFIG_CDC_DEBUG option needs CONFIG_UART_DEBUG: there is no console to print to"
 #endif
 int printf_real(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 

@@ -17,6 +17,13 @@
 
 extern cfg_t CFG;   /* game info "Show video" / "Play video music" toggles (game_info_video/_music) */
 
+/* The struct is blitted whole to SRAM_GAMEINFO_ADDR and the full-description region
+   starts right after it, so a field added to gameinfo_meta_t writes over the text the
+   same screen reads back -- silently, neither side bounds-checks the other.  The other
+   end of the block is asserted in cfg.c, where MAX_FAVORITE_GAMES lives. */
+_Static_assert(SRAM_GAMEINFO_ADDR + sizeof(gameinfo_meta_t) <= SRAM_GAMEINFO_DESCEXT_ADDR,
+               "gameinfo_meta_t runs into SRAM_GAMEINFO_DESCEXT_ADDR");
+
 /* UTF-8 codepoint -> sd2snes font byte. MUST match the ACCENTS map in
  * snes/utils/build_const.py (and snes/font.a65). Only the Latin accents the font
  * has glyphs for (codes 130..159); everything else renders as '?'.

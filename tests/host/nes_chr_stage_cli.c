@@ -1,4 +1,4 @@
-/* nes_chr_stage_cli.c -- prova de host do caminho de CHR-RAM do renderer NES
+/* nes_chr_stage_cli.c -- MODELO em C do caminho de CHR-RAM do renderer NES
  * (Fase 2.2-lite): SHADOW + SWIZZLE no stage + DMA EM BLOCO na NMI.
  *
  * O QUE ELE SIMULA.  Uma transcricao fiel do que snes/nes/nes_render.a65 faz
@@ -15,10 +15,10 @@
  * Depois despeja a VRAM no MESMO layout que utils/nes_chr_convert.py produz.
  * PASS do gate = `cmp` byte-exato contra o conversor de referencia.
  *
- * POR QUE ISTO E' A PROVA CERTA.  O que pode dar errado no renderer nao e'
- * "o formato do tile" isolado -- e' a composicao: shadow + expansao de um run
- * PARCIAL para tiles inteiros + empacotamento dos arrays + endereco de VRAM
- * derivado de t0.  Um erro em qualquer uma dessas pecas aparece aqui como
+ * O QUE ELE COBRE.  O que pode dar errado no DESENHO nao e' "o formato do
+ * tile" isolado -- e' a composicao: shadow + expansao de um run PARCIAL para
+ * tiles inteiros + empacotamento dos arrays + endereco de VRAM derivado de
+ * t0.  Um erro de concepcao em qualquer uma dessas pecas aparece aqui como
  * bytes diferentes.  A versao anterior deste CLI simulava o "plane-DMA" por
  * VMAIN (2 DMAs por tile/plano): o FORMATO passava, mas o custo era ~6x o que
  * cabe no vblank -- por isso o caminho mudou, e este arquivo mudou junto.
@@ -27,7 +27,9 @@
  * real e' assembly), entao esta e' uma TRANSCRICAO que precisa ser mantida em
  * lockstep -- os nomes dos rotulos do .a65 estao citados em cada bloco.  As
  * constantes de layout vem por -D do run_nes_chr.sh, que as extrai do
- * nes_equates.i65 (nao ha numero de layout duplicado aqui).
+ * nes_equates.i65 (nao ha numero de layout duplicado aqui).  Quem verifica o
+ * ASSEMBLY contra este desenho e' tests/host/nes_render_cli.c -- se os dois
+ * discordarem, quem vale e' aquele.
  *
  * Uso:
  *   nes_chr_stage_cli <in.chr> <out.bin> --bpp 2|4 [--split N]
