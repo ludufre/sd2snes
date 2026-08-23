@@ -115,6 +115,7 @@ wire [10:0] SD_DMA_PARTIAL_START;
 wire [10:0] SD_DMA_PARTIAL_END;
 
 wire [10:0] dac_addr;
+wire DAC_STATUS;
 wire [2:0] dac_vol_select_out;
 wire [8:0] dac_ptr_addr;
 //wire [7:0] dac_volume;
@@ -319,6 +320,7 @@ sd_dma snes_sd_dma(
 
 assign SD_DMA_TO_ROM = (SD_DMA_STATUS && (SD_DMA_TGT == 2'b00));
 
+`ifndef MK2
 dac snes_dac(
   .clkin(CLK2),
   .sysclk(SNES_SYSCLK),
@@ -337,6 +339,19 @@ dac snes_dac(
   .reset(dac_reset),
   .dac_address_ext(dac_ptr_addr)
 );
+`else
+// mk2 flavour: no MSU-1 audio.  The DAC is the biggest block in this core and it
+// plays MSU-1 PCM only -- no SPC7110 cartridge or hack has an MSU-1 track, and the
+// firmware's other user of this DAC (the menu sound effects) runs on the base core.
+// On mk2 the MCU skips the .msu check for this chip (memory.c), so the feature bit
+// is never raised.  Dropping the audio path is what leaves room for the virtual
+// battery on the Spartan-3.  The MSU-1 REGISTERS stay (snes_msu below answers as
+// before), so nothing else on the bus changes.
+assign DAC_MCLK   = 1'b0;
+assign DAC_LRCK   = 1'b0;
+assign DAC_SDOUT  = 1'b0;
+assign DAC_STATUS = 1'b0;
+`endif
 
 msu snes_msu (
   .clkin(CLK2),
@@ -466,13 +481,11 @@ wire        rtc_pgm_we;
 wire [59:0] rtcif_rtc_data_wr;
 wire        rtcif_rtc_we;
 /* RTC-4513 battery backup: read by the MCU with SPI $e6, restored with $e7 */
-`ifndef MK2
 wire [59:0] rtc_bkp_time;
 wire [1:0]  rtc_bkp_flags;
 wire [59:0] rtc_bkp_time_in;
 wire [1:0]  rtc_bkp_flags_in;
 wire        rtc_bkp_we;
-`endif
 
 /*****************************************************************************
  * Data ROM (DROM) fetch path
@@ -559,16 +572,12 @@ spc7110_regs snes_spc7110(
   .drom_data(drom_data),
   .rtc_data(rtc_data),
   .rtc_we(rtcif_rtc_we),
-`ifndef MK2
   .rtc_data_wr(rtcif_rtc_data_wr),
   .bkp_time(rtc_bkp_time),
   .bkp_flags(rtc_bkp_flags),
   .bkp_we(rtc_bkp_we),
   .bkp_time_in(rtc_bkp_time_in),
   .bkp_flags_in(rtc_bkp_flags_in)
-`else
-  .rtc_data_wr(rtcif_rtc_data_wr)
-`endif
 );
 
 // Time keeping.  Runs on CLKIN, not CLK2 -- same as the base core.  The
@@ -617,13 +626,11 @@ mcu_cmd snes_mcu_cmd(
   .drom_mask_out(DROM_MASK),
   .rtc_data_out(rtc_data_in),
   .rtc_pgm_we(rtc_pgm_we),
-`ifndef MK2
   .rtc_bkp_in(rtc_bkp_time),
   .rtc_bkp_flags_in(rtc_bkp_flags),
   .rtc_bkp_out(rtc_bkp_time_in),
   .rtc_bkp_flags_out(rtc_bkp_flags_in),
   .rtc_bkp_we(rtc_bkp_we),
-`endif
   .SD_DMA_EN(SD_DMA_EN),
   .SD_DMA_STATUS(SD_DMA_STATUS),
   .SD_DMA_NEXTADDR(SD_DMA_NEXTADDR),

@@ -84,9 +84,8 @@ SRC += cfg.c cheat.c yaml.c savestate.c sgb.c sms.c atari.c nes.c nes_chr.c hwin
 # Shared helpers: menu command handlers, file->PSRAM streaming, string/path
 # utilities and the YAML sidecar writer.
 SRC += menucmd.c psram_io.c strutil.c yamlw.c
-# SPC7110 RTC-4513 battery backup.  mk3 only: the mk2 flavour of the SPC7110 core
-# has no virtual battery, so the call sites are gated on CONFIG_MK2 and
-# --gc-sections drops the whole object there.
+# SPC7110 RTC-4513 battery backup.  Linked into every config: both flavours of the
+# SPC7110 core carry the virtual battery.
 SRC += spc7110rtc.c
 
 # Sufami Turbo Slot B autosave.  Linked into every config.

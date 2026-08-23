@@ -325,14 +325,9 @@ uint8_t snes_main_loop() {
      whole point of the second slot -- would otherwise never reach the card. */
   sufami_slotb_autosave();
 
-#ifndef CONFIG_MK2
   /* keep the SPC7110 RTC-4513 backup in step; writes the card only on a change.
-     The gate is the FPGA's, not the flash's: the mk2 flavour of the SPC7110 core
-     leaves the virtual-battery registers out and does not decode SPI $e6/$e7
-     (see the note at the spc7110_rtc_load call in memory.c).  It also happens to
-     be what lets --gc-sections drop the whole object on mk2. */
+     Every config: the Mk.II core carries the virtual battery as well now. */
   spc7110_rtc_save(file_lfn);
-#endif
 
   if(romprops.sramsize_bytes && CFG.enable_autosave) {
     uint32_t crc_bytes = min(romprops.sramsize_bytes - saveram_offset, SRAM_REGION_SIZE);

@@ -43,12 +43,15 @@ module mcu_cmd(
   /* RTC-4513 time, pushed by the MCU with SPI command $e5 */
   output [55:0] rtc_data_out,
   output rtc_pgm_we,
-`ifndef MK2
   /* RTC-4513 battery backup, SPI commands $e6 (read) and $e7 (restore).
      Layout in both directions is one status byte followed by the seven time
      bytes of $e5:
-       byte 0  {2'b0, stopped, dow_owned, day-of-week[3:0]}
+       byte 0  {magic, stopped, dow_owned, day-of-week[3:0]}
        byte 1..7  packed BCD time, most significant byte first
+     The two top bits of the status byte read back as 2'b10 and are ignored on the
+     way in.  A core without this handover leaves MCU_DATA_IN_BUF alone for the whole
+     of $e6, so the MCU gets eight copies of the previous transfer; the marker is how
+     the firmware tells that apart from an answer.
      $e6 is FPGA_CMD_RTCGET, which no other core implements for this core's
      chip; $e7 is free here (the SPC7110 has no S-RTC to reset). */
   input  [59:0] rtc_bkp_in,
@@ -56,7 +59,6 @@ module mcu_cmd(
   output [59:0] rtc_bkp_out,
   output [1:0]  rtc_bkp_flags_out,
   output rtc_bkp_we,
-`endif
 
   // SD "DMA" extension
   output SD_DMA_EN,
@@ -180,15 +182,12 @@ reg [23:0] DROM_MASK = 24'hffffff;
 reg [55:0] rtc_data_out_buf;
 reg rtc_pgm_we_buf;
 
-/* $e6 read shadow and $e7 restore buffers.  The shadow is taken in one clock so
-   the eight bytes the MCU reads cannot straddle a tick of the clock. */
-`ifndef MK2
-reg [59:0] rtc_bkp_in_buf;
-reg [1:0]  rtc_bkp_in_flags_buf;
-reg [59:0] rtc_bkp_out_buf;
-reg [1:0]  rtc_bkp_out_flags_buf;
+/* $e6 read shadow and $e7 restore buffer share registers: two directions of one
+   handover, never both in flight.  The restore side only has to hold still while
+   rtc_bkp_we is up. */
+reg [59:0] rtc_bkp_buf;
+reg [1:0]  rtc_bkp_flags_buf;
 reg rtc_bkp_we_buf;
-`endif
 
 assign spi_data_out = MCU_DATA_IN_BUF;
 
@@ -209,6 +208,14 @@ always @(posedge clk) begin
   MSU_RESET_OUT_BUF <= 1'b0;
 
   if (cmd_ready) begin
+    /* $e6: take the battery snapshot in one clock, on the command byte, so the
+       eight bytes the MCU reads out cannot straddle a tick.  It lives in this block
+       rather than next to the read-out because the $e7 restore writes the same
+       registers, and one register may only be driven from one block. */
+    if (cmd_data[7:0] == 8'he6) begin
+      rtc_bkp_buf       <= rtc_bkp_in;
+      rtc_bkp_flags_buf <= rtc_bkp_flags_in;
+    end
     case (cmd_data[7:4])
       4'h3: // select mapper
         MAPPER_BUF <= cmd_data[2:0];
@@ -375,33 +382,31 @@ always @(posedge clk) begin
           32'h9:
             rtc_pgm_we_buf <= 1'b0;
         endcase
-`ifndef MK2
       8'he7: // restore RTC battery backup (status byte + the seven $e5 bytes)
         case (spi_byte_cnt)
           32'h2: begin
-            rtc_bkp_out_flags_buf <= param_data[5:4];
-            rtc_bkp_out_buf[59:56] <= param_data[3:0];
+            rtc_bkp_flags_buf <= param_data[5:4];
+            rtc_bkp_buf[59:56] <= param_data[3:0];
           end
           32'h3:
-            rtc_bkp_out_buf[55:48] <= param_data;
+            rtc_bkp_buf[55:48] <= param_data;
           32'h4:
-            rtc_bkp_out_buf[47:40] <= param_data;
+            rtc_bkp_buf[47:40] <= param_data;
           32'h5:
-            rtc_bkp_out_buf[39:32] <= param_data;
+            rtc_bkp_buf[39:32] <= param_data;
           32'h6:
-            rtc_bkp_out_buf[31:24] <= param_data;
+            rtc_bkp_buf[31:24] <= param_data;
           32'h7:
-            rtc_bkp_out_buf[23:16] <= param_data;
+            rtc_bkp_buf[23:16] <= param_data;
           32'h8:
-            rtc_bkp_out_buf[15:8] <= param_data;
+            rtc_bkp_buf[15:8] <= param_data;
           32'h9: begin
-            rtc_bkp_out_buf[7:0] <= param_data;
+            rtc_bkp_buf[7:0] <= param_data;
             rtc_bkp_we_buf <= 1'b1;
           end
           32'ha:
             rtc_bkp_we_buf <= 1'b0;
         endcase
-`endif
       8'hec:
         begin // set DAC properties
           dac_vol_select_out <= param_data[2:0];
@@ -479,31 +484,25 @@ always @(posedge clk) begin
   else if (cmd_ready | param_ready /* bit_cnt == 7 */) begin
     if (cmd_data[7:4] == 4'hA)
       MCU_DATA_IN_BUF <= snescmd_data_in;
-`ifndef MK2
     if (cmd_data[7:0] == 8'hE6)
       case (spi_byte_cnt)
-        32'h1: begin
-          rtc_bkp_in_buf <= rtc_bkp_in;
-          rtc_bkp_in_flags_buf <= rtc_bkp_flags_in;
-        end
         32'h2:
-          MCU_DATA_IN_BUF <= {2'b00, rtc_bkp_in_flags_buf, rtc_bkp_in_buf[59:56]};
+          MCU_DATA_IN_BUF <= {2'b10, rtc_bkp_flags_buf, rtc_bkp_buf[59:56]};
         32'h3:
-          MCU_DATA_IN_BUF <= rtc_bkp_in_buf[55:48];
+          MCU_DATA_IN_BUF <= rtc_bkp_buf[55:48];
         32'h4:
-          MCU_DATA_IN_BUF <= rtc_bkp_in_buf[47:40];
+          MCU_DATA_IN_BUF <= rtc_bkp_buf[47:40];
         32'h5:
-          MCU_DATA_IN_BUF <= rtc_bkp_in_buf[39:32];
+          MCU_DATA_IN_BUF <= rtc_bkp_buf[39:32];
         32'h6:
-          MCU_DATA_IN_BUF <= rtc_bkp_in_buf[31:24];
+          MCU_DATA_IN_BUF <= rtc_bkp_buf[31:24];
         32'h7:
-          MCU_DATA_IN_BUF <= rtc_bkp_in_buf[23:16];
+          MCU_DATA_IN_BUF <= rtc_bkp_buf[23:16];
         32'h8:
-          MCU_DATA_IN_BUF <= rtc_bkp_in_buf[15:8];
+          MCU_DATA_IN_BUF <= rtc_bkp_buf[15:8];
         32'h9:
-          MCU_DATA_IN_BUF <= rtc_bkp_in_buf[7:0];
+          MCU_DATA_IN_BUF <= rtc_bkp_buf[7:0];
       endcase
-`endif
 
     if (cmd_data[7:0] == 8'hF0)
       MCU_DATA_IN_BUF <= 8'hA5;
@@ -587,11 +586,9 @@ assign drom_base_out = DROM_BASE;
 assign drom_mask_out = DROM_MASK;
 assign rtc_data_out = rtc_data_out_buf;
 assign rtc_pgm_we = rtc_pgm_we_buf;
-`ifndef MK2
-assign rtc_bkp_out = rtc_bkp_out_buf;
-assign rtc_bkp_flags_out = rtc_bkp_out_flags_buf;
+assign rtc_bkp_out = rtc_bkp_buf;
+assign rtc_bkp_flags_out = rtc_bkp_flags_buf;
 assign rtc_bkp_we = rtc_bkp_we_buf;
-`endif
 
 assign DBG_mcu_nextaddr = mcu_nextaddr;
 endmodule

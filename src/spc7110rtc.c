@@ -156,6 +156,9 @@ static const uint8_t spc7110_rtc_magic[4] = { 'S', '7', 'R', 'T' };
 static spc7110_instant_t spc7110_rtc_last_delta;
 static uint8_t spc7110_rtc_last_flags;
 static uint8_t spc7110_rtc_known;
+/* whether the configured core answered $e6 with the marker, i.e. whether there
+   is a battery on the other end at all */
+static uint8_t spc7110_rtc_have_core;
 
 /* how far the two clocks may disagree before the sidecar is rewritten.  The
    cartridge clock and the console clock are different crystals, so their
@@ -178,12 +181,24 @@ static uint64_t bytes_to_bcdtime(const uint8_t *b, uint8_t dow) {
 }
 
 /* the SPI helpers speak eight plain bytes; marshal rather than rely on how the
-   struct happens to be laid out */
-static void spc7110_rtc_get(spc7110_rtc_state_t *st) {
+   struct happens to be laid out.  Returns -1 when what answered is not a core
+   with the battery in it - see SPC7110_RTC_MAGIC. */
+static int spc7110_rtc_get(spc7110_rtc_state_t *st) {
   uint8_t b[FPGA_SPC7110_RTC_LEN];
+  int i, same = 1;
   get_spc7110_rtc(b);
-  st->flags = b[0];
+  /* Eight identical bytes are a stale latch, not an answer: a core without the
+     handover never touches its SPI read register and hands back the previous
+     transfer eight times.  The marker alone does not catch that (0xa5, left by the
+     $f0 liveness poll, passes the mask), but a real answer can never be uniform --
+     the status byte carries the marker in its top two bits and no valid BCD month
+     can. */
+  for (i = 1; i < FPGA_SPC7110_RTC_LEN; i++) if (b[i] != b[0]) same = 0;
+  if (same) return -1;
+  if ((b[0] & SPC7110_RTC_MAGIC_MASK) != SPC7110_RTC_MAGIC) return -1;
+  st->flags = (uint8_t)(b[0] & ~SPC7110_RTC_MAGIC_MASK);
   memcpy(st->time, b + 1, SPC7110_RTC_TIMELEN);
+  return 0;
 }
 
 /* `shown` is the instant the cartridge has to report from now on; `prog` is
@@ -204,6 +219,21 @@ static void spc7110_rtc_wallclock(void) {
   spc7110_rtc_known = 0;
 }
 
+/* Ask the core whether it has the handover before either direction is used: a board
+   running an fpga_spc7110 from before the battery would otherwise have its stale
+   latch written to the card as a calendar. */
+static uint8_t spc7110_rtc_probe(void) {
+  spc7110_rtc_state_t probe;
+  spc7110_rtc_have_core = (spc7110_rtc_get(&probe) == 0);
+  if (!spc7110_rtc_have_core)
+    printf("SPC7110 RTC: core without the battery, using the console clock\n");
+  return spc7110_rtc_have_core;
+}
+
+int spc7110_rtc_battery_present(void) {
+  return spc7110_rtc_have_core;
+}
+
 void spc7110_rtc_load(uint8_t *filename) {
   spc7110_rtc_file_t f;
   spc7110_rtc_state_t st;
@@ -214,6 +244,7 @@ void spc7110_rtc_load(uint8_t *filename) {
   uint32_t got;
 
   spc7110_rtc_known = 0;
+  if (!spc7110_rtc_probe()) { spc7110_rtc_wallclock(); return; }
   bcdtime_to_bytes(get_bcdtime(), wall);
 
   /* READ path: name only, never create the directory here */
@@ -304,9 +335,9 @@ void spc7110_rtc_save(uint8_t *filename) {
   char rtcfile[256];
   uint8_t flags_stable;
 
-  if (!romprops.has_spc7110) return;
+  if (!romprops.has_spc7110 || !spc7110_rtc_have_core) return;
 
-  spc7110_rtc_get(&st);
+  if (spc7110_rtc_get(&st)) return;
   bcdtime_to_bytes(get_bcdtime(), wall);
   if (spc7110_rtc_unpack(st.time, &cart) || spc7110_rtc_unpack(wall, &now))
     return;

@@ -37,16 +37,16 @@ TIMESPEC TS_CLK2 = PERIOD "CLK2_GRP" TS_CLKIN * 4 HIGH 50 %;
 # means 10.412 - (data path) >= 0.36 ns, not zero.
 SYSTEM_JITTER = 0.48 ns;
 # PLACER COST TABLE, and why it is not 1.
-# This core fills 91% of the device and its worst paths are the decompressor
+# This core fills 88% of the device and its worst paths are the decompressor
 # datapath, so closure sits within a nanosecond of the requirement and the
 # placement MAP produces decides which side of it the fit lands on.  Swept over
-# 56 cost tables with the current netlist: 33 is the one that reaches Timing
-# Score 0 (worst slack +0.002 ns, on a path into the MSU register file); the
-# next best are 16 and 1 at score 16, then 49 at 174, and most of the rest run
-# into the thousands.  The number lives in the .xise ("Starting Placer Cost
-# Table", Map AND Par) and it is a choice of seed, not a relaxation -- every
-# constraint in this file is met, and the guard band above is still discounted
-# from that slack.
+# 60 cost tables with the current netlist: 42 is the one that reaches Timing
+# Score 0 (worst slack +0.002 ns, from a_nib into b_pfx in the decompressor);
+# 39 is next at score 95, then 33 at 554, and most of the rest run into the
+# thousands.  The number lives in the .xise ("Starting Placer Cost Table", Map
+# AND Par) and it is a choice of seed, not a relaxation -- every constraint in
+# this file is met, and the guard band above is still discounted from that
+# slack.
 # CONSEQUENCE, and it has bitten this core once already: ANY edit to the
 # netlist re-rolls this.  A change that looks harmless can come back with a
 # score in the thousands and the honest answer is to sweep the cost table

@@ -71,7 +71,6 @@ module spc7110_regs(
   /* RTC-4513 time keeping (rtc.v) */
   input      [59:0] rtc_data,
   output            rtc_we,
-`ifndef MK2
   output     [59:0] rtc_data_wr,
 
   /* RTC-4513 battery backup state, straight through to spc7110_rtcif (SPI $e6
@@ -81,10 +80,6 @@ module spc7110_regs(
   input             bkp_we,
   input      [59:0] bkp_time_in,
   input      [1:0]  bkp_flags_in
-`else
-  /* mk2 flavor: no virtual battery (contract $0Ca) */
-  output     [59:0] rtc_data_wr
-`endif
 );
 
 // -----------------------------------------------------------------------------
@@ -419,16 +414,12 @@ spc7110_rtcif spc7110_rtcif_i(
   .r4842(c4842),
   .rtc_data(rtc_data),
   .rtc_we(rtc_we),
-`ifndef MK2
   .rtc_data_wr(rtc_data_wr),
   .bkp_time(bkp_time),
   .bkp_flags(bkp_flags),
   .bkp_we(bkp_we),
   .bkp_time_in(bkp_time_in),
   .bkp_flags_in(bkp_flags_in)
-`else
-  .rtc_data_wr(rtc_data_wr)
-`endif
 );
 
 // -----------------------------------------------------------------------------

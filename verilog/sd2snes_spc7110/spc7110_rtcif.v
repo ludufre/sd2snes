@@ -111,7 +111,6 @@ module spc7110_rtcif(
   // time keeping (rtc.v)
   input      [59:0] rtc_data,
   output            rtc_we,
-`ifndef MK2
   output     [59:0] rtc_data_wr,
 
   // Battery backup state (SPI $e6 reads it, $e7 restores it).  bkp_time is the
@@ -124,12 +123,6 @@ module spc7110_rtcif(
   input             bkp_we,
   input      [59:0] bkp_time_in,
   input      [1:0]  bkp_flags_in
-`else
-  // mk2 flavor: no virtual battery ($e6/$e7 handover gated out, contract $0Ca).
-  // The freeze register and STOP stay - they are cheap and the game uses them
-  // inside a session; what goes is only the handover to and from the MCU.
-  output     [59:0] rtc_data_wr
-`endif
 );
 
 // Width of the rtc.v write strobe, in clkin cycles.  rtc.v edge-detects we1
@@ -235,18 +228,14 @@ reg [31:0] date_ref;
 reg        stopped;
 reg [59:0] frz;
 
-`ifndef MK2
-// The state the MCU hands back with $e7, kept in its own registers.  The module
-// sits in reset (SNES_DEADr) for the whole time the MCU is setting the
-// cartridge up, so the restore has to be latched here and the reset branch has
-// to seed the working registers from it - otherwise the reset that is still
-// running would throw it away before the SNES ever starts.  bkp_valid is only
-// cleared by FPGA configuration, i.e. once per game load, which is exactly when
-// "there is no backup" is the right answer.
-reg [59:0] bkp_hold;
-reg [1:0]  bkp_hold_f;
+// Whether the MCU has handed a state back with $e7.  The module sits in reset
+// (SNES_DEADr) for the whole time the MCU sets the cartridge up, so the restore is
+// applied from inside the reset as well (block at the end of the always below), and
+// from then on the reset branch must keep its hands off what was planted.  A flag
+// rather than a second copy of the state: the copy puts a 60 bit multiplexer in
+// front of snap, frz and date_ref, which does not fit the Spartan-3.  bkp_valid is
+// cleared only by FPGA configuration, i.e. once per game load.
 reg        bkp_valid;
-`endif
 // Whether that seed has already been planted.  rst here is SNES_DEADr, which
 // goes high for every console reset and not just for the load, but the RTC-4513
 // is battery backed: it sits outside the console's reset domain and a reset
@@ -282,11 +271,7 @@ initial begin
   date_ref   = 32'h0;
   stopped    = 1'b0;
   frz        = 60'h0;
-`ifndef MK2
-  bkp_hold   = 60'h0;
-  bkp_hold_f = 2'b00;
   bkp_valid  = 1'b0;
-`endif
   bkp_applied = 1'b0;
 end
 
@@ -322,10 +307,8 @@ assign r4842 = {~busy_r, 7'h00};            // bit7 = ready
 assign rtc_we      = rtc_we_r;
 assign rtc_data_wr = wr_hold;
 
-`ifndef MK2
 assign bkp_time    = {dow_owned ? dow_r : time_src[59:56], time_src[55:0]};
 assign bkp_flags   = {stopped, dow_owned};
-`endif
 
 // ---------------------------------------------------------------------------
 // command / index / data machine
@@ -335,16 +318,12 @@ wire ce_falling = ~wdata[0] &  ce;
 wire stale      = dirty & ce & (idle_cnt == {STALE_BITS{1'b1}});
 
 always @(posedge clkin) begin
-`ifndef MK2
-  // accepted in reset as well as out of it - see bkp_hold above
+  // The handover is accepted in reset as well as out of it; the state itself is
+  // planted by the $e7 block at the end of this always block.
   if (bkp_we) begin
-    bkp_hold    <= bkp_time_in;
-    bkp_hold_f  <= bkp_flags_in;
     bkp_valid   <= 1'b1;
     bkp_applied <= 1'b0;      // a fresh handover, waiting to be planted
   end
-
-`endif
 
   if (rst) begin
     // Bus and session state only.  The console going away drops chip select, so
@@ -362,48 +341,30 @@ always @(posedge clkin) begin
     idle_cnt <= {STALE_BITS{1'b0}};
     busy_r   <= 1'b0;
 
-    // The handover from the MCU.  The MCU holds the console in reset for the
-    // whole time it is setting the cartridge up, so this keeps tracking until
-    // the console starts; from then on bkp_applied is set and a player pressing
-    // reset finds the clock exactly as the game left it.
-`ifndef MK2
+    // Following the wall clock the MCU is still programming: it holds the console
+    // in reset for the whole setup, so this tracks rtc.v until the console starts.
+    // From then on bkp_applied is set and a reset finds the clock as the game left
+    // it.
     if (!bkp_applied) begin
-      snap       <= bkp_valid ? bkp_hold        : rtc_data;
       wr_hold    <= rtc_data;
       ctrl_d     <= 4'h1;
       ctrl_e     <= 4'hf;
       ctrl_f     <= 4'h6;
       wr_pending <= 1'b0;
       rtc_prev   <= rtc_data;
-      dow_r      <= bkp_valid ? bkp_hold[59:56] : rtc_data[59:56];
-      dow_ss     <= bkp_valid ? bkp_hold[59:56] : rtc_data[59:56];
-      dow_owned  <= bkp_valid ? bkp_hold_f[0]   : 1'b0;
-      date_ref   <= bkp_valid ? bkp_hold[55:24] : rtc_data[55:24];
-      stopped    <= bkp_valid ? bkp_hold_f[1]   : 1'b0;
-      frz        <= bkp_valid ? bkp_hold        : rtc_data;
+      // Only until something has been handed over: from the $e7 on, the block at
+      // the end of this always holds the calendar, and re-seeding it from the wall
+      // clock would undo it.
+      if (!bkp_valid) begin
+        snap      <= rtc_data;
+        dow_r     <= rtc_data[59:56];
+        dow_ss    <= rtc_data[59:56];
+        dow_owned <= 1'b0;
+        date_ref  <= rtc_data[55:24];
+        stopped   <= 1'b0;
+        frz       <= rtc_data;
+      end
     end
-`else
-    // Same block with the handover selections collapsed: with no backup to
-    // plant, every seed comes from the wall clock the MCU programmed ($e5).
-    // bkp_applied itself stays - it is what makes a console reset leave the
-    // clock alone once the game is running, which is RTC-4513 behaviour and
-    // not part of the handover.
-    if (!bkp_applied) begin
-      snap       <= rtc_data;
-      wr_hold    <= rtc_data;
-      ctrl_d     <= 4'h1;
-      ctrl_e     <= 4'hf;
-      ctrl_f     <= 4'h6;
-      wr_pending <= 1'b0;
-      rtc_prev   <= rtc_data;
-      dow_r      <= rtc_data[59:56];
-      dow_ss     <= rtc_data[59:56];
-      dow_owned  <= 1'b0;
-      date_ref   <= rtc_data[55:24];
-      stopped    <= 1'b0;
-      frz        <= rtc_data;
-    end
-`endif
   end else begin
     // the console is running: the handover is done with
     bkp_applied <= 1'b1;
@@ -578,23 +539,25 @@ always @(posedge clkin) begin
       if (stopped) frz <= snap;
     end
 
-`ifndef MK2
-    // MCU restore of the backed up state ($e7).  Last in the block on purpose:
-    // it overrides anything the SNES side did in the same clock.  The time
-    // itself also goes to rtc.v, through $e5, before this arrives; frz is what
-    // makes a stopped clock come back at exactly the second it was left on.
-    if (bkp_we) begin
-      frz        <= bkp_time_in;
-      snap       <= bkp_time_in;
-      dow_r      <= bkp_time_in[59:56];
-      dow_ss     <= bkp_time_in[59:56];
-      dow_owned  <= bkp_flags_in[0];
-      stopped    <= bkp_flags_in[1];
-      date_ref   <= bkp_time_in[55:24];
-      wr_pending <= 1'b0;
-      dirty      <= 1'b0;
-    end
-`endif
+  end
+
+  // MCU restore of the backed up state ($e7).  LAST in the block on purpose: it
+  // overrides anything the reset branch or the SNES side did in the same clock.  It
+  // runs inside the reset too, because that is where the handover lands -- the MCU
+  // holds the console down for the whole load -- and bkp_valid then keeps the reset
+  // branch from seeding over it.  The time itself reaches rtc.v through $e5 before
+  // this arrives; frz is what makes a stopped clock come back on the second it was
+  // left on.
+  if (bkp_we) begin
+    frz        <= bkp_time_in;
+    snap       <= bkp_time_in;
+    dow_r      <= bkp_time_in[59:56];
+    dow_ss     <= bkp_time_in[59:56];
+    dow_owned  <= bkp_flags_in[0];
+    stopped    <= bkp_flags_in[1];
+    date_ref   <= bkp_time_in[55:24];
+    wr_pending <= 1'b0;
+    dirty      <= 1'b0;
   end
 end
 

@@ -650,20 +650,16 @@ static void load_saveram(const load_ctx_t *c) {
     if (romprops.sramsize_bytes) migrate_and_load_srm(filename, SRAM_SAVE_ADDR);
     /* file not found error is ok (SRM file might not exist yet) */
     if(file_res == FR_NO_FILE) file_res = 0;
-#ifdef CONFIG_MK2
-    /* The mk2 flavour of the SPC7110 core has no virtual battery (the $e6/$e7
-       handover is gated out of the bitstream, see the spc7110_rtc_load call
-       below), so the factory check program's RTC BACKUP test can never pass
-       here and this compensation stays.  Plant the retail signature that
-       the check program itself writes on success ("SPC7110 CHECK OK", last
-       16 bytes of SRAM) whenever it is absent, so a fresh cart boots retail
-       instead of looping the factory ritual.  Only the RTC cart (carttype
-       0xf9, Tengai Makyou Zero) carries the check program -- on the plain
-       SPC7110 carts those 16 bytes are ordinary save data and must not be
-       touched.  A save that already carries the signature is untouched;
-       the seed lands in the initial CRC, so it reaches the card only
-       together with a real save. */
-    if(romprops.has_spc7110_rtc && romprops.sramsize_bytes >= 16) {
+    /* A core without the virtual battery cannot pass the factory check program's
+       RTC BACKUP test -- that test IS the battery -- and the cart then loops the
+       factory ritual instead of booting retail.  Plant the signature the check
+       program writes on success ("SPC7110 CHECK OK", last 16 bytes of SRAM) when it
+       is absent.  ONLY the RTC cart (carttype 0xf9) carries the check program; on the
+       plain SPC7110 carts those 16 bytes are ordinary save data.  The seed lands in
+       the initial CRC, so it reaches the card only with a real save.  load_setup_masks
+       probes the core and runs before this. */
+    if(romprops.has_spc7110_rtc && romprops.sramsize_bytes >= 16
+       && !spc7110_rtc_battery_present()) {
       static const uint8_t spc7110_sig[16] = { 'S','P','C','7','1','1','0',' ',
                                                'C','H','E','C','K',' ','O','K' };
       uint8_t sigcur[16];
@@ -673,7 +669,6 @@ static void load_saveram(const load_ctx_t *c) {
         sram_writeblock((void*)spc7110_sig, sigaddr, 16);
       }
     }
-#endif
     saveram_crc_old = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase, romprops.sramsize_bytes, 0);
     saveram_crc = 0;
     saveram_offset = 0;
@@ -981,17 +976,11 @@ static void load_setup_masks(load_ctx_t *c) {
        With a .rtc sidecar next to the save this restores what the cartridge
        battery would have kept - including a clock the game stopped - and
        without one it falls back to the console's own time, exactly as before. */
-    /* An FPGA gate, not a flash one: the Spartan-3 flavour of the SPC7110 core has
-       no virtual battery.  spc7110_rtcif/spc7110_regs/main.v put
-       bkp_time/bkp_flags/bkp_we behind `ifndef MK2` and mcu_cmd.v does not decode
-       SPI $e6/$e7 there, so a backup call would push $e7 into a core that drops it
-       and read $e6 back as whatever the SPI input latch last held.  Wall clock only
-       until the mk2 bitstream carries the registers. */
-#ifndef CONFIG_MK2
+    /* Every config, Mk.II included: the Spartan-3 SPC7110 core carries the virtual
+       battery too.  An older core answers $e6 out of a stale latch, so the handover is
+       probed for its marker first and falls back to the console clock when it is
+       missing -- core and firmware still have to come from the same release. */
     spc7110_rtc_load(c->filename);
-#else
-    set_fpga_time(get_bcdtime());
-#endif
   }
   c->rammask  = rammask;
 }
@@ -1422,11 +1411,16 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   load_bs_pack_slot(&c);
 
   printf("check MSU...");
+  romprops.has_msu1 = 0;
+#ifdef CONFIG_MK2
+  /* The Spartan-3 SPC7110 core has no audio DAC, so MSU-1 is not offered for that
+     chip on the Mk.II.  The check must be SKIPPED, not undone afterwards: msu1_check()
+     raises FEAT_MSU1 itself and leaves the .msu open with a link map. */
+  if(!romprops.has_spc7110)
+#endif
   if(msu1_check(c.filename)) {
     romprops.fpga_features |= FEAT_MSU1;
     romprops.has_msu1 = 1;
-  } else {
-    romprops.has_msu1 = 0;
   }
   printf("done\n");
 

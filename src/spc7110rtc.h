@@ -24,6 +24,16 @@
 #define SPC7110_RTC_DOW_OWNED (0x10)  /* the game has written the weekday */
 #define SPC7110_RTC_DOW_MASK  (0x0f)
 
+/* Marker the core puts in the two spare bits when it answers $e6.  A core built
+   before the virtual battery does not decode $e6 at all and leaves its SPI read
+   register alone, so the eight bytes come back as eight copies of the previous
+   transfer -- plausible and wrong.  0xa5 passes the mask, so the reader also refuses
+   eight identical bytes.  The marker is read-only: $e7 ignores those bits and the
+   sidecar stores the status byte without them, so a card written by either firmware
+   loads in the other. */
+#define SPC7110_RTC_MAGIC_MASK (0xc0)
+#define SPC7110_RTC_MAGIC      (0x80)
+
 /* Seven packed BCD bytes, most significant first, exactly the payload of SPI
    command $e5: century, year, month, day, hour, minute, second. */
 #define SPC7110_RTC_TIMELEN   (7)
@@ -64,6 +74,10 @@ void spc7110_rtc_load(uint8_t *filename);
    sidecar only when it actually changed, so a free running clock costs no
    card writes at all. */
 void spc7110_rtc_save(uint8_t *filename);
+/* Whether the core the last spc7110_rtc_load() talked to answered $e6 with the
+   marker, i.e. whether there is a virtual battery on the other end.  0 means an
+   fpga_spc7110 from before the battery, on either board. */
+int spc7110_rtc_battery_present(void);
 #endif
 
 #endif
