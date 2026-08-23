@@ -31,9 +31,13 @@
 #include "spi.h"
 #include "config.h"
 
-#define FPGA_SELECT() do {FPGA_TX_SYNC(); CLEAR_BIT(FPGA_SSREG, FPGA_SSBIT);} while (0)
+/* Chip select / ready-wait.  The *_INLINE forms are the macro bodies, for per-byte
+   streaming loops; the plain names expand to a call -- see FPGA_WAIT_RDY below. */
+#define FPGA_SELECT_INLINE() do {FPGA_TX_SYNC(); CLEAR_BIT(FPGA_SSREG, FPGA_SSBIT);} while (0)
+#define FPGA_DESELECT_INLINE() do {FPGA_TX_SYNC(); SET_BIT(FPGA_SSREG, FPGA_SSBIT);} while (0)
+#define FPGA_SELECT() fpga_select()
+#define FPGA_DESELECT() fpga_deselect()
 #define FPGA_SELECT_ASYNC() do {CLEAR_BIT(FPGA_SSREG, FPGA_SSBIT);} while (0)
-#define FPGA_DESELECT() do {FPGA_TX_SYNC(); SET_BIT(FPGA_SSREG, FPGA_SSBIT);} while (0)
 #define FPGA_DESELECT_ASYNC() do {SET_BIT(FPGA_SSREG, FPGA_SSBIT);} while (0)
 
 #define FPGA_TX_SYNC()     spi_tx_sync()
@@ -59,7 +63,15 @@
 #define FEAT_ST0010        (1 << 1)
 #define FEAT_DSPX          (1 << 0)
 
-#define FPGA_WAIT_RDY()    do {__NOP(); __NOP(); __NOP(); __NOP(); while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE)); __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP(); while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)); } while (0)
+/* The ready-wait is ~40 bytes of straight-line code (16 NOPs + two poll loops) at
+   well over a hundred call sites, so FPGA_WAIT_RDY() is a CALL to the out-of-line
+   copy.  FPGA_WAIT_RDY_INLINE() is the body, for per-byte streaming loops
+   (sram_*block, the CRC scans, the .spc/.srm/RLE writers) where the call would be
+   paid once per byte.  The functions are noinline ON PURPOSE: under -flto the
+   optimizer would clone the body back into every caller.  A call only ADDS cycles
+   BEFORE the wait -- the NOP spacing and both poll loops run unchanged. */
+#define FPGA_WAIT_RDY_INLINE()    do {__NOP(); __NOP(); __NOP(); __NOP(); while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE)); __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP(); while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)); } while (0)
+#define FPGA_WAIT_RDY()    fpga_wait_rdy()
 
 /* Used ONLY by the ROM patcher.  An enhancement-chip FPGA core can leave the
    MCU SDRAM-port ready line (FPGA_MCU_RDY) deasserted, which makes the unbounded
@@ -70,7 +82,11 @@
    timing-critical global paths (DMA, savestate, normal load) keep the original
    unbounded FPGA_WAIT_RDY and are unaffected. */
 #define FPGA_MCU_RDY_TIMEOUT    (5000000UL)
-#define FPGA_WAIT_RDY_TO(toflag) do {__NOP(); __NOP(); __NOP(); __NOP(); while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE)); __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP(); { uint32_t _wto = FPGA_MCU_RDY_TIMEOUT; while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)) { if(!--_wto) { (toflag) = 1; break; } } } } while (0)
+#define FPGA_WAIT_RDY_TO_INLINE(toflag) do {__NOP(); __NOP(); __NOP(); __NOP(); while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE)); __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP(); { uint32_t _wto = FPGA_MCU_RDY_TIMEOUT; while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)) { if(!--_wto) { (toflag) = 1; break; } } } } while (0)
+/* Out-of-line twin (see FPGA_WAIT_RDY above).  The function returns the timeout and
+   the macro latches the caller's flag, so the flag is written only on timeout, exactly
+   like the inline body. */
+#define FPGA_WAIT_RDY_TO(toflag) do { if(fpga_wait_rdy_to()) (toflag) = 1; } while (0)
 
 /* command parameters */
 #define FPGA_MEM_AUTOINC        (0x8)
@@ -144,6 +160,13 @@
 #define FPGA_CMD_ECHO            (0xff)
 
 extern uint16_t current_features;
+
+/* Out-of-line bodies behind FPGA_SELECT/FPGA_DESELECT/FPGA_WAIT_RDY(_TO).
+   noinline is load-bearing under -flto -- see the note at FPGA_WAIT_RDY. */
+void __attribute__((noinline)) fpga_select(void);
+void __attribute__((noinline)) fpga_deselect(void);
+void __attribute__((noinline)) fpga_wait_rdy(void);
+int  __attribute__((noinline)) fpga_wait_rdy_to(void); /* 1 = MCU_RDY never asserted */
 
 void fpga_spi_init(void);
 uint8_t fpga_test(void);

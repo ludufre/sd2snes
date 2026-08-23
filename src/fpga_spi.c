@@ -172,6 +172,28 @@
 
 extern cfg_t CFG;   /* bus_compat -> featurebits[13] in fpga_set_features */
 
+/* The four out-of-line bodies behind FPGA_SELECT/FPGA_DESELECT/FPGA_WAIT_RDY(_TO).
+   They exist purely to stop the ready-wait and the chip-select sequence from being
+   pasted into every one of their ~200 call sites; the code they run is the original
+   macro body, verbatim.  noinline keeps LTO from undoing that on the mk2. */
+void __attribute__((noinline)) fpga_select(void) {
+  FPGA_SELECT_INLINE();
+}
+
+void __attribute__((noinline)) fpga_deselect(void) {
+  FPGA_DESELECT_INLINE();
+}
+
+void __attribute__((noinline)) fpga_wait_rdy(void) {
+  FPGA_WAIT_RDY_INLINE();
+}
+
+int __attribute__((noinline)) fpga_wait_rdy_to(void) {
+  uint8_t timedout = 0;
+  FPGA_WAIT_RDY_TO_INLINE(timedout);
+  return timedout;
+}
+
 void fpga_spi_init(void) {
   spi_init();
   GPIO_MODE_IN(FPGA_MCU_RDY_REG, FPGA_MCU_RDY_BIT);
@@ -211,22 +233,24 @@ void set_saveram_base(uint8_t mask) {
   FPGA_DESELECT();
 }
 
-void set_saveram_mask(uint32_t mask) {
+/* Every mask/base register below is one command byte followed by a 24-bit
+   big-endian value.  set_mcu_addr looks the same but is NOT one of these: it
+   waits for FPGA_MCU_RDY in the middle and is the hot path of every sram_*. */
+static void fpga_cmd24(uint8_t cmd, uint32_t v) {
   FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETRAMMASK);
-  FPGA_TX_BYTE((mask >> 16) & 0xff);
-  FPGA_TX_BYTE((mask >> 8) & 0xff);
-  FPGA_TX_BYTE((mask) & 0xff);
+  FPGA_TX_BYTE(cmd);
+  FPGA_TX_BYTE((v >> 16) & 0xff);
+  FPGA_TX_BYTE((v >> 8) & 0xff);
+  FPGA_TX_BYTE((v) & 0xff);
   FPGA_DESELECT();
 }
 
+void set_saveram_mask(uint32_t mask) {
+  fpga_cmd24(FPGA_CMD_SETRAMMASK, mask);
+}
+
 void set_rom_mask(uint32_t mask) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETROMMASK);
-  FPGA_TX_BYTE((mask >> 16) & 0xff);
-  FPGA_TX_BYTE((mask >> 8) & 0xff);
-  FPGA_TX_BYTE((mask) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd24(FPGA_CMD_SETROMMASK, mask);
 }
 
 /* SPC7110: the data ROM window in PSRAM.  The core computes
@@ -234,39 +258,19 @@ void set_rom_mask(uint32_t mask) {
    (power of two); the firmware programs both before the SNES is released.
    Every other core ignores $d7/$d8. */
 void set_drom_base(uint32_t base) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETDROMBASE);
-  FPGA_TX_BYTE((base >> 16) & 0xff);
-  FPGA_TX_BYTE((base >> 8) & 0xff);
-  FPGA_TX_BYTE((base) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd24(FPGA_CMD_SETDROMBASE, base);
 }
 
 void set_drom_mask(uint32_t mask) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETDROMMASK);
-  FPGA_TX_BYTE((mask >> 16) & 0xff);
-  FPGA_TX_BYTE((mask >> 8) & 0xff);
-  FPGA_TX_BYTE((mask) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd24(FPGA_CMD_SETDROMMASK, mask);
 }
 
 void set_rom_mask_b(uint32_t mask) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETROMMASK_B);
-  FPGA_TX_BYTE((mask >> 16) & 0xff);
-  FPGA_TX_BYTE((mask >> 8) & 0xff);
-  FPGA_TX_BYTE((mask) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd24(FPGA_CMD_SETROMMASK_B, mask);
 }
 
 void set_saveram_mask_b(uint32_t mask) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETRAMMASK_B);
-  FPGA_TX_BYTE((mask >> 16) & 0xff);
-  FPGA_TX_BYTE((mask >> 8) & 0xff);
-  FPGA_TX_BYTE((mask) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd24(FPGA_CMD_SETRAMMASK_B, mask);
 }
 
 void set_mapper(uint8_t val) {

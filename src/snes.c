@@ -89,7 +89,9 @@ snes_status_t STS = {
 // 0x06F5FCAD, 0x2DCCDC2F, 0x47AC91A5, 0x566A91FD
 // 0x61506060, 0x6D869DD1, 0x7B55EA0F, 0x81C1BA16
 // 0xD8841B4B, 0xDEFABA49, 0xE7E44192
-typedef struct { uint32_t crc; uint32_t base; uint32_t size; } SramOffset;
+/* base/size are cartridge SaveRAM offsets, so both fit a uint16_t (largest entry
+   below is 0x7c00 / 0x2000); they widen on the way into romprops. */
+typedef struct { uint32_t crc; uint16_t base; uint16_t size; } SramOffset;
 const SramOffset SramOffsetTable[] = {
   // GSU
   { 0x5cb1755a, 0x7c00, 0x0400 }, // yoshi's island (us)
@@ -649,7 +651,7 @@ void get_selected_name(uint8_t* fn) {
   }
 }
 
-void vsnes_bootprint(int line, int center, void *fmt, va_list arglist) {
+static void vsnes_bootprint(int line, int center, void *fmt, va_list arglist) {
   char bootmsg[33];
   int count;
 

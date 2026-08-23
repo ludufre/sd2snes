@@ -221,7 +221,7 @@ void sort_all_dir(uint32_t endaddr) {
 }
 
 void make_filesize_string(char *buf, uint32_t size) {
-  char *size_units[3] = {" ", "k", "M"};
+  static const char *const size_units[3] = {" ", "k", "M"};
   uint32_t fsize = size;
   uint8_t unit_idx = 0;
   while(fsize > 9999) {

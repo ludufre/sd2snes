@@ -9,6 +9,12 @@
 #include "uart.h"
 #include "led.h"
 
+/* Everything below is the serial console itself: the TX ring buffer, the UART IRQ
+   handler and the port setup. CONFIG_UART_DEBUG off (Mk.II) leaves this file empty --
+   uart.h turns every entry point into a no-op macro and UART_HANDLER is .weak in
+   startup.S, so the vector falls back to the default handler. */
+#ifdef CONFIG_UART_DEBUG
+
 #ifdef CONFIG_CDC_DEBUG
 /* Forward-declare the two USB CDC symbols needed for debug mirroring. */
 extern volatile uint8_t USB_Configuration;
@@ -289,3 +295,5 @@ void uart_puts(const char *text) {
     uart_putc(*text++);
   }
 }
+
+#endif /* CONFIG_UART_DEBUG */

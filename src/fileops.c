@@ -29,6 +29,7 @@
 #include "ff.h"
 #include "fileops.h"
 #include "diskio.h"
+#include "util.h"
 
 #include <string.h>
 #include <stdarg.h>
@@ -44,12 +45,17 @@ enum filestates file_status;
 
 int newcard;
 
-char *fresult_names[] = { "FR_OK", "FR_DISK_ERR", "FR_INT_ERR",
+/* Log-side FRESULT spelling: only ever reaches a serial console, so it follows
+   CONFIG_UART_DEBUG. The user-facing fresult_friendly_names[] below does NOT -- it is
+   drawn on screen by the early-boot "Could not load menu ROM!" failure. */
+#ifdef CONFIG_UART_DEBUG
+static const char *const fresult_names[] = { "FR_OK", "FR_DISK_ERR", "FR_INT_ERR",
   "FR_NOT_READY", "FR_NO_FILE", "FR_NO_PATH", "FR_INVALID_NAME",
   "FR_DENIED", "FR_EXIST", "FR_INVALID_OBJECT", "FR_WRITE_PROTECTED",
   "FR_INVALID_DRIVE", "FR_NOT_ENABLED", "FR_NO_FILESYSTEM", "FR_MKFS_ABORTED",
   "FR_TIMEOUT", "FR_LOCKED", "FR_NOT_ENOUGH_CORE", "FR_TOO_MANY_OPEN_FILES",
   "FR_INVALID_PARAMETER" };
+#endif
 
 /* Same FRESULT order as fresult_names above, but worded for the user instead of the log.
    English only: the one screen that shows these is the early boot "Could not load menu ROM!"
@@ -284,8 +290,7 @@ FRESULT check_or_create_folder(TCHAR *dir) {
   fno.lfname = NULL;
   TCHAR buf[256];
   TCHAR *ptr = buf;
-  strncpy(buf, dir, sizeof(buf) - 1);
-  buf[sizeof(buf) - 1] = '\0';
+  strlcpy_nul(buf, dir, sizeof(buf));
   while(*(ptr++)) {
     if(*ptr == '/') {
       *ptr = 0;
@@ -310,14 +315,17 @@ FRESULT check_or_create_folder(TCHAR *dir) {
   return FR_OK;
 }
 
+#ifdef CONFIG_UART_DEBUG
 char *get_fresult_name(FRESULT res) {
-  return fresult_names[res];
+  return (char *)fresult_names[res];
 }
+#endif
 
 char *get_fresult_friendlyname(FRESULT res) {
   return (char *)fresult_friendly_names[res];
 }
 
+#ifdef CONFIG_UART_DEBUG
 void vprint_fresult(FRESULT res, const char *fmt, va_list arglist) {
   vprintf(fmt, arglist);
   printf(": %s(%d)\n", get_fresult_name(res), res);
@@ -329,3 +337,4 @@ void print_fresult(FRESULT res, const char *fmt, ...) {
   vprint_fresult(res, fmt, arglist);
   va_end(arglist);
 }
+#endif /* CONFIG_UART_DEBUG */

@@ -266,7 +266,7 @@ static uint16_t usbint_sram_readblock_to(void *buf, uint32_t addr, uint16_t size
     FPGA_SELECT();
     FPGA_TX_BYTE(0x88);   /* READ */
     while (count--) {
-        FPGA_WAIT_RDY_TO(usbint_sram_err);
+        FPGA_WAIT_RDY_TO_INLINE(usbint_sram_err);
         if (usbint_sram_err) break;
         *(tgt++) = FPGA_RX_BYTE();
     }
@@ -285,7 +285,7 @@ static uint16_t usbint_sram_writeblock_to(void *buf, uint32_t addr, uint16_t siz
     FPGA_TX_BYTE(0x98);   /* WRITE */
     while (count--) {
         FPGA_TX_BYTE(*src++);
-        FPGA_WAIT_RDY_TO(usbint_sram_err);
+        FPGA_WAIT_RDY_TO_INLINE(usbint_sram_err);
         if (usbint_sram_err) break;
     }
     FPGA_DESELECT();

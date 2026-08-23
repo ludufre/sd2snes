@@ -36,7 +36,14 @@
 #include "config.h"
 #include "uart.h"
 
+/* The UART half of this file -- printf()/vprintf() and the puts()/putchar() gcc folds
+   literal printf() calls into -- is compiled only where CONFIG_UART_DEBUG is set;
+   snprintf()/vsnprintf() and the shared formatter below stay in every config.  With the
+   console off uart.h has already turned printf into a macro, so the definition here
+   would not even parse: the #ifdefs are load-bearing. */
+#ifdef CONFIG_UART_DEBUG
 #define outfunc(x) uart_putc(x)
+#endif
 
 #define FLAG_ZEROPAD   1
 #define FLAG_LEFTADJ   2
@@ -61,6 +68,7 @@ static char *outptr;
 static int maxlen;
 
 /* printf */
+#ifdef CONFIG_UART_DEBUG
 static void outchar(char x) {
   if (maxlen) {
     maxlen--;
@@ -68,6 +76,7 @@ static void outchar(char x) {
     outlength++;
   }
 }
+#endif
 
 /* sprintf */
 static void outstr(char x) {
@@ -253,6 +262,7 @@ static int internal_nprintf(void (*output_function)(char c), const char *fmt, va
   return outlength;
 }
 
+#ifdef CONFIG_UART_DEBUG
 int printf(const char *format, ...) {
   va_list ap;
   int res;
@@ -271,6 +281,7 @@ int vprintf(const char *format, va_list ap) {
   res = internal_nprintf(outchar, format, ap);
   return res;
 }
+#endif /* CONFIG_UART_DEBUG */
 
 int snprintf(char *str, size_t size, const char *format, ...) {
   va_list ap;
@@ -296,7 +307,10 @@ int vsnprintf(char *str, size_t size, const char *format, va_list ap) {
   return res;
 }
 
-/* Required for gcc compatibility */
+/* Required for gcc compatibility: at -Os gcc rewrites printf("literal\n") into puts()
+   and printf("c") into putchar().  Without the console there is no printf() to
+   rewrite, so these go with it. */
+#ifdef CONFIG_UART_DEBUG
 int puts(const char *str) {
   uart_puts(str);
   uart_putc('\n');
@@ -308,3 +322,4 @@ int putchar(int c) {
   uart_putc(c);
   return 0;
 }
+#endif /* CONFIG_UART_DEBUG */

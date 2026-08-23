@@ -10,6 +10,7 @@
 #include "yaml.h"
 #include "rtc.h"
 #include "snes.h"
+#include "util.h"
 
 /* The SNES menu pokes config bytes by hard-coded offset (snes/memmap.i65,
    CFG_*=CFG_ADDR+$nn).  Pin the C struct layout to that map so inserting or
@@ -33,7 +34,7 @@ _Static_assert(offsetof(cfg_t, enable_sram_slots) == 0x146, "cfg_t.enable_sram_s
 _Static_assert(offsetof(cfg_t, ingame_buttons_menu) == 0x147, "cfg_t.ingame_buttons_menu must stay at CFG_ADDR+$147");
 _Static_assert(offsetof(cfg_t, a26_video_width) == 0x149, "cfg_t.a26_video_width must stay at CFG_ADDR+$149");
 
-cfg_t CFG_DEFAULT = {
+const cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
   .vidmode_game = VIDMODE_AUTO,
   .pair_mode_allowed = 0,
@@ -98,7 +99,7 @@ cfg_t CFG_DEFAULT = {
 cfg_t CFG;
 extern mcu_status_t STM;
 
-char *button_names = "BYsSudlrAXLR";
+static const char button_names[] = "BYsSudlrAXLR";
 
 /* Gestures the FPGA decodes by exact equality of the pad word (see any core's cheat.v). */
 static const uint16_t cfg_reserved_gestures[] = {
@@ -141,150 +142,159 @@ static uint16_t cfg_check_menu_combo(uint16_t combo) {
   return combo;
 }
 
+/* ---- config.yml serializer ----------------------------------------------
+   config.yml is a flat list of "Key: value" lines; per setting only the byte's
+   place in cfg_t and the spelling of its scalar vary, so one table drives both
+   directions.  cfg_save walks it in order -- the table order IS the file layout,
+   pinned by tests/host/run_cfg.sh -- while cfg_load looks each key up
+   independently (yaml_get_itemvalue rewinds, so lookup order is free).
+   The file carries no prose: the documentation belongs with the menu entry that
+   sets the value, not on the card. */
+typedef enum {
+  CK_BOOL = 0,   /* uint8_t 0/1        <-> true / false */
+  CK_NUM,        /* uint8_t            <-> decimal, optional clamp (see below) */
+  CK_NUMTRUNC,   /* uint8_t            <-> decimal, truncated to 8 bits BEFORE the clamp */
+  CK_NIB,        /* uint8_t            <-> decimal, masked to 4 bits on load */
+  CK_STR,        /* uint8_t[CFG_STR_LEN] <-> bare scalar */
+  CK_BUTTONS,    /* uint16_t pad mask  <-> "BYsSudlrAXLR" letters */
+  CK_BSXTIME     /* uint8_t[12] S-RTC  <-> 14 BCD hex digits */
+} cfg_kind_t;
+
+/* clamp = (max << 4) | replacement, 0 = take whatever the file says.  Every max
+   and every replacement in use fits in a nibble.  The replacement is not always
+   zero: an out-of-range LEDBrightness means "maximum", an out-of-range
+   ShowCovers means "the default, on". */
+typedef struct {
+  const char *key;
+  uint16_t    off;    /* offsetof() into cfg_t -- the menu's CFG map, indirectly */
+  uint8_t     kind;
+  uint8_t     clamp;
+} cfg_item_t;
+
+#define CFG_STR_LEN (sizeof(CFG_DEFAULT.skin_name))
+_Static_assert(sizeof(CFG_DEFAULT.bgm_name) == CFG_STR_LEN,
+               "both CK_STR fields must share one length");
+
+/* The favorites mirror is 20 x 256 bytes and the game info block starts right after
+   it: raising a cap on one side only lets the SNES overwrite the other from
+   underneath (memory.h <-> snes/memmap.i65 are in lockstep). */
+_Static_assert(SRAM_FAVORITEGAMES_ADDR + MAX_FAVORITE_GAMES * 256L <= SRAM_GAMEINFO_ADDR,
+               "the favorites SRAM mirror runs into SRAM_GAMEINFO_ADDR");
+
+#define CFGI(k, field, kind, clamp) { k, offsetof(cfg_t, field), kind, clamp }
+static const cfg_item_t cfg_items[] = {
+  CFGI(CFG_PAIR_MODE_ALLOWED,           pair_mode_allowed,          CK_BOOL,    0),
+  CFGI(CFG_VIDMODE_MENU,                vidmode_menu,               CK_NUM,     0),
+  CFGI(CFG_VIDMODE_GAME,                vidmode_game,               CK_NUM,     0),
+  CFGI(CFG_BSX_USE_USERTIME,            bsx_use_usertime,           CK_BOOL,    0),
+  CFGI(CFG_BSX_TIME,                    bsx_time,                   CK_BSXTIME, 0),
+  CFGI(CFG_R213F_OVERRIDE,              r213f_override,             CK_BOOL,    0),
+  CFGI(CFG_1CHIP_TRANSIENT_FIXES,       onechip_transient_fixes,    CK_BOOL,    0),
+  CFGI(CFG_BRIGHTNESS_LIMIT,            brightness_limit,           CK_NIB,     0),
+  CFGI(CFG_ENABLE_RST_TO_MENU,          reset_to_menu,              CK_NUM,     0x31),
+  CFGI(CFG_ENABLE_CHEATS,               enable_cheats,              CK_BOOL,    0),
+  CFGI(CFG_ENABLE_INGAME_HOOK,          enable_ingame_hook,         CK_BOOL,    0),
+  CFGI(CFG_ENABLE_INGAME_BUTTONS,       enable_ingame_buttons,      CK_BOOL,    0),
+  CFGI(CFG_ENABLE_HOOK_HOLDOFF,         enable_hook_holdoff,        CK_BOOL,    0),
+  CFGI(CFG_RESET_PATCH,                 reset_patch,                CK_BOOL,    0),
+  CFGI(CFG_ENABLE_INGAME_SAVESTATE,     enable_ingame_savestate,    CK_NUM,     0),
+  CFGI(CFG_LOADSTATE_DELAY,             loadstate_delay,            CK_NUM,     0),
+  CFGI(CFG_ENABLE_SAVESTATE_SLOTS,      enable_savestate_slots,     CK_BOOL,    0),
+  CFGI(CFG_INGAME_BUTTONS_SAVE_STATE,   ingame_buttons_savestate,   CK_BUTTONS, 0),
+  CFGI(CFG_INGAME_BUTTONS_LOAD_STATE,   ingame_buttons_loadstate,   CK_BUTTONS, 0),
+  CFGI(CFG_INGAME_BUTTONS_CHANGE_STATE, ingame_buttons_changestate, CK_BUTTONS, 0),
+  CFGI(CFG_SGB_ENABLE_INGAME_HOOK,      sgb_enable_ingame_hook,     CK_BOOL,    0),
+  CFGI(CFG_SGB_ENABLE_STATE,            sgb_enable_state,           CK_BOOL,    0),
+  CFGI(CFG_SGB_VOLUME_BOOST,            sgb_volume_boost,           CK_NUM,     0),
+  CFGI(CFG_SGB_ENH_OVERRIDE,            sgb_enh_override,           CK_BOOL,    0),
+#ifdef CONFIG_MK3
+  /* The one key the mk2 and mk3 firmwares genuinely disagree about. */
+  CFGI(CFG_SGB_SPR_INCREASE,            sgb_spr_increase,           CK_BOOL,    0),
+#endif
+  CFGI(CFG_SGB_CLOCK_FIX,               sgb_clock_fix,              CK_BOOL,    0),
+  CFGI(CFG_SGB_BIOS_VERSION,            sgb_bios_version,           CK_NUM,     0),
+  CFGI(CFG_ENABLE_SCREENSAVER,          enable_screensaver,         CK_BOOL,    0),
+  CFGI(CFG_SORT_DIRECTORIES,            sort_directories,           CK_BOOL,    0),
+  CFGI(CFG_HIDE_EXTENSIONS,             hide_extensions,            CK_BOOL,    0),
+  CFGI(CFG_LED_BRIGHTNESS,              led_brightness,             CK_NUMTRUNC, 0xFF),
+  CFGI(CFG_CX4_SPEED,                   cx4_speed,                  CK_NUM,     0),
+  CFGI(CFG_GSU_SPEED,                   gsu_speed,                  CK_NUM,     0),
+  CFGI(CFG_MSU_VOLUME_BOOST,            msu_volume_boost,           CK_NUM,     0),
+  CFGI(CFG_ENABLE_AUTOSAVE,             enable_autosave,            CK_BOOL,    0),
+  CFGI(CFG_ENABLE_AUTOSAVE_MSU1,        enable_autosave_msu1,       CK_BOOL,    0),
+  CFGI(CFG_SHOW_COVERS,                 show_covers,                CK_NUM,     0x21),
+  CFGI(CFG_COVERS_IN_LISTS,             covers_in_lists,            CK_BOOL,    0),
+  CFGI(CFG_LANGUAGE,                    language,                   CK_NUM,     0x50),
+  CFGI(CFG_PATCH_VERIFY_INTEGRITY,      patch_verify_integrity,     CK_BOOL,    0),
+  CFGI(CFG_ENABLE_MENU_MUSIC,           enable_menu_music,          CK_BOOL,    0),
+  CFGI(CFG_ENABLE_MENU_SFX,             enable_menu_sfx,            CK_BOOL,    0),
+  CFGI(CFG_SORT_FAVORITES,              sort_favorites,             CK_BOOL,    0),
+  CFGI(CFG_ENABLE_CHEAT_OVERLAY,        enable_cheat_overlay,       CK_BOOL,    0),
+  CFGI(CFG_INGAME_BUTTONS_MENU,         ingame_buttons_menu,        CK_BUTTONS, 0),
+  CFGI(CFG_ENABLE_BPS_COPIER,           enable_bps_copier,          CK_BOOL,    0),
+  CFGI(CFG_CLEAR_PPU_ON_BOOT,           clear_ppu_on_boot,          CK_BOOL,    0),
+  CFGI(CFG_BUS_COMPAT,                  bus_compat,                 CK_BOOL,    0),
+  CFGI(CFG_ENABLE_GAME_MANUAL,          enable_game_manual,         CK_BOOL,    0),
+  CFGI(CFG_A26_VIDEO_WIDTH,             a26_video_width,            CK_NUM,     0x10),
+  CFGI(CFG_SKIN_NAME,                   skin_name,                  CK_STR,     0),
+  CFGI(CFG_MENU_MUSIC_FILE,             bgm_name,                   CK_STR,     0),
+  CFGI(CFG_SHOW_GAME_INFO,              show_game_info,             CK_NUM,     0x21),
+  CFGI(CFG_GAME_INFO_VIDEO,             game_info_video,            CK_BOOL,    0),
+  CFGI(CFG_GAME_INFO_MUSIC,             game_info_music,            CK_BOOL,    0),
+  CFGI(CFG_ENABLE_WIFI,                 enable_wifi,                CK_BOOL,    0)
+};
+#undef CFGI
+
+#define CFG_NITEMS (sizeof(cfg_items) / sizeof(cfg_items[0]))
+
 int cfg_save() {
-  int err = 0;
-  uint64_t bcdtime = srtctime2bcdtime(CFG.bsx_time);
+  char buttons[13];
+
   file_open((uint8_t*)CFG_FILE, FA_CREATE_ALWAYS | FA_WRITE);
   f_puts("---\n", &file_handle);
-  f_puts("##############################\n", &file_handle);
-  f_puts("# sd2snes configuration file #\n", &file_handle);
-  f_puts("##############################\n\n", &file_handle);
-  f_puts("# Allow SuperCIC Pair Mode (required for video mode setting)\n", &file_handle);
-  f_printf(&file_handle, "%s: %s\n", CFG_PAIR_MODE_ALLOWED, CFG.pair_mode_allowed ? "true" : "false");
-  f_printf(&file_handle, "\n# Video mode (%d = 60Hz, %d = 50Hz, %d = Auto (game only))\n", VIDMODE_60, VIDMODE_50, VIDMODE_AUTO);
-  f_printf(&file_handle, "%s: %d\n", CFG_VIDMODE_MENU, CFG.vidmode_menu);
-  f_printf(&file_handle, "%s: %d\n", CFG_VIDMODE_GAME, CFG.vidmode_game);
-  f_printf(&file_handle, "\n# Satellaview Settings\n#  %s: use user defined time instead of real time\n", CFG_BSX_USE_USERTIME);
-  f_printf(&file_handle, "#  %s: user defined Satellaview broadcast time (format: YYYYMMDDhhmmss)\n", CFG_BSX_TIME);
-  f_printf(&file_handle, "%s: %s\n", CFG_BSX_USE_USERTIME, CFG.bsx_use_usertime ? "true" : "false");
-  f_printf(&file_handle, "%s: %06lX%08lX\n", CFG_BSX_TIME, (uint32_t)(bcdtime>>32), (uint32_t)(bcdtime & 0xffffffffLL));
-  f_puts("\n# Enable PPU region flag patching\n", &file_handle);
-  f_printf(&file_handle, "%s: %s\n", CFG_R213F_OVERRIDE, CFG.r213f_override ? "true" : "false");
-  f_puts("\n# Enable 1CHIP transient fixes (experimental) - Fix some 1CHIP related graphical issues\n", &file_handle);
-  f_printf(&file_handle, "%s: %s\n", CFG_1CHIP_TRANSIENT_FIXES, CFG.onechip_transient_fixes ? "true" : "false");
-  f_puts("\n# Brightness limit - can be used to limit RGB output levels on S-CPUN based consoles\n", &file_handle);
-  f_printf(&file_handle, "%s: %d\n", CFG_BRIGHTNESS_LIMIT, CFG.brightness_limit);
-  f_puts("\n# Reset to menu on short reset (0: off, 1: on, 2: on+return to last folder, 3: on+return to folder and pre-select ROM)\n", &file_handle);
-  f_printf(&file_handle, "%s: %d\n", CFG_ENABLE_RST_TO_MENU, CFG.reset_to_menu);
-  f_puts("\n# Initial cheats state when loading a game (true: enabled, false: disabled)\n", &file_handle);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEATS, CFG.enable_cheats ? "true" : "false");
-  f_puts("\n\n# IRQ hook related settings\n", &file_handle);
-  f_printf(&file_handle, "#  %s: Overall enable IRQ hooks (required for in-game buttons & WRAM cheats)\n", CFG_ENABLE_INGAME_HOOK);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_INGAME_HOOK, CFG.enable_ingame_hook ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Enable in-game buttons (en/disable cheats, reset sd2snes...)\n", CFG_ENABLE_INGAME_BUTTONS);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_INGAME_BUTTONS, CFG.enable_ingame_buttons ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Enable 10s grace period after reset before enabling in-game hooks\n", CFG_ENABLE_HOOK_HOLDOFF);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_HOOK_HOLDOFF, CFG.enable_hook_holdoff ? "true" : "false");
-  f_printf(&file_handle, "%s: %s\n", CFG_RESET_PATCH, CFG.reset_patch ? "true" : "false");
-  f_puts("\n", &file_handle);
-  f_printf(&file_handle, "#  %s: Enable in-game savestate\n", CFG_ENABLE_INGAME_SAVESTATE);
-  f_printf(&file_handle, "%s: %d\n", CFG_ENABLE_INGAME_SAVESTATE, CFG.enable_ingame_savestate);
-  f_printf(&file_handle, "#  %s: Load state delay (frames),\n", CFG_LOADSTATE_DELAY);
-  f_printf(&file_handle, "%s: %d\n", CFG_LOADSTATE_DELAY, CFG.loadstate_delay);
-  f_printf(&file_handle, "#  %s: Enable in-game savestate (0: disabled, 1: enabled)\n", CFG_ENABLE_INGAME_SAVESTATE);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_SAVESTATE_SLOTS, CFG.enable_savestate_slots ? "true" : "false");
-  char buttons[13];
-  cfg_buttons_bits2string(CFG.ingame_buttons_savestate, buttons);
-  f_printf(&file_handle, "#  %s: In-game save state buttons (buttons: BYsSudlrAXLR, default: start+r (SR)),\n", CFG_INGAME_BUTTONS_SAVE_STATE);
-  f_printf(&file_handle, "%s: %s\n", CFG_INGAME_BUTTONS_SAVE_STATE, buttons);
-  cfg_buttons_bits2string(CFG.ingame_buttons_loadstate, buttons);
-  f_printf(&file_handle, "#  %s: In-game load state buttons (buttons: BYsSudlrAXLR, default: start+l (SL)),\n", CFG_INGAME_BUTTONS_LOAD_STATE);
-  f_printf(&file_handle, "%s: %s\n", CFG_INGAME_BUTTONS_LOAD_STATE, buttons);
-  cfg_buttons_bits2string(CFG.ingame_buttons_changestate, buttons);
-  f_printf(&file_handle, "#  %s: In-game change state slot buttons (buttons: BYsSudlrAXLR, don't use dpad buttons, default: select (s)),\n", CFG_INGAME_BUTTONS_CHANGE_STATE);
-  f_printf(&file_handle, "%s: %s\n", CFG_INGAME_BUTTONS_CHANGE_STATE, buttons);
-  f_puts("\n", &file_handle);
-  f_printf(&file_handle, "#  %s: SGB enable hooks (%s or %s enables SGB hooks.  zero overhead.)\n", CFG_SGB_ENABLE_INGAME_HOOK, CFG_SGB_ENABLE_INGAME_HOOK, CFG_ENABLE_INGAME_HOOK);
-  f_printf(&file_handle, "%s: %s\n", CFG_SGB_ENABLE_INGAME_HOOK, CFG.sgb_enable_ingame_hook ? "true" : "false");
-  f_printf(&file_handle, "#  %s: SGB enable save states (only works with ingame hooks when supported boot and bios/snes is used)\n", CFG_SGB_ENABLE_STATE);
-  f_printf(&file_handle, "%s: %s\n", CFG_SGB_ENABLE_STATE, CFG.sgb_enable_state ? "true" : "false");
-  f_printf(&file_handle, "#  %s: SGB audio volume boost\n#    (0: none; 1: +3.5dBFS; 2: +6dBFS; 3: +9.5dBFS; 4: +12dBFS)\n", CFG_SGB_VOLUME_BOOST);
-  f_printf(&file_handle, "%s: %d\n", CFG_SGB_VOLUME_BOOST, CFG.sgb_volume_boost);
-  f_printf(&file_handle, "#  %s: SGB enhancements override (false: enhancements enabled; true: enhancements disabled)\n", CFG_SGB_ENH_OVERRIDE);
-  f_printf(&file_handle, "%s: %s\n", CFG_SGB_ENH_OVERRIDE, CFG.sgb_enh_override ? "true" : "false");
-#ifdef CONFIG_MK3
-  f_printf(&file_handle, "#  %s: SGB sprite increase per scanline.  not compatible with all games  (false: 10 sprites (default); true: 16 sprites)\n", CFG_SGB_SPR_INCREASE);
-  f_printf(&file_handle, "%s: %s\n", CFG_SGB_SPR_INCREASE, CFG.sgb_spr_increase ? "true" : "false");
-#endif
-  f_printf(&file_handle, "#  %s: SGB timing/clock (true: original/sgb2, false: snes/sgb1)\n", CFG_SGB_CLOCK_FIX);
-  f_printf(&file_handle, "%s: %s\n", CFG_SGB_CLOCK_FIX, CFG.sgb_clock_fix ? "true" : "false");
-  f_printf(&file_handle, "#  %s: SGB bios firmware version (defined number loads: sgbX_boot.bin and sgbX_snes.bin)\n", CFG_SGB_BIOS_VERSION);
-  f_printf(&file_handle, "%s: %d\n", CFG_SGB_BIOS_VERSION, CFG.sgb_bios_version);
+  for(unsigned i = 0; i < CFG_NITEMS; i++) {
+    const cfg_item_t *it = &cfg_items[i];
+    const uint8_t *p = (const uint8_t*)&CFG + it->off;
+    const char *str;
 
-  f_puts("\n# Screensaver settings\n", &file_handle);
-  f_printf(&file_handle, "#  %s: Enable screensaver\n", CFG_ENABLE_SCREENSAVER);
-//  f_printf(&file_handle, "#  %s: Dim screen after n seconds\n", CFG_SCREENSAVER_TIMEOUT);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_SCREENSAVER, CFG.enable_screensaver ? "true" : "false");
-//  f_printf(&file_handle, "%s: %d\n", CFG_SCREENSAVER_TIMEOUT, CFG.screensaver_timeout);
-  f_puts("\n# UI related settings\n", &file_handle);
-  f_printf(&file_handle, "#  %s: Sort directories (slower but files are guaranteed to be in order)\n", CFG_SORT_DIRECTORIES);
-  f_printf(&file_handle, "#  %s: Hide file extensions\n", CFG_HIDE_EXTENSIONS);
-  f_printf(&file_handle, "#  %s: LED brightness (0: minimum, 15: maximum)\n", CFG_LED_BRIGHTNESS);
-  f_printf(&file_handle, "%s: %s\n", CFG_SORT_DIRECTORIES, CFG.sort_directories ? "true" : "false");
-  f_printf(&file_handle, "%s: %s\n", CFG_HIDE_EXTENSIONS, CFG.hide_extensions ? "true" : "false");
-  f_printf(&file_handle, "%s: %d\n", CFG_LED_BRIGHTNESS, CFG.led_brightness);
-  f_puts("\n# Enhancement chip settings\n", &file_handle);
-  f_printf(&file_handle, "#  %s: Cx4 core speed (0: original, 1: fast, all instructions are single cycle)\n", CFG_CX4_SPEED);
-  f_printf(&file_handle, "%s: %d\n", CFG_CX4_SPEED, CFG.cx4_speed);
-  f_printf(&file_handle, "#  %s: SuperFX core speed (0: original, 1: fast, instructions execute as fast as the implementation allows)\n", CFG_GSU_SPEED);
-  f_printf(&file_handle, "%s: %d\n", CFG_GSU_SPEED, CFG.gsu_speed);
-  f_printf(&file_handle, "#  %s: MSU audio volume boost\n#    (0: none; 1: +3.5dBFS; 2: +6dBFS; 3: +9.5dBFS; 4: +12dBFS)\n", CFG_MSU_VOLUME_BOOST);
-  f_printf(&file_handle, "%s: %d\n", CFG_MSU_VOLUME_BOOST, CFG.msu_volume_boost);
-  f_puts("\n# Autosave (save SRAM contents to card when changes are detected)\n", &file_handle);
-  f_printf(&file_handle, "#  %s: Autosave for everything except MSU-1 games\n", CFG_ENABLE_AUTOSAVE);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_AUTOSAVE, CFG.enable_autosave ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Opportunistic Autosave for MSU-1 games\n", CFG_ENABLE_AUTOSAVE_MSU1);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_AUTOSAVE_MSU1, CFG.enable_autosave_msu1 ? "true" : "false");
-  f_printf(&file_handle, "\n#  %s: Show per-ROM cover preview (Game.cov) in the file browser (0: off, 1: large, 2: small)\n", CFG_SHOW_COVERS);
-  f_printf(&file_handle, "%s: %d\n", CFG_SHOW_COVERS, CFG.show_covers);
-  f_printf(&file_handle, "#  %s: Also show covers in the Recent and Favorite lists (requires ShowCovers)\n", CFG_COVERS_IN_LISTS);
-  f_printf(&file_handle, "%s: %s\n", CFG_COVERS_IN_LISTS, CFG.covers_in_lists ? "true" : "false");
-  f_printf(&file_handle, "\n#  %s: Menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German, 4: French, 5: Italian)\n", CFG_LANGUAGE);
-  f_printf(&file_handle, "%s: %d\n", CFG_LANGUAGE, CFG.language);
-  f_printf(&file_handle, "\n#  %s: Re-read and CRC-check the ROM after applying an IPS/BPS patch (slow; ~23s for a 4MB BPS)\n", CFG_PATCH_VERIFY_INTEGRITY);
-  f_printf(&file_handle, "%s: %s\n", CFG_PATCH_VERIFY_INTEGRITY, CFG.patch_verify_integrity ? "true" : "false");
-  f_printf(&file_handle, "\n#  %s: Play background music (/sd2snes/menu.spc) in the menu\n", CFG_ENABLE_MENU_MUSIC);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_MUSIC, CFG.enable_menu_music ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Play menu navigation sound effects (cursor/confirm/back/error)\n", CFG_ENABLE_MENU_SFX);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_MENU_SFX, CFG.enable_menu_sfx ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Show the Favorites list in alphabetical order (display only)\n", CFG_SORT_FAVORITES);
-  f_printf(&file_handle, "%s: %s\n", CFG_SORT_FAVORITES, CFG.sort_favorites ? "true" : "false");
-  f_printf(&file_handle, "#  %s: In-game menu (pause with the combo below to toggle cheats, savestates, saves and guides).\n", CFG_ENABLE_CHEAT_OVERLAY);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_CHEAT_OVERLAY, CFG.enable_cheat_overlay ? "true" : "false");
-  cfg_buttons_bits2string(CFG.ingame_buttons_menu, buttons);
-  f_printf(&file_handle, "#  %s: Buttons that open the in-game menu (buttons: BYsSudlrAXLR, default: L+R+Y+Left (YlLR)).\n", CFG_INGAME_BUTTONS_MENU);
-  f_printf(&file_handle, "#    Min %d buttons, must include no reserved combo (L+R+Start+Select, L+R+Select+X, L+R+Start+A/B/X/Y);\n", CFG_MENU_COMBO_MIN_BUTTONS);
-  f_printf(&file_handle, "#    a rejected value reverts to the default here on the next boot. Include L or R: the handler\n");
-  f_printf(&file_handle, "#    filters frames on a shoulder bit. The in-game CONTROLS tab still shows the default combo.\n");
-  f_printf(&file_handle, "%s: %s\n", CFG_INGAME_BUTTONS_MENU, buttons);
-  f_printf(&file_handle, "#  %s: Apply BPS patches via the FPGA copier (fast). LoROM/HiROM without special chips only; others fall back to byte-by-byte.\n", CFG_ENABLE_BPS_COPIER);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_BPS_COPIER, CFG.enable_bps_copier ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Clear VRAM/CGRAM/OAM before booting a patched ROM (for romhacks that skip PPU init). Only when an IPS/BPS patch was applied.\n", CFG_CLEAR_PPU_ON_BOOT);
-  f_printf(&file_handle, "%s: %s\n", CFG_CLEAR_PPU_ON_BOOT, CFG.clear_ppu_on_boot ? "true" : "false");
-  f_printf(&file_handle, "%s: %s\n", CFG_BUS_COMPAT, CFG.bus_compat ? "true" : "false");
-  f_printf(&file_handle, "#  %s: show the in-game MANUAL tab (pages a <rom>.man from /sd2snes/info)\n", CFG_ENABLE_GAME_MANUAL);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_GAME_MANUAL, CFG.enable_game_manual ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Atari 2600 picture width (0: 160 native 1:1, 1: 256 stretched)\n", CFG_A26_VIDEO_WIDTH);
-  f_printf(&file_handle, "%s: %d\n", CFG_A26_VIDEO_WIDTH, CFG.a26_video_width);
-  f_printf(&file_handle, "\n#  %s: Selected menu theme file in /sd2snes/theme (\"%s\" = baked-in default)\n", CFG_SKIN_NAME, "sd2snes.skin");
-  f_printf(&file_handle, "%s: %s\n", CFG_SKIN_NAME, (char*)CFG.skin_name);
-  f_printf(&file_handle, "\n#  %s: Full path of the chosen menu background-music .spc (\"\" = /sd2snes/menu.spc fallback)\n", CFG_MENU_MUSIC_FILE);
-  f_printf(&file_handle, "%s: %s\n", CFG_MENU_MUSIC_FILE, (char*)CFG.bgm_name);
-  f_printf(&file_handle, "\n#  %s: Show the game info screen (cover/screenshot/metadata) before booting a ROM that has a /sd2snes/info entry (0: off, 1: on, 2: context menu only)\n", CFG_SHOW_GAME_INFO);
-  f_printf(&file_handle, "%s: %d\n", CFG_SHOW_GAME_INFO, CFG.show_game_info);
-  f_printf(&file_handle, "#  %s: Play the animated video clip on the game info screen (false: show a static snapshot instead)\n", CFG_GAME_INFO_VIDEO);
-  f_printf(&file_handle, "%s: %s\n", CFG_GAME_INFO_VIDEO, CFG.game_info_video ? "true" : "false");
-  f_printf(&file_handle, "#  %s: Play the video's soundtrack while the clip is showing (requires %s)\n", CFG_GAME_INFO_MUSIC, CFG_GAME_INFO_VIDEO);
-  f_printf(&file_handle, "%s: %s\n", CFG_GAME_INFO_MUSIC, CFG.game_info_music ? "true" : "false");
-  f_printf(&file_handle, "\n#  %s: Enable the WiFi companion (false: no access point, no WebUI). RESERVED -- no ESP link in this build yet\n", CFG_ENABLE_WIFI);
-  f_printf(&file_handle, "%s: %s\n", CFG_ENABLE_WIFI, CFG.enable_wifi ? "true" : "false");
+    switch(it->kind) {
+      case CK_NUM:
+      case CK_NUMTRUNC:
+      case CK_NIB:
+        f_printf(&file_handle, "%s: %d\n", it->key, *p);
+        continue;
+      case CK_BSXTIME: {
+        uint64_t bcdtime = srtctime2bcdtime((uint8_t*)p);
+        f_printf(&file_handle, "%s: %06lX%08lX\n", it->key,
+                 (uint32_t)(bcdtime >> 32), (uint32_t)(bcdtime & 0xffffffffLL));
+        continue;
+      }
+      case CK_BUTTONS: {
+        /* uint16_t at an odd offset in a packed struct: copy it out first. */
+        uint16_t bits;
+        memcpy(&bits, p, sizeof(bits));
+        cfg_buttons_bits2string(bits, buttons);
+        str = buttons;
+        break;
+      }
+      case CK_STR:
+        str = (const char*)p;
+        break;
+      case CK_BOOL:
+        str = *p ? "true" : "false";
+        break;
+      default:  /* a kind without a writer: emit nothing rather than guess */
+        continue;
+    }
+    f_printf(&file_handle, "%s: %s\n", it->key, str);
+  }
   file_close();
-  return err;
+  return 0;
 }
 
 int cfg_load() {
   int err = 0;
-  /* pre-load defaults */
+  /* pre-load defaults: a key missing from the file keeps its CFG_DEFAULT value */
   memcpy(&CFG, &CFG_DEFAULT, sizeof(cfg_t));
   yaml_file_open(CFG_FILE, FA_READ);
   if(file_res) {
@@ -292,205 +302,47 @@ int cfg_load() {
   }
   if(!err) {
     yaml_token_t tok;
-    /* get config entries */
-    if(yaml_get_itemvalue(CFG_VIDMODE_MENU, &tok)) {
-      CFG.vidmode_menu = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_VIDMODE_GAME, &tok)) {
-      CFG.vidmode_game = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_PAIR_MODE_ALLOWED, &tok)) {
-      CFG.pair_mode_allowed = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_BSX_USE_USERTIME, &tok)) {
-      CFG.bsx_use_usertime = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_BSX_TIME, &tok)) {
-      uint64_t bcdtime = strtoll(tok.stringvalue, NULL, 16);
-      bcdtime2srtctime(bcdtime, CFG.bsx_time);
-    }
-    if(yaml_get_itemvalue(CFG_R213F_OVERRIDE, &tok)) {
-      CFG.r213f_override = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_INGAME_HOOK, &tok)) {
-      CFG.enable_ingame_hook = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_INGAME_BUTTONS, &tok)) {
-      CFG.enable_ingame_buttons = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_HOOK_HOLDOFF, &tok)) {
-      CFG.enable_hook_holdoff = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_SCREENSAVER, &tok)) {
-      CFG.enable_screensaver = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_SORT_DIRECTORIES, &tok)) {
-      CFG.sort_directories = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_HIDE_EXTENSIONS, &tok)) {
-      CFG.hide_extensions = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_CX4_SPEED, &tok)) {
-      CFG.cx4_speed = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_GSU_SPEED, &tok)) {
-      CFG.gsu_speed = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_MSU_VOLUME_BOOST, &tok)) {
-      CFG.msu_volume_boost = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_1CHIP_TRANSIENT_FIXES, &tok)) {
-      CFG.onechip_transient_fixes = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_BRIGHTNESS_LIMIT, &tok)) {
-      CFG.brightness_limit = tok.longvalue & 0xf;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_RST_TO_MENU, &tok)) {
-      if(tok.type == YAML_BOOL) {
-        CFG.reset_to_menu = tok.boolvalue ? 1 : 0;
-      } else {
-        CFG.reset_to_menu = tok.longvalue > 3 ? 1 : (uint8_t)tok.longvalue;
+    for(unsigned i = 0; i < CFG_NITEMS; i++) {
+      const cfg_item_t *it = &cfg_items[i];
+      uint8_t *p = (uint8_t*)&CFG + it->off;
+      long v;
+
+      if(!yaml_get_itemvalue(it->key, &tok)) continue;
+      switch(it->kind) {
+        case CK_STR:
+          /* strncpy, NOT strlcpy_nul: the WHOLE cfg_t is blitted into the shared
+             BSRAM (cfg_load_to_menu), so a string field's tail travels with the
+             struct and the zero padding keeps a longer previous value out of that
+             window. */
+          strncpy((char*)p, tok.stringvalue, CFG_STR_LEN - 1);
+          p[CFG_STR_LEN - 1] = 0;
+          break;
+        case CK_BUTTONS: {
+          uint16_t bits = cfg_buttons_string2bits(tok.stringvalue);
+          memcpy(p, &bits, sizeof(bits));
+          break;
+        }
+        case CK_BSXTIME:
+          bcdtime2srtctime(strtoll(tok.stringvalue, NULL, 16), p);
+          break;
+        default:
+          /* Numeric and boolean scalars.  The type check is MANDATORY: one token is
+             reused for every key and yaml_detect_value fills only the field matching
+             the type it detected, so reading the other one picks up a stale value from
+             an earlier key.  A number on a boolean key (and vice versa) is accepted --
+             non-zero is true, true is one -- anything else keeps the default. */
+          if(tok.type == YAML_BOOL)      v = tok.boolvalue ? 1 : 0;
+          else if(tok.type == YAML_LONG) v = tok.longvalue;
+          else break;
+          if(it->kind == CK_BOOL)     v = v ? 1 : 0;
+          else if(it->kind == CK_NIB) v &= 0xf;
+          else {
+            if(it->kind == CK_NUMTRUNC) v = (uint8_t)v;
+            if(it->clamp && v > (long)(it->clamp >> 4)) v = it->clamp & 0xf;
+          }
+          *p = (uint8_t)v;
+          break;
       }
-    }
-    if(yaml_get_itemvalue(CFG_LED_BRIGHTNESS, &tok)) {
-      CFG.led_brightness = tok.longvalue;
-      if(CFG.led_brightness > 15) {
-        CFG.led_brightness = 15;
-      }
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_CHEATS, &tok)) {
-      CFG.enable_cheats = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_RESET_PATCH, &tok)) {
-      CFG.reset_patch = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_INGAME_SAVESTATE, &tok)) {
-      CFG.enable_ingame_savestate = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_LOADSTATE_DELAY, &tok)) {
-      CFG.loadstate_delay = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_SAVESTATE_SLOTS, &tok)) {
-      CFG.enable_savestate_slots = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_INGAME_BUTTONS_SAVE_STATE, &tok)) {
-      CFG.ingame_buttons_savestate = cfg_buttons_string2bits(tok.stringvalue);
-    }
-    if(yaml_get_itemvalue(CFG_INGAME_BUTTONS_LOAD_STATE, &tok)) {
-      CFG.ingame_buttons_loadstate = cfg_buttons_string2bits(tok.stringvalue);
-    }
-    if(yaml_get_itemvalue(CFG_INGAME_BUTTONS_CHANGE_STATE, &tok)) {
-      CFG.ingame_buttons_changestate = cfg_buttons_string2bits(tok.stringvalue);
-    }
-    if(yaml_get_itemvalue(CFG_SGB_ENABLE_INGAME_HOOK, &tok)) {
-      CFG.sgb_enable_ingame_hook = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_SGB_ENABLE_STATE, &tok)) {
-      CFG.sgb_enable_state = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_SGB_VOLUME_BOOST, &tok)) {
-      CFG.sgb_volume_boost = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_SGB_ENH_OVERRIDE, &tok)) {
-      CFG.sgb_enh_override = tok.boolvalue ? 1 : 0;
-    }
-#ifdef CONFIG_MK3
-    if(yaml_get_itemvalue(CFG_SGB_SPR_INCREASE, &tok)) {
-      CFG.sgb_spr_increase = tok.boolvalue ? 1 : 0;
-    }
-#endif
-    if(yaml_get_itemvalue(CFG_SGB_CLOCK_FIX, &tok)) {
-      CFG.sgb_clock_fix = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_SGB_BIOS_VERSION, &tok)) {
-      CFG.sgb_bios_version = tok.longvalue;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_AUTOSAVE, &tok)) {
-      CFG.enable_autosave = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_AUTOSAVE_MSU1, &tok)) {
-      CFG.enable_autosave_msu1 = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_SHOW_COVERS, &tok)) {
-      if(tok.type == YAML_BOOL) {
-        CFG.show_covers = tok.boolvalue ? 1 : 0;   /* legacy true -> large, false -> off */
-      } else {
-        CFG.show_covers = tok.longvalue > 2 ? 1 : (uint8_t)tok.longvalue;  /* 0: off, 1: large, 2: small */
-      }
-    }
-    if(yaml_get_itemvalue(CFG_COVERS_IN_LISTS, &tok)) {
-      CFG.covers_in_lists = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_LANGUAGE, &tok)) {
-      CFG.language = tok.longvalue;
-      if(CFG.language > 5) CFG.language = 0;
-    }
-    if(yaml_get_itemvalue(CFG_PATCH_VERIFY_INTEGRITY, &tok)) {
-      CFG.patch_verify_integrity = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_MENU_MUSIC, &tok)) {
-      CFG.enable_menu_music = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_MENU_SFX, &tok)) {
-      CFG.enable_menu_sfx = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_SORT_FAVORITES, &tok)) {
-      CFG.sort_favorites = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_CHEAT_OVERLAY, &tok)) {
-      CFG.enable_cheat_overlay = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_INGAME_BUTTONS_MENU, &tok)) {
-      CFG.ingame_buttons_menu = cfg_buttons_string2bits(tok.stringvalue);
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_BPS_COPIER, &tok)) {
-      CFG.enable_bps_copier = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_CLEAR_PPU_ON_BOOT, &tok)) {
-      CFG.clear_ppu_on_boot = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_BUS_COMPAT, &tok)) {
-      CFG.bus_compat = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_GAME_MANUAL, &tok)) {
-      CFG.enable_game_manual = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_A26_VIDEO_WIDTH, &tok)) {
-      /* Written as a number, but accept a hand-edited true/false as well. The type
-         check is MANDATORY on the numeric branch: the token is reused across keys and
-         yaml_detect_value only fills boolvalue in its BOOL branches. */
-      if(tok.type == YAML_BOOL) {
-        CFG.a26_video_width = tok.boolvalue ? 1 : 0;
-      } else {
-        CFG.a26_video_width = tok.longvalue > 1 ? 0 : (uint8_t)tok.longvalue;  /* 0: 160 (1:1), 1: 256 */
-      }
-    }
-    if(yaml_get_itemvalue(CFG_SKIN_NAME, &tok)) {
-      strncpy((char*)CFG.skin_name, tok.stringvalue, sizeof(CFG.skin_name) - 1);
-      CFG.skin_name[sizeof(CFG.skin_name) - 1] = 0;
-    }
-    if(yaml_get_itemvalue(CFG_MENU_MUSIC_FILE, &tok)) {
-      strncpy((char*)CFG.bgm_name, tok.stringvalue, sizeof(CFG.bgm_name) - 1);
-      CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
-    }
-    if(yaml_get_itemvalue(CFG_SHOW_GAME_INFO, &tok)) {
-      /* Type check is MANDATORY: yaml_detect_value only writes boolvalue in its
-         BOOL branches and the token is reused across keys, so reading boolvalue
-         for a numeric value would pick up a stale flag from an earlier key. */
-      if(tok.type == YAML_BOOL) {
-        CFG.show_game_info = tok.boolvalue ? 1 : 0;   /* legacy true -> on, false -> off */
-      } else {
-        CFG.show_game_info = tok.longvalue > 2 ? 1 : (uint8_t)tok.longvalue;  /* 0: off, 1: on, 2: context */
-      }
-    }
-    if(yaml_get_itemvalue(CFG_GAME_INFO_VIDEO, &tok)) {
-      CFG.game_info_video = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_GAME_INFO_MUSIC, &tok)) {
-      CFG.game_info_music = tok.boolvalue ? 1 : 0;
-    }
-    if(yaml_get_itemvalue(CFG_ENABLE_WIFI, &tok)) {
-      CFG.enable_wifi = tok.boolvalue ? 1 : 0;
     }
   }
   yaml_file_close();
@@ -531,8 +383,7 @@ uint8_t listed_game_resolve_index(const uint8_t *listfile, uint8_t menu_idx) {
    the sort key, so the two never diverge. */
 static void listed_game_display_key(const TCHAR *entry, TCHAR *out) {
   TCHAR tmp[256];
-  strncpy(tmp, entry, 255);
-  tmp[255] = 0;
+  strlcpy_nul(tmp, entry, sizeof(tmp));
   char *tab = strchr(tmp, '\t');
   char *disp;
   if(tab) {
@@ -543,8 +394,7 @@ static void listed_game_display_key(const TCHAR *entry, TCHAR *out) {
     char *slash = strrchr(tmp, '/');
     disp = slash ? slash + 1 : tmp;
   }
-  strncpy(out, disp, 255);
-  out[255] = 0;
+  strlcpy_nul(out, disp, 256);
 }
 
 /* The recent/favorite list functions below are STREAMING: they process one
@@ -559,8 +409,7 @@ static void listed_game_display_key(const TCHAR *entry, TCHAR *out) {
 
 /* Build "<listfilename>.tmp" into out (out must be >= strlen(list)+5). */
 static void listed_game_tmp_path(const uint8_t *listfilename, TCHAR *out, size_t outsz) {
-  strncpy(out, (const char*)listfilename, outsz - 5);
-  out[outsz - 5] = 0;
+  strlcpy_nul(out, (const char*)listfilename, outsz - 4);
   strncat(out, ".tmp", 5);
 }
 
@@ -598,8 +447,7 @@ int cfg_validity_check_listed_games(const uint8_t *listfilename) {
     if(*entry == 0) break;
     seen++;
     if(*entry != '/') { bad = 1; break; }
-    strncpy(base, entry, 255);
-    base[255] = 0;
+    strlcpy_nul(base, entry, sizeof(base));
     tab = strchr(base, '\t');
     if(tab) *tab = 0;
     if(f_stat((const TCHAR*)base, NULL) != FR_OK) { bad = 1; break; }
@@ -620,8 +468,7 @@ int cfg_validity_check_listed_games(const uint8_t *listfilename) {
       f_gets(entry, 255, &file_handle);
       if(*entry == 0) break;
       if(*entry != '/') continue;
-      strncpy(base, entry, 255);
-      base[255] = 0;
+      strlcpy_nul(base, entry, sizeof(base));
       tab = strchr(base, '\t');
       if(tab) *tab = 0;
       if(f_stat((const TCHAR*)base, NULL) != FR_OK) continue;
@@ -644,8 +491,7 @@ int cfg_add_listed_game_patched(const uint8_t *listfilename, uint8_t *fn,
   FIL dst;
   fqfn[0] = 0;
   if(fn[0] !=  '/') {
-    strncpy(fqfn, (const char*)file_path, 256);
-    fqfn[255] = 0;
+    strlcpy_nul(fqfn, (const char*)file_path, sizeof(fqfn));
   }
   strncat(fqfn, (const char*)fn, 256 - strlen(fqfn) - 1);
   /* Patch-aware: append "\t<patch_basename>" when it fits the 255-char entry cap
@@ -836,8 +682,7 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
           if(*fntmp == 0) break;
           if(*fntmp != '/') continue;
           listed_game_display_key(fntmp, dirtmp);
-          strncpy(keys[count], dirtmp, LISTED_DISP_KEYLEN - 1);
-          keys[count][LISTED_DISP_KEYLEN - 1] = 0;
+          strlcpy_nul(keys[count], dirtmp, LISTED_DISP_KEYLEN);
           count++;
         }
       }
@@ -947,8 +792,7 @@ int cfg_set_autoboot_rom(const uint8_t *fn) {
   TCHAR fqfn[256];
   fqfn[0] = 0;
   if(fn[0] != '/') {
-    strncpy(fqfn, (const char*)file_path, 256);
-    fqfn[255] = 0;
+    strlcpy_nul(fqfn, (const char*)file_path, sizeof(fqfn));
   }
   strncat(fqfn, (const char*)fn, 256 - strlen(fqfn) - 1);
   file_open(AUTOBOOT_FILE, FA_CREATE_ALWAYS | FA_WRITE);
@@ -1064,8 +908,7 @@ int cfg_get_stringvalue(const char *key, char *target, size_t count) {
   yaml_file_open(CFG_FILE, FA_READ);
   found = yaml_get_itemvalue(key, &tok);
   if(found) {
-    strncpy(target, tok.stringvalue, count);
-    if(count) target[count-1] = 0;   /* strncpy may not NUL-terminate */
+    strlcpy_nul(target, tok.stringvalue, count);
   } else if(count) {
     target[0] = 0;
   }

@@ -5,18 +5,25 @@
    the Free Software Foundation; version 2 of the License only.
 
    sms.c: .sms launch via the FPGA_SMS core. See sms.h for the model.
+
+   mk3-only: on the mk2 (LPC1754, tight flash and no Spartan-3 build of the core)
+   everything below compiles to no-op stubs (sms_active stays 0) -- see CONFIG_MK2,
+   same as the Atari launch in atari.c.
 */
 
 #include <string.h>
 #include "config.h"
-#include "fileops.h"
 #include "ff.h"
 #include "memory.h"
 #include "fpga.h"
 #include "sms.h"
 #include "uart.h"
+#include "util.h"
 
 uint8_t sms_active = 0;
+
+#ifndef CONFIG_MK2
+
 static char sms_rompath[256];
 
 /* case-insensitive ".sms" extension check */
@@ -26,8 +33,7 @@ void sms_id(uint8_t *filename) {
   char *dot = strrchr((char*)filename, '.');
   if (dot && !strcasecmp(dot + 1, "sms")) {
     sms_active = 1;
-    strncpy(sms_rompath, (char*)filename, sizeof(sms_rompath) - 1);
-    sms_rompath[sizeof(sms_rompath) - 1] = 0;
+    strlcpy_nul(sms_rompath, (char*)filename, sizeof(sms_rompath));
   }
 }
 
@@ -52,3 +58,21 @@ void sms_load_rom(void) {
   printf("SMS: staging %s -> PSRAM %06x\n", sms_rompath, SMS_ROM_PSRAM);
   load_sram_offload((uint8_t*)sms_rompath, SMS_ROM_PSRAM, 0);
 }
+
+#else /* CONFIG_MK2: no-op stubs -- the SMS core is mk3-only (no Spartan-3 build
+         of fpga_sms and the LPC1754 flash does not pay for the loader) */
+
+void sms_id(uint8_t *filename) {
+  (void)filename;
+  sms_active = 0;
+}
+
+uint8_t sms_update_file(uint8_t **filename_ref) {
+  (void)filename_ref;
+  return 1;
+}
+
+void sms_load_rom(void) {
+}
+
+#endif /* CONFIG_MK2 */

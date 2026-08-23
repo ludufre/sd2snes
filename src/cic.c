@@ -3,7 +3,7 @@
 #include "uart.h"
 #include "cic.h"
 
-char *cicstatenames[4] = { "CIC_OK", "CIC_FAIL", "CIC_PAIR", "CIC_SCIC" };
+static const char *const cicstatenames[4] = { "CIC_OK", "CIC_FAIL", "CIC_PAIR", "CIC_SCIC" };
 
 /* Human-readable CIC state, English only: it is handed to the SNES as a finished string in
    sysinfo_blk_t.cic_str, and localizing the System Information screen is the menu's job.
@@ -23,7 +23,7 @@ inline char *get_cic_statefriendlyname(enum cicstates state) {
 }
 
 inline char *get_cic_statename(enum cicstates state) {
-  return cicstatenames[state];
+  return (char *)cicstatenames[state];
 }
 
 enum cicstates get_cic_state() {

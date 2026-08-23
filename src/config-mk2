@@ -28,6 +28,10 @@ DEBUG_YAML       = n
 DEBUG_USB        = n
 DEBUG_USBHW      = n
 CONFIG_CDC_DEBUG = n
+# Serial diagnostics (printf) + the UART CLI. Off on Mk.II: a developer tool, and
+# compiling it out reclaims a sizeable slice of the 120K program flash (printf.c,
+# lpc175x/uart.h). CONFIG_CDC_DEBUG / CONFIG_UART_DEADLOCKABLE below are inert while off.
+CONFIG_UART_DEBUG = n
 
 MENU_FILENAME = "/sd2snes/menu.bin"
 

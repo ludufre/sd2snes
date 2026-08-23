@@ -339,7 +339,7 @@ void sufami_slotb_autosave(void) {
 }
 
 void sufami_slotb_flush_inreset(void) {
-  uint32_t crc = 0, i;
+  uint32_t crc;
 
   if(!sufami_slotb_ramsize) return;
   if(fpga_test() != FPGA_TEST_TOKEN) return;
@@ -347,14 +347,7 @@ void sufami_slotb_flush_inreset(void) {
   /* calc_sram_crc gives up as soon as get_snes_reset() is true, and we are called
      with the SNES already held in reset, so read raw here (same reason
      calc_pack_crc_inreset exists for the BS-X pack). */
-  set_mcu_addr(SUFAMI_SLOTB_SAVE_ADDR);
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_READMEM | FPGA_MEM_AUTOINC);
-  for(i = 0; i < sufami_slotb_ramsize; i++) {
-    FPGA_WAIT_RDY();
-    crc = crc32_update(crc, FPGA_RX_BYTE());
-  }
-  FPGA_DESELECT();
+  crc = calc_sram_crc_raw(SUFAMI_SLOTB_SAVE_ADDR, sufami_slotb_ramsize);
 
   if(crc != slotb_crc_old) {
     writeled(1);

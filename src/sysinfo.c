@@ -77,6 +77,8 @@ static void write_sysinfo_legacy(void) {
    returns the length it WOULD have written (not the C99-clamped one), which makes it useless
    for building bounded strings. */
 static void si_setstr(char *dst, size_t cap, const char *src) {
+  /* strncpy on purpose (not strlcpy_nul): the whole sysinfo_blk_t is blitted to the
+     shared BSRAM, so the zero padding travels with it -- same rule as cfg_t. */
   strncpy(dst, src, cap - 1);
   dst[cap - 1] = 0;
 }

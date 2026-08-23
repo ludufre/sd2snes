@@ -64,7 +64,7 @@ static UINT smc_readblock(void* buf, uint32_t addr, uint16_t size, uint32_t file
   return file_readblock(buf, addr + file_offset, size);
 }
 
-uint8_t isFixed(uint8_t* data, int size, uint8_t value) {
+static uint8_t isFixed(uint8_t* data, int size, uint8_t value) {
   uint8_t res = 1;
   do {
     size--;
@@ -75,7 +75,7 @@ uint8_t isFixed(uint8_t* data, int size, uint8_t value) {
   return res;
 }
 
-uint8_t checkChksum(uint16_t cchk, uint16_t chk) {
+static uint8_t checkChksum(uint16_t cchk, uint16_t chk) {
   uint32_t sum = cchk + chk;
   uint8_t res = 0;
   if(sum==0x0000ffff) {

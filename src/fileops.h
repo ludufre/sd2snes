@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 
+#include "config.h"   /* CONFIG_UART_DEBUG gates print_fresult() below */
 #include "ff.h"
 
 enum filestates { FILE_OK=0, FILE_ERR, FILE_EOF };
@@ -68,10 +69,21 @@ int     path_asset(char *buf, int buflen, const char *root, const char *src, con
 FRESULT path_asset_mkdir(char *path);
 FRESULT check_or_create_folder(TCHAR *dir);
 
-char *get_fresult_name(FRESULT res);
 char *get_fresult_friendlyname(FRESULT res);
 
+/* print_fresult() is log-only, so it follows the serial console (see lpc175x/uart.h).
+   The disabled form keeps its arguments live for -Wall while the dead `if (0)` drops
+   the call; print_fresult_real() is never defined, so a stray reference is a link error.
+   No format attribute here on purpose: the live declaration below has none either, and
+   adding one would make the Mk.II reject %s calls passing uint8_t*. */
+#ifdef CONFIG_UART_DEBUG
+char *get_fresult_name(FRESULT res);
 void print_fresult(FRESULT res, const char *fmt, ...);
 void vprint_fresult(FRESULT res, const char *fmt, va_list arglist);
+#else
+void print_fresult_real(FRESULT res, const char *fmt, ...);
+#define print_fresult(...)           do { if (0) print_fresult_real(__VA_ARGS__); } while (0)
+#define vprint_fresult(res, fmt, ap) do { (void)(res); (void)(fmt); (void)(ap); } while (0)
+#endif
 
 #endif

@@ -12,19 +12,31 @@
 #include "msu1.h"     /* menu_music_* : looping FMV audio via the MSU-1 DAC */
 #include "timer.h"    /* getticks()/MS_TO_TICKS/time_after for the FMV idle watchdog */
 #include "gameinfo.h"
+#include "psram_io.h"
+#include "util.h"
 
 extern cfg_t CFG;   /* game info "Show video" / "Play video music" toggles (game_info_video/_music) */
 
 /* UTF-8 codepoint -> sd2snes font byte. MUST match the ACCENTS map in
  * snes/utils/build_const.py (and snes/font.a65). Only the Latin accents the font
- * has glyphs for (codes 130..159); everything else renders as '?'. */
-static const struct { uint16_t cp; uint8_t code; } gi_accents[] = {
-  {0x00E1,130},{0x00E0,131},{0x00E2,132},{0x00E3,133},{0x00E9,134},{0x00EA,135},
-  {0x00ED,136},{0x00F3,137},{0x00F4,138},{0x00F5,139},{0x00FA,140},{0x00E7,141},
-  {0x00C1,142},{0x00C0,143},{0x00C2,144},{0x00C3,145},{0x00C9,146},{0x00CA,147},
-  {0x00CD,148},{0x00D3,149},{0x00D4,150},{0x00D5,151},{0x00DA,152},{0x00C7,153},
-  {0x00F1,154},{0x00D1,155},{0x00FC,156},{0x00DC,157},{0x00BF,158},{0x00A1,159},
+ * has glyphs for (codes 130..159); everything else renders as '?'.
+ * The codes are consecutive, so the table holds codepoints only and the font byte
+ * is GI_ACCENT_BASE + the index -- the ORDER below IS the code assignment. */
+#define GI_ACCENT_BASE 130
+static const uint16_t gi_accent_cp[] = {
+  0x00E1,0x00E0,0x00E2,0x00E3,0x00E9,0x00EA,
+  0x00ED,0x00F3,0x00F4,0x00F5,0x00FA,0x00E7,
+  0x00C1,0x00C0,0x00C2,0x00C3,0x00C9,0x00CA,
+  0x00CD,0x00D3,0x00D4,0x00D5,0x00DA,0x00C7,
+  0x00F1,0x00D1,0x00FC,0x00DC,0x00BF,0x00A1,
 };
+
+/* Map a decoded (>= 0x80) codepoint to its font byte, or '?' if unmapped. */
+static uint8_t gi_cp_to_font(uint32_t cp) {
+  for(unsigned k = 0; k < sizeof(gi_accent_cp) / sizeof(gi_accent_cp[0]); k++)
+    if(gi_accent_cp[k] == cp) return GI_ACCENT_BASE + k;
+  return '?';
+}
 
 /* Copy src -> dst (NUL-terminated, bounded), decoding UTF-8 to font byte codes.
  * Plain ASCII is copied verbatim; mapped accents become 130..159; anything else
@@ -49,21 +61,9 @@ static void gi_utf8_to_font(const char *src, char *dst, int dstsize) {
       s++;
     }
     if(!ok) { dst[di++] = '?'; continue; }
-    uint8_t code = 0;
-    for(unsigned k = 0; k < sizeof(gi_accents) / sizeof(gi_accents[0]); k++) {
-      if(gi_accents[k].cp == cp) { code = gi_accents[k].code; break; }
-    }
-    dst[di++] = code ? (char)code : '?';
+    dst[di++] = (char)gi_cp_to_font(cp);
   }
   dst[di] = 0;
-}
-
-/* Map a decoded (>= 0x80) codepoint to its font byte, or '?' if unmapped. Mirrors the
- * lookup in gi_utf8_to_font. */
-static uint8_t gi_cp_to_font(uint32_t cp) {
-  for(unsigned k = 0; k < sizeof(gi_accents) / sizeof(gi_accents[0]); k++)
-    if(gi_accents[k].cp == cp) return gi_accents[k].code;
-  return '?';
 }
 
 /* Incremental UTF-8 -> font transcoder state, for streaming a value that may split a
@@ -151,19 +151,6 @@ static void gi_dash(char *field) {
   if(!field[0]) { field[0] = '-'; field[1] = 0; }
 }
 
-/* stream `size` bytes from the open file to PSRAM at `addr` (bounded chunks). */
-static int gi_stream(uint32_t addr, uint32_t size) {
-  UINT got;
-  while(size) {
-    UINT want = (size > sizeof(file_buf)) ? sizeof(file_buf) : (UINT)size;
-    file_res = f_read(&file_handle, file_buf, want, &got);
-    if(file_res || got != want) return 0;
-    sram_writeblock(file_buf, addr, (uint16_t)got);
-    addr += got; size -= got;
-  }
-  return 1;
-}
-
 /* Load the standalone /sd2snes/info/<rom>.gcv (paletted 120c cover, DECOUPLED from the .fmv):
  * validate the header, stream the palette into SRAM_GAMEINFO_TMAP_ADDR ($CB0000 -> the SNES DMAs it
  * to CGRAM 48..167) and the 8bpp cover tiles into SRAM_COVER_ADDR (bank C9). Returns 1 on success.
@@ -180,8 +167,10 @@ static int gi_load_gcv(const char *path) {
     file_close(); return 0;
   }
   /* file order: header(8), palette (GCV_PAL_BYTES), tiles (GCV_TILE_BYTES) */
-  if(!gi_stream(SRAM_GAMEINFO_TMAP_ADDR, GCV_PAL_BYTES)) { file_close(); return 0; }
-  if(!gi_stream(SRAM_COVER_ADDR,         GCV_TILE_BYTES)) { file_close(); return 0; }
+  if(!psram_stream(&file_handle, SRAM_GAMEINFO_TMAP_ADDR, GCV_PAL_BYTES,  0)
+  || !psram_stream(&file_handle, SRAM_COVER_ADDR,         GCV_TILE_BYTES, 0)) {
+    file_close(); return 0;
+  }
   file_close();
   return 1;
 }
@@ -311,31 +300,20 @@ static void gi_fmv_close(void) {
   if(gi_fmv_open) { f_close(&gi_fmv_fil); gi_fmv_open = 0; }
 }
 
-/* stream `size` bytes from the open .fmv (gi_fmv_fil) into PSRAM at `addr`, pumping the FMV DAC
- * between chunks so the audio buffer never starves mid-read. Bounded; 0 on read error. */
-static int gi_fmv_stream(uint32_t addr, uint32_t size) {
-  UINT got;
-  while(size) {
-    UINT want = (size > sizeof(file_buf)) ? sizeof(file_buf) : (UINT)size;
-    if(f_read(&gi_fmv_fil, file_buf, want, &got) || got != want) return 0;
-    sram_writeblock(file_buf, addr, (uint16_t)got);
-    addr += got; size -= got;
-    menu_sfx_pump();
-  }
-  return 1;
-}
-
 /* Stage ONE frame (palette + tiles) from the current file position. On disk a frame is the
  * 176-byte FMV palette (88 colours) THEN the 6912-byte tiles: the palette goes to $CA1B00 (the SNES
  * DMAs it to CGRAM 168..255 each frame) and the tiles to $CA0000 (re-DMA'd to the FMV VRAM set). A glitched
- * read rewinds to the frame start and retries. Bounded; closes the file on persistent error. */
+ * read rewinds to the frame start and retries. Bounded; closes the file on persistent error.
+ * menu_sfx_pump runs between chunks so the FMV audio buffer never starves mid-read. */
 static int gi_fmv_read_frame(void) {
   DWORD start = gi_fmv_fil.fptr;
   int tries;
   for(tries = 0; tries < FMV_READ_RETRIES; tries++) {
     if(tries && f_lseek(&gi_fmv_fil, start)) break;
-    if(gi_fmv_stream(SRAM_GAMEINFO_TILES_ADDR + FMV_FRAME_BYTES, FMV_FRAME_PAL_BYTES)
-       && gi_fmv_stream(SRAM_GAMEINFO_TILES_ADDR, FMV_FRAME_BYTES)) return 1;
+    if(psram_stream(&gi_fmv_fil, SRAM_GAMEINFO_TILES_ADDR + FMV_FRAME_BYTES,
+                    FMV_FRAME_PAL_BYTES, menu_sfx_pump)
+       && psram_stream(&gi_fmv_fil, SRAM_GAMEINFO_TILES_ADDR,
+                       FMV_FRAME_BYTES, menu_sfx_pump)) return 1;
   }
   gi_fmv_close();
   return 0;
@@ -499,8 +477,7 @@ void gameinfo_load(uint8_t *rom_path) {
      invalidate the extended-description region so navigating Up/Down between ROMs never
      leaves a previous game's full text behind (a 1st byte of 0 = invalid; the menu then
      uses the struct's description[256]). */
-  strncpy(gi_yml_path, path, sizeof(gi_yml_path) - 1);
-  gi_yml_path[sizeof(gi_yml_path) - 1] = 0;
+  strlcpy_nul(gi_yml_path, path, sizeof(gi_yml_path));
   sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
   yaml_file_open(path, FA_READ);
   if(!file_res) {

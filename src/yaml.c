@@ -68,7 +68,7 @@ void yaml_decode_entities(char *s) {
   *w = 0;
 }
 
-yaml_token_type yaml_detect_value(char **token, yaml_token_t *tok) {
+static yaml_token_type yaml_detect_value(char **token, yaml_token_t *tok) {
   yaml_token_type type = YAML_UNKNOWN;
   /* as a default, copy the token literal value to stringvalue */
   strncpy(tok->stringvalue, *token, YAML_BUFLEN);
@@ -328,7 +328,7 @@ int yaml_search_next(yaml_token_t *tok, yaml_scope scope) {
   return yaml_search_core(tok->type, key, scope, tok);
 }
 
-void yaml_seek(uint32_t offset) {
+static void yaml_seek(uint32_t offset) {
   ystate.depth = 0;
   ystate.flags |= YAML_FLAG_BUF_EMPTY;
   ystate.flags &= ~(YAML_FLAG_REWIND_LINE | YAML_FLAG_REWIND_TOKEN);

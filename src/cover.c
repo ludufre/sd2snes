@@ -3,11 +3,13 @@
 
 #include "config.h"
 #include <string.h>
+#include "uart.h"     /* printf(): see the note in uart.h -- every printf caller includes this */
 #include "ff.h"
 #include "fileops.h"
 #include "memory.h"
 #include "cover.h"
 #include "msu1.h"   /* menu_sfx_pump: keep a playing effect fed during streams */
+#include "psram_io.h"
 
 /* derived from the rom path by swapping the extension to ".cov" */
 static uint8_t cover_path[260];
@@ -27,22 +29,6 @@ static void cover_set_status(uint32_t base, uint8_t status, uint8_t w,
   meta[6] = 0;
   meta[7] = 0;
   sram_writeblock(meta, base + COVER_OFF_STATUS, sizeof(meta));
-}
-
-/* stream `size` bytes from the open file into bank-C9 at `addr`, in chunks
- * bounded by file_buf. Returns 1 on success, 0 on read error / short read. */
-static int cover_stream(uint32_t addr, uint32_t size) {
-  UINT got = 0;
-  while(size) {
-    menu_sfx_pump();  /* keep a playing menu effect fed while streaming a cover */
-    UINT want = (size > sizeof(file_buf)) ? sizeof(file_buf) : (UINT)size;
-    file_res = f_read(&file_handle, file_buf, want, &got);
-    if(file_res || got != want) return 0;
-    sram_writeblock(file_buf, addr, (uint16_t)got);
-    addr += got;
-    size -= got;
-  }
-  return 1;
 }
 
 /* stream an explicit .cov path (v4, 16x16 OBJ sprites) into sram_addr in the
@@ -96,10 +82,12 @@ int load_cover_path(const char *cov_path, uint32_t sram_addr) {
   uint32_t blockmap_size = (uint32_t)w_spr * h_spr;     /*           <= 64   */
   uint32_t tiles_size    = (uint32_t)h_spr * 1024;      /* (2*h)*16*32, <= 8192 */
 
-  /* file order matches cover_conv.py: PALETTES, BLOCKMAP, TILES */
-  if(!cover_stream(sram_addr + COVER_OFF_PAL,      pal_size))      goto trunc;
-  if(!cover_stream(sram_addr + COVER_OFF_BLOCKMAP, blockmap_size)) goto trunc;
-  if(!cover_stream(sram_addr + COVER_OFF_TILES,    tiles_size))    goto trunc;
+  /* file order matches cover_conv.py: PALETTES, BLOCKMAP, TILES. Bounded chunks
+   * through file_buf, menu_sfx_pump after each chunk so a playing menu effect
+   * stays fed while a cover loads. */
+  if(!psram_stream(&file_handle, sram_addr + COVER_OFF_PAL,      pal_size,      menu_sfx_pump)
+  || !psram_stream(&file_handle, sram_addr + COVER_OFF_BLOCKMAP, blockmap_size, menu_sfx_pump)
+  || !psram_stream(&file_handle, sram_addr + COVER_OFF_TILES,    tiles_size,    menu_sfx_pump)) goto trunc;
 
   file_close();
 

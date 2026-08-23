@@ -228,7 +228,10 @@ int patch_belongs_to_rom(const char *fn, const char *romfile, unsigned stem_len)
    patch_order[] as it goes.  Kept in its own frame (dirpath[256] + DIR + FILINFO
    + the one patch_entry_t it stages and compares through) so it never coexists on
    the stack with the YAML parser's ~272-byte token -- the LPC175x has ~2.5 KB of
-   stack headroom and that pair has overflowed into .bss before (cheat menu hang). */
+   stack headroom and that pair has overflowed into .bss before (cheat menu hang).
+   noinline pins that: under LTO the menu-side caller otherwise absorbs this frame
+   next to its own 256-byte path buffer. */
+__attribute__((noinline))
 static uint8_t patch_scan_dir(const uint8_t *rom_path) {
     const char *path = (const char *)rom_path;
 
@@ -460,7 +463,7 @@ static void sram_write_from_buf(uint32_t addr, const uint8_t *buf, uint16_t len)
     FPGA_TX_BYTE(0x98); /* WRITE, address auto-increment */
     for (uint16_t i = 0; i < len; i++) {
         FPGA_TX_BYTE(buf[i]);
-        FPGA_WAIT_RDY_TO(patch_io_err);
+        FPGA_WAIT_RDY_TO_INLINE(patch_io_err);   /* per-byte loop: keep the wait inline */
         if (patch_io_err) break;
     }
     FPGA_DESELECT();
@@ -474,7 +477,7 @@ static void psram_memset(uint32_t addr, uint32_t len, uint8_t val) {
     FPGA_TX_BYTE(0x98);
     for (uint32_t i = 0; i < len; i++) {
         FPGA_TX_BYTE(val);
-        FPGA_WAIT_RDY_TO(patch_io_err);
+        FPGA_WAIT_RDY_TO_INLINE(patch_io_err);
         if (patch_io_err) break;
     }
     FPGA_DESELECT();
@@ -489,7 +492,7 @@ static uint16_t psram_readblock(void *buf, uint32_t addr, uint16_t size) {
     FPGA_SELECT();
     FPGA_TX_BYTE(0x88); /* READ */
     while (count--) {
-        FPGA_WAIT_RDY_TO(patch_io_err);
+        FPGA_WAIT_RDY_TO_INLINE(patch_io_err);
         if (patch_io_err) break;
         *(tgt++) = FPGA_RX_BYTE();
     }
@@ -507,7 +510,7 @@ static uint16_t psram_writeblock(void *buf, uint32_t addr, uint16_t size) {
     FPGA_TX_BYTE(0x98); /* WRITE */
     while (count--) {
         FPGA_TX_BYTE(*src++);
-        FPGA_WAIT_RDY_TO(patch_io_err);
+        FPGA_WAIT_RDY_TO_INLINE(patch_io_err);
         if (patch_io_err) break;
     }
     FPGA_DESELECT();
@@ -524,7 +527,7 @@ static uint16_t psram_readstrn(void *buf, uint32_t addr, uint16_t size) {
     FPGA_SELECT();
     FPGA_TX_BYTE(0x88); /* READ */
     while (count--) {
-        FPGA_WAIT_RDY_TO(patch_io_err);
+        FPGA_WAIT_RDY_TO_INLINE(patch_io_err);
         if (patch_io_err) break;
         if (!(*(tgt++) = FPGA_RX_BYTE())) break;
         elemcount++;

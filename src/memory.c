@@ -61,6 +61,7 @@ memory.c: RAM operations
 #include "patch_copier.h"
 
 #include <string.h>
+#include "util.h"
 char* hex = "0123456789ABCDEF";
 
 uint8_t current_ips_srm_source[256];
@@ -217,13 +218,13 @@ void sram_readlongblock(uint32_t* buf, uint32_t addr, uint16_t count) {
   FPGA_TX_BYTE(0x88);
   uint16_t i=0;
   while(i<count) {
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     uint32_t val = (uint32_t)FPGA_RX_BYTE()<<24;
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     val |= ((uint32_t)FPGA_RX_BYTE()<<16);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     val |= ((uint32_t)FPGA_RX_BYTE()<<8);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     val |= FPGA_RX_BYTE();
     buf[i++] = val;
   }
@@ -237,7 +238,7 @@ uint16_t sram_readblock(void* buf, uint32_t addr, uint16_t size) {
   FPGA_SELECT();
   FPGA_TX_BYTE(0x88);   /* READ */
   while(count--) {
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     *(tgt++) = FPGA_RX_BYTE();
   }
   FPGA_DESELECT();
@@ -252,7 +253,7 @@ uint16_t sram_readstrn(void* buf, uint32_t addr, uint16_t size) {
   FPGA_SELECT();
   FPGA_TX_BYTE(0x88);   /* READ */
   while(count--) {
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     if(!(*(tgt++) = FPGA_RX_BYTE())) break;
     elemcount++;
   }
@@ -272,7 +273,7 @@ uint16_t sram_writestrn(void* buf, uint32_t addr, uint16_t size) {
   if(*src) {
     while(count > 1) {
       FPGA_TX_BYTE(*src++);
-      FPGA_WAIT_RDY();
+      FPGA_WAIT_RDY_INLINE();
       elemcount++;
       count--;
       if(!(*src)) break;
@@ -292,7 +293,7 @@ uint16_t sram_writeblock(void* buf, uint32_t addr, uint16_t size) {
   FPGA_TX_BYTE(0x98);   /* WRITE */
   while(count--) {
     FPGA_TX_BYTE(*src++);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
   }
   FPGA_DESELECT();
   return size;
@@ -307,19 +308,10 @@ static int file_exists(const char *path) {
   return f_stat((TCHAR*)path, &fno) == FR_OK;
 }
 
-/* basename: last path component (drops "/sd2snes/"). Used so the on-screen error
-   shows "dsp1b.bin", not the full path (which would overflow the popup). */
-static const char *basename_of(const char *path) {
-  const char *b = strrchr(path, '/');
-  return b ? b + 1 : path;
-}
-
-/* Abort a game load because a required chip BIOS/firmware is missing: push the
-   message to the menu's error region ($FF1000 code, $FF1001 string) and NACK the
-   handshake so the menu falls into game_handshake_error and shows it WITHOUT a
-   reset (it never left the menu). For a menu load (flags has no LOADROM_WAIT_SNES)
-   this only clears the FS error. `name` must be a short basename/chip string.
-   Always returns 0 -- call as `return load_abort_missing(...)`. */
+/* Abort a game load: push the message to the menu's error region ($FF1000 code,
+   $FF1001 string) and NACK, so game_handshake_error shows it without a reset.
+   A menu load (no LOADROM_WAIT_SNES) only clears the FS error. `name` must be a
+   basename -- the popup is two lines. Always returns 0. */
 static uint32_t load_abort_missing(uint8_t flags, int err, const char *name) {
   printf("load aborted: err=%d missing=%s\n", err, name ? name : "");
   if(flags & LOADROM_WAIT_SNES) {
@@ -333,22 +325,691 @@ static uint32_t load_abort_missing(uint8_t flags, int err, const char *name) {
   return 0;
 }
 
-uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
+/* Per-load state shared by the phases below; a value only one phase touches stays a
+   local there.  The three console filenames are NOT interchangeable: sgb/nes/a26 each
+   capture the file the USER picked at a different point in the chain, before `filename`
+   is reassigned to the SNES-side player -- saves, cheats and assets key off the original.
+   Each phase mirrors the context fields it uses into locals and publishes at the end:
+   the calls in between are opaque, so reading out of *c reloads after every one. */
+typedef struct {
+  uint8_t  *filename;       /* file being streamed; becomes the player/BIOS after a swap,
+                               and is put back by load_setup_masks */
+  uint8_t  *sgb_filename;
+  uint8_t  *nes_filename;
+  uint8_t  *a26_filename;
+  DWORD     filesize;
+  DWORD     sgb_filesize;
+  uint32_t  file_offset;    /* combo slot for smc_id; cleared after an SMS/A26 swap */
+  uint32_t  base_addr;
+  uint8_t   flags;
+  uint8_t   is_menu;
+  uint16_t  fpga_features_preload;
+  uint32_t  rammask;
+} load_ctx_t;
+
+/* Stream the ROM image off the card into PSRAM at base_addr + romprops.load_address
+   (sd_offload DMA -- nothing can patch the bytes on the way through).
+
+   ips_recore_skip_restream is the copier-swap recore: RECORE_PSRAM_KEEP leaves the
+   ALREADY-PATCHED image in PSRAM across the fpga_pgm, so pass 2 must not overwrite it
+   from the file.  The $77 and the set_mcu_addr stay OUTSIDE the skip: the SNES-side
+   stub stream and the MCU write pointer are needed on every pass. */
+static void load_stream(const load_ctx_t *c) {
+  uint8_t  *filename  = c->filename;
+  uint32_t  base_addr = c->base_addr;
+  uint8_t   flags     = c->flags;
   UINT bytes_read;
-  DWORD filesize;
   UINT count=0;
-  uint8_t is_menu = (filename == (uint8_t*)MENU_FILENAME);
-  tick_t ticksstart, ticks_total=0;
-  ticksstart=getticks();
+  /* nesdbg: entre POST_PGM e PRE_STREAM ha' o $77 + o stream do STUB SNES-side
+     pra 0x880000 (caminho comum, esperas de MCU_RDY unbounded) -- este marco
+     desambigua um wedge nessa janela de um wedge no nes_load_prg. */
+  nes_dbg_log("PRE_STUB");
+  if(flags & LOADROM_WAIT_SNES) snes_set_snes_cmd(0x77);
+  set_mcu_addr(base_addr + romprops.load_address);
+  /* skip the stream on a survived recore reload (patched ROM is already in PSRAM) */
+  if(!(ips_recore_active && ips_recore_skip_restream)) {
+    file_open(filename, FA_READ);
+    ff_sd_offload=1;
+    sd_offload_tgt=0;
+    f_lseek(&file_handle, romprops.offset);
+    uint32_t total_bytes_read = 0;
+    for(;;) {
+      ff_sd_offload=1;
+      sd_offload_tgt=0;
+      bytes_read = file_read();
+      if (file_res || !bytes_read) break;
+      if(!(count++ % 512)) {
+        uart_putc('.');
+      }
+      total_bytes_read += bytes_read;
+      // FIXME: can we do this in the general (non-combo) case?
+      // FIXME: what does the condition below do that doubles romsize_bytes until it hits the file limit?  Do some games
+      // misreport size?  Or is this for BSX?
+      if((flags & LOADROM_WITH_COMBO) && (total_bytes_read >= romprops.romsize_bytes)) break;
+    }
+    uart_putc('\n');
+    file_close();
+  }
+}
 
-  /* NB: menu SFX teardown (menu_sfx_shutdown) is deferred all the way down to just
-     before the FPGA reconfig, past the prerequisite check AND past the 0x55 that
-     releases the SNES.  Two reasons: an aborted game load (missing chip BIOS ->
-     NACK -> back to menu) must leave the menu sound intact, and the confirm blip
-     gets to play across the SNES-side iris animation instead of being cut off. */
+/* Apply the patch this load requested to the image already staged in PSRAM, with the
+   SNES held in reset.  Returns patch_ok: load_rom still boots a failed patch, but the
+   export must not write a file claiming to be patched when it is not.
 
+   The two bases below differ on purpose: the patcher writes at SRAM_ROM_ADDR +
+   load_address, the recore fingerprint reads base_addr + load_address.  They agree for
+   every real load; do not unify them. */
+static uint8_t load_apply_patch(const load_ctx_t *c) {
+  DWORD filesize = c->filesize;
+  uint8_t patch_ok;
+  /* On a recore reload, fpga_pgm() (load_reconfigure_fpga) wiped all of SDRAM, including the
+     patch list that ips_find_patches() staged once before LOADROM.  The
+     patch's full path survives in MCU RAM as current_ips_srm_source, so
+     re-stage it into SDRAM at the same slot patch_apply() reads, otherwise
+     the re-patch would open an empty path and silently leave the ROM
+     unpatched.  The scan scratch behind patch_basename_at() is gone for good
+     though, so drop the scan: a CMD_PATCH_META_SAVE arriving afterwards must
+     not pair this ROM's flags with another ROM's basenames. */
+  if(ips_recore_active && current_ips_srm_source[0]) {
+    ips_scan_count = 0;
+    sram_writeblock(current_ips_srm_source,
+                    SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE
+                      + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
+                    (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
+    /* The header-mode override sits in the same wiped region; restage it too
+       or the re-patch silently falls back to auto-detect. */
+    sram_writebyte(current_ips_flags,
+                   SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE
+                     + (uint32_t)(ips_pending_index - 1));
+  }
+
+  /* The chip-converting-BPS recore decision is taken right after the stream (see the
+     single-pass recore block in load_rom); the post-patch smc re-detect below is the
+     safety net for a probe miss. */
+
+  /* Dispatch to ips_apply or bps_apply based on the patch file extension.
+     For IPS: pass the copier-header size so offset correction works when
+     the IPS was authored for a headered ROM.  For combo ROMs
+     romprops.offset carries a slot shift in the upper bits; mask those
+     off to get just the header size (0 or 0x200).
+     BPS encodes exact sizes so no header correction is needed there. */
+  uint32_t ips_header_size = romprops.offset & 0xFFFFF;
+  /* IPS-only auto-detection (folded into ips_apply's pass-1, so the IPS is
+     scanned only once): an IPS authored for a headered ROM but applied to a
+     headerless base (offset 0) lands 512 bytes too high.  ips_apply validates
+     the SNES internal header of each hypothesis and shifts by 512 only when
+     the headered image coheres and the literal one does not (conservative).
+     romprops.header_address (0x7FB0 LoROM / 0xFFB0 HiROM) locates the header;
+     BPS ignores it.  The user can pin the convention per patch on the patch
+     screen; that override is staged in the patch's flags byte and read by
+     ips_apply itself.  ips_header_adj_used reports which rule won ->
+     breadcrumb $FF072E below (D0 literal / D1 auto / D2 forced headered /
+     D3 forced headerless). */
+  ips_header_adj_used = 0;
+  /* Approach B: drive the FPGA copier from the MCU (the SNES is held in reset
+     here) for a BPS when EnableBpsCopier is on AND the currently-loaded core
+     carries the copier (probe).  IPS, the gate off, or a core without the copier
+     fall through to the byte-by-byte apply.  A copier op failure returns 0 and is
+     treated as a patch error (the probe makes a runtime failure unlikely). */
+  uint32_t ips_end;
+  uint8_t  copier_avail = CFG.enable_bps_copier && patch_copier_available();
+  if(copier_avail) {
+    extern uint32_t patch_targetread_bytes;
+    printf("BPS copier path (MCU-driven, SNES in reset)\n");
+    tick_t t_copier = getticks();
+    ips_end = patch_apply_copier(SRAM_IPS_LIST_ADDR, ips_pending_index,
+                                 SRAM_ROM_ADDR + romprops.load_address,
+                                 romprops.romsize_bytes, ips_header_size,
+                                 romprops.header_address);
+    uint32_t patch_ms = (uint32_t)(getticks() - t_copier) * 10u; /* 1 tick = 10ms */
+    /* DEBUG ($FF0724 marker, $FF0721 op count): B1 = copier applied OK,
+       B2 = copier failed mid-apply (timeout). */
+    sram_writebyte(ips_end ? 0xB1 : 0xB2, 0xFF0724L);
+    uint32_t n = patch_copier_count();
+    sram_writebyte((uint8_t)(n),       0xFF0721L);
+    sram_writebyte((uint8_t)(n >> 8),  0xFF0722L);
+    sram_writebyte((uint8_t)(n >> 16), 0xFF0723L);
+    /* DEBUG breakdown: $FF0728 = patch time ms (16b), $FF072A = TargetRead
+       byte-by-byte volume (24b) -> copier-op overhead vs literal volume. */
+    sram_writebyte((uint8_t)(patch_ms),       0xFF0728L);
+    sram_writebyte((uint8_t)(patch_ms >> 8),  0xFF0729L);
+    sram_writebyte((uint8_t)(patch_targetread_bytes),       0xFF072AL);
+    sram_writebyte((uint8_t)(patch_targetread_bytes >> 8),  0xFF072BL);
+    sram_writebyte((uint8_t)(patch_targetread_bytes >> 16), 0xFF072CL);
+  } else {
+    ips_end = patch_apply(SRAM_IPS_LIST_ADDR, ips_pending_index,
+                          SRAM_ROM_ADDR + romprops.load_address,
+                          romprops.romsize_bytes, ips_header_size,
+                          romprops.header_address);
+    /* B3 = gate on but copier not in this core (probe failed); B0 = gate off. */
+    sram_writebyte(CFG.enable_bps_copier ? 0xB3 : 0xB0, 0xFF0724L);
+  }
+  ips_pending_index = 0;
+  /* IPS header-convention breadcrumb (set by ips_apply; D0 for BPS):
+     D0 literal, D1 auto-detected +512, D2 user forced headered,
+     D3 user forced headerless. */
+  sram_writebyte(0xD0 + ips_header_adj_used, 0xFF072EL);
+  patch_ok = (ips_end > 0); /* 0 => patch error / FPGA stall */
+  patch_last_ok = patch_ok;
+  /* Exact byte length of the patched image, for CMD_EXPORT_PATCHED_ROM.
+     Deliberately NOT romprops.romsize_bytes: the doubling loop in load_setup_masks ("while
+     filesize > romsize_bytes + offset") has already rounded that UP to a
+     power of two, because it drives the FPGA ROM mask.  A 3 MB ROM therefore
+     reports 4 MB, and exporting that would append a megabyte of zero padding
+     -- producing a file whose CRC matches nothing Floating IPS or
+     RomPatcher.js generates, which is the whole point of the export.
+     The true headerless payload is filesize minus the copier header, the same
+     expression sram_crc_romsize uses below.  A BPS states its target size
+     outright; an IPS only reports the highest offset it wrote, which for a
+     small hack is far short of the ROM, so there the original length is the
+     floor.  Combo ROMs keep the old value: their offset carries a slot shift
+     and filesize spans every slot, so the subtraction would not mean this.
+     DEPENDS ON THE EXPORT REFUSING .gb: the SGB path reassigns filesize to the
+     size of the .gb while romprops still describes the SGB BIOS, so the
+     subtraction would not mean this there.  patch_export_command gates on
+     path_is_gb(), the same predicate that gates sgb_id() -- keep them together. */
+  uint32_t rom_bytes = romprops.romsize_bytes;
+  if(!romprops.has_combo && filesize > ips_header_size)
+    rom_bytes = filesize - ips_header_size;
+  if((current_ips_flags & PATCH_FLAG_TYPE_MASK) == PATCH_TYPE_BPS)
+    patch_export_size = ips_end;
+  else
+    patch_export_size = (ips_end > rom_bytes) ? ips_end : rom_bytes;
+  /* If the IPS patch wrote past the original ROM boundary (ROM expansion
+     hack), expand the FPGA ROM mask so those new banks are accessible.
+     romprops.romsize_bytes is always a power of 2, so a simple left-
+     shift loop finds the next fitting power of 2. */
+  if(ips_end > romprops.romsize_bytes) {
+    /* IPS/BPS patches authored for a headered (512-byte copier prefix)
+       ROM image sometimes have max_end that overshoots a clean power-of-2
+       ROM boundary by exactly 512 bytes.  Those extra bytes are the
+       copier header padding — not real ROM data — so they must not cause
+       the mask to double.  Snap ips_end back to the clean boundary when
+       the overshoot is ≤ 512 bytes. */
+    if (ips_end > 512) {
+      /* Largest power-of-2 that is ≤ ips_end */
+      uint32_t p2 = ips_end;
+      p2 |= p2 >> 1; p2 |= p2 >> 2; p2 |= p2 >> 4;
+      p2 |= p2 >> 8; p2 |= p2 >> 16;
+      p2 = (p2 + 1) >> 1;
+      if (p2 < ips_end && ips_end - p2 <= 512) {
+        printf("IPS/BPS: header padding trimmed 0x%lx -> 0x%lx\n",
+               (unsigned long)ips_end, (unsigned long)p2);
+        ips_end = p2;
+      }
+    }
+    uint32_t new_size = romprops.romsize_bytes;
+    while(new_size < ips_end) new_size <<= 1;
+    /* For LoROM (mapper_id 1) the FPGA address formula uses ~A23 to
+       overlay the two SNES bank halves onto the same SRAM window.
+       This only works correctly when the ROM mask has bit 22 clear
+       (i.e. mask <= 0x3FFFFF, ROM <= 4 MB).  LoROM's addressing limit
+       is 4 MB regardless of IPS expansion, so if the loop doubled past
+       4 MB (typically due to a single stray IPS byte sitting just past
+       the 4 MB boundary), cap new_size back to 4 MB. */
+    if(romprops.mapper_id == 1 && new_size > 0x400000)
+      new_size = 0x400000;
+    printf("IPS ROM expansion: %lx -> %lx (mask %lx)\n",
+           romprops.romsize_bytes, new_size, new_size - 1);
+    romprops.romsize_bytes = new_size;
+    set_rom_mask(new_size - 1);
+  }
+  return patch_ok;
+}
+
+/* The FPGA core, mapper and masks were all selected from the PRE-patch
+   header (smc_id ran on the unpatched file before fpga_pgm).  If the patch
+   changed the cartridge type (e.g. an SA-1 / Super FX conversion hack), the
+   wrong core is currently loaded and the game would boot broken.
+   Re-derive the cartridge from the now-patched image in SDRAM; if it needs a
+   different core, reload+repatch once under the correct core.  Reconfiguring
+   the FPGA wipes SDRAM, so a full reload (re-stream + re-patch) is required
+   rather than a bare fpga_pgm.  Guarded so the normal path (no patch, or a
+   patch that keeps the same core) is completely unaffected.
+
+   Returns 1 when the caller must reload under the new core (the recore state is armed
+   on the way out); 0 when the core stands. */
+static uint8_t load_patch_needs_recore(const load_ctx_t *c, uint8_t saved_ips_idx) {
+  smc_id_sdram(&ips_recore_props, SRAM_ROM_ADDR + romprops.load_address,
+               romprops.romsize_bytes);
+  const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
+  const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
+                                                       : FPGA_BASE;
+  if(core_new != core_now) {
+    printf("IPS: patch changed cartridge type -> reloading under correct core\n");
+    ips_recore_active = 1;
+#if RECORE_PSRAM_KEEP
+    /* copier-swap: patch already applied under base -> pass 2 skips stream+patch
+       (leave ips_pending_index at 0); capture size/fingerprint for the reload. */
+    ips_recore_skip_restream = 1;
+    ips_recore_romsize = romprops.romsize_bytes;
+    ips_recore_saved_idx = saved_ips_idx;
+    ips_recore_fingerprint = recore_rom_fingerprint(c->base_addr + romprops.load_address,
+                                                    romprops.romsize_bytes);
+#else
+    ips_pending_index = saved_ips_idx; /* re-apply the same patch on reload */
+#endif
+    return 1;
+  }
+  /* The patch may change only the MAPPER without changing the FPGA core —
+     most commonly a HiROM -> ExHiROM promotion when an expansion grows the
+     ROM past 4 MB (e.g. Bahamut Lagoon English: 3 MB HiROM -> 8 MB ExHiROM,
+     Tales of Phantasia-style).  set_mapper() ran before the patch with the
+     PRE-patch mapper, and the core-change branch above only fires on a core
+     swap, so a same-core mapper change would otherwise leave an 8 MB ExHiROM
+     image addressed as 4 MB HiROM -> the SNES reads garbage and black-
+     screens.  The core is already correct and the ROM mask was expanded
+     above, so just re-program the FPGA mapper register here (no reload). */
+  if(ips_recore_props.mapper_id != romprops.mapper_id) {
+    printf("IPS: patch changed mapper %d -> %d (same core) -> reprogramming FPGA mapper\n",
+           romprops.mapper_id, ips_recore_props.mapper_id);
+    romprops.mapper_id = ips_recore_props.mapper_id;
+    set_mapper(romprops.mapper_id);
+  }
+  return 0;
+}
+/* Battery SaveRAM for this load: clear the mapped window, pull the .srm back in and
+   seed the autosave CRC baseline.  Split by cartridge family: Sufami Turbo has TWO
+   independent battery chips, one per minicart slot, each with its own file.  rammask
+   sizes the MAPPED window, wider than the SAVEABLE size for a .st -- see
+   SUFAMI_SLOTA_SCRATCH_SIZE in memmap.h. */
+static void load_saveram(const load_ctx_t *c) {
+  uint8_t  *filename = c->filename;
+  uint32_t  rammask  = c->rammask;
+  if(romprops.has_sufami) {
+    /* Slot A is cleared over the WHOLE mapped window, scratch included, or the ST
+       BIOS inherits the previous game's leftovers and hangs. */
+    sram_memset(SRAM_SAVE_ADDR, rammask + 1, 0xFF);
+    if(romprops.sramsize_bytes) {
+      migrate_and_load_srm(filename, SRAM_SAVE_ADDR);
+      if(file_res == FR_NO_FILE) file_res = 0;
+    }
+#ifndef CONFIG_MK2
+    if(sufami_slotb_ramsize) {
+      char slotb_srm[256];
+      sram_memset(SUFAMI_SLOTB_SAVE_ADDR, sufami_slotb_ramsize, 0xFF);
+      /* Named from the Slot B CART, not the loaded game: not migrate_and_load_srm,
+         whose derivation is tied to Slot A (patch source + battery-slot). */
+      if(path_asset(slotb_srm, sizeof(slotb_srm), SAVE_BASEDIR,
+                    sufami_slotb_path, ".srm") >= 0) {
+        load_sram((uint8_t*)slotb_srm, SUFAMI_SLOTB_SAVE_ADDR);
+        if(file_res == FR_NO_FILE) file_res = 0;
+      }
+    }
+#endif
+#ifndef CONFIG_MK2
+    sufami_slotb_crc_seed();
+#endif
+    /* Seed the Slot A scan too: snes.c skips it entirely when sramsize_bytes is 0. */
+    saveram_crc_old = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase,
+                                    romprops.sramsize_bytes, 0);
+    saveram_crc = 0;
+    saveram_offset = 0;
+  } else if(romprops.ramsize_bytes) {
+    // powerslide relies on the init value to be 00.
+    sram_memset(SRAM_SAVE_ADDR, romprops.ramsize_bytes, romprops.has_gsu ? 0x00 : 0xFF);
+    if (romprops.sramsize_bytes) migrate_and_load_srm(filename, SRAM_SAVE_ADDR);
+    /* file not found error is ok (SRM file might not exist yet) */
+    if(file_res == FR_NO_FILE) file_res = 0;
+#ifdef CONFIG_MK2
+    /* SPC7110 on mk2 has no virtual battery, so the factory check program's
+       RTC BACKUP test can never pass here.  Plant the retail signature that
+       the check program itself writes on success ("SPC7110 CHECK OK", last
+       16 bytes of SRAM) whenever it is absent, so a fresh cart boots retail
+       instead of looping the factory ritual.  Only the RTC cart (carttype
+       0xf9, Tengai Makyou Zero) carries the check program -- on the plain
+       SPC7110 carts those 16 bytes are ordinary save data and must not be
+       touched.  A save that already carries the signature is untouched;
+       the seed lands in the initial CRC, so it reaches the card only
+       together with a real save. */
+    if(romprops.has_spc7110_rtc && romprops.sramsize_bytes >= 16) {
+      static const uint8_t spc7110_sig[16] = { 'S','P','C','7','1','1','0',' ',
+                                               'C','H','E','C','K',' ','O','K' };
+      uint8_t sigcur[16];
+      uint32_t sigaddr = SRAM_SAVE_ADDR + romprops.sramsize_bytes - 16;
+      sram_readblock(sigcur, sigaddr, 16);
+      if(memcmp(sigcur, spc7110_sig, 16)) {
+        sram_writeblock((void*)spc7110_sig, sigaddr, 16);
+      }
+    }
+#endif
+    saveram_crc_old = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase, romprops.sramsize_bytes, 0);
+    saveram_crc = 0;
+    saveram_offset = 0;
+  } else {
+    printf("No SRAM\n");
+  }
+}
+
+/* BS Memory Pack slot: decide whether this game gets one, then load it and seed the
+   pack autosave state.  Runs on every load so a pack from the previous game cannot
+   stay mapped. */
+static void load_bs_pack_slot(const load_ctx_t *c) {
+  uint8_t *filename = c->filename;
+  uint8_t  flags    = c->flags;
+  /* BS Memory Pack slot, auto-detected (no title list): needs a <rom>.mpk present.
+     Two families:
+       - base mapper (LoROM, or HiROM <=2MB; above that its own ROM reaches $E0+, where
+         the HiROM pack maps): confirm with the pack-probe ROM scan (LDA $bb:FF00/$bb:FF02).
+         The window follows the mapper (LoROM $C0-$DF / HiROM $E0-$EF).  FEAT_BSLOROM here
+         for a >2MB LoROM cart with a pack; standalone (no pack) boot of Derby/SN is in smc.c.
+       - SA-1 slotted (e.g. SD Gundam G Next): the game validates the pack on the S-CPU and
+         reads it through SuperMMC block 4 (the SA-1 core redirects MMC block>=4 to the pack
+         at PSRAM 0x900000).  It writes no flash registers, so there is no pack-probe
+         signature to scan -- gate on has_sa1 + a present .mpk (an explicit user action). */
+  uint8_t bs_slot = 0;
+  if((flags & LOADROM_WITH_SRAM) && bs_pack_exists(filename)) {
+    if(!romprops.fpga_conf
+       && (romprops.mapper_id == 1
+           || (romprops.mapper_id == 0 && romprops.romsize_bytes <= 0x200000))
+       && rom_scan_bs_vendor(romprops.romsize_bytes)) {
+      if(romprops.mapper_id == 1 && romprops.romsize_bytes > 0x200000) {
+        romprops.fpga_features |= FEAT_BSLOROM;
+      }
+      bs_slot = 1;
+    } else if(romprops.has_sa1) {
+      bs_slot = 1;
+    }
+  }
+  if(bs_slot && load_bs_pack(filename)) {
+    printf("BS Memory Pack present\n");
+    romprops.fpga_features |= FEAT_BSSLOT;
+    /* seed the autosave baseline + reset scan state per game (globals, like
+       saveram_offset) so an unchanged pack is not re-written */
+    bs_pack_crc_old = calc_sram_crc(BS_PACK_ADDR, BS_PACK_SIZE, 0);
+    bs_pack_crc = bs_pack_offset = bs_pack_diff = bs_pack_same = 0;
+    bs_pack_didnotsave = bs_pack_save_failed = 0;
+    /* sync the erase seq to the FPGA's current value so a stale seq from a previous
+       game doesn't trigger a spurious erase on the first poll */
+    bs_pack_erase_seq = (fpga_status() >> 11) & 0x3;
+    /* RTC is the Satellaview base-unit clock (base core only); the SA-1 core has no
+       BS-X base regs, so don't poke the FPGA time there. */
+    if(!romprops.has_sa1) {
+      if(CFG.bsx_use_usertime) {
+        set_fpga_time(srtctime2bcdtime(CFG.bsx_time));
+      } else {
+        set_fpga_time(get_bcdtime());
+      }
+    }
+  }
+}
+
+/* Everything the FPGA has to know before the SNES comes out of reset: the $213F
+   override, the per-core chipfeat word, the DAC, CIC pair mode and the feature bits.
+   Ordering matters -- see the NES/Atari invariant below. */
+static void load_set_features(const load_ctx_t *c) {
+  uint8_t *filename = c->filename;
+  uint8_t  is_menu  = c->is_menu;
+  printf("r213fen=%d is_u16=%d filename=%s\n", cfg_is_r213f_override_enabled(), STS.is_u16, filename);
+  if(cfg_is_r213f_override_enabled() && !is_menu && !STS.is_u16) {
+    romprops.fpga_features |= FEAT_213F; /* e.g. for general consoles */
+  }
+  fpga_set_213f(romprops.region);
+//  fpga_set_features(romprops.fpga_features);
+  /* NES: o chipfeat (0xef) E' o mapper_flags[15:0] do core (nes_feat_out em
+     mcu_cmd.v -> mapper_flags_in do nes_wrap).  INVARIANTE (false-path no
+     main.sdc do sd2snes_nes): esta escrita acontece ANTES do assert_reset/
+     deassert_reset abaixo -- o core NES so' sai do reset (SNES_reset_strobe no
+     retorno do clock do SNES) com os flags ja' estaveis, e o firmware NUNCA os
+     reprograma com o core rodando. */
+  /* Atari: the chipfeat (0xef) carries scheme/superchip/size_class/video width
+     (a26_feat_out; ATARI-CORE-CONTRACT sec. 7).  Same invariant as the NES above --
+     written BEFORE the reset below, never with the core already running. */
+  fpga_set_chipfeat(a26_romprops.has_a26 ? a26_romprops.feat16
+                    : nes_romprops.has_nes ? nes_romprops.mapper_flags16
+                    : sgb_romprops.has_sgb ? sgb_romprops.fpga_sgbfeat
+                                           : romprops.fpga_dspfeat);
+  nes_dbg_log("POST_CHIPFEAT");        /* nesdbg: no-op fora de um load .nes */
+  fpga_set_dac_boost(CFG.msu_volume_boost);
+  dac_pause();
+  dac_reset(0);
+/* fully enable pair mode again instead of just setting the video/d4 mode
+   in case previous pair mode entry was skipped / pair mode undetected so far */
+  if(get_cic_state() == CIC_PAIR) {
+    if(!is_menu) {
+      if(CFG.vidmode_game == VIDMODE_AUTO) {
+        cic_pair(romprops.region, romprops.region);
+      } else {
+        cic_pair(CFG.vidmode_game, romprops.region);
+      }
+    }
+  }
+
+  if(cfg_is_onechip_transient_fixes() && !is_menu) {
+    romprops.fpga_features |= FEAT_2100;
+  }
+  romprops.fpga_features |= FEAT_2100_LIMIT(cfg_get_brightness_limit());
+
+  /* enable Satellaview Base emulation only if no physical Satellaview Base unit is present */
+  if(!STS.has_satellaview) {
+    romprops.fpga_features |= FEAT_SATELLABASE;
+  }
+}
+/* Chip BIOSes and firmware blobs the staged ROM needs: BS-X, Sufami Turbo, DSPx.
+   Takes ticksstart only to close out the load timer printed here. */
+static void load_stage_bios(tick_t ticksstart) {
+  tick_t ticks_total=0;
+  printf("rom header map: %02x; mapper id: %d\n", romprops.header.map, romprops.mapper_id);
+  ticks_total=getticks()-ticksstart;
+  printf("%u ticks total\n", ticks_total);
+  if(romprops.mapper_id==3) {
+    printf("BSX Flash cart image\n");
+    printf("attempting to load BSX BIOS /sd2snes/bsxbios.bin...\n");
+    load_sram_offload((uint8_t*)"/sd2snes/bsxbios.bin", 0x800000, LOADRAM_AUTOSKIP_HEADER);
+    printf("attempting to load BS data file /sd2snes/bsxpage.bin...\n");
+    load_sram_offload((uint8_t*)"/sd2snes/bsxpage.bin", 0x900000, 0);
+    printf("Type: %02x\n", romprops.header.destcode);
+    set_bsx_regs(0xf6, 0x09);
+    uint16_t rombase;
+    if(romprops.header.ramsize & 1) {
+      rombase = romprops.load_address + 0xff00;
+// set_bsx_regs(0x36, 0xc9);
+    } else {
+      rombase = romprops.load_address + 0x7f00;
+// set_bsx_regs(0x34, 0xcb);
+    }
+    sram_writebyte(0x33, rombase+0xda);
+    sram_writebyte(0x00, rombase+0xd4);
+    sram_writebyte(0x00, rombase+0xd5);
+    if(CFG.bsx_use_usertime) {
+      set_fpga_time(srtctime2bcdtime(CFG.bsx_time));
+    } else {
+      set_fpga_time(get_bcdtime());
+    }
+  }
+#ifndef CONFIG_MK2
+  if(romprops.has_sufami) {
+
+    DBG_SUFAMI printf("Sufami Turbo. Loading BIOS %s...\n", STBIOS_FW);
+    load_sram_offload((uint8_t*)STBIOS_FW, SUFAMI_SLOTA_BIOS_ADDR, LOADRAM_AUTOSKIP_HEADER);
+    if(file_res) snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)STBIOS_FW);
+    sufami_stage_slotb_rom();
+  }
+#endif
+  if(romprops.has_dspx) {
+    printf("DSPx game. Loading firmware image %s...\n", romprops.dsp_fw);
+    load_dspx(romprops.dsp_fw, romprops.fpga_features);
+    /* fallback to DSP1B firmware if DSP1.bin is not present */
+    if(file_res && romprops.dsp_fw == DSPFW_DSP1) {
+      load_dspx(DSPFW_DSP1B, romprops.fpga_features);
+    }
+    if(file_res) {
+      snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)romprops.dsp_fw);
+    }
+  }
+}
+
+/* Size the ROM/SaveRAM windows for the FPGA and hand every console-specific stager
+   its image.  Also puts c->filename BACK to the file the user picked (the SGB/NES/A26
+   blocks swapped it for the SNES-side player), so saves, cheats and assets key off the
+   game and not the player binary. */
+static void load_setup_masks(load_ctx_t *c) {
+  uint32_t rammask;
+  uint32_t rommask;
+  uint8_t  ramslot = 0;
+  while(!romprops.has_combo && romprops.romsize_bytes && c->filesize > (romprops.romsize_bytes + romprops.offset)) {
+    romprops.romsize_bytes <<= 1;
+  }
+
+  if (romprops.has_sa1 && romprops.header.carttype == 0x36 && romprops.header.ramsize) {
+    // move iram into saveram for special carts with no bwram
+    romprops.header.ramsize = 1;
+    romprops.ramsize_bytes = 0x800;
+    // override any changes to this so we capture full sram
+    romprops.srambase       = 0;
+    romprops.sramsize_bytes = romprops.ramsize_bytes;
+    rammask = 1;
+  } else if(romprops.has_sufami) {
+    /* MAPPED size, deliberately NOT the saveable size: the ST BIOS uses Slot A SaveRAM
+       as scratch and dispatches into it (below $8000), so the window must exist even
+       for a cart with no battery. sramsize_bytes stays 0 there, and that is the field
+       the autosave and the .srm writer key off. */
+    rammask = (romprops.ramsize_bytes > SUFAMI_SLOTA_SCRATCH_SIZE
+               ? romprops.ramsize_bytes : SUFAMI_SLOTA_SCRATCH_SIZE) - 1;
+  } else if(romprops.header.ramsize == 0) {
+    rammask = 0;
+  } else {
+    rammask = romprops.ramsize_bytes - 1;
+  }
+  rommask = romprops.romsize_bytes - 1;
+  
+  if (romprops.has_combo) {
+    ramslot = sram_readbyte((romprops.mapper_id == 0 || romprops.mapper_id == 2) ? 0xFFDA : 0x7FDA);
+  }
+  
+  printf("ramsize=%x ramslot=%hx rammask=%lx\nromsize=%x rommask=%lx\n", romprops.header.ramsize, ramslot, rammask, romprops.header.romsize, rommask);
+
+  /* SGB setup romprops and load SRAM */
+  sgb_load_sram(c->sgb_filename);
+
+  /* SMS: stage the .sms ROM into PSRAM (FPGA Z80 fetches it) before the SNES boots */
+  sms_load_rom();
+
+  /* Atari 2600: stage the .a26 image into PSRAM before the SNES boots (the core copies
+     it into BRAM at reset and never reads PSRAM again).  No-op without a .a26. */
+  a26_load_rom();
+
+  /* SGB update local file properties */
+  if (sgb_romprops.has_sgb) {
+    /* reset the filename to match the GB file */
+    c->filename = c->sgb_filename;
+    c->filesize = c->sgb_filesize;
+
+    /* update SaveRAM properties */
+    romprops.ramsize_bytes = (CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? (128 * 1024) : sgb_romprops.ramsize_bytes;
+    romprops.srambase = sgb_romprops.srambase;
+    romprops.sramsize_bytes = (CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? (128 * 1024) : sgb_romprops.sramsize_bytes;
+
+    rammask = sgb_romprops.ramsize_bytes ? (sgb_romprops.ramsize_bytes - 1) : 0;
+    rommask = sgb_romprops.romsize_bytes ? (sgb_romprops.romsize_bytes - 1) : 0;
+  }
+
+  /* NES: stream do PRG (0x000000) + CHR (0x200000) em formato NES nativo,
+     zera CIRAM/WRAM/CART-RAM e grava o breadcrumb "NESL" em 0x400000
+     (gate da Fase 0; ver nes.c).  No-op sem .nes. */
+  nes_load_prg(c->nes_filename);
+
+  /* NES update local file properties (espelha o bloco SGB acima) */
+  if (nes_romprops.has_nes) {
+    /* reset the filename to match the NES file (recentes/saves usam o .nes) */
+    c->filename = c->nes_filename;
+
+    /* sem SaveRAM na Fase 0 (PRG-RAM com bateria fica pra fase futura);
+       ROM_MASK nao e' consumido pelo nes_wrap (o mapper_flags carrega as
+       classes de tamanho), setado por higiene pro tamanho do PRG. */
+    romprops.ramsize_bytes  = 0;
+    romprops.srambase       = 0;
+    romprops.sramsize_bytes = 0;
+    rammask = 0;
+    rommask = nes_romprops.prgsize_bytes ? (nes_romprops.prgsize_bytes - 1) : 0;
+  }
+
+  /* Atari 2600 update local file properties (mirrors the NES block above) */
+  if (a26_romprops.has_a26) {
+    /* point saves/cheats/game-info assets back at the .a26 instead of the player */
+    c->filename = c->a26_filename;
+
+    /* no SaveRAM: no scheme in the v0 set is battery backed (the Superchip RAM lives
+       in the core).  rommask is deliberately NOT touched: unlike the NES stub (which
+       is relocated to the 512KB RAM), the player IS the booted LoROM image in PSRAM,
+       so the mask smc_id computed for it has to stand -- masking it down to the size
+       of the .a26 would cut the player's own ROM. */
+    romprops.ramsize_bytes  = 0;
+    romprops.srambase       = 0;
+    romprops.sramsize_bytes = 0;
+    rammask = 0;
+  }
+
+  /* SGB load GB RTC */
+  sgb_gtc_load(c->sgb_filename);
+
+  printf("ramsize=%x rammask=%lx\nromsize=%x rommask=%lx\n", romprops.header.ramsize, rammask, romprops.header.romsize, rommask);
+  set_saveram_mask(rammask);
+  // don't set these for special chips as it may break from not supporting the feature
+  if (  !romprops.fpga_conf
+      || romprops.fpga_conf == FPGA_BASE
+      || romprops.fpga_conf == FPGA_DSP) {
+      set_saveram_base(ramslot);
+  }
+  set_rom_mask(rommask);
+  /* Sent on every load (0/0 when not a .st) so a previous minicart cannot leave a live
+     Slot B window behind; other cores drop the bytes. */
+  set_rom_mask_b(romprops.has_sufami ? sufami_rom_mask_b : 0);
+  set_saveram_mask_b((romprops.has_sufami && sufami_slotb_ramsize)
+                     ? (sufami_slotb_ramsize - 1) : 0);
+  if(romprops.has_spc7110) {
+    /* SPC7110: the ROM image is the program ROM followed by the data ROM.
+       Hand the core the DROM window over PSRAM as base + power-of-two mask
+       (the core masks the linear offset first, then adds the base).  The
+       power-up defaults are neutral, so this MUST run before the SNES is
+       released.
+       Image-shape premise, deliberate: a headerless .sfc does not carry the
+       PROM size (emulators take it from an external manifest), so the PROM is
+       assumed 1 MB and the DROM a power of two -- true for every released
+       SPC7110 cart (Tengai Makyou Zero 1+4 MB, Momotarou Dentetsu Happy
+       1+2 MB, Super Power League 4 1+1 MB).  A hypothetical 2 MB-PROM cart
+       (the r4834 bit2 mode) or a non-power-of-two data ROM is out of scope
+       and would map incorrectly. */
+    uint32_t drombase = 0x100000;
+    uint32_t dromspan = (romprops.romsize_bytes > drombase)
+                      ? (romprops.romsize_bytes - drombase) : drombase;
+    uint32_t dromsize = 1;
+    while(dromsize < dromspan) dromsize <<= 1;
+    set_drom_base(drombase);
+    set_drom_mask(dromsize - 1);
+    /* The RTC-4513 powers up with an invalid BCD calendar (month/day 00) and
+       games retry forever on it, so the clock is always programmed before boot.
+       With a .rtc sidecar next to the save this restores what the cartridge
+       battery would have kept - including a clock the game stopped - and
+       without one it falls back to the console's own time, exactly as before. */
+#ifndef CONFIG_MK2
+    spc7110_rtc_load(c->filename);
+#else
+    /* mk2 carries no virtual battery (MCU flash budget); wall clock only */
+    set_fpga_time(get_bcdtime());
+#endif
+  }
+  c->rammask  = rammask;
+}
+/* Re-open the file after a console block swapped `filename` for its SNES-side player:
+   smc_id has to see the player, not the cartridge image.  The caller then clears the
+   combo slot offset (it described the cartridge).  Returns 0 (already NACKed) when the
+   player will not open. */
+static uint32_t load_reopen_player(uint8_t *filename, uint8_t flags, const char *player) {
+  file_close();
+  file_open(filename, FA_READ);
+  if (file_res) {
+    return load_abort_missing(flags, MENU_ERR_FS, path_leaf(player));
+  }
+  return 1;
+}
+
+/* Open the picked file and take its size + combo slot.  0 = aborted (NACKed). */
+static uint32_t load_open(load_ctx_t *c) {
+  uint8_t *filename = c->filename;
+  uint8_t  flags    = c->flags;
   // copy the full name and path
-  strncpy(current_filename, (char *)filename, sizeof(current_filename)-1);
+  strlcpy_nul(current_filename, (char *)filename, sizeof(current_filename));
 
   printf("%s\n", filename);
   file_open(filename, FA_READ);
@@ -358,19 +1019,30 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     /* ROM vanished/SD glitch between selection and load: populate the error
        region so the menu's popup names this file instead of showing stale bytes
        from a previous abort (the main.c epilogue NACKs on a 0 return either way). */
-    return load_abort_missing(flags, MENU_ERR_FS, basename_of((const char*)filename));
+    return load_abort_missing(flags, MENU_ERR_FS, path_leaf((const char*)filename));
   }
-  filesize = file_handle.fsize; // won't be correct for combo roms
-  
-  uint32_t file_offset = 0;
+  c->filesize = file_handle.fsize; // won't be correct for combo roms
+
   if(flags & LOADROM_WITH_COMBO) {
     printf("Combo Header Check...");
     // seek to the proper slot.  slots are naturally aligned on 1MB boundaries.
-    file_offset = 0x100000 * snescmd_readbyte(SNESCMD_MCU_CMD + 1);
-    printf(" file_offset=0x%lx", file_offset);
+    c->file_offset = 0x100000 * snescmd_readbyte(SNESCMD_MCU_CMD + 1);
+    printf(" file_offset=0x%lx", c->file_offset);
     printf(" OK.\n");
   }
+  return 1;
+}
 
+/* Non-SNES consoles: detect the image and swap c->filename for the SNES-side player
+   or BIOS each one boots through.  The four differ in almost every step -- when the
+   original name is captured, whether a NOIMPL popup is possible, whether the swap
+   needs a reopen -- so they are written out rather than tabulated.
+   0 = aborted (NACKed). */
+static uint32_t load_stage_consoles(load_ctx_t *c) {
+  /* On an abort the context is left untouched: load_rom returns straight away. */
+  uint8_t  *filename    = c->filename;
+  uint8_t   flags       = c->flags;
+  uint32_t  file_offset = c->file_offset;
 #ifdef CONFIG_MK2
   /* NES/SMS/Atari cores are mk3-only (no Spartan-3 build). The files ARE listed in
      the browser on mk2 so the user gets a clear "needs mk3" popup here instead
@@ -387,7 +1059,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
       sms_active = 0;  /* returning before sms_id() would leave a stale flag */
       a26_romprops.has_a26 = 0;   /* same: returning before a26_id() leaves it stale */
       return load_abort_missing(flags, MENU_ERR_NOHW,
-                                basename_of((const char*)filename));
+                                path_leaf((const char*)filename));
     }
   }
 #endif
@@ -400,12 +1072,12 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
 
   /* SGB detect and file management */
   uint8_t *sgb_filename = filename;
-  DWORD sgb_filesize = file_handle.fsize;
+  DWORD    sgb_filesize = file_handle.fsize;
   sgb_id(&sgb_romprops, sgb_filename);
   /* SGB SNES BIOS (sgbN_snes.bin) missing -> message + NACK (else the menu would
      hang in game_handshake waiting for an ACK/NACK that never came). */
   if (!sgb_update_file(&filename)) {
-    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of(SGBSR));
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, path_leaf(SGBSR));
   }
 
   /* NES detect and file management (espelha o fluxo SGB acima; nes_id e' stub
@@ -422,26 +1094,22 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   /* stub SNES-side (nes_snes.bin) ausente -> message + NACK */
   if (!nes_update_file(&filename)) {
     return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
-                              basename_of((const char*)NES_SNES_STUB));
+                              path_leaf((const char*)NES_SNES_STUB));
   }
   /* SMS (experimental): a .sms boots the SNES-side player; the .sms ROM is staged
-     separately into PSRAM (sms_load_rom below). Mirrors the SGB file swap. */
+     separately into PSRAM (sms_load_rom, in load_setup_masks). Mirrors the SGB file swap. */
   sms_id(filename);
   if (!sms_update_file(&filename)) {
-    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of((const char*)SMS_PLAYER_FILE));
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, path_leaf((const char*)SMS_PLAYER_FILE));
   }
   /* the swap changed the open file (player); refresh smc_id's view of it */
   if (sms_active) {
-    file_close();
-    file_open(filename, FA_READ);
-    if (file_res) {
-      return load_abort_missing(flags, MENU_ERR_FS, basename_of((const char*)SMS_PLAYER_FILE));
-    }
+    if (!load_reopen_player(filename, flags, (const char*)SMS_PLAYER_FILE)) return 0;
     file_offset = 0;
   }
 
   /* Atari 2600 (experimental): a .a26 boots the SNES-side player; the cartridge image
-     is staged separately into PSRAM (a26_load_rom below). Mirrors the SMS file swap.
+     is staged separately into PSRAM (a26_load_rom, in load_setup_masks). Mirrors the SMS file swap.
      A bankswitch scheme outside the v0 set (or a size we cannot map) -> NOIMPL popup
      + NACK BEFORE the ACK, same rule as the prerequisite check: the menu stays alive,
      no reset. */
@@ -454,21 +1122,28 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   /* SNES-side player (a26_snes.bin) missing -> message + NACK */
   if (!a26_update_file(&filename)) {
     return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
-                              basename_of((const char*)A26_PLAYER_FILE));
+                              path_leaf((const char*)A26_PLAYER_FILE));
   }
   /* the swap changed the open file (player); refresh smc_id's view of it */
   if (a26_romprops.has_a26) {
-    file_close();
-    file_open(filename, FA_READ);
-    if (file_res) {
-      return load_abort_missing(flags, MENU_ERR_FS,
-                                basename_of((const char*)A26_PLAYER_FILE));
-    }
+    if (!load_reopen_player(filename, flags, (const char*)A26_PLAYER_FILE)) return 0;
     file_offset = 0;
   }
+  c->filename     = filename;
+  c->file_offset  = file_offset;
+  c->a26_filename = a26_filename;
+  c->sgb_filename = sgb_filename;
+  c->sgb_filesize = sgb_filesize;
+  c->nes_filename = nes_filename;
+  return 1;
+}
 
-  filesize = file_handle.fsize;
-  smc_id(&romprops, file_offset);
+/* Identify the cartridge from the (possibly swapped) open file and let each console
+   correct what the header of its player faked.  0 = aborted (NACKed). */
+static uint32_t load_identify(load_ctx_t *c) {
+  uint8_t flags = c->flags;
+  c->filesize = file_handle.fsize;
+  smc_id(&romprops, c->file_offset);
   /* the player is a plain LoROM; force the SMS core + drop any chip the header faked */
   if (sms_active) {
     romprops.fpga_conf = FPGA_SMS;
@@ -520,94 +1195,90 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
      A 0 here means the SGB SNES BIOS is PRESENT but fails the mapper/size/sram
      requirements (sgb_update_file already verified existence), so report a generic
      load error, not "file not found". */
-  if (!sgb_update_romprops(&romprops, sgb_filename)) {
-    return load_abort_missing(flags, MENU_ERR_FS, basename_of(SGBSR));
+  if (!sgb_update_romprops(&romprops, c->sgb_filename)) {
+    return load_abort_missing(flags, MENU_ERR_FS, path_leaf(SGBSR));
   }
 
   /* NES: aponta fpga_conf = fpga_nes + reloca o stub SNES-side pra RAM de
      512KB (0x880000), igual ao SGB.  0 = stub presente mas fora dos requisitos
      (LoROM <=512KB sem SaveRAM) -> erro generico de load. */
-  if (!nes_update_romprops(&romprops, nes_filename)) {
+  if (!nes_update_romprops(&romprops, c->nes_filename)) {
     return load_abort_missing(flags, MENU_ERR_FS,
-                              basename_of((const char*)NES_SNES_STUB));
+                              path_leaf((const char*)NES_SNES_STUB));
   }
+  return 1;
+}
 
-  uint16_t fpga_features_preload = romprops.fpga_features | FEAT_CMD_UNLOCK | FEAT_2100_LIMIT_NONE;
-  if(is_menu) {
-    printf("Setting menu features...");
-    fpga_set_features(fpga_features_preload);
-    printf("OK.\n");
+/* Prerequisite check BEFORE the ACK: if a required chip BIOS/firmware file is
+   missing (or the chip is unimplemented), NACK the handshake so the menu shows
+   the error and stays alive (no reset), instead of booting a broken game. Gated
+   on LOADROM_WAIT_SNES (the SNES is parked in game_handshake able to take the
+   NACK): a menu load (flags 0) never needs these files, and the IPS/BPS recore
+   reload clears WAIT_SNES AFTER the SNES already ACKed/booted, so aborting there
+   would only desync MCU and SNES -- let it fall through as before.  That gate
+   stays at the call site, where the difference is visible.
+   Returns 1 when everything the game needs is on the card, 0 after a NACK. */
+static uint32_t load_check_prereqs(load_ctx_t *c) {
+  uint8_t  *filename = c->filename;
+  DWORD     filesize = c->filesize;
+  uint8_t   flags    = c->flags;
+  /* unimplemented chip (ST0011/ST0018/SPC7110): smc_id already flagged it */
+  if(romprops.error == MENU_ERR_NOIMPL) {
+    return load_abort_missing(flags, MENU_ERR_NOIMPL, (char*)romprops.error_param);
   }
-  /* Prerequisite check BEFORE the ACK: if a required chip BIOS/firmware file is
-     missing (or the chip is unimplemented), NACK the handshake so the menu shows
-     the error and stays alive (no reset), instead of booting a broken game. Gated
-     on LOADROM_WAIT_SNES (the SNES is parked in game_handshake able to take the
-     NACK): a menu load (flags 0) never needs these files, and the IPS/BPS recore
-     reload clears WAIT_SNES AFTER the SNES already ACKed/booted, so aborting there
-     would only desync MCU and SNES -- let it fall through as before. */
-  if(!is_menu && (flags & LOADROM_WAIT_SNES)) {
-    /* unimplemented chip (ST0011/ST0018/SPC7110): smc_id already flagged it */
-    if(romprops.error == MENU_ERR_NOIMPL) {
-      return load_abort_missing(flags, MENU_ERR_NOIMPL, (char*)romprops.error_param);
-    }
-    /* FPGA core (.bit) for the enhancement chip: SA-1/GSU/CX4/OBC1/S-DD1/DSP/SGB.
-       fpga_conf is NULL for plain LoROM/HiROM (those fall back to fpga_base, not
-       gated here); when set it is always a real /sd2snes/fpga_*.bit path. Without
-       it, fpga_pgm() fails silently and the game boots with no/wrong core. */
-    if(romprops.fpga_conf && !file_exists((const char*)romprops.fpga_conf)) {
+  /* FPGA core (.bit) for the enhancement chip: SA-1/GSU/CX4/OBC1/S-DD1/DSP/SGB.
+     fpga_conf is NULL for plain LoROM/HiROM (those fall back to fpga_base, not
+     gated here); when set it is always a real /sd2snes/fpga_*.bit path. Without
+     it, fpga_pgm() fails silently and the game boots with no/wrong core. */
+  if(romprops.fpga_conf && !file_exists((const char*)romprops.fpga_conf)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
+                              path_leaf((const char*)romprops.fpga_conf));
+  }
+  /* DSPx / ST0010 firmware. DSP1 may fall back to dsp1b.bin (see load_stage_bios). */
+  if(romprops.has_dspx && romprops.dsp_fw) {
+    if(!file_exists((const char*)romprops.dsp_fw)
+       && !(romprops.dsp_fw == DSPFW_DSP1 && file_exists((const char*)DSPFW_DSP1B))) {
       return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
-                                basename_of((const char*)romprops.fpga_conf));
+                                path_leaf((const char*)romprops.dsp_fw));
     }
-    /* DSPx / ST0010 firmware. DSP1 may fall back to dsp1b.bin (see below). */
-    if(romprops.has_dspx && romprops.dsp_fw) {
-      if(!file_exists((const char*)romprops.dsp_fw)
-         && !(romprops.dsp_fw == DSPFW_DSP1 && file_exists((const char*)DSPFW_DSP1B))) {
-        return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
-                                  basename_of((const char*)romprops.dsp_fw));
-      }
-    }
-    /* The .st has no reset vector of its own: the BIOS boots and jumps into the slot. */
-    if(romprops.has_sufami && !file_exists((const char*)STBIOS_FW)) {
-      return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "stbios.bin");
-    }
-    /* BS-X BIOS + data page (mapper_id 3 = BS-X Flash cart); both are loaded by
-       the BS-X path below with their result ignored. */
-    if(romprops.mapper_id == 3) {
-      if(!file_exists("/sd2snes/bsxbios.bin")) {
-        return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxbios.bin");
-      }
-      if(!file_exists("/sd2snes/bsxpage.bin")) {
-        return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxpage.bin");
-      }
-    }
-    /* SGB boot ROM (sgbN_boot.bin); the SNES BIOS sgbN_snes.bin was already
-       checked by sgb_update_file above. */
-    if(sgb_romprops.has_sgb && !file_exists(SGBFW)) {
-      return load_abort_missing(flags, MENU_ERR_SUPPLFILE, basename_of(SGBFW));
-    }
-    /* A non-combo file too small to be a real ROM would still ACK the SNES out of
-       game_handshake and then stream nothing, desyncing the handshake. Abort here
-       (clean NACK while the SNES is still parked) instead of half-booting. */
-    if(!(flags & LOADROM_WITH_COMBO) && filesize < 1024) {
-      return load_abort_missing(flags, MENU_ERR_FS, basename_of((const char*)filename));
-    }
-    /* Prerequisites OK -> committed to the load.  The menu SFX teardown itself is
-       deferred further, to just before the FPGA reconfig below -- see there. */
   }
-  if(flags & LOADROM_WAIT_SNES) {
-    /* Arm the pre-boot PPU-clear gate BEFORE releasing the SNES from game_handshake
-       (the $55 below).  ips_pending_index is still the requested patch index here
-       (consumed later, ~line 800), so this fires for every launch path (browser,
-       Recents/Favorites, Autoboot) whenever a patch will be applied AND the option
-       is on.  Rewritten every game load => never stale.  game_handshake reads this
-       byte at boot, before the patch is actually applied, so we gate on "a patch was
-       requested" rather than "patch succeeded" (a failed patch aborts the load). */
-    sram_writebyte((CFG.clear_ppu_on_boot && ips_pending_index > 0) ? 1 : 0,
-                   SRAM_PPU_CLEAR_GATE_ADDR);
-    printf("Setting cmd=0x55...");
-    snes_set_snes_cmd(0x55);
-    printf("OK.\n");
+  /* The .st has no reset vector of its own: the BIOS boots and jumps into the slot. */
+  if(romprops.has_sufami && !file_exists((const char*)STBIOS_FW)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "stbios.bin");
   }
+  /* BS-X BIOS + data page (mapper_id 3 = BS-X Flash cart); both are loaded by
+     the BS-X path in load_stage_bios with their result ignored. */
+  if(romprops.mapper_id == 3) {
+    if(!file_exists("/sd2snes/bsxbios.bin")) {
+      return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxbios.bin");
+    }
+    if(!file_exists("/sd2snes/bsxpage.bin")) {
+      return load_abort_missing(flags, MENU_ERR_SUPPLFILE, "bsxpage.bin");
+    }
+  }
+  /* SGB boot ROM (sgbN_boot.bin); the SNES BIOS sgbN_snes.bin was already
+     checked by sgb_update_file above. */
+  if(sgb_romprops.has_sgb && !file_exists(SGBFW)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, path_leaf(SGBFW));
+  }
+  /* A non-combo file too small to be a real ROM would still ACK the SNES out of
+     game_handshake and then stream nothing, desyncing the handshake. Abort here
+     (clean NACK while the SNES is still parked) instead of half-booting. */
+  if(!(flags & LOADROM_WITH_COMBO) && filesize < 1024) {
+    return load_abort_missing(flags, MENU_ERR_FS, path_leaf((const char*)filename));
+  }
+  /* Prerequisites OK -> committed to the load.  The menu SFX teardown itself is
+     deferred further, to just before the FPGA reconfig below -- see there. */
+  return 1;
+}
+
+/* Swap the FPGA core in for this game.  The SNES is parked in game_handshake and
+   the menu SFX teardown is deliberately deferred to here -- see inside. */
+static void load_reconfigure_fpga(load_ctx_t *c) {
+#if RECORE_PSRAM_KEEP
+  uint32_t base_addr = c->base_addr;   /* only the fingerprint check below reads it */
+#endif
+  uint8_t  flags     = c->flags;
   /* reconfigure FPGA if necessary */
   if(flags & LOADROM_WAIT_SNES) {
     printf("Checking if ok to reconfigure...");
@@ -634,7 +1305,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
        latcha o skip limpo do load NES em vez de deixar o 1o FPGA_WAIT_RDY
        wedgar a MCU.  Ver nes.c (anti-wedge). */
     nes_dbg_post_pgm(fpga_conf);
-    fpga_set_features(fpga_features_preload);
+    fpga_set_features(c->fpga_features_preload);
   }
 #if RECORE_PSRAM_KEEP
   /* verify the patched image survived the reconfig; on mismatch fall back to re-stream+re-patch */
@@ -651,40 +1322,53 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
     }
   }
 #endif
-  /* nesdbg: entre POST_PGM e PRE_STREAM ha' o $77 + o stream do STUB SNES-side
-     pra 0x880000 (caminho comum, esperas de MCU_RDY unbounded) -- este marco
-     desambigua um wedge nessa janela de um wedge no nes_load_prg. */
-  nes_dbg_log("PRE_STUB");
-  if(flags & LOADROM_WAIT_SNES) snes_set_snes_cmd(0x77);
-  set_mcu_addr(base_addr + romprops.load_address);
-#if RECORE_PSRAM_KEEP
-  /* skip the stream on a survived recore reload (patched ROM is already in PSRAM) */
-  if(!(ips_recore_active && ips_recore_skip_restream)) {
-#endif
-  file_open(filename, FA_READ);
-  ff_sd_offload=1;
-  sd_offload_tgt=0;
-  f_lseek(&file_handle, romprops.offset);
-  uint32_t total_bytes_read = 0;
-  for(;;) {
-    ff_sd_offload=1;
-    sd_offload_tgt=0;
-    bytes_read = file_read();
-    if (file_res || !bytes_read) break;
-    if(!(count++ % 512)) {
-      uart_putc('.');
-    }
-    total_bytes_read += bytes_read;
-    // FIXME: can we do this in the general (non-combo) case?
-    // FIXME: what does the condition below do that doubles romsize_bytes until it hits the file limit?  Do some games
-    // misreport size?  Or is this for BSX?
-    if((flags & LOADROM_WITH_COMBO) && (total_bytes_read >= romprops.romsize_bytes)) break;
+}
+uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
+  /* Zero-initialised: a field no phase writes on this path (file_offset outside a
+     combo load) has to read back as 0. */
+  load_ctx_t c = { .filename  = filename,
+                   .base_addr = base_addr,
+                   .flags     = flags,
+                   .is_menu   = (filename == (uint8_t*)MENU_FILENAME) };
+  tick_t ticksstart = getticks();
+
+  /* NB: menu SFX teardown (menu_sfx_shutdown) is deferred all the way down to just
+     before the FPGA reconfig, past the prerequisite check AND past the 0x55 that
+     releases the SNES.  Two reasons: an aborted game load (missing chip BIOS ->
+     NACK -> back to menu) must leave the menu sound intact, and the confirm blip
+     gets to play across the SNES-side iris animation instead of being cut off. */
+
+  if(!load_open(&c)) return 0;
+
+  if(!load_stage_consoles(&c)) return 0;
+
+  if(!load_identify(&c)) return 0;
+
+  c.fpga_features_preload = romprops.fpga_features | FEAT_CMD_UNLOCK | FEAT_2100_LIMIT_NONE;
+  if(c.is_menu) {
+    printf("Setting menu features...");
+    fpga_set_features(c.fpga_features_preload);
+    printf("OK.\n");
   }
-  uart_putc('\n');
-  file_close();
-#if RECORE_PSRAM_KEEP
+  /* Gated at the call site: this is the difference between a menu load and a game
+     load, and between pass 1 and the recore reload. */
+  if(!c.is_menu && (flags & LOADROM_WAIT_SNES) && !load_check_prereqs(&c)) return 0;
+  if(flags & LOADROM_WAIT_SNES) {
+    /* Arm the pre-boot PPU-clear gate BEFORE releasing the SNES from game_handshake
+       (the $55 below).  ips_pending_index is still the requested patch index here
+       (consumed by load_apply_patch), so this fires for every launch path (browser,
+       Recents/Favorites, Autoboot) whenever a patch will be applied AND the option
+       is on.  Rewritten every game load => never stale.  game_handshake reads this
+       byte at boot, before the patch is actually applied, so we gate on "a patch was
+       requested" rather than "patch succeeded" (a failed patch aborts the load). */
+    sram_writebyte((CFG.clear_ppu_on_boot && ips_pending_index > 0) ? 1 : 0,
+                   SRAM_PPU_CLEAR_GATE_ADDR);
+    printf("Setting cmd=0x55...");
+    snes_set_snes_cmd(0x55);
+    printf("OK.\n");
   }
-#endif
+  load_reconfigure_fpga(&c);
+  load_stream(&c);
 
   /* Single-pass recore (optimization): decide a cartridge-type change RIGHT AFTER
      the stream, BEFORE the expensive tail (BSX/features/SaveRAM CRC/init 196KB
@@ -696,7 +1380,8 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
      correctness. */
   /* RECORE_PSRAM_KEEP disables this shortcut so pass 1 patches under the base core
      (the post-patch trigger then does the copier-swap reload). */
-  if(!RECORE_PSRAM_KEEP && ips_pending_index > 0 && !ips_recore_active) {
+#if !RECORE_PSRAM_KEEP
+  if(ips_pending_index > 0 && !ips_recore_active) {
     uint32_t probe_scratch = 0;
     uint32_t probe_tgt = bps_probe_header(SRAM_IPS_LIST_ADDR, ips_pending_index,
                                           SRAM_ROM_ADDR + romprops.load_address,
@@ -711,7 +1396,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
       if(core_new != core_now) {
         printf("IPS: single-pass recore -> reload under correct core (skip wasted tail)\n");
         ips_recore_active = 1;
-        uint32_t r = load_rom(filename, base_addr,
+        uint32_t r = load_rom(c.filename, base_addr,
                               (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
         ips_recore_active = 0;
         /* ...unless this is an export, which owns the reset itself (see the
@@ -722,318 +1407,19 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
       }
     }
   }
-
-  printf("rom header map: %02x; mapper id: %d\n", romprops.header.map, romprops.mapper_id);
-  ticks_total=getticks()-ticksstart;
-  printf("%u ticks total\n", ticks_total);
-  if(romprops.mapper_id==3) {
-    printf("BSX Flash cart image\n");
-    printf("attempting to load BSX BIOS /sd2snes/bsxbios.bin...\n");
-    load_sram_offload((uint8_t*)"/sd2snes/bsxbios.bin", 0x800000, LOADRAM_AUTOSKIP_HEADER);
-    printf("attempting to load BS data file /sd2snes/bsxpage.bin...\n");
-    load_sram_offload((uint8_t*)"/sd2snes/bsxpage.bin", 0x900000, 0);
-    printf("Type: %02x\n", romprops.header.destcode);
-    set_bsx_regs(0xf6, 0x09);
-    uint16_t rombase;
-    if(romprops.header.ramsize & 1) {
-      rombase = romprops.load_address + 0xff00;
-// set_bsx_regs(0x36, 0xc9);
-    } else {
-      rombase = romprops.load_address + 0x7f00;
-// set_bsx_regs(0x34, 0xcb);
-    }
-    sram_writebyte(0x33, rombase+0xda);
-    sram_writebyte(0x00, rombase+0xd4);
-    sram_writebyte(0x00, rombase+0xd5);
-    if(CFG.bsx_use_usertime) {
-      set_fpga_time(srtctime2bcdtime(CFG.bsx_time));
-    } else {
-      set_fpga_time(get_bcdtime());
-    }
-  }
-#ifndef CONFIG_MK2
-  if(romprops.has_sufami) {
-
-    DBG_SUFAMI printf("Sufami Turbo. Loading BIOS %s...\n", STBIOS_FW);
-    load_sram_offload((uint8_t*)STBIOS_FW, SUFAMI_SLOTA_BIOS_ADDR, LOADRAM_AUTOSKIP_HEADER);
-    if(file_res) snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)STBIOS_FW);
-    sufami_stage_slotb_rom();
-  }
 #endif
-  if(romprops.has_dspx) {
-    printf("DSPx game. Loading firmware image %s...\n", romprops.dsp_fw);
-    load_dspx(romprops.dsp_fw, romprops.fpga_features);
-    /* fallback to DSP1B firmware if DSP1.bin is not present */
-    if(file_res && romprops.dsp_fw == DSPFW_DSP1) {
-      load_dspx(DSPFW_DSP1B, romprops.fpga_features);
-    }
-    if(file_res) {
-      snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)romprops.dsp_fw);
-    }
-  }
-  uint32_t rammask;
-  uint32_t rommask;
 
-  while(!romprops.has_combo && romprops.romsize_bytes && filesize > (romprops.romsize_bytes + romprops.offset)) {
-    romprops.romsize_bytes <<= 1;
-  }
-
-  if (romprops.has_sa1 && romprops.header.carttype == 0x36 && romprops.header.ramsize) {
-    // move iram into saveram for special carts with no bwram
-    romprops.header.ramsize = 1;
-    romprops.ramsize_bytes = 0x800;
-    // override any changes to this so we capture full sram
-    romprops.srambase       = 0;
-    romprops.sramsize_bytes = romprops.ramsize_bytes;
-    rammask = 1;
-  } else if(romprops.has_sufami) {
-    /* MAPPED size, deliberately NOT the saveable size: the ST BIOS uses Slot A SaveRAM
-       as scratch and dispatches into it (below $8000), so the window must exist even
-       for a cart with no battery. sramsize_bytes stays 0 there, and that is the field
-       the autosave and the .srm writer key off. */
-    rammask = (romprops.ramsize_bytes > SUFAMI_SLOTA_SCRATCH_SIZE
-               ? romprops.ramsize_bytes : SUFAMI_SLOTA_SCRATCH_SIZE) - 1;
-  } else if(romprops.header.ramsize == 0) {
-    rammask = 0;
-  } else {
-    rammask = romprops.ramsize_bytes - 1;
-  }
-  rommask = romprops.romsize_bytes - 1;
-  
-  uint8_t ramslot = 0;
-  if (romprops.has_combo) {
-    ramslot = sram_readbyte((romprops.mapper_id == 0 || romprops.mapper_id == 2) ? 0xFFDA : 0x7FDA);
-  }
-  
-  printf("ramsize=%x ramslot=%hx rammask=%lx\nromsize=%x rommask=%lx\n", romprops.header.ramsize, ramslot, rammask, romprops.header.romsize, rommask);
-
-  /* SGB setup romprops and load SRAM */
-  sgb_load_sram(sgb_filename);
-
-  /* SMS: stage the .sms ROM into PSRAM (FPGA Z80 fetches it) before the SNES boots */
-  sms_load_rom();
-
-  /* Atari 2600: stage the .a26 image into PSRAM before the SNES boots (the core copies
-     it into BRAM at reset and never reads PSRAM again).  No-op without a .a26. */
-  a26_load_rom();
-
-  /* SGB update local file properties */
-  if (sgb_romprops.has_sgb) {
-    /* reset the filename to match the GB file */
-    filename = sgb_filename;
-    filesize = sgb_filesize;
-
-    /* update SaveRAM properties */
-    romprops.ramsize_bytes = (CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? (128 * 1024) : sgb_romprops.ramsize_bytes;
-    romprops.srambase = sgb_romprops.srambase;
-    romprops.sramsize_bytes = (CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? (128 * 1024) : sgb_romprops.sramsize_bytes;
-
-    rammask = sgb_romprops.ramsize_bytes ? (sgb_romprops.ramsize_bytes - 1) : 0;
-    rommask = sgb_romprops.romsize_bytes ? (sgb_romprops.romsize_bytes - 1) : 0;
-  }
-
-  /* NES: stream do PRG (0x000000) + CHR (0x200000) em formato NES nativo,
-     zera CIRAM/WRAM/CART-RAM e grava o breadcrumb "NESL" em 0x400000
-     (gate da Fase 0; ver nes.c).  No-op sem .nes. */
-  nes_load_prg(nes_filename);
-
-  /* NES update local file properties (espelha o bloco SGB acima) */
-  if (nes_romprops.has_nes) {
-    /* reset the filename to match the NES file (recentes/saves usam o .nes) */
-    filename = nes_filename;
-
-    /* sem SaveRAM na Fase 0 (PRG-RAM com bateria fica pra fase futura);
-       ROM_MASK nao e' consumido pelo nes_wrap (o mapper_flags carrega as
-       classes de tamanho), setado por higiene pro tamanho do PRG. */
-    romprops.ramsize_bytes  = 0;
-    romprops.srambase       = 0;
-    romprops.sramsize_bytes = 0;
-    rammask = 0;
-    rommask = nes_romprops.prgsize_bytes ? (nes_romprops.prgsize_bytes - 1) : 0;
-  }
-
-  /* Atari 2600 update local file properties (mirrors the NES block above) */
-  if (a26_romprops.has_a26) {
-    /* point saves/cheats/game-info assets back at the .a26 instead of the player */
-    filename = a26_filename;
-
-    /* no SaveRAM: no scheme in the v0 set is battery backed (the Superchip RAM lives
-       in the core).  rommask is deliberately NOT touched: unlike the NES stub (which
-       is relocated to the 512KB RAM), the player IS the booted LoROM image in PSRAM,
-       so the mask smc_id computed for it has to stand -- masking it down to the size
-       of the .a26 would cut the player's own ROM. */
-    romprops.ramsize_bytes  = 0;
-    romprops.srambase       = 0;
-    romprops.sramsize_bytes = 0;
-    rammask = 0;
-  }
-
-  /* SGB load GB RTC */
-  sgb_gtc_load(sgb_filename);
-
-  printf("ramsize=%x rammask=%lx\nromsize=%x rommask=%lx\n", romprops.header.ramsize, rammask, romprops.header.romsize, rommask);
-  set_saveram_mask(rammask);
-  // don't set these for special chips as it may break from not supporting the feature
-  if (  !romprops.fpga_conf
-      || romprops.fpga_conf == FPGA_BASE
-      || romprops.fpga_conf == FPGA_DSP) {
-      set_saveram_base(ramslot);
-  }
-  set_rom_mask(rommask);
-  /* Sent on every load (0/0 when not a .st) so a previous minicart cannot leave a live
-     Slot B window behind; other cores drop the bytes. */
-  set_rom_mask_b(romprops.has_sufami ? sufami_rom_mask_b : 0);
-  set_saveram_mask_b((romprops.has_sufami && sufami_slotb_ramsize)
-                     ? (sufami_slotb_ramsize - 1) : 0);
-  if(romprops.has_spc7110) {
-    /* SPC7110: the ROM image is the program ROM followed by the data ROM.
-       Hand the core the DROM window over PSRAM as base + power-of-two mask
-       (the core masks the linear offset first, then adds the base).  The
-       power-up defaults are neutral, so this MUST run before the SNES is
-       released.
-       Image-shape premise, deliberate: a headerless .sfc does not carry the
-       PROM size (emulators take it from an external manifest), so the PROM is
-       assumed 1 MB and the DROM a power of two -- true for every released
-       SPC7110 cart (Tengai Makyou Zero 1+4 MB, Momotarou Dentetsu Happy
-       1+2 MB, Super Power League 4 1+1 MB).  A hypothetical 2 MB-PROM cart
-       (the r4834 bit2 mode) or a non-power-of-two data ROM is out of scope
-       and would map incorrectly. */
-    uint32_t drombase = 0x100000;
-    uint32_t dromspan = (romprops.romsize_bytes > drombase)
-                      ? (romprops.romsize_bytes - drombase) : drombase;
-    uint32_t dromsize = 1;
-    while(dromsize < dromspan) dromsize <<= 1;
-    set_drom_base(drombase);
-    set_drom_mask(dromsize - 1);
-    /* The RTC-4513 powers up with an invalid BCD calendar (month/day 00) and
-       games retry forever on it, so the clock is always programmed before boot.
-       With a .rtc sidecar next to the save this restores what the cartridge
-       battery would have kept - including a clock the game stopped - and
-       without one it falls back to the console's own time, exactly as before. */
-#ifndef CONFIG_MK2
-    spc7110_rtc_load(filename);
-#else
-    /* mk2 carries no virtual battery (MCU flash budget); wall clock only */
-    set_fpga_time(get_bcdtime());
-#endif
-  }
+  load_stage_bios(ticksstart);
+  load_setup_masks(&c);
   readled(0);
 
   printf("gsu=%x sa1=%x srambase=%lx sramsize=%lx\n", romprops.has_gsu, romprops.has_sa1, romprops.srambase, romprops.sramsize_bytes);
-  if(flags & LOADROM_WITH_SRAM) {
-    if(romprops.has_sufami) {
-      /* Slot A is cleared over the WHOLE mapped window, scratch included, or the ST
-         BIOS inherits the previous game's leftovers and hangs. */
-      sram_memset(SRAM_SAVE_ADDR, rammask + 1, 0xFF);
-      if(romprops.sramsize_bytes) {
-        migrate_and_load_srm(filename, SRAM_SAVE_ADDR);
-        if(file_res == FR_NO_FILE) file_res = 0;
-      }
-#ifndef CONFIG_MK2
-      if(sufami_slotb_ramsize) {
-        char slotb_srm[256];
-        sram_memset(SUFAMI_SLOTB_SAVE_ADDR, sufami_slotb_ramsize, 0xFF);
-        /* Named from the Slot B CART, not the loaded game: not migrate_and_load_srm,
-           whose derivation is tied to Slot A (patch source + battery-slot). */
-        if(path_asset(slotb_srm, sizeof(slotb_srm), SAVE_BASEDIR,
-                      sufami_slotb_path, ".srm") >= 0) {
-          load_sram((uint8_t*)slotb_srm, SUFAMI_SLOTB_SAVE_ADDR);
-          if(file_res == FR_NO_FILE) file_res = 0;
-        }
-      }
-#endif
-#ifndef CONFIG_MK2
-      sufami_slotb_crc_seed();
-#endif
-      /* Seed the Slot A scan too: snes.c skips it entirely when sramsize_bytes is 0. */
-      saveram_crc_old = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase,
-                                      romprops.sramsize_bytes, 0);
-      saveram_crc = 0;
-      saveram_offset = 0;
-    } else if(romprops.ramsize_bytes) {
-      // powerslide relies on the init value to be 00.
-      sram_memset(SRAM_SAVE_ADDR, romprops.ramsize_bytes, romprops.has_gsu ? 0x00 : 0xFF);
-      if (romprops.sramsize_bytes) migrate_and_load_srm(filename, SRAM_SAVE_ADDR);
-      /* file not found error is ok (SRM file might not exist yet) */
-      if(file_res == FR_NO_FILE) file_res = 0;
-#ifdef CONFIG_MK2
-      /* SPC7110 on mk2 has no virtual battery, so the factory check program's
-         RTC BACKUP test can never pass here.  Plant the retail signature that
-         the check program itself writes on success ("SPC7110 CHECK OK", last
-         16 bytes of SRAM) whenever it is absent, so a fresh cart boots retail
-         instead of looping the factory ritual.  Only the RTC cart (carttype
-         0xf9, Tengai Makyou Zero) carries the check program -- on the plain
-         SPC7110 carts those 16 bytes are ordinary save data and must not be
-         touched.  A save that already carries the signature is untouched;
-         the seed lands in the initial CRC, so it reaches the card only
-         together with a real save. */
-      if(romprops.has_spc7110_rtc && romprops.sramsize_bytes >= 16) {
-        static const uint8_t spc7110_sig[16] = { 'S','P','C','7','1','1','0',' ',
-                                                 'C','H','E','C','K',' ','O','K' };
-        uint8_t sigcur[16];
-        uint32_t sigaddr = SRAM_SAVE_ADDR + romprops.sramsize_bytes - 16;
-        sram_readblock(sigcur, sigaddr, 16);
-        if(memcmp(sigcur, spc7110_sig, 16)) {
-          sram_writeblock((void*)spc7110_sig, sigaddr, 16);
-        }
-      }
-#endif
-      saveram_crc_old = calc_sram_crc(SRAM_SAVE_ADDR + romprops.srambase, romprops.sramsize_bytes, 0);
-      saveram_crc = 0;
-      saveram_offset = 0;
-    } else {
-      printf("No SRAM\n");
-    }
-  }
+  if(flags & LOADROM_WITH_SRAM) load_saveram(&c);
 
-  /* BS Memory Pack slot, auto-detected (no title list): needs a <rom>.mpk present.
-     Two families:
-       - base mapper (LoROM, or HiROM <=2MB; above that its own ROM reaches $E0+, where
-         the HiROM pack maps): confirm with the pack-probe ROM scan (LDA $bb:FF00/$bb:FF02).
-         The window follows the mapper (LoROM $C0-$DF / HiROM $E0-$EF).  FEAT_BSLOROM here
-         for a >2MB LoROM cart with a pack; standalone (no pack) boot of Derby/SN is in smc.c.
-       - SA-1 slotted (e.g. SD Gundam G Next): the game validates the pack on the S-CPU and
-         reads it through SuperMMC block 4 (the SA-1 core redirects MMC block>=4 to the pack
-         at PSRAM 0x900000).  It writes no flash registers, so there is no pack-probe
-         signature to scan -- gate on has_sa1 + a present .mpk (an explicit user action). */
-  uint8_t bs_slot = 0;
-  if((flags & LOADROM_WITH_SRAM) && bs_pack_exists(filename)) {
-    if(!romprops.fpga_conf
-       && (romprops.mapper_id == 1
-           || (romprops.mapper_id == 0 && romprops.romsize_bytes <= 0x200000))
-       && rom_scan_bs_vendor(romprops.romsize_bytes)) {
-      if(romprops.mapper_id == 1 && romprops.romsize_bytes > 0x200000) {
-        romprops.fpga_features |= FEAT_BSLOROM;
-      }
-      bs_slot = 1;
-    } else if(romprops.has_sa1) {
-      bs_slot = 1;
-    }
-  }
-  if(bs_slot && load_bs_pack(filename)) {
-    printf("BS Memory Pack present\n");
-    romprops.fpga_features |= FEAT_BSSLOT;
-    /* seed the autosave baseline + reset scan state per game (globals, like
-       saveram_offset) so an unchanged pack is not re-written */
-    bs_pack_crc_old = calc_sram_crc(BS_PACK_ADDR, BS_PACK_SIZE, 0);
-    bs_pack_crc = bs_pack_offset = bs_pack_diff = bs_pack_same = 0;
-    bs_pack_didnotsave = bs_pack_save_failed = 0;
-    /* sync the erase seq to the FPGA's current value so a stale seq from a previous
-       game doesn't trigger a spurious erase on the first poll */
-    bs_pack_erase_seq = (fpga_status() >> 11) & 0x3;
-    /* RTC is the Satellaview base-unit clock (base core only); the SA-1 core has no
-       BS-X base regs, so don't poke the FPGA time there. */
-    if(!romprops.has_sa1) {
-      if(CFG.bsx_use_usertime) {
-        set_fpga_time(srtctime2bcdtime(CFG.bsx_time));
-      } else {
-        set_fpga_time(get_bcdtime());
-      }
-    }
-  }
+  load_bs_pack_slot(&c);
 
   printf("check MSU...");
-  if(msu1_check(filename)) {
+  if(msu1_check(c.filename)) {
     romprops.fpga_features |= FEAT_MSU1;
     romprops.has_msu1 = 1;
   } else {
@@ -1041,50 +1427,7 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   }
   printf("done\n");
 
-  printf("r213fen=%d is_u16=%d filename=%s\n", cfg_is_r213f_override_enabled(), STS.is_u16, filename);
-  if(cfg_is_r213f_override_enabled() && !is_menu && !STS.is_u16) {
-    romprops.fpga_features |= FEAT_213F; /* e.g. for general consoles */
-  }
-  fpga_set_213f(romprops.region);
-//  fpga_set_features(romprops.fpga_features);
-  /* NES: o chipfeat (0xef) E' o mapper_flags[15:0] do core (nes_feat_out em
-     mcu_cmd.v -> mapper_flags_in do nes_wrap).  INVARIANTE (false-path no
-     main.sdc do sd2snes_nes): esta escrita acontece ANTES do assert_reset/
-     deassert_reset abaixo -- o core NES so' sai do reset (SNES_reset_strobe no
-     retorno do clock do SNES) com os flags ja' estaveis, e o firmware NUNCA os
-     reprograma com o core rodando. */
-  /* Atari: the chipfeat (0xef) carries scheme/superchip/size_class/video width
-     (a26_feat_out; ATARI-CORE-CONTRACT sec. 7).  Same invariant as the NES above --
-     written BEFORE the reset below, never with the core already running. */
-  fpga_set_chipfeat(a26_romprops.has_a26 ? a26_romprops.feat16
-                    : nes_romprops.has_nes ? nes_romprops.mapper_flags16
-                    : sgb_romprops.has_sgb ? sgb_romprops.fpga_sgbfeat
-                                           : romprops.fpga_dspfeat);
-  nes_dbg_log("POST_CHIPFEAT");        /* nesdbg: no-op fora de um load .nes */
-  fpga_set_dac_boost(CFG.msu_volume_boost);
-  dac_pause();
-  dac_reset(0);
-/* fully enable pair mode again instead of just setting the video/d4 mode
-   in case previous pair mode entry was skipped / pair mode undetected so far */
-  if(get_cic_state() == CIC_PAIR) {
-    if(!is_menu) {
-      if(CFG.vidmode_game == VIDMODE_AUTO) {
-        cic_pair(romprops.region, romprops.region);
-      } else {
-        cic_pair(CFG.vidmode_game, romprops.region);
-      }
-    }
-  }
-
-  if(cfg_is_onechip_transient_fixes() && !is_menu) {
-    romprops.fpga_features |= FEAT_2100;
-  }
-  romprops.fpga_features |= FEAT_2100_LIMIT(cfg_get_brightness_limit());
-
-  /* enable Satellaview Base emulation only if no physical Satellaview Base unit is present */
-  if(!STS.has_satellaview) {
-    romprops.fpga_features |= FEAT_SATELLABASE;
-  }
+  load_set_features(&c);
 
   if(flags & LOADROM_WAIT_SNES) {
     while(snes_get_mcu_cmd() != SNES_CMD_RESET) cli_entrycheck();
@@ -1119,237 +1462,41 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
 //printf("%04lx\n", romprops.header_address + ((void*)&romprops.header.vect_irq16 - (void*)&romprops.header));
   if(flags & (LOADROM_WITH_RESET|LOADROM_WAIT_SNES)) {
     assert_reset();
-    init(filename);
+    init(c.filename);
     /* Apply IPS patch to the ROM in SRAM while the SNES is in hardware reset.
        ips_pending_index is set by the CMD_LOADROM handler in main.c before
        calling load_rom().  We consume+clear it here. */
     uint8_t saved_ips_idx = ips_pending_index; /* for recore reload */
     uint8_t patch_ok = 0;                      /* patch_apply succeeded */
-    if(ips_pending_index > 0) {
-      /* On a recore reload, fpga_pgm() above wiped all of SDRAM, including the
-         patch list that ips_find_patches() staged once before LOADROM.  The
-         patch's full path survives in MCU RAM as current_ips_srm_source, so
-         re-stage it into SDRAM at the same slot patch_apply() reads, otherwise
-         the re-patch would open an empty path and silently leave the ROM
-         unpatched.  The scan scratch behind patch_basename_at() is gone for good
-         though, so drop the scan: a CMD_PATCH_META_SAVE arriving afterwards must
-         not pair this ROM's flags with another ROM's basenames. */
-      if(ips_recore_active && current_ips_srm_source[0]) {
-        ips_scan_count = 0;
-        sram_writeblock(current_ips_srm_source,
-                        SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE
-                          + (uint32_t)(ips_pending_index - 1) * IPS_PATH_LEN,
-                        (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
-        /* The header-mode override sits in the same wiped region; restage it too
-           or the re-patch silently falls back to auto-detect. */
-        sram_writebyte(current_ips_flags,
-                       SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE
-                         + (uint32_t)(ips_pending_index - 1));
-      }
+    if(ips_pending_index > 0) patch_ok = load_apply_patch(&c);
 
-      /* (The chip-converting-BPS recore decision was MOVED earlier -- right after
-         the stream, before the expensive tail -- so the wasted pass-1 tail is
-         skipped; see "Single-pass recore" above.  The post-patch smc re-detect
-         below stays as the safety net for a probe miss.) */
-
-      /* Dispatch to ips_apply or bps_apply based on the patch file extension.
-         For IPS: pass the copier-header size so offset correction works when
-         the IPS was authored for a headered ROM.  For combo ROMs
-         romprops.offset carries a slot shift in the upper bits; mask those
-         off to get just the header size (0 or 0x200).
-         BPS encodes exact sizes so no header correction is needed there. */
-      uint32_t ips_header_size = romprops.offset & 0xFFFFF;
-      /* IPS-only auto-detection (folded into ips_apply's pass-1, so the IPS is
-         scanned only once): an IPS authored for a headered ROM but applied to a
-         headerless base (offset 0) lands 512 bytes too high.  ips_apply validates
-         the SNES internal header of each hypothesis and shifts by 512 only when
-         the headered image coheres and the literal one does not (conservative).
-         romprops.header_address (0x7FB0 LoROM / 0xFFB0 HiROM) locates the header;
-         BPS ignores it.  The user can pin the convention per patch on the patch
-         screen; that override is staged in the patch's flags byte and read by
-         ips_apply itself.  ips_header_adj_used reports which rule won ->
-         breadcrumb $FF072E below (D0 literal / D1 auto / D2 forced headered /
-         D3 forced headerless). */
-      ips_header_adj_used = 0;
-      /* Approach B: drive the FPGA copier from the MCU (the SNES is held in reset
-         here) for a BPS when EnableBpsCopier is on AND the currently-loaded core
-         carries the copier (probe).  IPS, the gate off, or a core without the copier
-         fall through to the byte-by-byte apply.  A copier op failure returns 0 and is
-         treated as a patch error (the probe makes a runtime failure unlikely). */
-      uint32_t ips_end;
-      uint8_t  copier_avail = CFG.enable_bps_copier && patch_copier_available();
-      if(copier_avail) {
-        extern uint32_t patch_targetread_bytes;
-        printf("BPS copier path (MCU-driven, SNES in reset)\n");
-        tick_t t_copier = getticks();
-        ips_end = patch_apply_copier(SRAM_IPS_LIST_ADDR, ips_pending_index,
-                                     SRAM_ROM_ADDR + romprops.load_address,
-                                     romprops.romsize_bytes, ips_header_size,
-                                     romprops.header_address);
-        uint32_t patch_ms = (uint32_t)(getticks() - t_copier) * 10u; /* 1 tick = 10ms */
-        /* DEBUG ($FF0724 marker, $FF0721 op count): B1 = copier applied OK,
-           B2 = copier failed mid-apply (timeout). */
-        sram_writebyte(ips_end ? 0xB1 : 0xB2, 0xFF0724L);
-        uint32_t n = patch_copier_count();
-        sram_writebyte((uint8_t)(n),       0xFF0721L);
-        sram_writebyte((uint8_t)(n >> 8),  0xFF0722L);
-        sram_writebyte((uint8_t)(n >> 16), 0xFF0723L);
-        /* DEBUG breakdown: $FF0728 = patch time ms (16b), $FF072A = TargetRead
-           byte-by-byte volume (24b) -> copier-op overhead vs literal volume. */
-        sram_writebyte((uint8_t)(patch_ms),       0xFF0728L);
-        sram_writebyte((uint8_t)(patch_ms >> 8),  0xFF0729L);
-        sram_writebyte((uint8_t)(patch_targetread_bytes),       0xFF072AL);
-        sram_writebyte((uint8_t)(patch_targetread_bytes >> 8),  0xFF072BL);
-        sram_writebyte((uint8_t)(patch_targetread_bytes >> 16), 0xFF072CL);
-      } else {
-        ips_end = patch_apply(SRAM_IPS_LIST_ADDR, ips_pending_index,
-                              SRAM_ROM_ADDR + romprops.load_address,
-                              romprops.romsize_bytes, ips_header_size,
-                              romprops.header_address);
-        /* B3 = gate on but copier not in this core (probe failed); B0 = gate off. */
-        sram_writebyte(CFG.enable_bps_copier ? 0xB3 : 0xB0, 0xFF0724L);
-      }
-      ips_pending_index = 0;
-      /* IPS header-convention breadcrumb (set by ips_apply; D0 for BPS):
-         D0 literal, D1 auto-detected +512, D2 user forced headered,
-         D3 user forced headerless. */
-      sram_writebyte(0xD0 + ips_header_adj_used, 0xFF072EL);
-      patch_ok = (ips_end > 0); /* 0 => patch error / FPGA stall */
-      patch_last_ok = patch_ok;
-      /* Exact byte length of the patched image, for CMD_EXPORT_PATCHED_ROM.
-         Deliberately NOT romprops.romsize_bytes: the loop far above ("while
-         filesize > romsize_bytes + offset") has already rounded that UP to a
-         power of two, because it drives the FPGA ROM mask.  A 3 MB ROM therefore
-         reports 4 MB, and exporting that would append a megabyte of zero padding
-         -- producing a file whose CRC matches nothing Floating IPS or
-         RomPatcher.js generates, which is the whole point of the export.
-         The true headerless payload is filesize minus the copier header, the same
-         expression sram_crc_romsize uses below.  A BPS states its target size
-         outright; an IPS only reports the highest offset it wrote, which for a
-         small hack is far short of the ROM, so there the original length is the
-         floor.  Combo ROMs keep the old value: their offset carries a slot shift
-         and filesize spans every slot, so the subtraction would not mean this.
-         DEPENDS ON THE EXPORT REFUSING .gb: the SGB path reassigns filesize to the
-         size of the .gb while romprops still describes the SGB BIOS, so the
-         subtraction would not mean this there.  patch_export_command gates on
-         path_is_gb(), the same predicate that gates sgb_id() -- keep them together. */
-      uint32_t rom_bytes = romprops.romsize_bytes;
-      if(!romprops.has_combo && filesize > ips_header_size)
-        rom_bytes = filesize - ips_header_size;
-      if((current_ips_flags & PATCH_FLAG_TYPE_MASK) == PATCH_TYPE_BPS)
-        patch_export_size = ips_end;
-      else
-        patch_export_size = (ips_end > rom_bytes) ? ips_end : rom_bytes;
-      /* If the IPS patch wrote past the original ROM boundary (ROM expansion
-         hack), expand the FPGA ROM mask so those new banks are accessible.
-         romprops.romsize_bytes is always a power of 2, so a simple left-
-         shift loop finds the next fitting power of 2. */
-      if(ips_end > romprops.romsize_bytes) {
-        /* IPS/BPS patches authored for a headered (512-byte copier prefix)
-           ROM image sometimes have max_end that overshoots a clean power-of-2
-           ROM boundary by exactly 512 bytes.  Those extra bytes are the
-           copier header padding — not real ROM data — so they must not cause
-           the mask to double.  Snap ips_end back to the clean boundary when
-           the overshoot is ≤ 512 bytes. */
-        if (ips_end > 512) {
-          /* Largest power-of-2 that is ≤ ips_end */
-          uint32_t p2 = ips_end;
-          p2 |= p2 >> 1; p2 |= p2 >> 2; p2 |= p2 >> 4;
-          p2 |= p2 >> 8; p2 |= p2 >> 16;
-          p2 = (p2 + 1) >> 1;
-          if (p2 < ips_end && ips_end - p2 <= 512) {
-            printf("IPS/BPS: header padding trimmed 0x%lx -> 0x%lx\n",
-                   (unsigned long)ips_end, (unsigned long)p2);
-            ips_end = p2;
-          }
-        }
-        uint32_t new_size = romprops.romsize_bytes;
-        while(new_size < ips_end) new_size <<= 1;
-        /* For LoROM (mapper_id 1) the FPGA address formula uses ~A23 to
-           overlay the two SNES bank halves onto the same SRAM window.
-           This only works correctly when the ROM mask has bit 22 clear
-           (i.e. mask <= 0x3FFFFF, ROM <= 4 MB).  LoROM's addressing limit
-           is 4 MB regardless of IPS expansion, so if the loop doubled past
-           4 MB (typically due to a single stray IPS byte sitting just past
-           the 4 MB boundary), cap new_size back to 4 MB. */
-        if(romprops.mapper_id == 1 && new_size > 0x400000)
-          new_size = 0x400000;
-        printf("IPS ROM expansion: %lx -> %lx (mask %lx)\n",
-               romprops.romsize_bytes, new_size, new_size - 1);
-        romprops.romsize_bytes = new_size;
-        set_rom_mask(new_size - 1);
-      }
-    }
-
-    /* The FPGA core, mapper and masks were all selected from the PRE-patch
-       header (smc_id ran on the unpatched file before fpga_pgm).  If the patch
-       changed the cartridge type (e.g. an SA-1 / Super FX conversion hack), the
-       wrong core is currently loaded and the game would boot broken.
-       Re-derive the cartridge from the now-patched image in SDRAM; if it needs a
-       different core, reload+repatch once under the correct core.  Reconfiguring
-       the FPGA wipes SDRAM, so a full reload (re-stream + re-patch) is required
-       rather than a bare fpga_pgm.  Guarded so the normal path (no patch, or a
-       patch that keeps the same core) is completely unaffected. */
-    if(saved_ips_idx && patch_ok && !ips_recore_active) {
-      smc_id_sdram(&ips_recore_props, SRAM_ROM_ADDR + romprops.load_address,
-                   romprops.romsize_bytes);
-      const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
-      const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
-                                                           : FPGA_BASE;
-      if(core_new != core_now) {
-        printf("IPS: patch changed cartridge type -> reloading under correct core\n");
-        ips_recore_active = 1;
+    /* Did the patch change the cartridge type?  See load_patch_needs_recore. */
+    if(saved_ips_idx && patch_ok && !ips_recore_active
+       && load_patch_needs_recore(&c, saved_ips_idx)) {
+      /* Keep the SNES held in hardware reset across the reload (do NOT
+         deassert here): the SNES handshake already completed on this pass, so
+         we drop LOADROM_WAIT_SNES and let fpga_pgm reconfigure the FPGA while
+         the SNES is safely in reset.  The recursive call ends with its own
+         deassert_reset(), releasing the SNES into the correctly-cored game.
+         NOTE: on the recursive pass the global (un-timeout'd) sram_* writes to
+         SaveRAM/BWRAM (0xE00000) run under the chip core; they complete only
+         because a fresh fpga_pgm powers up SNES_DEADr=1 and the SNES stays in
+         reset the whole time, so the chip-core RAM arbiter grants the MCU
+         every cycle.  Do not deassert before the reload or those would hang. */
+      uint32_t r = load_rom(c.filename, base_addr,
+                            (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
+      ips_recore_active = 0;
 #if RECORE_PSRAM_KEEP
-        /* copier-swap: patch already applied under base -> pass 2 skips stream+patch
-           (leave ips_pending_index at 0); capture size/fingerprint for the reload. */
-        ips_recore_skip_restream = 1;
-        ips_recore_romsize = romprops.romsize_bytes;
-        ips_recore_saved_idx = saved_ips_idx;
-        ips_recore_fingerprint = recore_rom_fingerprint(base_addr + romprops.load_address,
-                                                        romprops.romsize_bytes);
-#else
-        ips_pending_index = saved_ips_idx; /* re-apply the same patch on reload */
+      ips_recore_skip_restream = 0;
 #endif
-        /* Keep the SNES held in hardware reset across the reload (do NOT
-           deassert here): the SNES handshake already completed on this pass, so
-           we drop LOADROM_WAIT_SNES and let fpga_pgm reconfigure the FPGA while
-           the SNES is safely in reset.  The recursive call ends with its own
-           deassert_reset(), releasing the SNES into the correctly-cored game.
-           NOTE: on the recursive pass the global (un-timeout'd) sram_* writes to
-           SaveRAM/BWRAM (0xE00000) run under the chip core; they complete only
-           because a fresh fpga_pgm powers up SNES_DEADr=1 and the SNES stays in
-           reset the whole time, so the chip-core RAM arbiter grants the MCU
-           every cycle.  Do not deassert before the reload or those would hang. */
-        uint32_t r = load_rom(filename, base_addr,
-                              (flags & ~LOADROM_WAIT_SNES) | LOADROM_WITH_RESET);
-        ips_recore_active = 0;
-#if RECORE_PSRAM_KEEP
-        ips_recore_skip_restream = 0;
-#endif
-        /* If the reload aborted early (before its own deassert_reset), the SNES
-           is still held in reset from this pass — release it so the console is
-           never left frozen with the MCU alive.  EXCEPT during an export: there
-           the caller keeps the SNES in reset on purpose and cold-boots the menu
-           right after, so releasing it would run the half-staged PSRAM image over
-           the teardown (see rom_export_active at the tail of load_rom). */
-        if(!r && !rom_export_active) deassert_reset();
-        return r;
-      }
-      /* The patch may change only the MAPPER without changing the FPGA core —
-         most commonly a HiROM -> ExHiROM promotion when an expansion grows the
-         ROM past 4 MB (e.g. Bahamut Lagoon English: 3 MB HiROM -> 8 MB ExHiROM,
-         Tales of Phantasia-style).  set_mapper() ran before the patch with the
-         PRE-patch mapper, and the core-change branch above only fires on a core
-         swap, so a same-core mapper change would otherwise leave an 8 MB ExHiROM
-         image addressed as 4 MB HiROM -> the SNES reads garbage and black-
-         screens.  The core is already correct and the ROM mask was expanded
-         above, so just re-program the FPGA mapper register here (no reload). */
-      if(ips_recore_props.mapper_id != romprops.mapper_id) {
-        printf("IPS: patch changed mapper %d -> %d (same core) -> reprogramming FPGA mapper\n",
-               romprops.mapper_id, ips_recore_props.mapper_id);
-        romprops.mapper_id = ips_recore_props.mapper_id;
-        set_mapper(romprops.mapper_id);
-      }
+      /* If the reload aborted early (before its own deassert_reset), the SNES
+         is still held in reset from this pass — release it so the console is
+         never left frozen with the MCU alive.  EXCEPT during an export: there
+         the caller keeps the SNES in reset on purpose and cold-boots the menu
+         right after, so releasing it would run the half-staged PSRAM image over
+         the teardown (see rom_export_active at the tail of load_rom). */
+      if(!r && !rom_export_active) deassert_reset();
+      return r;
     }
     /* CMD_EXPORT_PATCHED_ROM wants the patched image sitting still in PSRAM so it
        can be streamed to the card; letting the SNES run would have it executing a
@@ -1359,10 +1506,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   // loading a new rom implies the previous crc is no longer valid
   sram_crc_valid = romprops.has_combo ? 1 : 0;
   sram_crc_init = 1;
-  sram_crc_romsize = filesize - romprops.offset;
+  sram_crc_romsize = c.filesize - romprops.offset;
 
   nes_dbg_log("DONE");                 /* nesdbg: no-op fora de um load .nes */
-  return (uint32_t)filesize;
+  return (uint32_t)c.filesize;
 }
 
 void assert_reset() {
@@ -1451,7 +1598,7 @@ uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header
     FPGA_TX_BYTE(0x98);
     for(j=0; j<bytes_read; j++) {
       FPGA_TX_BYTE(file_buf[j]);
-      FPGA_WAIT_RDY();
+      FPGA_WAIT_RDY_INLINE();
     }
     FPGA_DESELECT();
   }
@@ -1467,7 +1614,7 @@ uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header
   for (j = 0; j < 256; j++) {
     data = file_getc();
     FPGA_TX_BYTE(data);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
   }
   FPGA_DESELECT();
 
@@ -1482,7 +1629,7 @@ uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header
   for (j = 0; j < 128; j++) {
     data = file_getc();
     FPGA_TX_BYTE(data);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
   }
   FPGA_DESELECT();
   file_close(); /* Done ! */
@@ -1587,7 +1734,7 @@ uint32_t load_sram(uint8_t* filename, uint32_t base_addr) {
     FPGA_TX_BYTE(0x98);
     for(int j=0; j<bytes_read; j++) {
       FPGA_TX_BYTE(file_buf[j]);
-      FPGA_WAIT_RDY();
+      FPGA_WAIT_RDY_INLINE();
     }
     FPGA_DESELECT();
   }
@@ -1608,7 +1755,7 @@ uint32_t load_sram_rle(uint8_t* filename, uint32_t base_addr) {
     data = rle_file_getc();
     if (file_res || file_status) break;
     FPGA_TX_BYTE(data);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
   }
   FPGA_DESELECT();
   file_close();
@@ -1627,7 +1774,7 @@ uint32_t load_bootrle(uint32_t base_addr) {
     data = rle_mem_getc();
     if(rle_state) break;
     FPGA_TX_BYTE(data);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     filesize++;
   }
   FPGA_DESELECT();
@@ -1730,7 +1877,7 @@ static uint8_t rom_scan_bs_vendor(uint32_t size) {
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_READMEM | FPGA_MEM_AUTOINC);
   for(uint32_t i=0; i<size; i++) {
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     w0=w1; w1=w2; w2=w3; w3=FPGA_RX_BYTE();
     if(w0==0xAF && w2==0xFF && w3>=0xC0) {
       if(w1==0x00) { pend=w3; cd=24; }
@@ -1870,7 +2017,7 @@ int save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
   while(remain) {
     copy = (remain > 512) ? 512 : remain;
     for(int j=0; j < copy; j++) {
-      FPGA_WAIT_RDY();
+      FPGA_WAIT_RDY_INLINE();
       file_buf[j] = FPGA_RX_BYTE();
       count++;
     }
@@ -1900,7 +2047,7 @@ uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc) {
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_READMEM | FPGA_MEM_AUTOINC);
   for(count=0; count<size; count++) {
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
     data = FPGA_RX_BYTE();
     if(get_snes_reset()) {
       crc_valid = 0;
@@ -1914,19 +2061,25 @@ uint32_t calc_sram_crc(uint32_t base_addr, uint32_t size, uint32_t crc) {
   return crc;
 }
 
-/* CRC the 1MB pack -- like calc_sram_crc but no get_snes_reset bail (prepare_reset
-   holds the SNES in reset, so the read is stable) */
-uint32_t calc_pack_crc_inreset(void) {
+/* CRC a PSRAM range.  Like calc_sram_crc but with no get_snes_reset bail, for callers
+   that already hold the SNES in reset: the read is stable and bailing out half way
+   could only produce a bogus checksum. */
+uint32_t calc_sram_crc_raw(uint32_t addr, uint32_t size) {
   uint32_t crc = 0;
-  set_mcu_addr(BS_PACK_ADDR);
+  set_mcu_addr(addr);
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_READMEM | FPGA_MEM_AUTOINC);
-  for(uint32_t i = 0; i < BS_PACK_SIZE; i++) {
-    FPGA_WAIT_RDY();
+  for(uint32_t i = 0; i < size; i++) {
+    FPGA_WAIT_RDY_INLINE();
     crc = crc32_update(crc, FPGA_RX_BYTE());
   }
   FPGA_DESELECT();
   return crc;
+}
+
+/* CRC the 1MB BS-X pack for prepare_reset. */
+uint32_t calc_pack_crc_inreset(void) {
+  return calc_sram_crc_raw(BS_PACK_ADDR, BS_PACK_SIZE);
 }
 
 uint8_t sram_reliable() {
@@ -1957,7 +2110,7 @@ void sram_memset(uint32_t base_addr, uint32_t len, uint8_t val) {
   FPGA_TX_BYTE(0x98);
   for(uint32_t i=0; i<len; i++) {
     FPGA_TX_BYTE(val);
-    FPGA_WAIT_RDY();
+    FPGA_WAIT_RDY_INLINE();
   }
   FPGA_DESELECT();
 }

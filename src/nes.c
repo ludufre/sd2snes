@@ -470,7 +470,8 @@ static void nes_dbg_conv_progress(uint32_t add) {
 
 /* Wrappers BOUNDED dos helpers de PSRAM (espelham set_mcu_addr/
    sram_writeblock/sram_readblock/sram_memset de fpga_spi.c/memory.c, so'
-   trocando FPGA_WAIT_RDY -> FPGA_WAIT_RDY_TO(nes_fpga_err)).  Uma vez
+   trocando a espera por FPGA_WAIT_RDY_TO_INLINE(nes_fpga_err) -- a forma
+   macro, porque sao lacos por byte).  Uma vez
    latched, tudo vira no-op (padrao patch.c) -- o abort inteiro custa UM
    timeout (~fracao de segundo), nao um por byte. */
 static void nes_set_mcu_addr_to(uint32_t addr) {
@@ -494,7 +495,7 @@ static void nes_sram_writeblock_to(const void *buf, uint32_t addr, uint16_t size
   FPGA_TX_BYTE(0x98);                /* WRITE with autoincrement */
   while(size--) {
     FPGA_TX_BYTE(*src++);
-    FPGA_WAIT_RDY_TO(nes_fpga_err);
+    FPGA_WAIT_RDY_TO_INLINE(nes_fpga_err);
     if(nes_fpga_err) break;
   }
   FPGA_DESELECT();
@@ -508,7 +509,7 @@ static void nes_sram_readblock_to(void *buf, uint32_t addr, uint16_t size) {
   FPGA_SELECT();
   FPGA_TX_BYTE(0x88);                /* READ */
   while(size--) {
-    FPGA_WAIT_RDY_TO(nes_fpga_err);
+    FPGA_WAIT_RDY_TO_INLINE(nes_fpga_err);
     if(nes_fpga_err) break;
     *(tgt++) = FPGA_RX_BYTE();
   }
@@ -523,7 +524,7 @@ static void nes_sram_memset_to(uint32_t addr, uint32_t len, uint8_t val) {
   FPGA_TX_BYTE(0x98);
   for(uint32_t i = 0; i < len; i++) {
     FPGA_TX_BYTE(val);
-    FPGA_WAIT_RDY_TO(nes_fpga_err);
+    FPGA_WAIT_RDY_TO_INLINE(nes_fpga_err);
     if(nes_fpga_err) break;
   }
   FPGA_DESELECT();
@@ -686,7 +687,7 @@ static uint32_t nes_stream_window(uint32_t file_off, uint32_t len, uint32_t psra
     FPGA_TX_BYTE(0x98);   /* WRITE with autoincrement */
     for(UINT j = 0; j < bytes_read; j++) {
       FPGA_TX_BYTE(file_buf[j]);
-      FPGA_WAIT_RDY_TO(nes_fpga_err);
+      FPGA_WAIT_RDY_TO_INLINE(nes_fpga_err);
       if(nes_fpga_err) break;
     }
     FPGA_DESELECT();

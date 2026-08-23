@@ -20,11 +20,13 @@
 
 #include "config.h"
 #include <string.h>
+#include "uart.h"     /* printf(): see the note in uart.h -- every printf caller includes this */
 #include "ff.h"
 #include "fileops.h"
 #include "memory.h"
 #include "cfg.h"
 #include "theme.h"
+#include "psram_io.h"
 
 extern cfg_t CFG;
 
@@ -82,20 +84,16 @@ static const uint16_t theme_slot_max[THEME_NSLOTS] = {
 /* Stream `len` bytes from the open theme file, writing the first min(len,cap)
  * of them to PSRAM at `dest`. The full `len` is always consumed so the file
  * stays aligned for the next region (cap==0 -> consume only). Bounded by
- * file_buf; returns 1 on success, 0 on read error/short read. */
+ * file_buf; returns 1 on success, 0 on read error/short read.
+ * The tail past `cap` is SEEKED over rather than read: theme_apply's atomicity
+ * guard has already proven every region fits inside fsize, so the seek can
+ * never land past EOF (which f_lseek would silently clamp instead of failing). */
 static int theme_stream(uint32_t dest, uint32_t len, uint32_t cap) {
-  uint32_t done = 0;
-  UINT got;
-  while(len) {
-    UINT want = (len > sizeof(file_buf)) ? sizeof(file_buf) : (UINT)len;
-    file_res = f_read(&file_handle, file_buf, want, &got);
-    if(file_res || got != want) return 0;
-    if(done < cap) {
-      uint16_t w = (done + got > cap) ? (uint16_t)(cap - done) : (uint16_t)got;
-      if(w) sram_writeblock(file_buf, dest + done, w);
-    }
-    done += got;
-    len  -= got;
+  uint32_t keep = (len > cap) ? cap : len;
+  if(!psram_stream(&file_handle, dest, keep, 0)) return 0;
+  if(len > keep) {
+    file_res = f_lseek(&file_handle, file_handle.fptr + (len - keep));
+    if(file_res) return 0;
   }
   return 1;
 }
@@ -271,6 +269,8 @@ void theme_select(const char *name) {
   if(!name || name[0] == 0) {
     strcpy((char*)CFG.skin_name, THEME_DEFAULT);
   } else {
+    /* strncpy for the zero padding: the whole cfg_t goes to the shared BSRAM,
+       tail included (see CK_STR in cfg.c). */
     strncpy((char*)CFG.skin_name, name, sizeof(CFG.skin_name) - 1);
     CFG.skin_name[sizeof(CFG.skin_name) - 1] = 0;
   }

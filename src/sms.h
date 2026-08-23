@@ -25,7 +25,10 @@
 /* where the FPGA Z80 fetches the .sms ROM (matches sms_inst SMS_ROM base) */
 #define SMS_ROM_PSRAM   0x300000
 
-extern uint8_t sms_active;        /* set by sms_id() when the booted file is a .sms */
+/* set by sms_id() when the booted file is a .sms. Always 0 under CONFIG_MK2: the
+   launch is compiled out there (sms.c) and load_rom aborts a .sms with the
+   "needs mk3" popup long before sms_id() runs. */
+extern uint8_t sms_active;
 
 /* detect a .sms by extension; sets sms_active and remembers the rom path */
 void sms_id(uint8_t *filename);

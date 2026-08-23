@@ -81,6 +81,9 @@ SRC += printf.c fileops.c fpga.c fpga_spi.c snes.c smc.c
 SRC += memory.c filetypes.c faulthandler.c sort.c crc32.c cic.c cover.c patch.c patchmeta.c patch_copier.c theme.c
 SRC += cli.c ymodem.c rle.c msu1.c crc16.c sysinfo.c
 SRC += cfg.c cheat.c yaml.c savestate.c sgb.c sms.c atari.c nes.c nes_chr.c hwinfo.c gameinfo.c igmenu.c manual.c
+# Shared helpers: menu command handlers, file->PSRAM streaming, string/path
+# utilities and the YAML sidecar writer.
+SRC += menucmd.c psram_io.c strutil.c yamlw.c
 # SPC7110 RTC-4513 battery backup.  mk3 only in practice: the call sites are
 # gated on CONFIG_MK2, so --gc-sections drops the whole object on mk2.
 SRC += spc7110rtc.c
@@ -174,6 +177,9 @@ CFLAGS += -I$(OBJDIR) -I$(CONFIG_ARCH)
 CFLAGS += $(patsubst %,-I%,$(EXTRAINCDIRS))
 CFLAGS += $(CSTANDARD)
 CFLAGS += -ffunction-sections -fdata-sections
+# Per-function stack frames (<obj>.su): the LPC175x main SRAM leaves only a few KB
+# between .bss and the stack.
+CFLAGS += -fstack-usage
 
 # Link-Time Optimization: mk2 ONLY (LPC1754, 128 KB flash). LTO shrinks the build
 # ~2 KB so it fits; mk3/mk3-stm32 have room to spare and stay non-LTO (no LTO risk on
@@ -204,6 +210,8 @@ ASFLAGS = $(CPUFLAGS) -Wa,-adhlns=$(OBJDIR)/$(<:.S=.lst),-gstabs -I$(OBJDIR)
 LDFLAGS = -Wl,-Map=$(TARGET).map,--cref
 LDFLAGS += -T$(LINKERSCRIPT)
 LDFLAGS += -Wl,--gc-sections
+# Print flash/ram/ahbram usage per link (the mk2 flash is the budget to watch).
+LDFLAGS += -Wl,--print-memory-usage
 ifeq ($(CONFIG_LINKER_RELAX),y)
   LDFLAGS += -Wl,-O9,--relax
 endif

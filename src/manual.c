@@ -22,6 +22,7 @@
 #include "gameinfo.h"   /* gameinfo_info_base: shared /sd2snes/info bucket-path derivation */
 #include "fileops.h"    /* file_lfn: the current game's path (in-game rebuild source, see below) */
 #include "manual.h"
+#include "psram_io.h"
 
 extern cfg_t CFG;
 
@@ -218,17 +219,6 @@ static uint8_t man_probe_hit[MAN_MAX_GUIDES];  /* which candidates the directory
    every guide -- worse than the un-optimised code, which at least still tried to open them. */
 static uint8_t man_probe_scanned;
 
-/* Case-insensitive compares. FAT name matching is case-insensitive and the firmware's libc has
-   no str[n]casecmp, so keep two tiny ASCII-only helpers here rather than pull anything in. */
-static char man_lc(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-static int man_strncasecmp(const char *a, const char *b, int n) {
-  while(n--) { char x = man_lc(*a++), y = man_lc(*b++); if(x != y) return 1; if(!x) return 0; }
-  return 0;
-}
-static int man_strcasecmp(const char *a, const char *b) {
-  for(;; a++, b++) { char x = man_lc(*a), y = man_lc(*b); if(x != y) return 1; if(!x) return 0; }
-}
-
 static int man_open_guide(const uint8_t *rom_path, uint8_t nn) {
   int n;
   /* reserve 8 bytes (longest suffix ".0N.man" = 7 + NUL) so the append can never overrun. */
@@ -331,11 +321,11 @@ void manual_stage_meta(uint8_t *rom_path) {
           const char *sfx;
           if(!nm[0]) break;                            /* end of directory */
           if(fno.fattrib & AM_DIR) continue;
-          if(man_strncasecmp(nm, leaf, slen)) continue;
+          if(strncasecmp(nm, leaf, (size_t)slen)) continue;
           sfx = nm + slen;
-          if(!man_strcasecmp(sfx, ".man")) man_probe_hit[0] = 1;
+          if(!strcasecmp(sfx, ".man")) man_probe_hit[0] = 1;
           else if(sfx[0] == '.' && sfx[1] == '0' && sfx[2] >= '2' && sfx[2] <= '8'
-                  && !man_strcasecmp(sfx + 3, ".man"))
+                  && !strcasecmp(sfx + 3, ".man"))
             man_probe_hit[sfx[2] - '0' - 1] = 1;
         }
       }
@@ -574,7 +564,6 @@ static int man_stage_zattrs(uint32_t attr_ofs, uint16_t nrows, uint16_t row0) {
    0-31 then 1024B of cols 32-63), so this is two contiguous copies per row into the two banks --
    no de-interleaving, and no DMA the viewer issues ever crosses a bank boundary. */
 static int man_stage_ztiles(uint32_t tile_ofs, uint16_t nrows, uint16_t row0) {
-  UINT     got;
   uint16_t r;
 
   if(f_lseek(&man_fil, tile_ofs)) return 0;
@@ -583,16 +572,9 @@ static int man_stage_ztiles(uint32_t tile_ofs, uint16_t nrows, uint16_t row0) {
     int      half;
     dst[0] = SRAM_MANUAL_ZTILES_A_ADDR + (uint32_t)(row0 + r) * MAN_Z_HALF_BYTES;
     dst[1] = SRAM_MANUAL_ZTILES_B_ADDR + (uint32_t)(row0 + r) * MAN_Z_HALF_BYTES;
-    for(half = 0; half < 2; half++) {
-      uint32_t addr   = dst[half];
-      uint32_t remain = MAN_Z_HALF_BYTES;
-      while(remain) {
-        UINT want = (remain > sizeof(man_buf)) ? (UINT)sizeof(man_buf) : (UINT)remain;
-        if(f_read(&man_fil, man_buf, want, &got) || got != want) return 0;
-        sram_writeblock(man_buf, addr, (uint16_t)got);
-        addr += got; remain -= got;
-      }
-    }
+    for(half = 0; half < 2; half++)
+      if(!psram_stream_buf(&man_fil, dst[half], MAN_Z_HALF_BYTES,
+                           man_buf, sizeof(man_buf), 0)) return 0;
   }
   return 1;
 }
@@ -626,18 +608,12 @@ static int man_stage_s1attrs(uint32_t attr_ofs, uint16_t nrows, uint16_t row0) {
 }
 
 static int man_stage_s1tiles(uint32_t tile_ofs, uint16_t nrows, uint16_t row0) {
-  UINT     got;
-  uint32_t addr   = SRAM_MANUAL_S1TILES_ADDR + (uint32_t)row0 * MAN_S1_ROW_BYTES;
-  uint32_t remain = (uint32_t)nrows * MAN_S1_ROW_BYTES;
-
   if(f_lseek(&man_fil, tile_ofs)) return 0;
-  while(remain) {                          /* one contiguous run: rows are not split at 1x */
-    UINT want = (remain > sizeof(man_buf)) ? (UINT)sizeof(man_buf) : (UINT)remain;
-    if(f_read(&man_fil, man_buf, want, &got) || got != want) return 0;
-    sram_writeblock(man_buf, addr, (uint16_t)got);
-    addr += got; remain -= got;
-  }
-  return 1;
+  /* one contiguous run: rows are not split at 1x */
+  return psram_stream_buf(&man_fil,
+                          SRAM_MANUAL_S1TILES_ADDR + (uint32_t)row0 * MAN_S1_ROW_BYTES,
+                          (uint32_t)nrows * MAN_S1_ROW_BYTES,
+                          man_buf, sizeof(man_buf), 0);
 }
 
 /* ---- viewport floor for SHORT pages -------------------------------------------------------

@@ -24,6 +24,7 @@
 #include "ff.h"       /* shim: the minimal FatFs surface */
 #include "fileops.h"  /* shim: file_handle / file_res */
 #include "memory.h"   /* shim: load_sram_offload prototype */
+#include "cfg.h"      /* shim: the stand-in cfg_t */
 
 #include "atari.h"    /* the real src/atari.h */
 
@@ -32,6 +33,11 @@
  * it, so the few symbols the detector touches are provided right here. */
 FIL     file_handle;
 FRESULT file_res;
+
+/* a26_id() folds CFG.a26_video_width into the CHIPFEAT word it hands the core.
+   Left zero-initialized: that is the firmware default (160 px, the native TIA
+   raster), and the picture width does not affect the bankswitch verdict. */
+cfg_t CFG;
 
 FRESULT f_lseek(FIL *fp, DWORD ofs) {
   if (!fp->fp) return FR_INT_ERR;

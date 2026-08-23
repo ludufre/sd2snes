@@ -16,11 +16,10 @@
 #include "led.h"
 #include "usbinterface.h"
 #include "savestate.h"
-#include "cheat.h"
 #include "cfg.h"
 #include "spc7110rtc.h"
+#include "psram_io.h"
 #include "sufami.h"
-#include "manual.h"
 
 FIL msudata;
 FIL msuaudio;
@@ -45,14 +44,13 @@ uint32_t msu_page2_start = 0x2000;
 uint16_t fpga_status_prev = 0;
 uint16_t fpga_status_now = 0;
 
-inline int is_msu_free_to_save(void);
 extern volatile cfg_t CFG;
 extern volatile int reset_changed;   /* set by the reset-line edge (snes.c) */
 
 int msu_audio_usage = MSU_IDLE;
 int msu_data_usage = MSU_IDLE;
 
-void save_during_msu_shortreset(void) {
+static void save_during_msu_shortreset(void) {
   snes_reset(1);
   delay_ms(1);
   if(romprops.ramsize_bytes && fpga_test() == FPGA_TEST_TOKEN) {
@@ -79,7 +77,7 @@ void msu_dac_release(void) {
 
 /* returns true if no MSU feature is in use at the moment so the SD card
    may be used to save the game */
-int is_msu_free_to_save() {
+static int is_msu_free_to_save(void) {
   return (msu_audio_usage == MSU_IDLE)
     && (msu_data_usage == MSU_IDLE);
 }
@@ -88,7 +86,7 @@ int is_msu_free_to_save() {
  * immediate: 0 = do not check if last check is less than one one second ago
  *            1 = check immediately
  */
-void msu_savecheck(int immediate) {
+static void msu_savecheck(int immediate) {
   uint32_t currentcrc;
 #ifndef CONFIG_MK2
   /* Keep the SPC7110 RTC-4513 backup in step here too.  msu1_loop is the second
@@ -119,7 +117,7 @@ void msu_savecheck(int immediate) {
   }
 }
 
-void prepare_audio_track(uint16_t msu_track, uint32_t audio_offset) {
+static void prepare_audio_track(uint16_t msu_track, uint32_t audio_offset) {
   uint32_t audio_sect = audio_offset & ~0x1ff;
   uint32_t audio_sect_offset_sample = (audio_offset & 0x1ff) >> 2;
   DBG_MSU1 printf("offset=%08lx sect=%08lx sample=%08lx\n", audio_offset, audio_sect, audio_sect_offset_sample);
@@ -161,7 +159,7 @@ void prepare_audio_track(uint16_t msu_track, uint32_t audio_offset) {
   }
 }
 
-void prepare_data(uint32_t msu_offset) {
+static void prepare_data(uint32_t msu_offset) {
   uint32_t msu_sect = msu_offset & ~0x1ff;
   uint32_t msu_sect_offset = msu_offset & 0x1ff;
   static int seekcount = 0;
@@ -611,19 +609,11 @@ static void menusfx_preload(menusfx_slot_t *s) {
      slots (never taking ROM_ADDR from the live SNES), exactly like the cover load that
      already streams to PSRAM on every browse without ever freezing. */
   f_lseek(&menusfx_pre_fil, MSU_PCM_OFFSET_WAVEDATA);
-  {
-    uint32_t addr = s->base;
-    for(;;) {
-      if(f_read(&menusfx_pre_fil, file_buf, sizeof(file_buf), &br) != FR_OK) {
-        f_close(&menusfx_pre_fil); return;          /* read error -> stay silent */
-      }
-      if(!br) break;                                /* EOF -> whole body streamed */
-      sram_writeblock(file_buf, addr, (uint16_t)br);
-      addr += br;
-    }
+  s->bytelen = (uint32_t)(fsz - MSU_PCM_OFFSET_WAVEDATA);
+  if(!psram_stream(&menusfx_pre_fil, s->base, s->bytelen, 0)) {
+    f_close(&menusfx_pre_fil); return;              /* read error -> stay silent */
   }
   f_close(&menusfx_pre_fil);
-  s->bytelen = (uint32_t)(fsz - MSU_PCM_OFFSET_WAVEDATA);
   s->ready = 1;
 }
 

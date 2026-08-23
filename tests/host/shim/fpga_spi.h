@@ -25,5 +25,8 @@ uint8_t host_fpga_rx(void);
 #define FPGA_RX_BYTE()   host_fpga_rx()
 #define FPGA_WAIT_RDY()         do { } while (0)
 #define FPGA_WAIT_RDY_TO(err)   do { } while (0)
+/* The _INLINE spellings are the same waits kept as macros inside per-byte loops. */
+#define FPGA_WAIT_RDY_INLINE()         do { } while (0)
+#define FPGA_WAIT_RDY_TO_INLINE(err)   do { } while (0)
 
 #endif

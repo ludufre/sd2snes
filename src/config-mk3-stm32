@@ -28,6 +28,9 @@ DEBUG_YAML       = n
 DEBUG_USB        = n
 DEBUG_USBHW      = n
 CONFIG_CDC_DEBUG = n
+# Serial diagnostics (printf) + the UART CLI. On here; the Mk.II turns it off to
+# reclaim program flash -- see printf.c / stm32f4xx/uart.h.
+CONFIG_UART_DEBUG = y
 
 GPIO_I = IDR
 GPIO_O = ODR

@@ -16,6 +16,25 @@
 extern cfg_t CFG;
 extern snes_romprops_t romprops;
 
+/* The savestate base name: a patched game keys off the PATCH name (mirroring the .srm
+   path via current_ips_srm_source in memory.c) so the .state matches the .srm; a plain
+   game keys off the base ROM at recents index 0.  Uses file_lfn as the scratch the
+   recents lookup fills, so the pointer stays valid until the next
+   cfg_get_listed_game. */
+static const char *ss_base(void) {
+  cfg_get_listed_game(LAST_FILE, file_lfn, 0);
+  return current_ips_srm_source[0] ? (const char *)current_ips_srm_source
+                                   : (const char *)file_lfn;
+}
+
+/* Build "<SS_BASEDIR>/<BB>/<base>NN.state" for slot NN.  Passes path_asset's return
+   through: -1 means the name did not fit, and `line` is left an empty string. */
+static int ss_slot_path(char *line, int n, const char *base, uint8_t slot) {
+  char extend[10];
+  snprintf(extend, sizeof(extend), "%02d.state", slot);
+  return path_asset(line, n, SS_BASEDIR, base, extend);
+}
+
 /* Scan the SD for the 4 possible savestate slot files of the game being loaded and
    publish an occupancy bitmask (bit N-1 = slot N has <rom>0N.state) to
    SRAM_SS_SLOT_STATUS_ADDR for the in-game STATES tab.  Names are built EXACTLY as
@@ -26,14 +45,11 @@ extern snes_romprops_t romprops;
    not existing simply yields mask 0 (every f_stat fails); no folder is created here. */
 void savestate_slot_status_stage(void) {
   char line[256];
-  char extend[10];
   uint8_t mask = 0;
   int slot;
-  cfg_get_listed_game(LAST_FILE, file_lfn, 0);
-  char *ssbase = current_ips_srm_source[0] ? (char*)current_ips_srm_source : (char*)file_lfn;
+  const char *ssbase = ss_base();
   for(slot = 1; slot <= 4; slot++) {
-    snprintf(extend, sizeof(extend), "%02d.state", slot);
-    path_asset(line, sizeof(line), SS_BASEDIR, ssbase, extend);
+    ss_slot_path(line, sizeof(line), ssbase, (uint8_t)slot);
     if(f_stat((const TCHAR*)line, NULL) == FR_OK) {
       mask |= (uint8_t)(1 << (slot - 1));
     }
@@ -275,7 +291,7 @@ void savestate_set_inputs() {
 /* convert a YAML record into binary fix data for the savestate handler.
    XXX Also patches the ROM directly when ROM patch directive found
 */
-int savestate_parse_yaml_fix(ssfix_record_t *fix, yaml_token_t *tok) {
+static int savestate_parse_yaml_fix(ssfix_record_t *fix, yaml_token_t *tok) {
   fix->operator = SS_OP_NONE;
   fix->operand = 0;
   uint32_t dst;
@@ -335,7 +351,7 @@ int savestate_parse_yaml_fix(ssfix_record_t *fix, yaml_token_t *tok) {
   convert savestate fix record into executable code and deploy at addr.
   Returns: number of bytes written
 */
-int savestate_write_fix_code(ssfix_record_t *fix, uint32_t addr) {
+static int savestate_write_fix_code(ssfix_record_t *fix, uint32_t addr) {
   int count = 0;
   uint8_t fixcode[10];
   memset(fixcode, 0, sizeof(fixcode));
@@ -365,7 +381,7 @@ int savestate_write_fix_code(ssfix_record_t *fix, uint32_t addr) {
   convert literal savestate code string str into binary and deploy at addr
   Returns: number of bytes written
 */
-int savestate_write_fix_literal(char *str, uint32_t addr) {
+static int savestate_write_fix_literal(char *str, uint32_t addr) {
   int count = 0;
   uint8_t fixcode[64];
   char c, d;
@@ -440,14 +456,7 @@ void load_backup_state() {
   uint8_t slot = CFG.enable_savestate_slots ? sram_readbyte(SS_SLOTS_ADDR) : 1;
   slot &= 0x7F;
   char line[256];
-  char extend[10];
-  cfg_get_listed_game(LAST_FILE, file_lfn, 0);
-  /* A patched game keys its savestate off the PATCH name (mirrors the .srm path
-     chosen via current_ips_srm_source in memory.c) so the .state matches the
-     .srm; a plain game keys off the base ROM at recents index 0. */
-  char *ssbase = current_ips_srm_source[0] ? (char*)current_ips_srm_source : (char*)file_lfn;
-  snprintf(extend, sizeof(extend), "%02d.state", slot);
-  path_asset(line, sizeof(line), SS_BASEDIR, ssbase, extend);
+  ss_slot_path(line, sizeof(line), ss_base(), slot);
 
   /* Publish which slot's image is resident ONLY when the file is really there. A
      failed load leaves the PREVIOUS slot's image in PSRAM, and claiming it as this
@@ -469,14 +478,7 @@ void save_backup_state() {
   uint8_t slot = CFG.enable_savestate_slots ? sram_readbyte(SS_SLOTS_ADDR) : 1;
   slot &= 0x7F;
   char line[256];
-  char extend[10];
-  cfg_get_listed_game(LAST_FILE, file_lfn, 0);
-  /* A patched game keys its savestate off the PATCH name (mirrors the .srm path
-     chosen via current_ips_srm_source in memory.c) so the .state matches the
-     .srm; a plain game keys off the base ROM at recents index 0. */
-  char *ssbase = current_ips_srm_source[0] ? (char*)current_ips_srm_source : (char*)file_lfn;
-  snprintf(extend, sizeof(extend), "%02d.state", slot);
-  if(path_asset(line, sizeof(line), SS_BASEDIR, ssbase, extend) < 0) return;
+  if(ss_slot_path(line, sizeof(line), ss_base(), slot) < 0) return;
   path_asset_mkdir(line);                     /* create only AFTER the name exists */
 
   save_sram((uint8_t*) line, 0x50000L, 0xF00000L);
