@@ -246,12 +246,12 @@ void theme_apply(void) {
   }
 
   /* Font edge remaps (flags bit1 outline-off / bit2 AA-off): rewrite the font's
-     edge pixels in place, before the SNES boots and runs genfonts. Both remaps
-     share one pass over the font. The font is bank $C1 while gfxptr[SLOT_FONT]
-     carries only the low word, so add the bank byte read from the _GFXPTR_
-     table. Guarded to a valid menu bank and to the loaded image so a stale/old
-     menu (no bank byte) or bogus value can never write out of range. */
-  if((flags & (THEME_FLAG_OUTLINE_OFF | THEME_FLAG_AA_OFF)) && gfxptr[SLOT_FONT] != 0
+     edge pixels in place, before the SNES runs genfonts. The font is in bank $C1
+     but gfxptr[SLOT_FONT] only carries the low word, so add the bank byte from
+     the _GFXPTR_ table -- that byte is also what tells a menu with the ABI from
+     an old one. Don't test gfxptr[SLOT_FONT] != 0 here: the font sits at offset 0,
+     so zero is its real address (that test used to skip the remap on every build). */
+  if((flags & (THEME_FLAG_OUTLINE_OFF | THEME_FLAG_AA_OFF))
      && (font_bank == 0xC0 || font_bank == 0xC1)) {
     uint32_t font_addr = SRAM_MENU_ADDR
                        + (((uint32_t)(font_bank - 0xC0)) << 16)
