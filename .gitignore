@@ -159,3 +159,4 @@ snes/const_lang_str.a65
 snes/igmenu_lang.i65
 
 __pycache__
+*.sample

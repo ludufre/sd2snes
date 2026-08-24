@@ -124,7 +124,7 @@ enum usbint_server_stream_state_e { FOREACH_SERVER_STREAM_STATE(GENERATE_ENUM) }
   OP(USBINT_SERVER_OPCODE_STREAM)               \
   OP(USBINT_SERVER_OPCODE_TIME)                 \
                                                 \
-  OP(USBINT_SERVER_OPCODE_RESPONSE)
+  OP(USBINT_SERVER_OPCODE_RESPONSE)             
 enum usbint_server_opcode_e { FOREACH_SERVER_OPCODE(GENERATE_ENUM) };
 #ifdef DEBUG_USB
 static const char *usbint_server_opcode_s[] = { FOREACH_SERVER_OPCODE(GENERATE_STRING) };
@@ -154,6 +154,14 @@ static const char *usbint_server_space_s[] = { FOREACH_SERVER_SPACE(GENERATE_STR
   OP(USBINT_SERVER_FLAGS_64BDATA=128)
 enum usbint_server_flags_e { FOREACH_SERVER_FLAGS(GENERATE_ENUM) };
 //static const char *usbint_server_flags_s[] = { FOREACH_SERVER_FLAGS(GENERATE_STRING) };
+
+#define FOREACH_FI_FLAGS(OP)        \
+  OP(USBINT_FI_FLAGS_NONE=0)        \
+  OP(USBINT_FI_FLAGS_FILESIZE=1)    \
+  OP(USBINT_FI_FLAGS_FILEDATE=2)    \
+  OP(USBINT_FI_FLAGS_FILETIME=4)    \
+  OP(USBINT_FI_FLAGS_ATTRIBUTE=8)   
+enum usbint_fi_flags_e { FOREACH_FI_FLAGS(GENERATE_ENUM) };
 
 volatile enum usbint_server_state_e server_state = USBINT_SERVER_STATE_IDLE;
 volatile enum usbint_server_stream_state_e stream_state;
@@ -206,6 +214,7 @@ static FILINFO fi;
 static int     fiCont = 0;
 static FIL     fh;
 static char    fbuf[MAX_STRING_LENGTH + 1];
+static enum usbint_fi_flags_e fiFlags = USBINT_FI_FLAGS_NONE;
 
 extern cfg_t CFG;
 
@@ -560,6 +569,8 @@ int usbint_handler_cmd(void) {
     server_info.error = 0;
     usbint_sram_err = 0;   /* v2.0d: fresh SRAM-timeout latch per command -- see helpers above */
 
+    fiFlags = cmd_buffer[7];
+
     memset((unsigned char *)send_buffer[send_buffer_index], 0, USB_BLOCK_SIZE);
 
     switch (server_info.opcode) {
@@ -679,6 +690,7 @@ int usbint_handler_cmd(void) {
         time.tm_wday = (uint8_t) cmd_buffer[11+4];
 
         set_rtc(&time);
+        break;
     }
     case USBINT_SERVER_OPCODE_MV: {
         // copy string name
@@ -981,15 +993,48 @@ int usbint_handler_dat(void) {
                 strlwr((char *)name);
             }
 
-            // check for id(1) string(strlen + 1) is does not go past index
-            if (bytesSent + 1 + strlen((TCHAR*)name) + 1 <= server_info.block_size) {
+            size_t nameLen = strlen((TCHAR*)name);
+            size_t needed = 1 + nameLen + 1;
+            if(fiFlags & USBINT_FI_FLAGS_FILESIZE) {
+                needed += sizeof(DWORD);
+            }
+            if(fiFlags & USBINT_FI_FLAGS_FILEDATE) {
+                needed += sizeof(WORD);
+            }
+            if(fiFlags & USBINT_FI_FLAGS_FILETIME) {
+                needed += sizeof(WORD);
+            }
+            if(fiFlags & USBINT_FI_FLAGS_ATTRIBUTE) {
+                needed += sizeof(BYTE);
+            }
+
+            if (bytesSent + needed <= server_info.block_size) {
                 send_buffer[send_buffer_index][bytesSent++] = (fi.fattrib & AM_DIR) ? 0 : 1;
+
+                if(fiFlags & USBINT_FI_FLAGS_FILESIZE) {
+                    DWORD fsize = fi.fsize;
+                    memcpy((TCHAR*)send_buffer[send_buffer_index] + bytesSent, &fsize, sizeof(fsize));
+                    bytesSent += sizeof(fsize);
+                }
+                if(fiFlags & USBINT_FI_FLAGS_FILEDATE) {
+                    WORD fdate = fi.fdate;
+                    memcpy((TCHAR*)send_buffer[send_buffer_index] + bytesSent, &fdate, sizeof(fdate));
+                    bytesSent += sizeof(fdate);
+                }
+                if(fiFlags & USBINT_FI_FLAGS_FILETIME) {
+                    WORD ftime = fi.ftime;
+                    memcpy((TCHAR*)send_buffer[send_buffer_index] + bytesSent, &ftime, sizeof(ftime));
+                    bytesSent += sizeof(ftime);
+                }
+                if(fiFlags & USBINT_FI_FLAGS_ATTRIBUTE) {
+                    BYTE fattrib = fi.fattrib;
+                    memcpy((TCHAR*)send_buffer[send_buffer_index] + bytesSent, &fattrib, sizeof(fattrib));
+                    bytesSent += sizeof(fattrib);
+                }
                 strcpy((TCHAR*)send_buffer[send_buffer_index] + bytesSent, (TCHAR*)name);
-                bytesSent += strlen((TCHAR*)name) + 1;
-                // send string
+                bytesSent += nameLen + 1;
             }
             else {
-                // send continuation.  overwrite string flag to simplify parsing
                 send_buffer[send_buffer_index][bytesSent++] = 2;
                 fiCont = 1;
                 break;

@@ -1999,7 +1999,6 @@ void save_bs_pack(uint8_t* filename) {
    needs it, because there a half-written multi-megabyte file must not be
    presented to the user as a finished ROM. */
 int save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
-  uint32_t count = 0;
   uint32_t remain = sram_size;
   size_t copy;
   FPGA_DESELECT();
@@ -2016,7 +2015,6 @@ int save_sram(uint8_t* filename, uint32_t sram_size, uint32_t base_addr) {
     for(int j=0; j < copy; j++) {
       FPGA_WAIT_RDY_INLINE();
       file_buf[j] = FPGA_RX_BYTE();
-      count++;
     }
     file_write(copy);
     if(file_res) {
