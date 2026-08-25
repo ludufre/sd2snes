@@ -40,6 +40,8 @@ module mcu_cmd(
   /* SPC7110 data ROM window in PSRAM (SPI commands $d7 / $d8, see below) */
   output [23:0] drom_base_out,
   output [23:0] drom_mask_out,
+  /* SPC7110 expansion ROM base (SPI command $db, see below) */
+  output [23:0] exp_base_out,
   /* RTC-4513 time, pushed by the MCU with SPI command $e5 */
   output [55:0] rtc_data_out,
   output rtc_pgm_we,
@@ -175,6 +177,13 @@ reg [23:0] ROM_MASK;
 reg [23:0] DROM_BASE = 24'h000000;
 reg [23:0] DROM_MASK = 24'hffffff;
 
+/* SPC7110 expansion ROM at banks $40-4f (flat, no window/block indirection --
+   see spc7110_map.v).  PSRAM base of the chip, 1 MB-aligned by contract; 0 =
+   no third chip (no retail SPC7110 cart has one, the Tengai Makyou Zero
+   translations do).  The MCU sends this on every load, like DROM_BASE/
+   DROM_MASK, so it never carries a stale value from a previous game. */
+reg [23:0] EXP_BASE = 24'h000000;
+
 /* RTC time as the MCU packs it for command $e5: seven bytes MSB first, BCD
    nibbles in the SPC7110 order plus the thousands of the year.  pgm_we goes up
    on the last data byte and back down on the next one, which is the pulse
@@ -271,6 +280,17 @@ always @(posedge clk) begin
             DROM_MASK[15:8] <= param_data;
           32'h4:
             DROM_MASK[7:0] <= param_data;
+        endcase
+      /* $db bbhhll: set SPC7110 expansion ROM base in PSRAM (banks $40-4f).
+         $db is free in every other core, same rationale as $d7/$d8. */
+      8'hdb:
+        case (spi_byte_cnt)
+          32'h2:
+            EXP_BASE[23:16] <= param_data;
+          32'h3:
+            EXP_BASE[15:8] <= param_data;
+          32'h4:
+            EXP_BASE[7:0] <= param_data;
         endcase
       8'h4x:
         SD_DMA_ENr <= 1'b0;
@@ -584,6 +604,7 @@ assign rom_mask_out = ROM_MASK;
 assign saveram_mask_out = SAVERAM_MASK;
 assign drom_base_out = DROM_BASE;
 assign drom_mask_out = DROM_MASK;
+assign exp_base_out = EXP_BASE;
 assign rtc_data_out = rtc_data_out_buf;
 assign rtc_pgm_we = rtc_pgm_we_buf;
 assign rtc_bkp_out = rtc_bkp_buf;

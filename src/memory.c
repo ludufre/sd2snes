@@ -971,6 +971,10 @@ static void load_setup_masks(load_ctx_t *c) {
     while(dromsize < dromspan) dromsize <<= 1;
     set_drom_base(drombase);
     set_drom_mask(dromsize - 1);
+    /* Expansion ROM for SPC7110 translations.
+       7 MB ROMs use the extra 1 MB at PSRAM 0x600000.
+       Set its base when present, or 0 otherwise. */
+    set_exp_base(romprops.romsize_bytes > 0x600000 ? 0x600000 : 0);
     /* The RTC-4513 powers up with an invalid BCD calendar (month/day 00) and
        games retry forever on it, so the clock is always programmed before boot.
        With a .rtc sidecar next to the save this restores what the cartridge

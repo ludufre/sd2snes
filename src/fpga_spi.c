@@ -265,6 +265,16 @@ void set_drom_mask(uint32_t mask) {
   fpga_cmd24(FPGA_CMD_SETDROMMASK, mask);
 }
 
+/* SPC7110: PSRAM base of the expansion ROM the Tengai Makyou Zero
+   translations add at banks $40-4f (flat, outside the $483x window logic).
+   1 MB-aligned by contract -- the core concatenates base[23:20] with the
+   bank offset -- and 0 means no expansion chip, so it is sent on every
+   SPC7110 load like $d7/$d8 and never carries a stale value over.  Every
+   other core ignores $db. */
+void set_exp_base(uint32_t base) {
+  fpga_cmd24(FPGA_CMD_SETEXPBASE, base);
+}
+
 void set_rom_mask_b(uint32_t mask) {
   fpga_cmd24(FPGA_CMD_SETROMMASK_B, mask);
 }

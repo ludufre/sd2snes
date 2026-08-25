@@ -116,6 +116,7 @@
 #define FPGA_CMD_SETDROMMASK     (0xd8) /* SPC7110 core only: 3 param bytes MSB first -> power-of-two size mask of the data ROM */
 #define FPGA_CMD_SETROMMASK_B    (0xd9) /* base core, Sufami Turbo only: 3 param bytes MSB first -> power-of-two size mask of the Slot B minicart ROM (0 = empty slot; every other core drops the bytes) */
 #define FPGA_CMD_SETRAMMASK_B    (0xda) /* base core, Sufami Turbo only: 3 param bytes MSB first -> size mask of the Slot B minicart SaveRAM. 0 disables the Slot B SaveRAM window (empty slot / no battery).  A SEPARATE register and not a slice of SAVERAM_MASK: one shared mask cannot describe two independent carts, and folding them together aliases Slot B onto Slot A whenever B declares no RAM. */
+#define FPGA_CMD_SETEXPBASE      (0xdb) /* SPC7110 core only: 3 param bytes MSB first -> PSRAM base of the expansion ROM decoded flat at banks $40-4f (a third chip only the Tengai Makyou Zero translations populate). 1 MB-aligned by contract -- the core concatenates base[23:20] with the bank offset instead of adding. 0 = chip absent; sent on every SPC7110 load so a stale base never lingers; every other core drops the bytes. */
 #define FPGA_CMD_MSUSETBITS      (0xe0)
 #define FPGA_CMD_DACPAUSE        (0xe1)
 #define FPGA_CMD_DACPLAY         (0xe2)
@@ -188,6 +189,7 @@ void set_rom_mask_b(uint32_t);
 void set_saveram_mask_b(uint32_t);
 void set_drom_base(uint32_t);
 void set_drom_mask(uint32_t);
+void set_exp_base(uint32_t);
 void set_mapper(uint8_t val);
 void fpga_sddma(uint8_t tgt, uint8_t partial);
 void fpga_set_sddma_range(uint16_t start, uint16_t end);
