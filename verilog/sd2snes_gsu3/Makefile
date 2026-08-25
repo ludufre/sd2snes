@@ -1,0 +1,18 @@
+CORE = gsu3
+
+VSRC_DIR = ../sd2snes_gsu
+
+VSRC = address.v cheat.v regshadow.v dac.v dcm.v gsu.v main.v mcu_cmd.v msu.v sd_dma.v spi.v
+VHSRC =
+
+HEADER = config.vh
+
+COMMON_IP = dac_buf gsu_cache gsu_fmult gsu_mult gsu_umult msu_databuf snescmd_buf
+
+XIL_IP =
+XIL_IPCORE_DIR = ../sd2snes_gsu/ip/mk2
+
+INT_IP = pll
+
+include ../settings.mk
+include ../common.mk

@@ -1419,8 +1419,10 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
 #ifdef CONFIG_MK2
   /* The Spartan-3 SPC7110 core has no audio DAC, so MSU-1 is not offered for that
      chip on the Mk.II.  The check must be SKIPPED, not undone afterwards: msu1_check()
-     raises FEAT_MSU1 itself and leaves the .msu open with a link map. */
-  if(!romprops.has_spc7110)
+     raises FEAT_MSU1 itself and leaves the .msu open with a link map.
+     The FX3 variant of the GSU core (fpga_gsu3.bit) trades the DAC for the FX3
+     logic, so FX3 carts get the same treatment; classic GSU keeps MSU-1. */
+  if(!romprops.has_spc7110 && !romprops.has_fx3)
 #endif
   if(msu1_check(c.filename)) {
     romprops.fpga_features |= FEAT_MSU1;

@@ -1,4 +1,13 @@
 `timescale 1ns / 1ps
+// FX3 availability: always present on mk3; on mk2 only in the gsu3 core variant
+// (Verilog macro GSU3, set by that project's .xise).  The classic mk2 gsu core is
+// the master-identical GSU: every FX3 site below keeps the original text under
+// GSU_FX3_OFF, so that netlist cannot differ from the pre-FX3 core.
+`ifdef MK2
+ `ifndef GSU3
+  `define GSU_FX3_OFF
+ `endif
+`endif
 //////////////////////////////////////////////////////////////////////////////////
 // Company:
 // Engineer:
@@ -55,6 +64,11 @@ module gsu(
   input  [7:0]  RAM_BUS_RDDATA,
   output [7:0]  RAM_BUS_WRDATA,
 
+`ifndef GSU_FX3_OFF
+  // FX3 mode (FX3 spec): register window, memory map, MERGE dispatcher, ...
+  input         FX3,
+
+`endif
   // ACTIVE interface
   output        IRQ,
   output        GO,
@@ -96,12 +110,23 @@ reg        enable_r;
 reg [9:0]  pgm_addr_r;
 
 reg        ss_en_r; initial ss_en_r = 0;
+`ifndef GSU_FX3_OFF
+// FX3 mode select, flopped once here; every FX3 delta below reads fx3_r so the
+// classic GSU circuit is what remains when the bit is clear.  On mk2 FX3 does not
+// fit the Spartan-3 next to the classic GSU, so the flop becomes a compile-time
+// tie-off (main.v drives the port with a constant too) and XST folds every FX3
+// term away; the blocks that cannot be folded that way are `ifndef GSU_FX3_OFF below.
+reg        fx3_r; initial fx3_r = 0;
+`endif
 
 always @(posedge CLK) begin
   data_in_r  <= DATA_IN;
   addr_in_r  <= SNES_ADDR;
   enable_r   <= ENABLE;
   ss_en_r    <= SS_EN;
+`ifndef GSU_FX3_OFF
+  fx3_r      <= FX3;
+`endif
   pgm_addr_r <= PGM_ADDR;
 end
 
@@ -312,6 +337,12 @@ reg stb_ram_wr_r; initial stb_ram_wr_r = 0;
 reg bmp_ram_rd_r; initial bmp_ram_rd_r = 0;
 reg bmf_ram_rd_r; initial bmf_ram_rd_r = 0;
 reg bmf_ram_wr_r; initial bmf_ram_wr_r = 0;
+`ifndef GSU_FX3_OFF
+// FX3 MERGE Clear engine (see "FX3 CLEAR ENGINE" below).  Declared up here so the
+// RAM pipeline -- which serves the engine's byte writes -- sees them before use.
+// Not built on mk2 (no FX3 there), together with the engine and its RAM requester.
+reg clr_ram_wr_r; initial clr_ram_wr_r = 0;
+`endif
 
 reg cache_word_r;
 reg prf_word_r;
@@ -328,6 +359,27 @@ reg [15:0] stb_data_r;
 reg [23:0] bmp_addr_r;
 reg [23:0] bmf_addr_r;
 reg [15:0] bmf_data_r;
+`ifndef GSU_FX3_OFF
+
+// FX3 MERGE Clear engine state (FX3 spec: MERGE is a dispatcher; R0=3/4/5 clear
+// third A/B/C of the frame buffer).  Handshake: the execute pipeline arms
+// fx3_clr_go_r/fx3_clr_third_r, the engine raises fx3_clr_busy_r until the last
+// byte has been written.  fx3_clr_go_r/fx3_clr_third_r are written ONLY by the
+// execute block, the rest ONLY by the engine (one driver per reg).
+// The arm side stays declared on mk2 as well: its only writers sit under
+// `if (fx3_r)` arms that constant-fold away there, so XST drops the flops.  The
+// engine side is `ifndef GSU_FX3_OFF -- an always block with its own reset would survive.
+reg        fx3_clr_go_r;   initial fx3_clr_go_r   = 0;
+reg [1:0]  fx3_clr_third_r; initial fx3_clr_third_r = 0;
+reg        fx3_clr_busy_r; initial fx3_clr_busy_r = 0;
+reg [16:0] fx3_clr_addr_r;              // absolute FX SRAM address ($10000..)
+reg [10:0] fx3_clr_cnt_r;               // byte within the 18-char column (0..1151)
+reg [3:0]  fx3_clr_col_r;               // column 0..8
+// Per-char byte pattern (observed): $FF$00 x8, $00 x32, $00$FF x8.
+wire [7:0] fx3_clr_byte = (~|fx3_clr_cnt_r[5:4]) ? (fx3_clr_cnt_r[0] ? 8'h00 : 8'hFF)
+                        : (&fx3_clr_cnt_r[5:4])  ? (fx3_clr_cnt_r[0] ? 8'hFF : 8'h00)
+                        :                          8'h00;
+`endif
 
 reg [23:0] debug_inst_addr_r;
 
@@ -647,6 +699,12 @@ reg        snes_writebuf_val_r; initial snes_writebuf_val_r = 0;
 reg        snes_writebuf_reg_r;
 reg        snes_writebuf_gpr_r;
 reg        snes_writebuf_ss_r; initial snes_writebuf_ss_r = 0;
+`ifndef GSU_FX3_OFF
+// FX3: qualifies the cache-write arm below.  snes_writebuf_addr_r is 9 bits, so the
+// $x300-$x3FF quarter -- which only FX3 lets through -- would land on the SAME cache
+// cells as $x100-$x1FF and corrupt the instruction cache.  Always 1 in classic mode.
+reg        snes_writebuf_cache_ok_r; initial snes_writebuf_cache_ok_r = 0;
+`endif
 reg [8:0]  snes_writebuf_addr_r;
 reg [7:0]  snes_writebuf_data_r;
 
@@ -725,7 +783,12 @@ always @(posedge CLK) begin
     COLR_r  <= 0;
     POR_r   <= 0;
     BRAMR_r <= 0;
+`ifdef GSU_FX3_OFF
     VCR_r   <= 4;
+`else
+    // FX3 spec: version code register reads $52 (classic GSU-1/2 read 4)
+    VCR_r   <= fx3_r ? 8'h52 : 8'd4;
+`endif
     CFGR_r  <= 0;
     CLSR_r  <= 0;
 
@@ -738,6 +801,9 @@ always @(posedge CLK) begin
     snes_writebuf_val_r <= 0;
     snes_writebuf_reg_r <= 0;
     snes_writebuf_gpr_r <= 0;
+`ifndef GSU_FX3_OFF
+    snes_writebuf_cache_ok_r <= 0;
+`endif
     snes_readbuf_val_r <= 0;
 
     r2i_flush_r <= 0;
@@ -752,17 +818,39 @@ always @(posedge CLK) begin
       if (SNES_RD_start) begin
         if (~|addr_in_r[9:8]) begin
           casex (addr_in_r[7:0])
+`ifdef GSU_FX3_OFF
             ADDR_GPRL : begin data_out_r <= REG_r[addr_in_r[4:1]][7:0];  if (~SFR_GO | ss_frozen_r) data_enable_r <= 1; end
             ADDR_GPRH : begin data_out_r <= REG_r[addr_in_r[4:1]][15:8]; if (~SFR_GO | ss_frozen_r) data_enable_r <= 1; end
+`else
+            // FX3 spec (software): reading R15 is allowed while the FX runs -- that
+            // is how the 65816 detects the end of a program (there is no FX IRQ).
+            // Observed: R1 answers with live data during GO as well, i.e. the
+            // registers simply respond, so the fx3_r term opens all of them.  The
+            // classic open-bus-while-GO behaviour is untouched when fx3_r is 0.
+            ADDR_GPRL : begin data_out_r <= REG_r[addr_in_r[4:1]][7:0];  if (~SFR_GO | ss_frozen_r | fx3_r) data_enable_r <= 1; end
+            ADDR_GPRH : begin data_out_r <= REG_r[addr_in_r[4:1]][15:8]; if (~SFR_GO | ss_frozen_r | fx3_r) data_enable_r <= 1; end
+`endif
 
             ADDR_SFR  : begin data_out_r <= SFR_r[7:0];  data_enable_r <= 1; end
             ADDR_SFR+1: begin data_out_r <= SFR_r[15:8]; data_enable_r <= 1; end
+`ifdef GSU_FX3_OFF
             ADDR_PBR  : begin data_out_r <= PBR_r;       if (~SFR_GO | ss_frozen_r) data_enable_r <= 1; end
             ADDR_ROMBR: begin data_out_r <= ROMBR_r;     if (~SFR_GO | ss_frozen_r) data_enable_r <= 1; end
             ADDR_VCR  : begin data_out_r <= VCR_r;       data_enable_r <= 1; end
             ADDR_RAMBR: begin data_out_r <= RAMBR_r;     if (~SFR_GO | ss_frozen_r) data_enable_r <= 1; end
             ADDR_CBR+0: begin data_out_r <= CBR_r[7:0];  if (~SFR_GO | ss_frozen_r) data_enable_r <= 1; end
             ADDR_CBR+1: begin data_out_r <= CBR_r[15:8]; if (~SFR_GO | ss_frozen_r) data_enable_r <= 1; end
+`else
+            ADDR_PBR  : begin data_out_r <= PBR_r;       if (~SFR_GO | ss_frozen_r | fx3_r) data_enable_r <= 1; end
+            ADDR_ROMBR: begin data_out_r <= ROMBR_r;     if (~SFR_GO | ss_frozen_r | fx3_r) data_enable_r <= 1; end
+            // FX3 spec: VCR reads $52.  Forced on the read path (not only on the
+            // reset value) so the answer does not depend on whether the mode bit
+            // arrived before the load reset.
+            ADDR_VCR  : begin data_out_r <= fx3_r ? 8'h52 : VCR_r; data_enable_r <= 1; end
+            ADDR_RAMBR: begin data_out_r <= RAMBR_r;     if (~SFR_GO | ss_frozen_r | fx3_r) data_enable_r <= 1; end
+            ADDR_CBR+0: begin data_out_r <= CBR_r[7:0];  if (~SFR_GO | ss_frozen_r | fx3_r) data_enable_r <= 1; end
+            ADDR_CBR+1: begin data_out_r <= CBR_r[15:8]; if (~SFR_GO | ss_frozen_r | fx3_r) data_enable_r <= 1; end
+`endif
             // savestate window extras (mk3): expose the write-only config regs
             // and the internal plot/pixel state for capture.  ss_en_r-gated so
             // native MMIO open-bus behaviour is unchanged.
@@ -801,7 +889,15 @@ always @(posedge CLK) begin
         end
       end
       else if (|addr_in_r[9:8] & ~ss_en_r) begin
+`ifdef GSU_FX3_OFF
         data_out_r <= cache_rddata;
+`else
+        // FX3: the fourth quarter of the mirrored register window ($x300-$x3FF)
+        // reads $00 -- the cache image only spans $x100-$x2FF (observed behavior).
+        // In classic mode address.v never lets [9:8]==3 reach us, so this term is
+        // dead there.
+        data_out_r <= (fx3_r & (&addr_in_r[9:8])) ? 8'h00 : cache_rddata;
+`endif
       end
     end
     else begin
@@ -817,6 +913,10 @@ always @(posedge CLK) begin
       // GO side effect is overwritten by the saved GO bit)
       snes_writebuf_reg_r  <= ~|addr_in_r[9:8] & (~ss_en_r | ~|addr_in_r[7:6]);
       snes_writebuf_gpr_r  <= ~|addr_in_r[9:5];
+`ifndef GSU_FX3_OFF
+      // FX3: writes to $x300-$x3FF are ignored (the cache image is $x100-$x2FF)
+      snes_writebuf_cache_ok_r <= ~(fx3_r & (&addr_in_r[9:8]));
+`endif
       snes_writebuf_addr_r <= addr_in_r[8:0];
       snes_writebuf_data_r <= data_in_r;
     end
@@ -890,7 +990,11 @@ always @(posedge CLK) begin
         endcase
       end
       else begin
+`ifdef GSU_FX3_OFF
         cache_mmio_wren_r <= 1;
+`else
+        cache_mmio_wren_r <= snes_writebuf_cache_ok_r;
+`endif
         cache_mmio_wrdata_r <= snes_writebuf_data_r;
         cache_mmio_addr_r <= {~snes_writebuf_addr_r[8],snes_writebuf_addr_r[7:0]};
       end
@@ -1021,7 +1125,14 @@ always @(posedge CLK) begin
   else begin
     case (ROM_STATE)
       ST_ROM_IDLE: begin
+`ifdef GSU_FX3_OFF
         if (SCMR_RON & ROM_BUS_RDY & SFR_GO) begin
+`else
+        // FX3 spec: ROM is shared with the 65816, so RON is ignored (real FX3 games
+        // keep toggling it -- observed) and the arbiter in main.v handles the
+        // concurrent access instead.
+        if ((SCMR_RON | fx3_r) & ROM_BUS_RDY & SFR_GO) begin
+`endif
           if (cache_rom_rd_r) begin
             rom_bus_rrq_r <= 1;
             rom_bus_addr_r <= cache_addr_r;
@@ -1070,7 +1181,15 @@ parameter
   ST_RAM_DATA_END  = 8'b00001000,
   ST_RAM_STB_END   = 8'b00010000,
   ST_RAM_BMP_END   = 8'b00100000,
+`ifdef GSU_FX3_OFF
   ST_RAM_BMF_END   = 8'b01000000
+`else
+  ST_RAM_BMF_END   = 8'b01000000,
+  // FX3 Clear engine gets its own end state: the store buffer keys its
+  // MEMORY_WAIT -> WAIT transition off ST_RAM_STB_END, so sharing it would make a
+  // clear byte complete a store that is still in flight.
+  ST_RAM_CLR_END   = 8'b10000000
+`endif
   ;
 reg [7:0] RAM_STATE; initial RAM_STATE = ST_RAM_IDLE;
 reg [7:0] ram_state_end_r;
@@ -1096,7 +1215,14 @@ always @(posedge CLK) begin
   else begin
     case (RAM_STATE)
       ST_RAM_IDLE: begin
+`ifdef GSU_FX3_OFF
         if (SCMR_RAN & RAM_BUS_RDY & SFR_GO) begin
+`else
+        // FX3 spec: FX SRAM is shared with the 65816, so RAN is ignored (Star Fox 2
+        // FX3 writes SCMR with RAN=0 tens of thousands of times while the chip runs
+        // -- observed).
+        if ((SCMR_RAN | fx3_r) & RAM_BUS_RDY & SFR_GO) begin
+`endif
           if (exe_ram_rd_r) begin
             ram_bus_rrq_r <= 1;
             ram_bus_word_r <= 0;
@@ -1159,6 +1285,24 @@ always @(posedge CLK) begin
             RAM_STATE <= ST_RAM_ACCESS;
             ram_state_end_r <= ST_RAM_BMF_END;
           end
+`ifndef GSU_FX3_OFF
+          // FX3 Clear engine byte write.  Lowest priority so it never delays the
+          // execute/fetch/bitmap paths.  The address is absolute in the FX SRAM
+          // (RAMBR is ignored -- observed), so it carries the bank bit itself; the
+          // {4'hE,3'h0} prefix the other requesters spell out is dropped by the
+          // 19-bit RAM_BUS_ADDR anyway.
+          else if (clr_ram_wr_r) begin
+            ram_bus_wrq_r <= 1;
+            ram_bus_word_r <= 0;
+            ram_bus_addr_r <= {2'b00,fx3_clr_addr_r};
+            ram_bus_data_r <= {8'h00,fx3_clr_byte};
+            ram_busy_r <= 1;
+            ram_word_r <= 0;
+            ram_wr_r <= 1;
+            RAM_STATE <= ST_RAM_ACCESS;
+            ram_state_end_r <= ST_RAM_CLR_END;
+          end
+`endif
         end
       end
       ST_RAM_ACCESS: begin
@@ -1191,6 +1335,9 @@ always @(posedge CLK) begin
       ST_RAM_STB_END,
       ST_RAM_DATA_END,
       ST_RAM_BMP_END,
+`ifndef GSU_FX3_OFF
+      ST_RAM_CLR_END,
+`endif
       ST_RAM_BMF_END: begin
         ram_busy_r <= 0;
         RAM_STATE <= ST_RAM_IDLE;
@@ -1638,6 +1785,92 @@ always @(posedge CLK) begin
 end
 
 //-------------------------------------------------------------------
+`ifndef GSU_FX3_OFF
+// FX3 CLEAR ENGINE (not built on mk2 -- see the fx3_r tie-off above)
+//-------------------------------------------------------------------
+// FX3 spec: MERGE ($70) is repurposed as a dispatcher with R0 selecting the
+// function; R0 = 3/4/5 clear third A/B/C of the 8bpp frame buffer.  Layout below is
+// the observed one:
+//
+//   - always FX SRAM bank $71 -- RAMBR is IGNORED (the pair RAMBR=0/RAMBR=1 gives
+//     byte-identical results), so the engine drives an absolute address
+//   - third t starts at $10000 + t*$2D00
+//   - 9 columns per third, column stride $500 (20 chars = 160 screen lines)
+//   - 18 chars (64 B each = $480 B) written per column, the remaining $80 untouched
+//   - per char: $FF$00 x8, $00 x32, $00$FF x8 (see fx3_clr_byte)
+//
+// Writes that fall outside the RAM the cart declares are DROPPED, not wrapped
+// (observed with a 64KB expramsize: the clear produces no writes at all), so the
+// engine only runs when SAVERAM_MASK reaches bank $71.  Without that gate a 64KB
+// mask would fold every write onto bank $70 and corrupt the game's data.
+//
+// 9 * 18 * 64 = 10368 byte writes per call: long-running by construction, which
+// matches the observed behavior.  The execute pipeline parks in ST_EXE_FX3CLR
+// meanwhile, so the savestate freeze (which waits for exe idle) simply waits it out.
+// Like the other memory-side FSMs the engine is NOT gated on gsu_clock_en, and it
+// is not gated on the overlay pause / savestate freeze either: an overlay pause
+// landing mid-clear lets the ~1-3ms run finish instead of stopping it.  Accepted by
+// design -- savestates and FX3 do not coexist in this version.
+wire fx3_clr_ram_ok  = SAVERAM_MASK[16];        // FX SRAM covers bank $71?
+wire fx3_clr_col_end = (fx3_clr_cnt_r == 11'd1151);
+
+always @(posedge CLK) begin
+  if (RST) begin
+    fx3_clr_busy_r <= 0;
+    clr_ram_wr_r   <= 0;
+
+    fx3_clr_addr_r <= 0;
+    fx3_clr_cnt_r  <= 0;
+    fx3_clr_col_r  <= 0;
+  end
+  else if (~fx3_clr_busy_r) begin
+    // arm.  fx3_clr_go_r is cleared by the execute block in the same cycle we
+    // sample it, so busy comes up exactly as the execute pipeline enters the wait
+    // state.  Without the RAM gate the request completes without any write.
+    if (fx3_clr_go_r & fx3_r & fx3_clr_ram_ok) begin
+      fx3_clr_busy_r <= 1;
+      clr_ram_wr_r   <= 1;
+      fx3_clr_cnt_r  <= 0;
+      fx3_clr_col_r  <= 0;
+
+      case (fx3_clr_third_r)
+        2'd0:    fx3_clr_addr_r <= 17'h10000;
+        2'd1:    fx3_clr_addr_r <= 17'h12D00;
+        default: fx3_clr_addr_r <= 17'h15A00;
+      endcase
+    end
+  end
+  else if (~SFR_GO) begin
+    // The SNES can clear GO through SFR at any time.  With GO low the RAM pipeline
+    // stops serving requests, so drop the rest of the clear instead of waiting for
+    // a slot that will never come (the execute pipeline is parked on us and only
+    // RST would get it back).
+    clr_ram_wr_r   <= 0;
+    fx3_clr_busy_r <= 0;
+  end
+  else if (|(RAM_STATE & ST_RAM_CLR_END)) begin
+    // one byte done -- clr_ram_wr_r stays asserted so the RAM pipeline picks the
+    // next byte up with the address updated in this very cycle
+    if (fx3_clr_col_end) begin
+      if (fx3_clr_col_r == 4'd8) begin
+        clr_ram_wr_r   <= 0;
+        fx3_clr_busy_r <= 0;
+      end
+      else begin
+        fx3_clr_col_r  <= fx3_clr_col_r + 1;
+        fx3_clr_cnt_r  <= 0;
+        fx3_clr_addr_r <= fx3_clr_addr_r + 17'h81; // +1, then skip the $80 gap
+      end
+    end
+    else begin
+      fx3_clr_cnt_r  <= fx3_clr_cnt_r + 1;
+      fx3_clr_addr_r <= fx3_clr_addr_r + 1;
+    end
+  end
+end
+
+//-------------------------------------------------------------------
+`endif
 // FETCH PIPELINE
 //-------------------------------------------------------------------
 // The frontend of the pipeline starts with the fetch operation which
@@ -1774,7 +2007,15 @@ always @(posedge CLK) begin
 `endif
 
     // PBR is updated by SNES or JMP instructions.
+`ifdef GSU_FX3_OFF
     fetch_rom_r <= (PBR_r < 8'h60);
+`else
+    // FX3 spec (FX map): the FX reaches 3MB of ROM ($00-$6F) and its SRAM sits at
+    // $70-$71, so the ROM/SRAM split moves from $60 to $70.  PBR stays a 7-bit
+    // register in FX3 (writes truncate: $81 -> $01, $F0 -> $70 -- observed), which
+    // is what makes the 4th MB CPU-only and keeps the hybrid decode below valid.
+    fetch_rom_r <= (PBR_r < (fx3_r ? 8'h70 : 8'h60));
+`endif
 
     case (FETCH_STATE)
       ST_FETCH_IDLE: begin
@@ -1799,8 +2040,13 @@ always @(posedge CLK) begin
         //cache_gsu_addr_r    <= (REG_r[R15][15:0] - CBR_r);
 
         // need to use PBR directly here because of prior cycle update
+`ifdef GSU_FX3_OFF
         cache_addr_r <= (PBR_r < 8'h60) ? ((PBR_r[6] ? {PBR_r,REG_r[R15]} : {PBR_r,REG_r[R15][14:0]}) & ROM_MASK)
                                         : 24'hE00000 + ({PBR_r[0],REG_r[R15]} & SAVERAM_MASK);
+`else
+        cache_addr_r <= (PBR_r < (fx3_r ? 8'h70 : 8'h60)) ? ((PBR_r[6] ? {PBR_r,REG_r[R15]} : {PBR_r,REG_r[R15][14:0]}) & ROM_MASK)
+                                                          : 24'hE00000 + ({PBR_r[0],REG_r[R15]} & SAVERAM_MASK);
+`endif
 
         FETCH_STATE <= ST_FETCH_CACHE;
       end
@@ -2017,7 +2263,13 @@ parameter
   ST_EXE_EXECUTE     = 8'b00001000,
   ST_EXE_MEMORY      = 8'b00010000,
   ST_EXE_MEMORY_WAIT = 8'b00100000,
+`ifdef GSU_FX3_OFF
   ST_EXE_WAIT        = 8'b01000000
+`else
+  ST_EXE_WAIT        = 8'b01000000,
+  // FX3 only: MERGE dispatched a Clear -- park here until the engine drains
+  ST_EXE_FX3CLR      = 8'b10000000
+`endif
   ;
 reg [7:0]  EXE_STATE; initial EXE_STATE = ST_EXE_IDLE;
 
@@ -2122,6 +2374,10 @@ always @(posedge CLK) begin
 
     RAMWRBUF_r <= 0;
     RAMADDR_r <= 0;
+`ifndef GSU_FX3_OFF
+
+    fx3_clr_go_r <= 0;
+`endif
   end
   else begin
     case (EXE_STATE)
@@ -2234,8 +2490,23 @@ always @(posedge CLK) begin
             end
             `OP_STOP           : begin
               e2r_g_r <= 0;
+`ifdef GSU_FX3_OFF
               // mask interrupt write into SFR
               e2r_irq_r <= ~CFGR_IRQ;
+`else
+              // mask interrupt write into SFR.  FX3 spec: there is no FX IRQ, and
+              // SFR after STOP reads $0000 (observed) -- no flag either.
+              e2r_irq_r <= ~CFGR_IRQ & ~fx3_r;
+              // FX3 spec (software): STOP zeroes R15 (and does not increment it
+              // afterwards -- observed).  Writing it through the normal e2r path
+              // lands in the register file's R15 case, which writes without the
+              // +1 the other destinations take.
+              if (fx3_r) begin
+                e2r_val_r <= 1;
+                e2r_destnum_r <= R15;
+                e2r_data_pre_r <= 16'h0000;
+              end
+`endif
               // clear POR
               //e2r_wpor_r <= 1;
               //e2r_por_r <= 0;
@@ -2449,10 +2720,36 @@ always @(posedge CLK) begin
               e2r_s_r    <= exe_result[7];
             end
             `OP_MERGE         : begin
+`ifdef GSU_FX3_OFF
               exe_result = {REG_r[R7][15:8],REG_r[R8][15:8]};
+`else
+              if (fx3_r) begin
+                // FX3 spec: MERGE is a dispatcher, R0 picks the function.  0/1/2 =
+                // Chunky-To-Planar A/B/C, 3/4/5 = Clear A/B/C.  No destination
+                // register and no flags: the registers are preserved (observed).
+                // The C2P functions are true no-ops here -- this core plots planar
+                // straight into the frame buffer, so there is nothing to convert
+                // (observed: R0=0/1/2 leave RAM untouched and complete at once).
+                // Software that needs the classic MERGE has the equivalent
+                // instruction sequence in the FX3 spec.
+                case (REG_r[R0][7:0])
+                  8'd3: begin fx3_clr_go_r <= 1; fx3_clr_third_r <= 2'd0; end
+                  8'd4: begin fx3_clr_go_r <= 1; fx3_clr_third_r <= 2'd1; end
+                  8'd5: begin fx3_clr_go_r <= 1; fx3_clr_third_r <= 2'd2; end
+                endcase
+              end
+              else begin
+                exe_result = {REG_r[R7][15:8],REG_r[R8][15:8]};
+`endif
 
+`ifdef GSU_FX3_OFF
               e2r_val_r  <= 1;
               e2r_data_pre_r <= exe_result;
+`else
+                e2r_val_r  <= 1;
+                e2r_data_pre_r <= exe_result;
+              end
+`endif
             end
 
             // MULTIPLY
@@ -2533,6 +2830,12 @@ always @(posedge CLK) begin
         if (op_complete) begin
           case (exe_opcode_r)
             `OP_STOP           : begin
+`ifndef GSU_FX3_OFF
+              // FX3: propagate the R15 = 0 armed in EXECUTE.  This case does not
+              // fall through to the default arm, so without this the value never
+              // reaches the register file.
+              if (fx3_r) e2r_data_r <= 16'h0000;
+`endif
               if (~stb_busy_r & ~SFR_RR) begin
                 // don't allow STOP to complete until the store buffer is flushed
                 EXE_STATE <= ST_EXE_WAIT;
@@ -2712,13 +3015,39 @@ always @(posedge CLK) begin
             end
             // hopefully relax timing by setting some condition codes here
             `OP_MERGE         : begin
+`ifdef GSU_FX3_OFF
               e2r_z_r    <= |({e2r_data_pre_r[15:12],e2r_data_pre_r[7:4]});
               e2r_ov_r   <= |({e2r_data_pre_r[15:14],e2r_data_pre_r[7:6]});
               e2r_s_r    <= |({e2r_data_pre_r[15:15],e2r_data_pre_r[7:7]});
               e2r_cy_r   <= |({e2r_data_pre_r[15:13],e2r_data_pre_r[7:5]});
+`else
+              if (fx3_r) begin
+                // dispatcher: no flags, no destination.  A Clear armed in EXECUTE
+                // parks the pipeline until the engine has written its last byte;
+                // C2P (and any other R0) just falls through.
+                if (fx3_clr_go_r) begin
+                  fx3_clr_go_r <= 0;
+                  EXE_STATE <= ST_EXE_FX3CLR;
+                end
+                else begin
+                  EXE_STATE <= ST_EXE_WAIT;
+                end
+              end
+              else begin
+                e2r_z_r    <= |({e2r_data_pre_r[15:12],e2r_data_pre_r[7:4]});
+                e2r_ov_r   <= |({e2r_data_pre_r[15:14],e2r_data_pre_r[7:6]});
+                e2r_s_r    <= |({e2r_data_pre_r[15:15],e2r_data_pre_r[7:7]});
+                e2r_cy_r   <= |({e2r_data_pre_r[15:13],e2r_data_pre_r[7:5]});
+`endif
 
+`ifdef GSU_FX3_OFF
               e2r_data_r <= e2r_data_pre_r;
               EXE_STATE <= ST_EXE_WAIT;
+`else
+                e2r_data_r <= e2r_data_pre_r;
+                EXE_STATE <= ST_EXE_WAIT;
+              end
+`endif
             end
             default: begin
               if (exe_zs_r) begin
@@ -2805,6 +3134,17 @@ always @(posedge CLK) begin
           end
         endcase
       end
+`ifndef GSU_FX3_OFF
+      // FX3 only: wait for the MERGE Clear engine.  Reached exclusively from the
+      // fx3_r arm of OP_MERGE, so the classic pipeline never enters this state --
+      // and on mk2, where fx3_r is a constant 0, that arm is unreachable and the
+      // engine does not exist, so the state goes with it.
+      // The engine is not gated on gsu_clock_en (it is a memory-side FSM like the
+      // store buffer), so the wait ends as soon as the last byte retires.
+      ST_EXE_FX3CLR: begin
+        if (~fx3_clr_go_r & ~fx3_clr_busy_r) EXE_STATE <= ST_EXE_WAIT;
+      end
+`endif
       ST_EXE_WAIT: begin
         e2c_waitcnt_val_r <= 0;
         e2s_req_r <= 0;
@@ -2864,6 +3204,11 @@ always @(posedge CLK) begin
           exe_branch_r        <= 0;
           e2r_val_r           <= 0;
           e2i_flush_r         <= 0;
+`ifndef GSU_FX3_OFF
+          // a normalize between EXECUTE and MEMORY would strand an armed MERGE
+          // Clear request, and the engine would re-arm off it forever
+          fx3_clr_go_r        <= 0;
+`endif
         end
       endcase
     end
@@ -2922,8 +3267,14 @@ always @(posedge CLK) begin
     brk_error        <= fetch_error; // FIXME: set this state based on opcode or other error condition
 
 
+`ifdef GSU_FX3_OFF
     brk_addr_r <= (CONFIG_ADDR_WATCH[23:16] < 8'h60) ? ((CONFIG_ADDR_WATCH[22] ? CONFIG_ADDR_WATCH : {CONFIG_ADDR_WATCH[20:16],CONFIG_ADDR_WATCH[14:0]}) & ROM_MASK)
                                                      : 24'hE00000 + (CONFIG_ADDR_WATCH & SAVERAM_MASK);
+`else
+    // same ROM/SRAM split as the fetch path (FX3 moves it from $60 to $70)
+    brk_addr_r <= (CONFIG_ADDR_WATCH[23:16] < (fx3_r ? 8'h70 : 8'h60)) ? ((CONFIG_ADDR_WATCH[22] ? CONFIG_ADDR_WATCH : {CONFIG_ADDR_WATCH[20:16],CONFIG_ADDR_WATCH[14:0]}) & ROM_MASK)
+                                                                       : 24'hE00000 + (CONFIG_ADDR_WATCH & SAVERAM_MASK);
+`endif
   end
 end
 `endif

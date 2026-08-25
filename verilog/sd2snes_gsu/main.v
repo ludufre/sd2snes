@@ -19,6 +19,15 @@
 //
 //////////////////////////////////////////////////////////////////////////////////
 `include "config.vh"
+// FX3 availability: always present on mk3; on mk2 only in the gsu3 core variant
+// (Verilog macro GSU3, set by that project's .xise).  The classic mk2 gsu core is
+// the master-identical GSU: every FX3 site below keeps the original text under
+// GSU_FX3_OFF, so that netlist cannot differ from the pre-FX3 core.
+`ifdef MK2
+ `ifndef GSU3
+  `define GSU_FX3_OFF
+ `endif
+`endif
 
 module main(
 `ifdef MK2
@@ -150,6 +159,12 @@ wire [2:0] SD_DMA_DBG_clkcnt;
 wire [10:0] SD_DMA_DBG_cyclecnt;
 
 wire [15:0] dsp_feat;
+`ifndef GSU_FX3_OFF
+// FX3 mode select (MCU sets it from the cart type: FX3 spec carttype $17/$18).
+// EVERY FX3 delta in this core is gated on this bit, so with it clear the circuit
+// is the classic GSU by construction.
+wire IS_FX3 = dsp_feat[1];
+`endif
 
 wire [8:0] snescmd_addr_mcu;
 wire [7:0] snescmd_data_out_mcu;
@@ -240,8 +255,13 @@ always @(posedge CLK2) begin
   // synchronize to the SNES cycle to avoid reading partial interrupt vector
   //if (SNES_WR_end | SNES_RD_end) begin
   if (SNES_cycle_end) begin
+`ifdef GSU_FX3_OFF
     GSU_RONr    <= GSU_RON & GSU_GO;
     GSU_RANr    <= GSU_RAN & GSU_GO;
+`else
+    GSU_RONr    <= GSU_RON & GSU_GO & ~IS_FX3;
+    GSU_RANr    <= GSU_RAN & GSU_GO & ~IS_FX3;
+`endif
   end
 end
 
@@ -329,6 +349,7 @@ sd_dma snes_sd_dma(
 
 assign SD_DMA_TO_ROM = (SD_DMA_STATUS && (SD_DMA_TGT == 2'b00));
 
+`ifndef GSU3
 dac snes_dac(
   .clkin(CLK2),
   .sysclk(SNES_SYSCLK),
@@ -347,6 +368,16 @@ dac snes_dac(
   .reset(dac_reset),
   .dac_address_ext(dac_ptr_addr)
 );
+`else
+// gsu3 (mk2 FX3 variant): no MSU-1 audio.  Dropping the DAC audio path is what
+// makes room for the FX3 logic on the Spartan-3; the MSU-1 REGISTERS stay
+// (snes_msu below answers as before), so nothing else on the bus changes --
+// MSU-1 titles boot, only the PCM stream stays silent on this variant.
+assign DAC_MCLK  = 1'b0;
+assign DAC_LRCK  = 1'b0;
+assign DAC_SDOUT = 1'b0;
+assign DAC_STATUS = 1'b0;  // implicit net; the msu register block reads it
+`endif
 
 msu snes_msu (
   .clkin(CLK2),
@@ -440,6 +471,11 @@ gsu snes_gsu (
   .RAM_BUS_RDDATA(GSU_RAM_DINr),
   .RAM_BUS_WRDATA(GSU_RAM_DOUT),
   
+`ifndef GSU_FX3_OFF
+  // FX3 mode
+  .FX3(IS_FX3),
+
+`endif
   // ACTIVE interface
   //.ACTIVE(GSU_ACTIVE),
   .IRQ(GSU_IRQ),
@@ -560,6 +596,9 @@ address snes_addr(
   .IS_PATCH(IS_PATCH),
   .gsu_ss_enable(gsu_ss_enable),
   .snescmd_unlock(snescmd_unlock),
+`ifndef GSU_FX3_OFF
+  .fx3(IS_FX3),
+`endif
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
   //MSU-1
@@ -1311,6 +1350,13 @@ assign SNES_DATABUS_DIR = ((~SNES_READ & (~rs_snoop_pawr_oe | ROM_HIT | gsu_data
                            : ((~SNES_PAWR & r2100_enable) ? r2100_forcewrite
                            : 1'b0);
 
+`ifdef GSU_FX3_OFF
 assign SNES_IRQ = GSU_IRQ;
+`else
+// FX3 spec (hardware vs emulation): there is no FX IRQ -- end of execution is
+// detected by polling R15.  Observed: SFR after STOP reads $0000 (no IRQ flag) and
+// the 65816 IRQ handler never fires.
+assign SNES_IRQ = GSU_IRQ & ~IS_FX3;
+`endif
 
 endmodule

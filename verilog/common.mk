@@ -64,7 +64,11 @@ UCF := main.ucf
 ifdef VSRC_DIR
 	VSRC := $(patsubst %,$(VSRC_DIR)/%,$(VSRC))
 	VHSRC := $(patsubst %,$(VSRC_DIR)/%,$(VHSRC))
+	# a variant dir may carry its own main.ucf (e.g. extra timing guard bands);
+	# fall back to the parent tree's only when there is no local one
+	ifeq ($(wildcard main.ucf),)
 	UCF := $(patsubst %,$(VSRC_DIR)/%,$(UCF))
+	endif
 endif
 
 XIL_IP := $(sort $(XIL_IP))

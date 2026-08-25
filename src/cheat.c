@@ -114,8 +114,13 @@ void cheat_program() {
   printf("enable mask=%02x\n", enable_mask);
   fpga_write_cheat(6, enable_mask);
   cheat_enable(CFG.enable_cheats);
-  cheat_nmi_enable(CFG.enable_ingame_hook);
-  cheat_irq_enable((romprops.has_gsu && !strncmp((char *)romprops.header.name, "DOOM", strlen("DOOM"))) ? 0 : CFG.enable_ingame_hook);
+  /* Super FX 3 maps real ROM across $C0-$FF, so the in-game hook window is
+     disabled there and the hook bodies are unreachable: an armed NMI/IRQ hook
+     would vector into game ROM bytes. DOOM times its display uploads off the
+     IRQ (same reason the classic DOOM opts out below), so a hijacked vector
+     drops whole frames to black. No in-game hooks on FX3 carts. */
+  cheat_nmi_enable(CFG.enable_ingame_hook && !romprops.has_fx3);
+  cheat_irq_enable((romprops.has_fx3 || (romprops.has_gsu && !strncmp((char *)romprops.header.name, "DOOM", strlen("DOOM")))) ? 0 : CFG.enable_ingame_hook);
   cheat_holdoff_enable(CFG.enable_hook_holdoff);
   cheat_buttons_enable(CFG.enable_ingame_buttons);
   cheat_wram_present(wram_index);

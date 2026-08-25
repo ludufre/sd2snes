@@ -125,6 +125,7 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->has_cx4 = 0;
   props->has_obc1 = 0;
   props->has_gsu = 0;
+  props->has_fx3 = 0;
   props->has_sa1 = 0;
   props->has_sdd1 = 0;
   props->has_combo = 0;
@@ -296,7 +297,37 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
           header->carttype == 0x1a)) {
         props->has_gsu = 1;
         props->fpga_conf = FPGA_GSU;
-        props->fpga_dspfeat = CFG.gsu_speed;
+        /* dsp_feat bit 0 is the speed toggle; bit 1 selects FX3 mode in the
+           core, so a stray GSUSpeed value from config.yml must never leak
+           past bit 0 here (cfg_load clamps new writes, but a value already
+           on the card is only rewritten on the next cfg_save). */
+        props->fpga_dspfeat = CFG.gsu_speed & 1;
+        header->ramsize = header->expramsize & 0x7;
+      }
+      /* Super FX 3 carts identify as LoROM with cart type $17 (or $18 when a
+         battery backs the cart RAM) and may declare FastROM (map $30).  The
+         GSU core is told to behave as an FX3 through dsp_feat bit 1: MMIO
+         moves to $7000, the 65816 sees a flat 4MB image, cart RAM shrinks to
+         banks $70-$71, and the RON/RAN bus handover stops applying. */
+      else if ((header->map & 0xef) == 0x20 &&
+          (header->carttype == 0x17 || header->carttype == 0x18)) {
+        props->has_gsu = 1;
+        props->has_fx3 = 1;
+#ifdef CONFIG_MK2
+        /* The full GSU core with FX3 overmaps the Spartan-3, so the Mk.II
+           ships a dedicated variant with the MSU-1 audio DAC traded for the
+           FX3 logic (same move as the SPC7110 core).  Classic GSU carts keep
+           fpga_gsu.bit (and their MSU-1). */
+        props->fpga_conf = FPGA_GSU3;
+#else
+        props->fpga_conf = FPGA_GSU;
+#endif
+        /* FX3 always runs at the fast GSU timing: the real chip is far
+           quicker than a stock GSU, and games sized for it (DOOM) hold the
+           screen in forced blank while they wait for the render -- at the
+           slow timing that wait spills across whole frames and the picture
+           strobes.  The GSUSpeed toggle stays a classic-GSU affair. */
+        props->fpga_dspfeat = 0x01 | 0x02;
         header->ramsize = header->expramsize & 0x7;
       }
       break;
@@ -416,7 +447,8 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->region = (header->destcode <= 1 || header->destcode >= 13) ? 0 : 1;
 
   // adjust sram size for special cart types
-  if (  (props->has_gsu && (header->carttype != 0x15 && header->carttype != 0x1a))
+  if (  (props->has_gsu && (header->carttype != 0x15 && header->carttype != 0x1a
+                            && header->carttype != 0x18))
      || (props->has_sa1 && (header->carttype == 0x34)                            )
      ) {
     // no sram in ram

@@ -269,7 +269,7 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_HIDE_EXTENSIONS,             hide_extensions,            CK_BOOL,    0),
   CFGI(CFG_LED_BRIGHTNESS,              led_brightness,             CK_NUM,     0xFF),
   CFGI(CFG_CX4_SPEED,                   cx4_speed,                  CK_NUM,     0),
-  CFGI(CFG_GSU_SPEED,                   gsu_speed,                  CK_NUM,     0),
+  CFGI(CFG_GSU_SPEED,                   gsu_speed,                  CK_NUM,     0x10),
   CFGI(CFG_MSU_VOLUME_BOOST,            msu_volume_boost,           CK_NUM,     0),
   CFGI(CFG_ENABLE_AUTOSAVE,             enable_autosave,            CK_BOOL,    0),
   CFGI(CFG_ENABLE_AUTOSAVE_MSU1,        enable_autosave_msu1,       CK_BOOL,    0),
