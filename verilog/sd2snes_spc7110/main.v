@@ -742,6 +742,66 @@ cheat snes_cheat(
   .snescmd_unlock(snescmd_unlock)
 );
 
+// PPU-register capture via the base ctx.v counter scheme (this core's CLK2 is the
+// base's native 96 MHz, so the shift patterns and the count==4 sample point apply
+// as-proven).  Same block as the S-DD1/OBC1/CX4/GSU cores: without the snoop OE
+// terms below, the data-bus level shifter stays disabled for B-bus writes to
+// non-cart addresses and the shadow captures only the open-bus address echo
+// ($21 in every slot -- confirmed in HW on the obc1 core).
+wire rs_pawr_start_early = ((SNES_PAWRr[4:1] | SNES_PAWRr[5:2]) == 4'b1110);
+reg [3:0] rs_pawr_cnt;   initial rs_pawr_cnt   = 0;
+reg       rs_pawr_end;   initial rs_pawr_end   = 0;
+reg       rs_pawr_end_r; initial rs_pawr_end_r = 0;
+reg [7:0] rs_data_r;     initial rs_data_r     = 0;
+reg       rs_abus_rd;    initial rs_abus_rd    = 0;
+reg       rs_abus_rd_r;  initial rs_abus_rd_r  = 0;
+always @(posedge CLK2) begin
+  if (rs_pawr_end)               rs_pawr_cnt <= 0;
+  else if (rs_pawr_start_early)  rs_pawr_cnt <= 1;
+  else if (|rs_pawr_cnt)         rs_pawr_cnt <= rs_pawr_cnt + 1'b1;
+  rs_pawr_end   <= (rs_pawr_cnt == 4'd4);
+  rs_pawr_end_r <= rs_pawr_end;      // ctx.v registers the strobe once more...
+  rs_data_r     <= SNES_DATAr[0];    // ...and the data tap with it (2-cyc align)
+  // accumulate over the same window the counter above measures, then pipeline the
+  // verdict one cycle so it lines up with rs_pawr_end_r / rs_data_r
+  if      (rs_pawr_start_early)  rs_abus_rd <= ~SNES_READ;
+  else if (|rs_pawr_cnt)         rs_abus_rd <= rs_abus_rd | ~SNES_READ;
+  rs_abus_rd_r  <= rs_abus_rd;
+end
+// PPU (B-bus) -> the ctx-aligned captured byte; CPU ($42xx, A-bus/SNES_WR_end) uses
+// raw SNES_DATA (the native snes_ajr capture pattern).
+wire [7:0] rs_data = rs_pawr_end_r ? rs_data_r : SNES_DATA;
+
+// In-game cheat-overlay register shadow (regshadow.v).  The overlay restores the
+// PPU/CPU registers by reading a shadow of the last value(s) written to each, through
+// the hook's identity window: $F90500-$F9057F (PPU regs, stride-2 words holding the
+// (1st write, 2nd write) pair) and $F90700-$F9071F (CPU $42xx regs, stride-1 bytes).
+// IS_PATCH gates the reads to the active hook window only.
+wire shadow_ppu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF905) & ~SNES_ADDR[7];         // $F90500-7F
+wire shadow_cpu_hit = IS_PATCH & (SNES_ADDR[23:8] == 16'hF907) & (SNES_ADDR[7:5] == 3'b000); // $F90700-1F
+wire [7:0] regshadow_dout;
+// PPU pair = mem[0x00-0x7F] indexed straight by SNES_ADDR[6:0]: the even byte of a
+// stride-2 entry is the 1st write, the odd byte the 2nd (double-write regs are
+// reconstructed ctx.v-style inside regshadow.v).  CPU reg = mem[0x80-0x9F] via
+// SNES_ADDR[4:0].  1-cycle BRAM read latency (like snescmd_buf); the address is
+// stable for the whole ROM cycle so the value settles before the CPU samples it.
+wire [8:0] regshadow_raddr = shadow_cpu_hit ? {4'b0100, SNES_ADDR[4:0]}
+                                            : {2'b00,  SNES_ADDR[6:0]};
+regshadow snes_regshadow(
+  .clk(CLK2),
+  // PPU strobe = the ctx-style counter end (count==4 from write start), QUALIFIED to
+  // CPU writes only: DMA/HDMA-issued B-bus writes are dropped (rs_abus_rd_r, see the
+  // discriminator above) so per-scanline HDMA never poisons the restore.
+  .pawr_end(rs_pawr_end_r & ~rs_abus_rd_r),
+  .wr_end(SNES_WR_end),
+  .snes_addr(SNES_ADDR),
+  .snes_pa(SNES_PA),
+  // PPU: ctx-aligned captured byte; CPU: raw SNES_DATA (muxed by rs_pawr_end_r).
+  .snes_data(rs_data),
+  .rd_addr(regshadow_raddr),
+  .rd_data(regshadow_dout)
+);
+
 wire [7:0] snescmd_dout;
 
 parameter ST_R213F_ARMED     = 4'b0001;
@@ -767,6 +827,10 @@ wire r2100_patch = featurebits[6];
 wire r2100_enable = r2100_hit & (r2100_patch | ~(&r2100_limit));
 
 wire snoop_4200_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04200;
+// regshadow write-snoop windows: enable the data-bus level shifter (receive) so the
+// snoop sees the actual write byte instead of bus float -- see SNES_DATABUS_OE/DIR.
+wire snoop_42xx_enable = ~SNES_ADDR[22] & (SNES_ADDR[15:5] == 11'b01000010000);
+wire rs_snoop_pawr_oe  = ~SNES_PAWR & (SNES_PA < 8'h40);
 wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 
 always @(posedge CLK2) begin
@@ -799,6 +863,15 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD & ~r213f_forceread) ? r213fr
               ( msu_enable ? MSU_SNES_DATA_OUT
               :(cheat_hit & ~feat_cmd_unlock) ? cheat_data_out
               :((snescmd_unlock | feat_cmd_unlock) & snescmd_enable) ? snescmd_dout
+              // in-game overlay register shadow: $F90500 (PPU, stride-2) /
+              // $F90700 (CPU $42xx) read-backs.  A stride-2 PPU entry is a PAIR,
+              // not a duplicate: even byte = 1st write (prev), odd byte = 2nd
+              // write (current), so the double-writing restore loop replays
+              // scroll/mode-7 in the right order (ctx.v-style, see regshadow.v).
+              // Single-write regs store (value, value), so the high byte is never
+              // $00 (that zeroed BGMODE/TM/INIDISP -> backdrop-only screen, hw).
+              :shadow_ppu_hit ? regshadow_dout
+              :shadow_cpu_hit ? regshadow_dout
               // SPC7110 register read-back ($4800-$484F).  Gated by ~IS_PATCH:
               // yield to the hook identity window so code running there reads
               // PSRAM instead of chip registers.
@@ -1130,6 +1203,11 @@ assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
                          spc7110_reg_enable ? 1'b0 :
                          (r213f_enable & ~SNES_PARD) ? 1'b0 :
                          (r2100_enable & ~SNES_PAWR) ? 1'b0 :
+                         // regshadow write snoop: enable the shifter (receive) during
+                         // PPU B-bus writes and $42xx A-bus writes, else the snoop
+                         // reads float (base does this via SNES_SNOOPPAWR_DATA_OE).
+                         rs_snoop_pawr_oe ? 1'b0 :
+                         (snoop_42xx_enable & ~SNES_WRITE) ? 1'b0 :
                          snoop_4200_enable ? SNES_WRITE :
                          ((IS_ROM & SNES_ROMSEL) | (!IS_ROM & !IS_SAVERAM & !IS_WRITABLE) | (SNES_READ_narrow & SNES_WRITE)
                          );
@@ -1139,7 +1217,15 @@ assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
  *  a) the SNES wants to read
  *  b) we want to force a value on the bus
  */
-assign SNES_DATABUS_DIR = ((~SNES_READ) | (~SNES_PARD & (r213f_enable))) ?
+// ~rs_snoop_pawr_oe | ROM_HIT | <fpga-served>: during a snooped B-bus write the
+// concurrent A-bus read (/RD low on DMA/HDMA) must NOT flip the shifter to drive --
+// unless the DMA source is served by the FPGA itself (ROM/PSRAM via ROM_HIT, or the
+// chip's own register block), where it must keep driving (the snoop then reads back
+// our own value).  The register term is what keeps the chip's decompression DMAs
+// alive: a game aims a DMA at the data port ($4810, or all of bank $50) with the
+// B-bus side writing the PPU -- exactly the CX4-RAM->PPU case that garbled sprites
+// on the cx4 core when its chip region was missing from this exception.
+assign SNES_DATABUS_DIR = ((~SNES_READ & (~rs_snoop_pawr_oe | ROM_HIT | (~IS_PATCH & spc7110_enable & spc7110_reg_enable))) | (~SNES_PARD & (r213f_enable))) ?
               (1'b1 ^ (r213f_forceread & r213f_enable & ~SNES_PARD)
                   ^ (r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE))
                            : ((~SNES_PAWR & r2100_enable) ? r2100_forcewrite

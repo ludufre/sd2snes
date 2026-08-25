@@ -123,13 +123,14 @@ void cheat_program() {
   /* Arm the in-game cheat overlay (snes/savestate.a65 probe reads this byte).
      This byte carries ONLY the user toggle. The chip/core gating lives in
      savestate.c (savestate_program): it installs the handler that runs this probe
-     only on FPGA cores that actually have the snapshot machinery the overlay reuses
-     (the base and DSP cores -- ctx.v copier + PPU/VRAM/CGRAM mirrors). On the
-     SA-1/GSU/CX4/OBC1/S-DD1/SPC7110/SGB cores the handler is not installed, so this
-     byte is never read there. Unlike an in-game savestate, the overlay never
-     snapshots/restores the coprocessor's internal state -- it only freezes the CPU
-     and saves/restores the PPU it took over -- which is why it is safe on the DSP
-     core (e.g. Super Mario Kart) even though savestates are not. */
+     only on FPGA cores that actually have the machinery the overlay needs (the
+     $21xx/$42xx register shadow -- ctx.v on base/DSP/SA-1, regshadow.v on the
+     other coprocessor cores, SPC7110 included). Only the SGB core lacks it, so
+     there the handler is not installed and this byte is never read. Unlike an
+     in-game savestate, the overlay never snapshots/restores the coprocessor's
+     internal state -- it only freezes the CPU and saves/restores the PPU it took
+     over -- which is why it is safe on cores whose chip has no snapshot window
+     (e.g. SPC7110) even though savestates are not. */
   sram_writebyte(CFG.enable_cheat_overlay ? 1 : 0, SRAM_CHEAT_OVL_GATE_ADDR);
 
   /* Combo plus its complement: a new m3nu.bin can run against an old MCU that never writes

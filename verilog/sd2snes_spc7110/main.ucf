@@ -11,7 +11,14 @@ TIMESPEC TS_CLKIN = PERIOD "CLKIN" 24.01 MHz HIGH 50 %;
 # Putting CLK2 in a user TNM_NET suppresses the automatic DCM-derived PERIOD,
 # so CLK2_GRP must carry its own (same TS_CLKIN * 4 the tools would derive) --
 # without it the whole 96 MHz domain goes unanalyzed.
-NET "CLK2" TNM_NET = "CLK2_GRP";
+# ANCHOR: the wrapper-internal net (DCM CLKFX output pin -> BUFG input), NOT the
+# top-level wire name.  XST names the flattened BUFG-output net after whichever
+# alias it fancies -- adding the regshadow instance renamed it from "CLK2" to
+# "snes_regshadow/clk" and NGDBuild failed with ConstraintSystem:59 -- while
+# "snes_dcm/CLKFX_BUF" comes from DCM_Scope.v itself and survives top-level
+# edits.  TNM_NET traces forward through the BUFG, so the group members (every
+# FF clocked by the 96 MHz domain) are identical either way.
+NET "snes_dcm/CLKFX_BUF" TNM_NET = "CLK2_GRP";
 TIMESPEC TS_CLK2 = PERIOD "CLK2_GRP" TS_CLKIN * 4 HIGH 50 %;
 # GUARD BAND on the 96 MHz domain -- do not drop this line.
 # Spartan-3 is one of the architectures whose timing engine computes NO clock
@@ -37,16 +44,16 @@ TIMESPEC TS_CLK2 = PERIOD "CLK2_GRP" TS_CLKIN * 4 HIGH 50 %;
 # means 10.412 - (data path) >= 0.36 ns, not zero.
 SYSTEM_JITTER = 0.48 ns;
 # PLACER COST TABLE, and why it is not 1.
-# This core fills 88% of the device and its worst paths are the decompressor
+# This core fills ~90% of the device and its worst paths are the decompressor
 # datapath, so closure sits within a nanosecond of the requirement and the
-# placement MAP produces decides which side of it the fit lands on.  Swept over
-# 60 cost tables with the current netlist: 42 is the one that reaches Timing
-# Score 0 (worst slack +0.002 ns, from a_nib into b_pfx in the decompressor);
-# 39 is next at score 95, then 33 at 554, and most of the rest run into the
-# thousands.  The number lives in the .xise ("Starting Placer Cost Table", Map
-# AND Par) and it is a choice of seed, not a relaxation -- every constraint in
-# this file is met, and the guard band above is still discounted from that
-# slack.
+# placement MAP produces decides which side of it the fit lands on.  Swept per
+# netlist (each edit re-rolls it): the battery netlist closed on 42, the
+# expansion-ROM netlist on 79, and the current one (regshadow / in-game menu)
+# on 71 -- Timing Score 0, fully routed, with the runner-up at 399 (table 54)
+# and the old 79 at 73582.  The number lives in the .xise ("Starting Placer
+# Cost Table", Map AND Par) and it is a choice of seed, not a relaxation --
+# every constraint in this file is met, and the guard band above is still
+# discounted from that slack.
 # CONSEQUENCE, and it has bitten this core once already: ANY edit to the
 # netlist re-rolls this.  A change that looks harmless can come back with a
 # score in the thousands and the honest answer is to sweep the cost table

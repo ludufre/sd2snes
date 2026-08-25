@@ -118,15 +118,20 @@ void savestate_program() {
      write-only $21xx/$42xx registers read back at $F90500/$F90700.  VRAM/CGRAM it reads
      back directly via $2139/$213B, so it does NOT need the full ctx.v mirror or the
      $2020 copier.  BASE/DSP/SA-1 carry that shadow inside ctx.v; the coprocessor cores
-     OBC1, S-DD1, CX4 and GSU instead get a small standalone regshadow.v BRAM (see their
-     verilog/), which is all the overlay needs -- so the overlay runs there too.  On the
-     CX4 core the $FFE0-$FFFF vector override (cx4_active) is suppressed while the hook
-     owns the vectors; on SA-1 the autonomous CPU is halted (snapshot_pause / $202C); on
-     GSU the coprocessor is auto-paused and the ROM arbiter yields to the SNES for the
-     duration of the hook (the handler runs from PSRAM, which the GSU would otherwise
-     starve under RON).
+     OBC1, S-DD1, CX4, GSU and SPC7110 instead get a small standalone regshadow.v BRAM
+     (see their verilog/), which is all the overlay needs -- so the overlay runs there
+     too.  On the CX4 core the $FFE0-$FFFF vector override (cx4_active) is suppressed
+     while the hook owns the vectors; on SA-1 the autonomous CPU is halted
+     (snapshot_pause / $202C); on GSU the coprocessor is auto-paused and the ROM arbiter
+     yields to the SNES for the duration of the hook (the handler runs from PSRAM, which
+     the GSU would otherwise starve under RON).  The SPC7110 needs neither: like OBC1/
+     S-DD1 it is reactive on this side (the overlay never touches $4800-$484F, and the
+     data-ROM fetch engine only arms in free slots, so the handler's PSRAM fetches are
+     never starved).
      Full in-game SAVESTATES work on base, DSP1-4, (Mk.III only) SA-1, GSU, OBC1,
-     S-DD1 and CX4.  Cores still WITHOUT the overlay machinery: SPC7110, SGB.  Key
+     S-DD1 and CX4.  SPC7110 is overlay-only: its chip state (decompressor position,
+     data-port pointer, ALU in flight) has no halt/scan window yet, so it never enters
+     savestate_ok below.  Cores still WITHOUT the overlay machinery: SGB.  Key
      the gate on the core, not the chip flags. (Pointer compare against the FPGA_*
      path literals -- same idiom as FPGA_BASE.) */
   int core_has_snapshot = (romprops.fpga_conf == NULL)
@@ -136,7 +141,8 @@ void savestate_program() {
                        || (romprops.fpga_conf == FPGA_OBC1)
                        || (romprops.fpga_conf == FPGA_SDD1)
                        || (romprops.fpga_conf == FPGA_CX4)
-                       || (romprops.fpga_conf == FPGA_GSU);
+                       || (romprops.fpga_conf == FPGA_GSU)
+                       || (romprops.fpga_conf == FPGA_SPC7110);
   if(!core_has_snapshot) {
     savestate_enable_handler(0);
     return;
