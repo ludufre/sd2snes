@@ -237,7 +237,7 @@
     <property xil_pn:name="Manual Implementation Compile Order" xil_pn:value="false" xil_pn:valueState="default"/>
     <property xil_pn:name="Map Effort Level" xil_pn:value="High" xil_pn:valueState="default" xil_pn:x_locked="true"/>
     <property xil_pn:name="Map Slice Logic into Unused Block RAMs" xil_pn:value="false" xil_pn:valueState="default"/>
-    <property xil_pn:name="Max Fanout" xil_pn:value="500" xil_pn:valueState="default"/>
+    <property xil_pn:name="Max Fanout" xil_pn:value="100" xil_pn:valueState="non-default"/>
     <property xil_pn:name="Maximum Number of Lines in Report" xil_pn:value="1000" xil_pn:valueState="default"/>
     <property xil_pn:name="Maximum Signal Name Length" xil_pn:value="20" xil_pn:valueState="default"/>
     <property xil_pn:name="ModelSim Post-Map UUT Instance Name" xil_pn:value="UUT" xil_pn:valueState="default"/>

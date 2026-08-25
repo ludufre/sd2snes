@@ -109,6 +109,7 @@ wire [23:0] ROM_MASK;
 /* SPC7110 data ROM window in PSRAM, programmed by the MCU (see mcu_cmd.v) */
 wire [23:0] DROM_BASE;
 wire [23:0] DROM_MASK;
+wire [23:0] EXP_BASE;
 wire [7:0] SD_DMA_SRAM_DATA;
 wire [1:0] SD_DMA_TGT;
 wire [10:0] SD_DMA_PARTIAL_START;
@@ -546,6 +547,7 @@ spc7110_regs snes_spc7110(
   .snes_addr(SNES_ADDR),
   .drom_base(DROM_BASE),
   .drom_mask(DROM_MASK),
+  .exp_base(EXP_BASE),
   .map_rom_hit(SPC7110_ROM_HIT),
   .map_psram_addr(SPC7110_PSRAM_ADDR),
   .map_is_sram(SPC7110_IS_SRAM),
@@ -614,6 +616,7 @@ mcu_cmd snes_mcu_cmd(
   .rom_mask_out(ROM_MASK),
   .drom_base_out(DROM_BASE),
   .drom_mask_out(DROM_MASK),
+  .exp_base_out(EXP_BASE),
   .rtc_data_out(rtc_data_in),
   .rtc_pgm_we(rtc_pgm_we),
 `ifndef MK2

@@ -55,6 +55,7 @@ module spc7110_regs(
   input      [23:0] snes_addr,
   input      [23:0] drom_base,
   input      [23:0] drom_mask,
+  input      [23:0] exp_base,
   output            map_rom_hit,
   output     [23:0] map_psram_addr,
   output            map_is_sram,
@@ -397,6 +398,7 @@ spc7110_map spc7110_map_i(
   .r4834(q4834),
   .drom_base(drom_base),
   .drom_mask(drom_mask),
+  .exp_base(exp_base),
   .rom_hit(map_rom_hit),
   .psram_addr(map_psram_addr),
   .is_sram(map_is_sram)

@@ -62,6 +62,12 @@ module spc7110_map(
   input       [23:0] drom_base,   // = PROM size; data ROM origin in PSRAM
   input       [23:0] drom_mask,   // physical data ROM mirror mask
 
+  input       [23:0] exp_base,    // expansion ROM (banks $40-4f) origin in
+                                  // PSRAM, 1 MB-aligned by contract; upper
+                                  // nibble 0 = chip absent (a real base is
+                                  // never below 1 MB, the PROM owns PSRAM 0
+                                  // -- same sentinel idea as prom_present)
+
   output             rom_hit,
   output      [23:0] psram_addr,
   output             is_sram
@@ -75,6 +81,18 @@ module spc7110_map(
   wire hi_bank = snes_addr[23] & snes_addr[22];   // $c0-ff
 
   wire rom_win = (lo_bank & snes_addr[15]) | hi_bank;
+
+  // -------------------------------------------------------------------------
+  // expansion ROM: banks $40-4f, flat 1 MB, outside the $483x window/block
+  // machinery entirely.  The board decodes it as a separate chip (its own
+  // "map address=40-4f:0000-ffff", no mask/mcu column); no retail cart
+  // populates it, the Tengai Makyou Zero translations do.  exp_base is
+  // 1 MB-aligned by contract, so the PSRAM address is a concatenation --
+  // no 24-bit carry chain in the PSRAM address path.
+  // -------------------------------------------------------------------------
+  wire        exp_avail = |exp_base[23:20];
+  wire        exp_sel    = (snes_addr[23:20] == 4'h4);
+  wire [23:0] exp_psram    = {exp_base[23:20], snes_addr[19:0]};
 
   // Both folds land on the same 22 bits: removing bit 23 from $00-3f/$80-bf
   // and bits 23:22 from $c0-ff leaves snes_addr[21:0] either way, because the
@@ -135,10 +153,16 @@ module spc7110_map(
   assign is_sram = lo_bank & r4830[7] & (snes_addr[15:13] == 3'b011);
 
   // the PROM branch answers only if a PROM is there, the data ROM branch only
-  // if the 0x400000 guard of dataromRead() does not fire
-  assign rom_hit = rom_win & (prom_branch ? prom_present : ~drom_kill);
+  // if the 0x400000 guard of dataromRead() does not fire.  exp_sel sits
+  // outside rom_win entirely (lo_bank needs bit 22 clear, hi_bank needs
+  // bit 23 set, exp_sel is bit23=0/bit22=1), so there is nothing to
+  // arbitrate -- and with no expansion chip present the $40-4f banks stay
+  // unmapped exactly as before.
+  assign rom_hit = (exp_sel & exp_avail)
+                 | (rom_win & (prom_branch ? prom_present : ~drom_kill));
 
   assign psram_addr = ~rom_hit   ? 24'h000000 :
+                       exp_sel  ? exp_psram   :
                        use_prom  ? prom_off   :
                                    (drom_base + drom_off);
 
