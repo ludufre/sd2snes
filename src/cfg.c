@@ -78,6 +78,7 @@ _Static_assert(offsetof(cfg_t, enable_game_manual) == 0x145, "cfg_t.enable_game_
 _Static_assert(offsetof(cfg_t, enable_sram_slots) == 0x146, "cfg_t.enable_sram_slots must stay at CFG_ADDR+$146");
 _Static_assert(offsetof(cfg_t, ingame_buttons_menu) == 0x147, "cfg_t.ingame_buttons_menu must stay at CFG_ADDR+$147");
 _Static_assert(offsetof(cfg_t, a26_video_width) == 0x149, "cfg_t.a26_video_width must stay at CFG_ADDR+$149");
+_Static_assert(offsetof(cfg_t, cc_time_limit) == 0x14a, "cfg_t.cc_time_limit must stay at CFG_ADDR+$14A");
 
 const cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -138,7 +139,8 @@ const cfg_t CFG_DEFAULT = {
   .enable_game_manual = 1,
   .enable_sram_slots = 1,
   .ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_Y | SNES_BUTTON_LEFT,
-  .a26_video_width = 0
+  .a26_video_width = 0,
+  .cc_time_limit = 3   /* 6 minutes, the event setting */
 };
 
 cfg_t CFG;
@@ -289,6 +291,7 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_BUS_COMPAT,                  bus_compat,                 CK_BOOL,    0),
   CFGI(CFG_ENABLE_GAME_MANUAL,          enable_game_manual,         CK_BOOL,    0),
   CFGI(CFG_A26_VIDEO_WIDTH,             a26_video_width,            CK_NUM,     0x10),
+  CFGI(CFG_CC_TIME_LIMIT,               cc_time_limit,              CK_NUM,     0xf3),
   CFGI(CFG_SKIN_NAME,                   skin_name,                  CK_STR,     0),
   CFGI(CFG_MENU_MUSIC_FILE,             bgm_name,                   CK_STR,     0),
   CFGI(CFG_SHOW_GAME_INFO,              show_game_info,             CK_NUM,     0x21),

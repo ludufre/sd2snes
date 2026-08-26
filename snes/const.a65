@@ -354,6 +354,7 @@ mtext_chip_cx4_speed              .byt "Cx4 speed", 0
 mtext_chip_gsu_speed              .byt "SuperFX speed", 0
 mtext_chip_msu1_volume_boost      .byt "MSU-1 volume boost", 0
 mtext_a26_width                   .byt "Atari 2600 video width", 0
+mtext_chip_cc_time_limit          .byt "Competition Cart timer (min)", 0
 
 mdesc_mm_last                     .byt "Show up to 10 most recently played games", 0
 mdesc_mm_favorites                .byt "Show up to 20 favorite games", 0
@@ -421,6 +422,7 @@ mdesc_chip_cx4_speed              .byt "Set speed of Cx4 soft core", 0
 mdesc_chip_gsu_speed              .byt "Set speed of SuperFX soft core", 0
 mdesc_chip_msu1_volume_boost      .byt "Set volume boost for MSU1 audio if your sd2snes is too quiet (Rev. E-G)", 0
 mdesc_a26_width                   .byt "Atari 2600 picture width: 160 is native 1:1, 256 fills the screen", 0
+mdesc_chip_cc_time_limit          .byt "Campus Challenge '92 / PowerFest '94 round timer", 0
 mdesc_cx4_speed_fast              .byt "Run as fast as possible", 0
 mdesc_cx4_speed_normal            .byt "Run at approx. original speed", 0
 mdesc_gsu_speed_fast              .byt "Run as fast as possible", 0

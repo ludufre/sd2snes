@@ -425,6 +425,7 @@ static void cfg_make_allchanged(void) {
      gesture -- cfg_check_menu_combo() has to accept it verbatim ("rXLR"). */
   CFG.ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_X | SNES_BUTTON_RIGHT;
   CFG.a26_video_width = 1;                       /* 256 px stretched */
+  CFG.cc_time_limit = 15;                        /* 18 minutes */
 }
 
 /* ---- the alternating-booleans config ------------------------------------

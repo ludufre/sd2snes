@@ -172,6 +172,70 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
     }
   }
 
+  /* Nintendo event carts (Campus Challenge '92 / PowerFest '94), also tested
+     before header scoring: the 256 KB multi-game menu chip carries no valid SNES
+     header ($7FC0 is code, and one PowerFest score hack even has a donor game's
+     header there).  Instead they are matched on the menu program's own boot code
+     at file offset $20 -- the status-poll / SRAM-init sequence that encodes the
+     board's register map ($C00000/$700420 long accesses on CC'92, $106000/$306420
+     on PF'94).  That window is byte-identical across every known dump and score
+     hack of each cart (the hacks patch data, not the boot), so one fingerprint
+     per cart covers them all. */
+  {
+    static const uint8_t cc92_boot[64] = {
+      0xc4, 0x81, 0x20, 0xdc, 0x81, 0xa9, 0x01, 0x8f,
+      0x23, 0x04, 0x70, 0xaf, 0x00, 0x00, 0xc0, 0x29,
+      0x0e, 0xc9, 0x0e, 0xd0, 0x1a, 0xa9, 0x03, 0x8f,
+      0x21, 0x04, 0x70, 0xcf, 0x21, 0x04, 0x70, 0xd0,
+      0xf6, 0xa9, 0x09, 0x8f, 0x20, 0x04, 0x70, 0xcf,
+      0x20, 0x04, 0x70, 0xd0, 0xf6, 0x80, 0x2f, 0xaf,
+      0x00, 0x00, 0xc0, 0x29, 0x10, 0xf0, 0x27, 0xa9,
+      0x01, 0x8f, 0x25, 0x04, 0x70, 0x80, 0x1f, 0x78
+    };
+    static const uint8_t pf94_boot[64] = {
+      0xf2, 0x81, 0x20, 0xda, 0x81, 0xa9, 0x01, 0x8f,
+      0x23, 0x64, 0x30, 0xaf, 0x00, 0x60, 0x10, 0x29,
+      0x0e, 0xc9, 0x0e, 0xd0, 0x1a, 0xa9, 0x03, 0x8f,
+      0x21, 0x64, 0x30, 0xcf, 0x21, 0x64, 0x30, 0xd0,
+      0xf6, 0xa9, 0x09, 0x8f, 0x20, 0x64, 0x30, 0xcf,
+      0x20, 0x64, 0x30, 0xd0, 0xf6, 0x80, 0x2f, 0xaf,
+      0x00, 0x60, 0x10, 0x29, 0x10, 0xf0, 0x27, 0xa9,
+      0x01, 0x8f, 0x25, 0x64, 0x30, 0x80, 0x1f, 0x78
+    };
+    uint8_t cc_hdr[64];
+    uint32_t cc_base = ((SMC_FSIZE() & 0xffff) == 0x200) ? 0x200 : 0;  /* copier header */
+
+    smc_readblock(cc_hdr, cc_base + 0x20, sizeof(cc_hdr), file_offset);
+    uint8_t is_cc92 = !memcmp(cc_hdr, cc92_boot, sizeof(cc92_boot));
+    if(is_cc92 || !memcmp(cc_hdr, pf94_boot, sizeof(pf94_boot))) {
+      memset(header, 0, sizeof(snes_header_t));  /* romprops is global: no stale SNES header */
+      header->ramsize       = 3;    /* 8 KB.  load_rom derives rammask from
+                                       header.ramsize (0 would leave the SRAM
+                                       unmapped and the menu spins forever in
+                                       its SRAM write-verify loop) */
+      props->mapper_id      = 1;    /* LoROM base map; the event-board game select,
+                                       menu mirror and PF'94 SRAM window key on
+                                       FEAT_CC92/FEAT_PF94 in the dsp core */
+      props->offset         = cc_base;
+      props->header_address = 0;
+      props->has_dspx       = 1;    /* Pilotwings resp. Super Mario Kart */
+      props->dsp_fw         = DSPFW_DSP1B;
+      props->fpga_conf      = FPGA_DSP;
+      props->fpga_features  = FEAT_DSPX | (is_cc92 ? FEAT_CC92 : FEAT_PF94);
+      /* dsp_feat[3:0] = uPD77C25 waitstates (as for any DSP1 game);
+         dsp_feat[12:8] = round timer in minutes.  The physical carts set the
+         time with a 4-bit DIP bank, 3 + 0..15 minutes; the event setting was 6. */
+      props->fpga_dspfeat   = 4 | ((uint16_t)(3 + (CFG.cc_time_limit & 15)) << 8);
+      /* image = 256 KB menu + 3 game chips staged linearly; round the PSRAM
+         claim up to a power of two for ROM_MASK */
+      props->romsize_bytes  = is_cc92 ? 0x200000 : 0x400000;
+      props->sramsize_bytes = props->ramsize_bytes = 8192;
+      props->region         = 0;
+      printf("%s event cart detected\n", is_cc92 ? "Campus Challenge '92" : "PowerFest '94");
+      return;
+    }
+  }
+
   for(uint8_t num = 0; num < 6; num++) {
     score = smc_headerscore(hdr_addr[num], header, file_offset);
     //printf("%d: offset = %lX; score = %d\n", num, hdr_addr[num], score);

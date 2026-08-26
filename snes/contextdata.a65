@@ -118,3 +118,115 @@ menu_enttab_filesel_favorites_context_gi:
 #include "ctxrows_favorites.i65"
 
  .byt  0
+
+; ---------------------------------------------------------------------------
+; Chip options menu (moved here from menudata.a65).  Not a context variant --
+; it lives in this object purely for the bank: the parent SUBMENU entry stores
+; `^menu_enttab_chip` and show_menu_submenu sets DBR from it, so relocating the
+; table to $C1 needs no reader change and returns its bytes to the starving $C0.
+menu_enttab_chip:
+; HEADER
+ .byt 1
+ .word !mtext_cfg_chip
+ .byt  ^mtext_cfg_chip
+; ENTRIES
+ .byt  MTYPE_VALUE
+ .word !mtext_chip_cx4_speed
+ .byt  ^mtext_chip_cx4_speed
+ .word !kv_cx4_speed
+ .byt  ^kv_cx4_speed
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_CX4_SPEED
+ .byt  ^CFG_CX4_SPEED
+ .word !mdesc_chip_cx4_speed
+ .byt  ^mdesc_chip_cx4_speed
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_chip_gsu_speed
+ .byt  ^mtext_chip_gsu_speed
+ .word !kv_gsu_speed
+ .byt  ^kv_gsu_speed
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GSU_SPEED
+ .byt  ^CFG_GSU_SPEED
+ .word !mdesc_chip_gsu_speed
+ .byt  ^mdesc_chip_gsu_speed
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_chip_msu1_volume_boost
+ .byt  ^mtext_chip_msu1_volume_boost
+ .word !kv_volume_boost
+ .byt  ^kv_volume_boost
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_MSU_VOLUME_BOOST
+ .byt  ^CFG_MSU_VOLUME_BOOST
+ .word !mdesc_chip_msu1_volume_boost
+ .byt  ^mdesc_chip_msu1_volume_boost
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_a26_width
+ .byt  ^mtext_a26_width
+ .word !kv_a26_width
+ .byt  ^kv_a26_width
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_A26_VIDEO_WIDTH
+ .byt  ^CFG_A26_VIDEO_WIDTH
+ .word !mdesc_a26_width
+ .byt  ^mdesc_a26_width
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !mtext_chip_cc_time_limit
+ .byt  ^mtext_chip_cc_time_limit
+ .word !kv_cc_time_limit
+ .byt  ^kv_cc_time_limit
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_CC_TIME_LIMIT
+ .byt  ^CFG_CC_TIME_LIMIT
+ .word !mdesc_chip_cc_time_limit
+ .byt  ^mdesc_chip_cc_time_limit
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt 0
+
+; Competition Cart round timer, 0..15 = 3..18 minutes = the 4-bit DIP bank of the
+; physical event boards.  The row shows the bare minute count (the entry title
+; carries the "(min)" unit): values 3-14 reuse the neutral number strings the LED
+; brightness table already pays for in $C0; only 15-18 are new, and they live here
+; in $C1 -- resolve_str passes any pointer outside the translated pool through.
+kv_cc_time_limit:
+.word $0000, !text_3 : .byt ^text_3
+.word $0001, !text_4 : .byt ^text_4
+.word $0002, !text_5 : .byt ^text_5
+.word $0003, !text_6 : .byt ^text_6
+.word $0004, !text_7 : .byt ^text_7
+.word $0005, !text_8 : .byt ^text_8
+.word $0006, !text_9 : .byt ^text_9
+.word $0007, !text_10 : .byt ^text_10
+.word $0008, !text_11 : .byt ^text_11
+.word $0009, !text_12 : .byt ^text_12
+.word $000a, !text_13 : .byt ^text_13
+.word $000b, !text_14 : .byt ^text_14
+.word $000c, !text_ccmin_15 : .byt ^text_ccmin_15
+.word $000d, !text_ccmin_16 : .byt ^text_ccmin_16
+.word $000e, !text_ccmin_17 : .byt ^text_ccmin_17
+.word $000f, !text_ccmin_18 : .byt ^text_ccmin_18
+.word $ffff
+
+text_ccmin_15  .byt "15", 0
+text_ccmin_16  .byt "16", 0
+text_ccmin_17  .byt "17", 0
+text_ccmin_18  .byt "18", 0

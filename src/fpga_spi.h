@@ -49,6 +49,13 @@
 
 #define FEAT_BSLOROM       (1 << 15)
 #define FEAT_BSSLOT        (1 << 14)
+/* Competition/event carts (dsp core only). Featurebits are interpreted per core,
+   so these overlay the BS-X bits above: BSLOROM/BSSLOT are only read by the base
+   core and a BS-X ROM never loads the dsp core (same precedent as BUSCOMPAT
+   reusing the dead COMBO bit below). Bit 13 itself is off limits here: it is
+   forced from CFG.bus_compat on every feature write. */
+#define FEAT_PF94          (1 << 15)  /* PowerFest '94 event board (dsp core) */
+#define FEAT_CC92          (1 << 14)  /* Campus Challenge '92 event board (dsp core) */
 #define FEAT_COMBO         (1 << 13)  /* dead: set by smc.c, never read by any FPGA core */
 #define FEAT_BUSCOMPAT     (1 << 13)  /* reuses the dead COMBO bit; forced from CFG.bus_compat in fpga_set_features (global bus-timing compat, not per-ROM). main.v muxes SNES_PULSE_end/READ_narrow on it */
 #define FEAT_SATELLABASE   (1 << 12)

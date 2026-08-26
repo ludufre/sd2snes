@@ -34,6 +34,8 @@ module address(
   input [7:0] SAVERAM_BASE,
   input [23:0] SAVERAM_MASK,
   input [23:0] ROM_MASK,
+  input [7:0] CC_DR,        // event cart (CC92/PF94) game-select latch
+  output cc_sel,            // event cart select/status register window
   input  map_unlock,
   input  map_Ex_rd_unlock,
   input  map_Ex_wr_unlock,
@@ -65,7 +67,9 @@ parameter [3:0]
   FEAT_213F = 4,
   FEAT_SNESUNLOCK = 5,
   FEAT_2100 = 6,
-  FEAT_DMA1 = 11
+  FEAT_DMA1 = 11,
+  FEAT_CC92 = 14,           // Campus Challenge '92 event board
+  FEAT_PF94 = 15            // PowerFest '94 event board
 ;
 
 integer i;
@@ -95,6 +99,14 @@ assign IS_SAVERAM_pre = (~map_unlock & SAVERAM_MASK[0])
                       ?((SNES_ADDR_early[22:19] == 4'b1101)
                         & &(~SNES_ADDR_early[15:12])
                         & SNES_ADDR_early[11])
+/*  PF'94 event board: SRAM @ Bank 0x30-0x3f, 0xb0-0xbf, offset 6000-7fff
+ *  (HiROM-style window; the menu program keeps its bookkeeping at $306420).
+ *  Replaces the LoROM rule below, whose bank $70 window would collide with
+ *  the menu mirror there.  CC'92 keeps the standard LoROM rule (its menu
+ *  writes $700420). */
+                      :featurebits[FEAT_PF94]
+                      ? ((SNES_ADDR_early[22:20] == 3'b011)
+                        & (SNES_ADDR_early[15:13] == 3'b011))
                       :((MAPPER_DEC[3'b000]
                         || MAPPER_DEC[3'b010]
                         || MAPPER_DEC[3'b110])
@@ -137,8 +149,38 @@ assign IS_PATCH = ( (map_unlock
 assign IS_WRITABLE = IS_SAVERAM
                      |IS_PATCH; // allow writing of the patch region
 
+/* Event carts (CC'92 / PF'94): 256 KB menu chip + 3 game chips staged linearly
+ * in PSRAM (menu at 0, games at +040000/+0C0000/+140000).  The menu program's
+ * select latch (CC_DR, in main.v) decides which chip answers the game area;
+ * the menu chip stays visible at its own region so the games can jump back
+ * into it, and an unknown/zero select falls back to the menu (the reset vector
+ * is fetched from bank $00, which must land in the menu chip).
+ * CC'92: menu @ banks 80-ff:8000+, games @ 00-7f (all LoROM folds).
+ * PF'94: menu @ banks 20-3f/60-7f/a0-bf/e0-ff:8000+; game 2 is HiROM-style
+ * (linear A[18:0]), game 3 a 1 MB LoROM fold. */
+wire [23:0] cc_menu_addr = {6'b0, SNES_ADDR[18:16], SNES_ADDR[14:0]};
+wire [23:0] cc_lofold    = {5'b0, SNES_ADDR[19:16], SNES_ADDR[14:0]};
+wire [23:0] cc92_rom_addr =
+    (SNES_ADDR[23] & SNES_ADDR[15]) ? cc_menu_addr
+  : (CC_DR == 8'h09) ? cc_lofold + 24'h040000
+  : (CC_DR == 8'h05) ? cc_lofold + 24'h0C0000
+  : (CC_DR == 8'h03) ? cc_lofold + 24'h140000
+  : cc_menu_addr;
+wire [23:0] pf94_rom_addr =
+    (SNES_ADDR[21] & SNES_ADDR[15]) ? cc_menu_addr
+  : (CC_DR == 8'h09) ? cc_lofold + 24'h040000
+  : (CC_DR == 8'h0C) ? {5'b0, SNES_ADDR[18:0]} + 24'h0C0000
+  : (CC_DR == 8'h0A) ? {4'b0, SNES_ADDR[20:16], SNES_ADDR[14:0]} + 24'h140000
+  : cc_menu_addr;
+
 assign SRAM_SNES_ADDR = IS_PATCH
                         ? SNES_ADDR
+                        : (featurebits[FEAT_CC92] | featurebits[FEAT_PF94])
+                        ?(IS_SAVERAM
+                          ? SAVERAM_ADDR + ({SNES_ADDR[20:16], SNES_ADDR[14:0]}
+                                          & SAVERAM_MASK)
+                          : featurebits[FEAT_CC92] ? cc92_rom_addr
+                                                   : pf94_rom_addr)
                         : ((MAPPER_DEC[3'b000])
                           ?(IS_SAVERAM
                             ? SAVERAM_ADDR + ({SNES_ADDR[20:16], SNES_ADDR[12:0]}
@@ -181,7 +223,7 @@ assign SRAM_SNES_ADDR = IS_PATCH
 
 assign ROM_ADDR = SRAM_SNES_ADDR;
 
-assign ROM_HIT = IS_ROM | IS_WRITABLE;
+assign ROM_HIT = (IS_ROM | IS_WRITABLE) & ~cc_sel;
 
 assign msu_enable = featurebits[FEAT_MSU1] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff8) == 16'h2000));
 assign dma_enable = (featurebits[FEAT_DMA1] | map_unlock | snescmd_unlock) & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff0) == 16'h2020));
@@ -191,8 +233,15 @@ assign map_enable =                           (!SNES_ADDR[22] && ((SNES_ADDR[15:
 // DSP1 LoROM: DR=30-3f:8000-bfff; SR=30-3f:c000-ffff
 //          or DR=60-6f:0000-3fff; SR=60-6f:4000-7fff
 // DSP1 HiROM: DR=00-0f:6000-6fff; SR=00-0f:7000-7fff
+// CC'92 event board: DR=20-3f/a0-bf:8000-bfff; SR=20-3f/a0-bf:c000-ffff
+// PF'94 event board: DR=00-0f/80-8f:6000-6fff; SR=00-0f/80-8f:7000-7fff
 assign dspx_enable =
-  featurebits[FEAT_DSPX]
+  featurebits[FEAT_CC92]
+  ? ((SNES_ADDR[22:21] == 2'b01) & SNES_ADDR[15])
+  : featurebits[FEAT_PF94]
+  ? (((SNES_ADDR[23:20] == 4'h0) | (SNES_ADDR[23:20] == 4'h8))
+    & (SNES_ADDR[15:13] == 3'b011))
+  : featurebits[FEAT_DSPX]
   ?((MAPPER_DEC[3'b001])
     ?( ( SNES_ADDR[22] & SNES_ADDR[21] & ~SNES_ADDR[20] & ~SNES_ADDR[15])
       |(~SNES_ADDR[22] & SNES_ADDR[21] &  SNES_ADDR[20] &  SNES_ADDR[15]))
@@ -213,13 +262,35 @@ assign dspx_dp_enable = (SNES_ADDR[15:11] == 5'b00000)
                       & ( (featurebits[FEAT_ST0010] & (SNES_ADDR[22:19] == 4'b1101))
                         | (featurebits[FEAT_DSPX] & (map_unlock | snescmd_unlock) & (SNES_ADDR[23:16] == 8'hE8)) );
 
-assign dspx_a0 = featurebits[FEAT_DSPX]
+assign dspx_a0 = featurebits[FEAT_CC92] ? SNES_ADDR[14]
+                 : featurebits[FEAT_PF94] ? SNES_ADDR[12]
+                 : featurebits[FEAT_DSPX]
                  ?((MAPPER_DEC[3'b001]) ? SNES_ADDR[14]
                    :(MAPPER_DEC[3'b000]) ? SNES_ADDR[12]
                    :1'b1)
                  : featurebits[FEAT_ST0010]
                  ? SNES_ADDR[0]
                  : 1'b1;
+
+// Event cart select/status window.  Reads return the status byte (CC_SR in
+// main.v: bit 1 = round timer expired); writes with A21=1 latch the game
+// select (CC_DR).  The boards decode loosely, so whole banks mirror:
+// CC'92: banks c0-cf (status, read @ $C00000) / e0-ef (select, write @ $E00000)
+// PF'94: banks 10-2f/90-af : 6000-7fff (read @ $106000, write @ $206000)
+// Muzzled while any patch/snescmd unlock is held: the in-game overlay and
+// savestate handlers own banks $C0-$FF then, and a handler write landing in
+// $E0-$EF would otherwise latch garbage into CC_DR.
+wire cc_unlocked = map_unlock | snescmd_unlock
+                 | map_Ex_rd_unlock | map_Ex_wr_unlock
+                 | map_Fx_rd_unlock | map_Fx_wr_unlock;
+assign cc_sel = ~cc_unlocked
+              & (featurebits[FEAT_CC92]
+                ? ((SNES_ADDR[23:20] == 4'hC) | (SNES_ADDR[23:20] == 4'hE))
+                : featurebits[FEAT_PF94]
+                ? (((SNES_ADDR[23:20] == 4'h1) | (SNES_ADDR[23:20] == 4'h2)
+                   |(SNES_ADDR[23:20] == 4'h9) | (SNES_ADDR[23:20] == 4'hA))
+                  & (SNES_ADDR[15:13] == 3'b011))
+                : 1'b0);
 
 assign r213f_enable = featurebits[FEAT_213F] & (SNES_PA == 8'h3f);
 assign r2100_hit = (SNES_PA == 8'h00);

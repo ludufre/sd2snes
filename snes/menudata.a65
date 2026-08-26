@@ -586,69 +586,10 @@ menu_enttab_browser:
 
  .byt 0
 
-menu_enttab_chip:
-; HEADER
- .byt 1
- .word !mtext_cfg_chip
- .byt  ^mtext_cfg_chip
-; ENTRIES
- .byt  MTYPE_VALUE
- .word !mtext_chip_cx4_speed
- .byt  ^mtext_chip_cx4_speed
- .word !kv_cx4_speed
- .byt  ^kv_cx4_speed
- .byt  OPTTYPE_KVBYTE
- .word !CFG_CX4_SPEED
- .byt  ^CFG_CX4_SPEED
- .word !mdesc_chip_cx4_speed
- .byt  ^mdesc_chip_cx4_speed
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_VALUE
- .word !mtext_chip_gsu_speed
- .byt  ^mtext_chip_gsu_speed
- .word !kv_gsu_speed
- .byt  ^kv_gsu_speed
- .byt  OPTTYPE_KVBYTE
- .word !CFG_GSU_SPEED
- .byt  ^CFG_GSU_SPEED
- .word !mdesc_chip_gsu_speed
- .byt  ^mdesc_chip_gsu_speed
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_VALUE
- .word !mtext_chip_msu1_volume_boost
- .byt  ^mtext_chip_msu1_volume_boost
- .word !kv_volume_boost
- .byt  ^kv_volume_boost
- .byt  OPTTYPE_KVBYTE
- .word !CFG_MSU_VOLUME_BOOST
- .byt  ^CFG_MSU_VOLUME_BOOST
- .word !mdesc_chip_msu1_volume_boost
- .byt  ^mdesc_chip_msu1_volume_boost
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_VALUE
- .word !mtext_a26_width
- .byt  ^mtext_a26_width
- .word !kv_a26_width
- .byt  ^kv_a26_width
- .byt  OPTTYPE_KVBYTE
- .word !CFG_A26_VIDEO_WIDTH
- .byt  ^CFG_A26_VIDEO_WIDTH
- .word !mdesc_a26_width
- .byt  ^mdesc_a26_width
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt 0
+; menu_enttab_chip moved to contextdata.a65 ($C1): the SUBMENU dispatch loads the
+; table bank from the entry itself (`pha : plb : jsr show_menu`), so a table is
+; free to live outside $C0 -- and $C0 is the page that runs out.  See the WHY $C1
+; note at the top of contextdata.a65.
 
 menu_enttab_sgb:
 ; HEADER

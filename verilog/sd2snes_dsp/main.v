@@ -656,6 +656,25 @@ mcu_cmd snes_mcu_cmd(
   .dsp_feat_out(dsp_feat)
 );
 
+// Event cart (Campus Challenge '92 / PowerFest '94) game-select latch, round
+// timer and status.  CC_DR is written by the cart's menu program ($E00000 on
+// CC'92, $206000 on PF'94; cc_sel decode in address.v) and picks which of the
+// staged chips answers the game area; /RESET clears it so the console always
+// reboots into the menu chip.  Writing $09 (round start) arms the countdown
+// with dsp_feat[12:8] minutes and clears the status; on expiry CC_SR[1]
+// latches ("time over" -- every game build polls it from its NMI handler and
+// jumps to the score screen).  CC_SR and the timer deliberately survive a
+// console reset: the menu's boot path tests bit 1 to land on the score screen
+// after a mid-round reset.
+reg [7:0] CC_DR = 8'h00;
+reg [7:0] CC_SR = 8'h00;
+wire cc_sel;
+reg cc_tm_on = 1'b0;
+reg [4:0] cc_tm_min = 5'd0;
+reg [5:0] cc_tm_sec = 6'd0;
+reg [26:0] cc_tm_div = 27'd0;
+localparam [26:0] CC_ONE_SECOND = 27'd95999999; // CLK2 = 96 MHz on both boards
+
 address snes_addr(
   .CLK(CLK2),
   .MAPPER(MAPPER),
@@ -673,6 +692,8 @@ address snes_addr(
   .SAVERAM_BASE(SAVERAM_BASE),
   .SAVERAM_MASK(SAVERAM_MASK),
   .ROM_MASK(ROM_MASK),
+  .CC_DR(CC_DR),
+  .cc_sel(cc_sel),
   .map_unlock(map_unlock),
   .map_Ex_rd_unlock(map_Ex_rd_unlock_r),
   .map_Ex_wr_unlock(map_Ex_wr_unlock_r),
@@ -784,11 +805,50 @@ always @(posedge CLK2) begin
   end
 end
 
+// event cart game-select latch (see the block comment at the declarations)
+wire cc_wr_hit = cc_sel & SNES_ADDR[21];
+always @(posedge CLK2) begin
+  if(SNES_reset_strobe) begin
+    CC_DR <= 8'h00;
+  end else if(SNES_WR_end & cc_wr_hit) begin
+    CC_DR <= SNES_DATA;
+  end
+end
+
+// event cart round timer: 1 s prescaler -> seconds -> minutes countdown
+always @(posedge CLK2) begin
+  if(SNES_WR_end & cc_wr_hit & (SNES_DATA == 8'h09)) begin
+    cc_tm_on  <= (dsp_feat[12:8] != 5'd0);
+    cc_tm_min <= dsp_feat[12:8];
+    cc_tm_sec <= 6'd0;
+    cc_tm_div <= 27'd0;
+    CC_SR     <= 8'h00;
+  end else if(cc_tm_on) begin
+    if(cc_tm_div == CC_ONE_SECOND) begin
+      cc_tm_div <= 27'd0;
+      if(cc_tm_sec == 6'd59) begin
+        cc_tm_sec <= 6'd0;
+        if(cc_tm_min == 5'd1) begin
+          CC_SR[1] <= 1'b1;
+          cc_tm_on <= 1'b0;
+        end else begin
+          cc_tm_min <= cc_tm_min - 5'd1;
+        end
+      end else begin
+        cc_tm_sec <= cc_tm_sec + 6'd1;
+      end
+    end else begin
+      cc_tm_div <= cc_tm_div + 27'd1;
+    end
+  end
+end
+
 assign SNES_DATA = (r213f_enable & ~SNES_PARD) ? (r213f_forceread ? 8'bZ : r213fr)
                    :(r2100_enable & ~SNES_PAWR & r2100_forcewrite) ? r2100r
                    :(((~SNES_READ & ((~SNES_SNOOPPAWR_DATA_OE & ~SNES_SNOOPPARD_DATA_OE) | ~SNES_ROMSEL_EARLY)))
                                 & ~(r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE))
-                                ? (dspx_enable ? DSPX_SNES_DATA_OUT
+                                ? (cc_sel ? CC_SR
+                                  :dspx_enable ? DSPX_SNES_DATA_OUT
                                   :dspx_dp_enable ? DSPX_SNES_DATA_OUT
                                   :msu_enable ? MSU_SNES_DATA_OUT
                                   :dma_enable ? DMA_SNES_DATA_OUT
@@ -1163,7 +1223,7 @@ assign ROM_BLE = ~ROM_ADDR0 & ~(~SD_DMA_TO_ROM & CTX_HIT & CTX_ROM_WORDr) & ~(~S
 
 reg ReadOrWrite_r; always @(posedge CLK2) ReadOrWrite_r <= ~(SNES_READr[1] & SNES_READr[0] & SNES_WRITEr[1] & SNES_WRITEr[0]);
 
-assign SNES_DATABUS_OE = ((dspx_enable | dspx_dp_enable) & ReadOrWrite_r) ? 1'b0 :
+assign SNES_DATABUS_OE = ((cc_sel | dspx_enable | dspx_dp_enable) & ReadOrWrite_r) ? 1'b0 :
                          (msu_enable & ReadOrWrite_r) ? 1'b0 :
                          (dma_enable & ReadOrWrite_r) ? 1'b0 :
                          (loop_enable & ~SNES_READ_narrow) ? 1'b0 :

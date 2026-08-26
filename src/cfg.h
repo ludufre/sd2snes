@@ -77,6 +77,7 @@
 #define CFG_BUS_COMPAT                   ("BusCompat")
 #define CFG_ENABLE_GAME_MANUAL           ("EnableGameManual")
 #define CFG_A26_VIDEO_WIDTH              ("A26VideoWidth")
+#define CFG_CC_TIME_LIMIT                ("CompCartTimeLimit")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -154,6 +155,11 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      source pixels stretched to 8 so the picture fills the screen. Global toggle, read at .a26 load time
      and shipped to the core as feat16[5] of CHIPFEAT $EF (src/atari.c); the core resamples, so the SNES
      side never sees the difference. mk3-only -- the mk2 a26 stubs never look at it. Default 0. */
+  uint8_t  cc_time_limit;           /* CFG @ $14A: Competition Cart (Campus Challenge '92 / PowerFest '94)
+     round timer, 0..15 = 3..18 minutes -- the value of the 4-bit DIP bank on the physical event
+     boards. Read at load time by smc_id and shipped to the dsp core in dsp_feat[12:8]. Menu entry
+     "Competition Cart timer (min)" under Chip options (kv_cc_time_limit shows the minute count);
+     YAML key CompCartTimeLimit. Default 3 = 6 minutes, the setting used at the actual events. */
 } cfg_t;
 
 int cfg_save(void);
