@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# pack_igmenu.py -- slice igmenu.bin (bank $C2) out of the sneslink -fsmc image and
+# pack_igmenu.py -- slice igmenu.bin (bank $C8) out of the sneslink -fsmc image and
 # patch the crc16(body). Usage: pack_igmenu.py <raw.smc> <igmenu.bin>
 #
 # sneslink emits a HiROM smc (bank $C0 = file offset 0). The igmenu object is org'd
-# `.link page $c2` so its bytes carry the "IGMN" header at address $C20000. We locate
-# that magic (= the bank $C2 base) and slice from there so the shipped bin's offset 0
-# maps to PSRAM $C20000 when the MCU loads it. The crc16 covers the body from offset 8
+# `.link page $c8` so its bytes carry the "IGMN" header at address $C80000. We locate
+# that magic (= the bank $C8 base) and slice from there so the shipped bin's offset 0
+# maps to PSRAM $C80000 when the MCU loads it. The crc16 covers the body from offset 8
 # (jml + code), matching src/igmenu.c (crc16_update, init 0xFFFF, xorout 0xFFFF).
 import sys
 
@@ -35,18 +35,18 @@ def main():
     if len(data) < 12:
         sys.exit("pack_igmenu: body too small (%d)" % len(data))
 
-    # BASE/ENTRY guard: $C20008 must be `jmp igmenu_main` ($4C, 16-bit operand) and
+    # BASE/ENTRY guard: $C80008 must be `jmp igmenu_main` ($4C, 16-bit operand) and
     # igmenu_main must begin with `sep #$20` ($E2 $20). We interpret the jmp's 16-bit
-    # target as a FILE offset (valid only if the object is based at $C20000) and confirm
-    # it lands on `sep #$20`. This fails loudly if the linker did NOT base the $C2 object
-    # at $C20000 (then every absolute reference in the bin would be off by the base and it
+    # target as a FILE offset (valid only if the object is based at $C80000) and confirm
+    # it lands on `sep #$20`. This fails loudly if the linker did NOT base the $C8 object
+    # at $C80000 (then every absolute reference in the bin would be off by the base and it
     # would crash the SNES in-game).
     if data[8] != 0x4C:
         sys.exit("pack_igmenu: no jmp ($4C) at offset 8 (got %02x)" % data[8])
     tgt = data[9] | (data[10] << 8)
     if tgt + 2 > len(data) or data[tgt] != 0xE2 or data[tgt + 1] != 0x20:
         sys.exit("pack_igmenu: entry/base mismatch -- jmp target (file off 0x%04x) is not "
-                 "igmenu_main's `sep #$20`; the $C2 object is not based at $C20000." % tgt)
+                 "igmenu_main's `sep #$20`; the $C8 object is not based at $C80000." % tgt)
 
     crc = 0xFFFF
     for b in data[8:]:

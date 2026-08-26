@@ -1,6 +1,6 @@
 ; MENU-side host for the shared MANUAL/GUIDES image viewer (snes/manviewer.i65).
 ;
-; The viewer body is SHARED SOURCE with the in-game $C2 shell (snes/igmenu.a65): this file
+; The viewer body is SHARED SOURCE with the in-game $C8 shell (snes/igmenu.a65): this file
 ; is the second HOST of that contract.  It binds the man_* contract #defines, includes the
 ; viewer into the menu's $C1 page, supplies the three man_host_* hooks, and adds the entry
 ; point the game-info screen calls on X (manhost_from_gi).
@@ -226,9 +226,10 @@ mhg_restore:
 	plb                                        ;   phb/plb in it would break this silently.
 	sep #$20 : .as
 	lda #$80 : sta @$002115                    ; re-assert after genfonts (it drives ch7)
-	; (b) the .man page staging overwrote PSRAM $C3..$C7 = the browser's file-STRING table
-	;     (scan_dir grows it from $C30000; the $C2 pointer table survives).  Re-scan the
-	;     current directory before anything reads a filename again.
+	; (b) historical: the .man page staging ($C3..$C7) used to overwrite the browser's
+	;     file-STRING table there. The dir buffer lives in $DB/$DC-$DF now, so nothing is
+	;     destroyed anymore -- the re-scan stays because it is cheap and keeps this exit
+	;     path identical to the proven one.
 	jsl @fs_call_readdir
 	; (c) MCU_PARAM back (READDIR just wrote 15 bytes over it), then re-fire the SAME info
 	;     query: it re-derives file_lfn on the MCU (so a second X works), re-stages the guide

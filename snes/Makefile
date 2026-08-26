@@ -7,10 +7,14 @@ OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
 
 OUT = menu.bin m3nu.bin
-# igmenu.bin: the in-game TAB menu shell, linked SEPARATELY from the menu (org bank $C2,
-# loaded by the MCU to PSRAM $C20000 at game-load). NOT part of m3nu.bin.
+# igmenu.bin: the in-game TAB menu shell, linked SEPARATELY from the menu (org bank $C8,
+# loaded by the MCU to PSRAM $C80000 at game-load). NOT part of m3nu.bin.
 IGMENU = igmenu.bin
-MENU_SIZE = 131072
+# 3 banks ($C0-$C2). Lockstep with THEME_MENU_SIZE in src/theme.c. $C2 carries the
+# i18n string pool (const_lang_str, build_const.py) and stays RESIDENT in-game
+# (igmenu moved to $C8, the dir buffer to $DB), so in-game readers like the cheat
+# overlay's (no name) lookup keep working.
+MENU_SIZE = 196608
 
 LOG = $(OBJS:=.log)
 MAP = $(IPS:.ips=.map) $(O65:.o65=.map)
@@ -53,6 +57,7 @@ $(OUT): $(OBJS)
 	@if grep -qE "ERROR:|still undefined|still not defined" link.log; then \
 	  echo "*** menu link FAILED — bank overflow or undefined symbol (see snes/link.log)"; exit 1; fi
 	@python3 -c "from pathlib import Path; p=Path('$@'); d=p.read_bytes(); target=$(MENU_SIZE); assert len(d) <= target, f'{p} too large: {len(d)} > {target}'; p.write_bytes(d + b'\xff' * (target - len(d)))"
+	@python3 utils/bankcheck.py $@ $(MENU_SIZE)
 
 # igmenu.bin: separate $C2 link -> HiROM smc -> slice from the "IGMN" magic + patch the
 # crc16(body). Same loud guard as the menu (the `| tee` masks sneslink's exit code, so a

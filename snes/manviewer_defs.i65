@@ -1,7 +1,7 @@
 // manviewer.i65 companion -- MANUAL viewer #defines ONLY (no code, no data, no .link).
 //
 // Split out of igmenu.a65 so the SAME viewer source (manviewer.i65) can be assembled into the
-// in-game $C2 shell AND, later, into the $C0/$C1 menu. Everything here is layout/PPU/scratch
+// in-game $C8 shell AND, later, into the $C0/$C1 menu. Everything here is layout/PPU/scratch
 // that belongs to the VIEWER; anything the tab level owns stayed behind in igmenu.a65
 // (IGM_MN_* i18n indices, MN_TITLE_ROW/MN_PAGES_ROW/..., MN_BG1_BYTES/MN_BG2_*/MN_BUF_*
 // -- the host snapshot spans, used only by the host's own save/restore hooks --

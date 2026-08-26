@@ -1990,8 +1990,8 @@ gi_call_query:
   jsr gameinfo_query
   rtl
 
-; -- re-scan the current browser directory: the manual page staging overwrites the file
-;    STRING table in PSRAM $C3..$C7 (scan_dir grows it from $C30000).
+; -- re-scan the current browser directory (historical: the manual staging used to
+;    overwrite the file-STRING table in $C3..$C7; it lives in $DC.. now -- kept, cheap).
 fs_call_readdir:
   jsr filesel_request_filelist
   rtl

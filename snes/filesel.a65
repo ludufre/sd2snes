@@ -3605,15 +3605,24 @@ fnl_es_loop:
   sta [dirlog_idx], y     ; dirstart_addr = 0
   iny
   iny
-  lda #$00C2
-  sta [dirlog_idx], y     ; dirstart_bank lo = $C2 (=^ROOT_DIR; hi byte overwritten next)
+  sep #$20 : .as
+  lda #^ROOT_DIR
+  sta [dirlog_idx], y     ; dirstart_bank = ^ROOT_DIR (8-bit store: snescom rejects
+                          ; #^label with A in 16-bit mode).
+                          ; MUST track ROOT_DIR: this was a hardcoded #$00C2 and kept
+                          ; pointing at the old dir-buffer bank after the move to $DB --
+                          ; the first B (parent) after a boot-nav restore then read
+                          ; "dirents" out of the menu's own third bank (garbage list).
+  rep #$20 : .al
   iny
   lda testvar+4           ; dirptr_addr = entry offset (screen starts here on B)
   sta [dirlog_idx], y
   iny
   iny
-  lda #$00C2
-  sta [dirlog_idx], y     ; dirptr_bank lo = $C2 (=^ROOT_DIR)
+  sep #$20 : .as
+  lda #^ROOT_DIR
+  sta [dirlog_idx], y     ; dirptr_bank = ^ROOT_DIR (same rationale as above)
+  rep #$20 : .al
   iny
   lda #$0000
   sta [dirlog_idx], y     ; filesel_sel = 0
@@ -3771,7 +3780,7 @@ fnl_sf_scroll:
   asl                     ; A = (index - listdisp + 1) * 4
   sta @dirptr_addr        ; scroll so the matched entry is the last visible row
   lda #$0000
-  sta @dirstart_addr      ; the directory ALWAYS starts at $C1:0000 — keep the
+  sta @dirstart_addr      ; the directory ALWAYS starts at ROOT_DIR offset 0 — keep the
                           ; scroll floor at 0 (do NOT set it to the scroll
                           ; offset, or Up/PageUp/End/Home break and the list
                           ; corrupts once dirptr drops below the bogus floor)

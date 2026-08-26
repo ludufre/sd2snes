@@ -1,11 +1,11 @@
 // manviewer.i65 -- the MANUAL/GUIDES image viewer, shared source.
 //
-// Extracted verbatim from igmenu.a65 so the SAME viewer can be assembled into the in-game $C2
+// Extracted verbatim from igmenu.a65 so the SAME viewer can be assembled into the in-game $C8
 // shell AND (next step) into the menu. Like cheatlist.i65 this file has NO .link directive: it
 // inherits the including file's bank. #include "manviewer_defs.i65" BEFORE this file.
 //
 // EXTRACTION GUARD (durable): nothing here may name a HOST label or a host-only variable. The
-// separate $C2 link fails loudly on an undefined symbol (snes/Makefile greps igmenu.link.log
+// separate $C8 link fails loudly on an undefined symbol (snes/Makefile greps igmenu.link.log
 // for "still undefined"), and that failure IS the proof the boundary stayed clean. Concretely:
 // no host-side scratch, no host tilemap/font constants, no host draw routine may be named
 // here -- the contract names below are the only way across.

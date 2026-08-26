@@ -28,7 +28,7 @@ void igmenu_stage(void) {
 
   /* Invalidate the header + gate FIRST: a missing/short/corrupt bin must leave no
      stale magic behind (the $C0 hook then falls through to the single-tab fail-safe). */
-  sram_memset(SRAM_DIR_ADDR, 8, 0);          /* $C20000..$C20007 */
+  sram_memset(SRAM_IGMENU_ADDR, 8, 0);          /* $C80000..$C80007 */
   sram_writebyte(0, SRAM_IGMENU_GATE_ADDR);
 
   file_open((const uint8_t *)IGMENU_FILENAME, FA_READ);
@@ -45,7 +45,7 @@ void igmenu_stage(void) {
       hdr_crc = (uint16_t)buf[6] | ((uint16_t)buf[7] << 8);
       got_header = 1;
     }
-    sram_writeblock(buf, SRAM_DIR_ADDR + off, n);
+    sram_writeblock(buf, SRAM_IGMENU_ADDR + off, n);
     for (uint16_t i = 0; i < n; i++) {
       if (off + i >= 8) crc = crc16_update(crc, buf[i]);
     }
@@ -68,8 +68,8 @@ void igmenu_stage(void) {
     printf("igmenu.bin OK (%lu bytes, ver %d)\n", (unsigned long)off, ver);
   } else {
     /* Wipe the streamed header so BOTH the gate (0) and the overlay's own version
-       re-check ($C20004) fail -> guaranteed fall-through to the fail-safe. */
-    sram_memset(SRAM_DIR_ADDR, 8, 0);
+       re-check ($C80004) fail -> guaranteed fall-through to the fail-safe. */
+    sram_memset(SRAM_IGMENU_ADDR, 8, 0);
     printf("igmenu.bin rejected (hdr=%d ver=%d crc=%04x/%04x)\n",
            got_header, ver, crc, hdr_crc);
   }

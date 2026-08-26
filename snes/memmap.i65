@@ -175,7 +175,13 @@
 #define WRAM_WAIT_MCU               $7EF200
 #define WRAM_LOAD_ULTRA16_CFG       $7EF210
 
-#define ROOT_DIR                    $C20000
+/* Browser directory buffer (pointer table; the MCU keeps the file-string table one
+   bank up at base+$10000). Moved $C2 -> $DB when the menu image grew to 3 banks
+   ($C0-$C2). The stored entries are offsets relative to $C00000, so every reader
+   (adc #$c0 sites in filesel.a65 and friends) followed the move for free; the
+   end-of-list sentinel `cmp #$c0` stays valid because no entry can point into $C0.
+   Lockstep with SRAM_DIR_ADDR in src/memmap.h. */
+#define ROOT_DIR                    $DB0000
 
 /* $FF0C00-$FF0C07: savestate diagnostics, all zeroed by ss_init every game load.
    $FF0C00-01 = SS_DIAG_REJECT (word: reject counter + resume-watchdog breadcrumb),
@@ -270,17 +276,17 @@
 #define CMD_MANUAL_ZPAGE            $45     /* SNES_CMD_MANUAL_ZPAGE: stage one whole 2x zoom page into MANUAL_ZTILES_A/B + ZTMAP + ZPAL. MCU_PARAM[0] = compacted guide (0..7), [1..2] = index u16 LE, [3] = mode: 0 = index is a 1x BLOCK (resolved via the block map; entry Y published in MAN_META_ZENTRYY), 1 = index is a ZOOM PAGE directly (page turns). Re-staging an already-resident page is skipped. Publishes MAN_META_F_ZREADY + ZNROWS/ZPIXH/ZPAGE/ZENTRYY/ZFIRSTBLK. Lockstep with src/snes.h. */
 #define CMD_SET_SRM_SLOT           $44     /* SNES_CMD_SET_SRM_SLOT: persist the selected SRAM slot (MCU_PARAM low byte 0..3) to the <stem>.slot sidecar; refreshes SAVEINFO+42 / SRM_SLOT_STATUS. Applies on next game load (never changes the live slot). Lockstep with src/snes.h. */
 #define CFG_ENABLE_GAME_MANUAL      CFG_ADDR+$0145 /* EnableGameManual toggle (default ON); next free after CFG_BUS_COMPAT $0144. Lockstep with src/cfg.h. */
-#define IGMENU_ABI_VERSION          $03     /* igmenu.bin ABI version. Checked by BOTH the MCU (igmenu_stage: magic+version+crc) AND the overlay ($C20004 vs this). Bump on ANY layout/ABI change so a mismatched bin degrades to the fail-safe. v3 requires the theme block the overlay stages at IGM_THM_* before dispatching the shell. Lockstep with IGMENU_ABI_VERSION in src/igmenu.h. */
+#define IGMENU_ABI_VERSION          $04     /* igmenu.bin ABI version. Checked by BOTH the MCU (igmenu_stage: magic+version+crc) AND the overlay ($C80004 vs this). Bump on ANY layout/ABI change so a mismatched bin degrades to the fail-safe. v4 moved the shell from bank $C2 to $C8 (the menu image grew to 3 banks; $C2 is now menu-resident in-game), so a stale bin never gets jsl-ed at the old bank. Lockstep with IGMENU_ABI_VERSION in src/igmenu.h. */
 #define IGM_POS_MAGIC               $5A34   /* in-game menu session-persist magic (bumped on any change to what active_tab indexes / the persisted layout). Written by igmenu_main to IGM_POS_MAGIC_ADDR; tested by BOTH the shell (manual position + tab) and the $C0 overlay init (cheat-list top/selrow keep). MCU clears the ADDR on every game load. */
 #define IGM_POS_MAGIC_ADDR          $F4819E /* = man_pos_magic (igmenu.a65) = IGMENU_PERSIST_MAGIC_ADDR (src/memmap.h). Lockstep. */
-#define IGMENU_ENTRY                $C20008 /* igmenu.bin entry (jml igmenu_main); the $C0 hook does jsl here after the gate+version guard. Header: $C20000 "IGMN" magic, $C20004 version, $C20006 crc16(body), $C20008 jml. Loaded to PSRAM SRAM_DIR_ADDR ($C20000, menu dir buffer, dormant in-game) -- reachable in-game only under IS_PATCH (snescmd_unlock). */
+#define IGMENU_ENTRY                $C80008 /* igmenu.bin entry (jml igmenu_main); the $C0 hook does jsl here after the gate+version guard. Header: $C80000 "IGMN" magic, $C80004 version, $C80006 crc16(body), $C80008 jml. Loaded to PSRAM SRAM_IGMENU_ADDR ($C80000, a bank idle in both modes) -- reachable in-game only under IS_PATCH (snescmd_unlock). */
 /* ---- in-game TAB menu theme hand-off (staged block in PSRAM $F4) ----
    igmenu.bin is a SEPARATE link and sees none of the m3nu symbols, but the cheat
    overlay object ($C1, part of the m3nu link) does -- and in-game those symbols
    address the menu image RESIDENT in PSRAM, which theme_apply already overwrote
    with the active theme (the same mechanism that lets the overlay call genfonts).
    So the overlay copies the themed bytes into this block right before the
-   jsl $c20008, and the shell reads only from here. Written by snes/cheatoverlay.a65
+   jsl $c80008, and the shell reads only from here. Written by snes/cheatoverlay.a65
    (ovl_stage_theme), read by snes/igmenu.a65. Lives in the once-free $F48252..$F48FFF
    gap -- above the igmenu Slice-2 scratch ($F48240..$F4824F), clear of OVL_RB
    ($F48200..$F4823F) and OVL_TMBUF ($F49000..$F499FF) -- now occupied up to $F48397:
@@ -289,7 +295,7 @@
    $F48300-$F483A3 (igmenu.a65); then ig_win_x..h $F483A4-A7, tint $F483A8, pos_focus
    $F483AA, pos_slot $F483AC and the guide-picker mh_* block $F483B0-$F483BB
    (manhost.a65) -- free again from $F483BC, with OVL_NONAME_BUF taking $F483C0-$F483DF. */
-#define IGM_THM_MAGIC               $F48260 /* 1B: $A5 = staged block valid, written LAST by the overlay before the jsl $c20008; 0 = invalid (aborted/never staged) and the shell must fall back to its baked colours. */
+#define IGM_THM_MAGIC               $F48260 /* 1B: $A5 = staged block valid, written LAST by the overlay before the jsl $c80008; 0 = invalid (aborted/never staged) and the shell must fall back to its baked colours. */
 #define IGM_THM_GRAD                $F48261 /* 55B: backdrop gradient blob ([count,lo,hi]* terminated by a 0 count), copied from the THEMED hdma_pal_src. Same 55-byte region size main.a65 DMAs into the hdma_pal WRAM buffer. */
 #define IGM_THM_GRAD_A              $8261   /* 16-bit abs alias of IGM_THM_GRAD for abs,Y reads under DBR=$F4 (igt_grad_build walks two cursors and the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with IGM_THM_GRAD above -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65. */
 #define IGM_THM_MATH                $F48298 /* 19B: colour-math table of the selection BAR, copied RAW from hdma_math_src -- so it already carries the NORMAL bar colour in its COLDATA bytes. */
@@ -300,13 +306,13 @@
    name: an empty CHEAT_NAMES entry means "draw the localized placeholder", and the
    HOST that opened the list stages that string here BEFORE the first list paint
    (snes/cheatoverlay.a65 resolves it out of the menu's $C1 pool; snes/igmenu.a65
-   indexes its own $C2 table). cheatlist.i65 -- shared source, no host symbols -- only
+   indexes its own $C8 table). cheatlist.i65 -- shared source, no host symbols -- only
    ever READS it. 32 B in the free $F483BC..$F48FFF gap, clear of the mh_* guide-picker
    block below ($F483B0..$F483BB) and of OVL_TMBUF ($F49000). */
 #define OVL_NONAME_BUF              $F483C0 /* 32 B: NUL-terminated placeholder, font-encoded. */
 #define OVL_NONAME_A                $83C0   /* 16-bit abs alias of OVL_NONAME_BUF for abs,Y stores under DBR=$F4 (the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with OVL_NONAME_BUF -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65 and IGM_THM_GRAD_A above. */
 #define OVL_NONAME_MAX              32      /* buffer size: at most 31 visible chars + the NUL. */
-#define OVL_CUR_OFF                 $F482E8 /* 1B: 0 = the cheat list draws its own '>' cursor (the $C0 fail-safe path); 1 = the $C2 shell suppresses it because the BAR marks the selection. Zeroed by the overlay on EVERY open, BEFORE the first list paint (ss_ovl_draw_full_row is the reader) -- PSRAM $F4 is not auto-cleared and survives reopens. The reader does a 16-bit lda + and #$00ff, so $F482E9 is fetched and discarded: keep it unallocated. */
+#define OVL_CUR_OFF                 $F482E8 /* 1B: 0 = the cheat list draws its own '>' cursor (the $C0 fail-safe path); 1 = the $C8 shell suppresses it because the BAR marks the selection. Zeroed by the overlay on EVERY open, BEFORE the first list paint (ss_ovl_draw_full_row is the reader) -- PSRAM $F4 is not auto-cleared and survives reopens. The reader does a 16-bit lda + and #$00ff, so $F482E9 is fetched and discarded: keep it unallocated. */
 #define SS_OBC1_GATE                $FF0718 /* OBC1 savestate present flag (firmware-armed = fpga_conf==FPGA_OBC1, on Mk.II and Mk.III -- the OBC1 is purely reactive, no chip halt needed). Handler reads it to decide whether to capture/restore the OBC1 window. Free $FF0701..$FF07FF gap, after SRM_SLOT_STATUS (below the BPS breadcrumbs $FF0720-2E). Lockstep with SS_OBC1_GATE_ADDR in src/memmap.h. */
 #define SS_OBC1_SCRATCH             $F47000 /* PSRAM scratch for the OBC1 window image (2 KB = the SNES-visible $7800-$7FFF window: obc_lower + obc_upper mirror image + the 8 regs). Shares the coprocessor scratch slot (SA-1 IRAM / GSU cache / DSP snapshot); a game is never two chips. Captures/restores the state VISIBLE to the SNES, not the chip's internal BRAM (on Mk.II the unreachable obc_lower[512:1023] never enters the window). */
 #define SS_SDD1_GATE                $FF0719 /* S-DD1 savestate present flag (firmware-armed = fpga_conf==FPGA_SDD1, on Mk.II and Mk.III -- the S-DD1 decompressor FSM is never mid-transfer at an NMI boundary, so no chip halt needed). Handler reads it to decide whether to capture/restore the S-DD1 config block. Free $FF0701..$FF07FF gap, after SS_OBC1_GATE. Lockstep with SS_SDD1_GATE_ADDR in src/memmap.h. */

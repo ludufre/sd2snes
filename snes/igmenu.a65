@@ -1,9 +1,9 @@
 ; igmenu.a65 -- Phase-0 in-game TAB menu shell.
 ;
-; Assembled SEPARATELY from m3nu.bin into igmenu.bin (org bank $C2) and loaded by the
-; MCU (src/igmenu.c igmenu_stage) into PSRAM $C20000 every game-load. The $C0 cheat
+; Assembled SEPARATELY from m3nu.bin into igmenu.bin (org bank $C8) and loaded by the
+; MCU (src/igmenu.c igmenu_stage) into PSRAM $C80000 every game-load. The $C0 cheat
 ; overlay (cheatoverlay.a65) draws its cheat screen in forced blank, then -- IF the MCU
-; armed IGMENU_GATE and the ABI version word matches -- does `jsl $C20008` here. This
+; armed IGMENU_GATE and the ABI version word matches -- does `jsl $C80008` here. This
 ; shell adds a tab bar + tab dispatch on top of the ALREADY-drawn (still forced-blank)
 ; cheat screen, does its own unblank + input loop, and returns via `rtl` when the user
 ; presses B; the $C0 hook then takes the normal apply + savestate-grade restore exit.
@@ -11,34 +11,34 @@
 ; INVARIANTS (durable):
 ;  - This runs under the same handler as the $C0 overlay: PPU taken over (savestate-grade
 ;    snapshot in $C0), SA-1 paused, NMI/IRQ off, IS_PATCH ($C0-FF identity) live. NEVER
-;    drop snescmd_unlock (that would UNMAP $C2 = the code executing).
+;    drop snescmd_unlock (that would UNMAP $C8 = the code executing).
 ;  - Entry is jsl/rtl balanced (no self-modifying code, no jml-without-push).
 ;  - PSRAM is NOT zeroed by clear_wram -> igmenu_main zeroes the shell vars explicitly.
 ;  - VRAM writes only in forced blank (tab switches force-blank) or via the OVL_TMBUF DMA
 ;    pipeline in the vblank window (the Cheats list scroll). Bar/footer/body: forced blank.
 ;  - .as/.al declared at the entry of every routine (snescom leaks the last directive in
 ;    SOURCE order -> a wrong-width immediate becomes a stray byte / BRK).
-;  - Bank-alto vars ($F4/$C2) are ALWAYS @long or DBR=$F4 abs -- a bare symbol assembles
+;  - Bank-alto vars ($F4/$C8) are ALWAYS @long or DBR=$F4 abs -- a bare symbol assembles
 ;    absolute (DBR-relative) and links with NO error but reads the wrong bank.
 
 #include "memmap.i65"              ; brings CHEAT_*/IGMENU_* defines (this sets .link page $c0)
-.link page $c2                     ; OUR code lives in bank $C2 -- override memmap's $c0
+.link page $c8                     ; OUR code lives in bank $C8 -- override memmap's $c0
 
-; ===== HEADER (fixed layout, first emitted bytes -> $C20000). The MCU + $C0 hook read
+; ===== HEADER (fixed layout, first emitted bytes -> $C80000). The MCU + $C0 hook read
 ;       these by absolute offset, so this block MUST come before any other emission. =====
 igmenu_header:
-	.byt "IGMN"                    ; $C20000 magic (4)
-	.byt IGMENU_ABI_VERSION        ; $C20004 ABI version (1)
-	.byt $00                       ; $C20005 reserved (1)
-	.word $0000                    ; $C20006 crc16(body from $C20008), patched by the build (2)
-	jmp igmenu_main                ; $C20008 in-bank jump past the shared routines to igmenu_main
-	                               ;  (3 bytes; PBR is $C2 after the $C0 `jsl $c20008`). snescom
-	                               ;  has no `jml`; a near jmp is right since both are in bank $C2.
+	.byt "IGMN"                    ; $C80000 magic (4)
+	.byt IGMENU_ABI_VERSION        ; $C80004 ABI version (1)
+	.byt $00                       ; $C80005 reserved (1)
+	.word $0000                    ; $C80006 crc16(body from $C80008), patched by the build (2)
+	jmp igmenu_main                ; $C80008 in-bank jump past the shared routines to igmenu_main
+	                               ;  (3 bytes; PBR is $C8 after the $C0 `jsl $c80008`). snescom
+	                               ;  has no `jml`; a near jmp is right since both are in bank $C8.
 
 #include "cheatlist.i65"           ; shared cheat-list layout defines + render/input routines
-                                   ; (OWN copy in $C2; SEPARATE link -> no symbol collision)
+                                   ; (OWN copy in $C8; SEPARATE link -> no symbol collision)
 #include "igmenu_lang.i65"         ; GENERATED: HELP tab i18n string tables + IGM_HELP_NLINES/
-                                   ; IGM_LANG_COUNT (bank $C2 data, jumped over -- included
+                                   ; IGM_LANG_COUNT (bank $C8 data, jumped over -- included
                                    ; BEFORE help_enter so its #defines are in scope)
 
 ; --- shell scratch vars (PSRAM $F4, ABOVE the overlay's ovl_* block $F48100-$F48127 and
@@ -80,7 +80,7 @@ igmenu_header:
 ;     destination tab's enter runs, and enter re-derives its own lang). Words. ---
 #define igm_tab_lang    $F48178    ; CFG.language clamped 0..IGM_LANG_COUNT-1
 #define igm_tab_len     $F4817A    ; encoded label length (0..IGM_TAB_FIELD)
-#define igm_tab_src     $F4817C    ; source byte offset of the label within bank $C2
+#define igm_tab_src     $F4817C    ; source byte offset of the label within bank $C8
                                    ; (ends $F4817D; reserved gap ends $F4817F)
 
 ; --- Slice 2 scratch (PSRAM $F4, free gap ABOVE OVL_RB $F48200-$F4823F, below OVL_TMBUF
@@ -280,7 +280,7 @@ igmenu_header:
 ; (word $0000-$6FFF) clobber ALL of these. The 24KB MANUAL_SHELLSAVE buffer holds the two
 ; FONTS (16KB+8KB, packed at +0 and +$4000; CGRAM 512B at +$6000 per the contract); the
 ; tilemaps are REBUILT on exit (draw_tabbar/footer/manual_enter). genfonts is a $C0-only
-; label the igmenu $C2 link cannot reference, so the font MUST be saved/restored (not
+; label the igmenu $C8 link cannot reference, so the font MUST be saved/restored (not
 ; regenerated).
 #define MN_BG1_BYTES    $4000      ; BG1 font save/restore span (8192 words = 16KB) @ buf +0
 #define MN_BG2_VMADD    $4000      ; BG2 font VRAM word base
@@ -1002,7 +1002,7 @@ ig_master_clear:
 ;      cheatlist.i65 (shared source, no host symbols) reads the string from
 ;      OVL_NONAME_BUF, so each host stages it in its own language before the first paint.
 ;      Same shape as help_enter: CFG.language from the CFG BSRAM mirror, clamped, then
-;      one NUL-terminated font-encoded run out of igmenu_lang.i65 (bank $C2). ----
+;      one NUL-terminated font-encoded run out of igmenu_lang.i65 (bank $C8). ----
 igm_fill_noname:
 	php
 	phb
@@ -1017,12 +1017,12 @@ ifn_lang_ok:
 	and #$00ff
 	asl                                        ; igm_cheats_tbl has ONE line -> lang*2
 	tax
-	lda @igm_cheats_tbl, x                      ; A = string offset within bank $C2
+	lda @igm_cheats_tbl, x                      ; A = string offset within bank $C8
 	tax
 	ldy #$0000
 	sep #$20 : .as
 ifn_copy:
-	lda @$c20000, x                             ; long,X source byte (bank $C2)
+	lda @$c80000, x                             ; long,X source byte (bank $C8)
 	beq ifn_done
 	sta OVL_NONAME_A, y                        ; abs,Y (DBR=$F4)
 	inx
@@ -1054,7 +1054,7 @@ ig_noop:
 ;  then draws IGM_HELP_NLINES font-encoded lines from igmenu_lang.i65. The row +
 ;  start column per line come from igm_help_rows/igm_help_cols (layout, language-
 ;  independent). Each source string is a NUL-terminated, already-encoded run in bank
-;  $C2, read via `lda @$c20000, x` (long,X). Input/tick are ig_noop for this tab.
+;  $C8, read via `lda @$c80000, x` (long,X). Input/tick are ig_noop for this tab.
 ; ======================================================================
 help_enter:
 	php
@@ -1080,7 +1080,7 @@ he_body:
 	; --- dest column = igm_help_cols[lineno] -> Y ---
 	lda @help_lineno : tax
 	sep #$20 : .as
-	lda @igm_help_cols, x                       ; long,X byte (bank $C2)
+	lda @igm_help_cols, x                       ; long,X byte (bank $C8)
 	rep #$30 : .al : .xl
 	and #$00ff
 	tay                                        ; Y = dest column in OVL_RB
@@ -1093,11 +1093,11 @@ he_body:
 	clc : adc @help_lang                       ; + lang column
 	asl                                        ; *2 (word index)
 	tax
-	lda @igm_help_tbl, x                        ; A = string offset within bank $C2
+	lda @igm_help_tbl, x                        ; A = string offset within bank $C8
 	tax                                        ; X = source byte offset
 	sep #$20 : .as
 he_copy:
-	lda @$c20000, x                             ; long,X source byte (bank $C2)
+	lda @$c80000, x                             ; long,X source byte (bank $C8)
 	beq he_copy_done
 	sta OVL_RB, y                              ; abs,Y (DBR=$F4)
 	inx
@@ -1119,7 +1119,7 @@ hh_paldone:
 	; --- flush the built row to igm_help_rows[lineno] ---
 	lda @help_lineno : tax
 	sep #$20 : .as
-	lda @igm_help_rows, x                       ; long,X row byte (bank $C2)
+	lda @igm_help_rows, x                       ; long,X row byte (bank $C8)
 	rep #$30 : .al : .xl
 	and #$00ff
 	tax                                        ; X = absolute tile row
@@ -1316,11 +1316,11 @@ sst_copy:
 	clc : adc @sst_lang                        ; + lang column
 	asl                                        ; *2 (word index)
 	tax
-	lda @igm_states_tbl, x                      ; A = source byte offset within bank $C2
+	lda @igm_states_tbl, x                      ; A = source byte offset within bank $C8
 	tax                                        ; X = source offset
 	sep #$20 : .as
 sst_copy_l:
-	lda @$c20000, x                             ; long,X source byte (bank $C2)
+	lda @$c80000, x                             ; long,X source byte (bank $C8)
 	beq sst_copy_d
 	sta OVL_RB, y                              ; abs,Y (DBR=$F4)
 	inx
@@ -1346,7 +1346,7 @@ sst_strlen:
 	ldy #$0000
 	sep #$20 : .as
 sst_sl_l:
-	lda @$c20000, x
+	lda @$c80000, x
 	beq sst_sl_d
 	inx
 	iny
@@ -1693,11 +1693,11 @@ svs_copy:
 	clc : adc @sst_lang                         ; + lang column
 	asl                                        ; *2 (word index)
 	tax
-	lda @igm_saves_tbl, x                       ; A = source byte offset within bank $C2
+	lda @igm_saves_tbl, x                       ; A = source byte offset within bank $C8
 	tax                                        ; X = source offset
 	sep #$20 : .as
 svs_copy_l:
-	lda @$c20000, x                             ; long,X source byte (bank $C2)
+	lda @$c80000, x                             ; long,X source byte (bank $C8)
 	beq svs_copy_d
 	sta OVL_RB, y                              ; abs,Y (DBR=$F4)
 	inx
@@ -1723,7 +1723,7 @@ svs_strlen:
 	ldy #$0000
 	sep #$20 : .as
 svs_sl_l:
-	lda @$c20000, x
+	lda @$c80000, x
 	beq svs_sl_d
 	inx
 	iny
@@ -1937,7 +1937,7 @@ swa_done:
 ;      d-pad pans; B returns to the tab level. Routed by the viewer bypass in igmenu_loop.
 ;  The shell's mode-5 VRAM (both fonts) is saved to MANUAL_SHELLSAVE on entry and
 ;  restored on exit; the tilemaps are rebuilt (draw_tabbar/footer/manual_enter). This is
-;  self-contained in $C2 -- the $C0 hook stays byte-identical (fail-safe intact).
+;  self-contained in $C8 -- the $C0 hook stays byte-identical (fail-safe intact).
 ; ======================================================================
 manual_enter:                                   ; forced blank (ig_switch_to / man_viewer_exit)
 	php
@@ -2288,11 +2288,11 @@ mn_copy:
 	clc : adc @sst_lang                         ; + lang column
 	asl                                        ; *2 (word index)
 	tax
-	lda @igm_manual_tbl, x                       ; A = source byte offset within bank $C2
+	lda @igm_manual_tbl, x                       ; A = source byte offset within bank $C8
 	tax
 	sep #$20 : .as
 mn_copy_l:
-	lda @$c20000, x                             ; long,X source byte (bank $C2)
+	lda @$c80000, x                             ; long,X source byte (bank $C8)
 	beq mn_copy_d
 	sta OVL_RB, y                              ; abs,Y (DBR=$F4)
 	inx
@@ -2317,7 +2317,7 @@ mn_strlen:
 	ldy #$0000
 	sep #$20 : .as
 mn_sl_l:
-	lda @$c20000, x
+	lda @$c80000, x
 	beq mn_sl_d
 	inx
 	iny
@@ -2439,7 +2439,7 @@ mn_dp_nd:
 ;  assembled into THIS bank -- the include carries no .link, exactly like cheatlist.i65)
 ;  so the menu can reuse it. Everything after the include is the HOST half of that
 ;  contract: the three man_host_* hooks plus the two routines that can only live here
-;  because they name $C2 shell state (MANUAL_SHELLSAVE, OVL_BG1_MAP/OVL_BG2_MAP).
+;  because they name $C8 shell state (MANUAL_SHELLSAVE, OVL_BG1_MAP/OVL_BG2_MAP).
 ; ======================================================================
 #include "manviewer.i65"
 
@@ -2606,7 +2606,7 @@ man_host_chrome:
 ;  in the field, so the window_tl/window_tr caps (glyphs 28/29) sit at FIXED field
 ;  edges (base, base+11) and stay aligned regardless of the translated label's width.
 ;  The ACTIVE tab reads by COLOUR (the slot is recoloured below). Labels come from igm_tab_tbl (the
-;  GENERATED i18n table, bank $C2), indexed by CFG.language exactly like help_enter.
+;  GENERATED i18n table, bank $C8), indexed by CFG.language exactly like help_enter.
 ;  Built in OVL_RB then flushed with ovl_flush_abs. Forced blank.
 ;  Clobbers ovl_idx/ovl_rowoff/ovl_cur + igm_tab_lang/igm_tab_len/igm_tab_src.
 ; ======================================================================
@@ -2650,14 +2650,14 @@ ig_tb_loop:
 	clc : adc @igm_tab_lang                   ; + lang column
 	asl                                       ; *2 (word index)
 	tax
-	lda @igm_tab_tbl, x                        ; A = string offset within bank $C2
+	lda @igm_tab_tbl, x                        ; A = string offset within bank $C8
 	sta @igm_tab_src
 	; --- strlen (cap IGM_TAB_FIELD) -> igm_tab_len ---
 	tax                                       ; X = source byte offset
 	ldy #$0000
 	sep #$20 : .as
 it_len_l:
-	lda @$c20000, x                            ; long,X source byte (bank $C2)
+	lda @$c80000, x                            ; long,X source byte (bank $C8)
 	beq it_len_d
 	inx
 	iny
@@ -2677,7 +2677,7 @@ it_len_d:
 	lda @igm_tab_src : tax                     ; X = source offset (16-bit A -> clean tax)
 	sep #$20 : .as
 it_copy_l:
-	lda @$c20000, x                            ; long,X source byte (bank $C2)
+	lda @$c80000, x                            ; long,X source byte (bank $C8)
 	beq it_copy_d
 	sta OVL_RB, y                             ; abs,Y (DBR=$F4)
 	inx
@@ -2822,7 +2822,7 @@ igt_sc_go:
 	rts
 
 ; ======================================================================
-;  Footer (row 25): the new bindings. Copied from a $C2 string via long,X. Forced blank.
+;  Footer (row 25): the new bindings. Copied from a $C8 string via long,X. Forced blank.
 ; ======================================================================
 igmenu_draw_footer:
 	php
@@ -2960,7 +2960,7 @@ ig_pal_frame:                                  ; the MENU'S window-frame palette
 ;  THEME: apply the MENU's active theme to the shell -- backdrop gradient (HDMA ch2), themed
 ;  BG palettes, and the infrastructure the selection BAR rides on (HDMA ch5 colour-math table +
 ;  the colour window / CGWSEL regs). The $C0 overlay stages the THEMED bytes into the IGM_THM_*
-;  PSRAM block right before the `jsl $c20008`; this bank is a separate link and sees none of the
+;  PSRAM block right before the `jsl $c80008`; this bank is a separate link and sees none of the
 ;  menu symbols, so the block is our only source. IGM_THM_MAGIC = $A5 gates it: on anything else
 ;  (old overlay, aborted copy) we fall back to the baked palettes + a baked BAR table, which is
 ;  why the BAR half is armed UNCONDITIONALLY -- the bar must exist even without a theme.
@@ -3000,7 +3000,7 @@ igt_math_thm:
 igt_math_baked:
 	ldx #$0000
 igt_math_def:
-	lda @ig_thm_math_def, x : sta @$7E0061, x    ; long,X read of our own bank-$C2 data
+	lda @ig_thm_math_def, x : sta @$7E0061, x    ; long,X read of our own bank-$C8 data
 	inx : cpx #$0013 : bne igt_math_def
 igt_math_done:
 	; --- 3/4. gradient + palettes: themed, or the baked green/frame palettes as before ---
@@ -3550,12 +3550,12 @@ iwt_lang_ok:
 	clc : adc @igm_tab_lang                         ; + lang column
 	asl                                           ; *2 (word index)
 	tax
-	lda @igm_tab_tbl, x                             ; string offset within bank $C2
+	lda @igm_tab_tbl, x                             ; string offset within bank $C8
 	tax                                           ; X = source byte offset
 	ldy #$0004                                    ; dest col 4 (after the TL cap at col 3)
 	sep #$20 : .as
 iwt_copy:
-	lda @$c20000, x                                ; long,X source byte (bank $C2)
+	lda @$c80000, x                                ; long,X source byte (bank $C8)
 	beq iwt_done
 	sta OVL_RB, y                                 ; abs,Y (DBR=$F4)
 	inx
@@ -3581,7 +3581,7 @@ ig_frame_if_static:
 	asl : asl                                     ; (tab-1)*4 -> geometry record
 	tax
 	sep #$20 : .as
-	lda @ig_frame_geom+0, x : sta @ig_win_x       ; long,X reads of our own $C2 table
+	lda @ig_frame_geom+0, x : sta @ig_win_x       ; long,X reads of our own $C8 table
 	lda @ig_frame_geom+1, x : sta @ig_win_y
 	lda @ig_frame_geom+2, x : sta @ig_win_w
 	lda @ig_frame_geom+3, x : sta @ig_win_h
@@ -3681,7 +3681,7 @@ iot_done:
 	rts
 
 ; ======================================================================
-;  Data (bank $C2; never executed).
+;  Data (bank $C8; never executed).
 ; ======================================================================
 tab_enter_tbl:
 	.word cheats_enter                       ; 0 CHEATS

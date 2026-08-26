@@ -395,7 +395,7 @@ ss_ovl_init_drawn:
 	lda #$4a : sta @$002122 : lda #$29 : sta @$002122   ; CGRAM 19 = dim grey
 	; palette 3 = the WINDOW-FRAME colour the scrollbar cell wears (ovl_sb_recolor stamps that
 	; one cell as $2C00 so it matches the menu's own scrollbars, which hiprint in palette 3).
-	; The $C2 shell themes this slot (igt_pal_apply); this fail-safe path hardcodes it like the
+	; The $C8 shell themes this slot (igt_pal_apply); this fail-safe path hardcodes it like the
 	; two palettes above, with the menu's baked pal3 bevel. BG2 2bpp pal3 = CGRAM 12-15, and the
 	; bar sits on an EVEN column (BG2 only), so entry 12 (colour 0) stays transparent = backdrop.
 	lda #$0d : sta @$002121                              ; CGADD = 13 (BG2 palette 3, colour 1)
@@ -453,7 +453,7 @@ ss_ovl_hdmasave:
 	lda #$02 : sta @$00420c               ; enable ch1 HDMA (BGMODE switch) -- AFTER all the
 	                                      ; GP-DMAs (font gen), per the game-info HDMA ordering
 
-	; --- Phase-0 in-game TAB menu dispatch (igmenu.bin @ PSRAM $C2, staged+verified
+	; --- Phase-0 in-game TAB menu dispatch (igmenu.bin @ PSRAM $C8, staged+verified
 	;     by the MCU this game-load). Two guards: the MCU-armed IGMENU_GATE, and a
 	;     re-check of the bin's ABI version word here (catches a partial SD update
 	;     where m3nu and igmenu.bin came from different releases). On both passing,
@@ -463,14 +463,14 @@ ss_ovl_hdmasave:
 	;     ANY failure falls through to ovl_failsafe = the proven single-tab overlay.
 	;     A is 8-bit here (.as); X is 16-bit and free (ovl_stage_theme uses it as a
 	;     copy index). jsl/rtl is stack-balanced; the shell NEVER drops
-	;     snescmd_unlock (that would unmap $C2). ---
+	;     snescmd_unlock (that would unmap $C8). ---
 	lda @IGMENU_GATE                      ; MCU staged+verified the bin?
 	beq ovl_failsafe
-	lda @$c20004                          ; bin ABI version byte ($C20004)
+	lda @$c80004                          ; bin ABI version byte ($C80004 = IGMENU_ENTRY-4)
 	cmp #IGMENU_ABI_VERSION
 	bne ovl_failsafe
-	jsr ovl_stage_theme                   ; publish the active theme for the $C2 shell
-	jsl $c20008                           ; $C20008 = jml igmenu_main; rtl on close
+	jsr ovl_stage_theme                   ; publish the active theme for the $C8 shell
+	jsl $c80008                           ; $C80008 = IGMENU_ENTRY = jml igmenu_main; rtl on close
 	jmp ss_ovl_do_exit                    ; apply toggles (ovl_dirty) + savestate-grade restore
 ovl_failsafe:
 	lda #$0f : sta @$002100               ; unblank to full brightness
@@ -813,7 +813,7 @@ ss_ovl_pd_done:
 	rts
 
 ; ---- ovl_stage_theme: publish the ACTIVE menu theme into the PSRAM $F4 hand-off
-;      block (IGM_THM_*) the $C2 shell reads. igmenu.bin is a separate link and
+;      block (IGM_THM_*) the $C8 shell reads. igmenu.bin is a separate link and
 ;      sees none of these symbols; this object ($C1) does, and in-game they
 ;      address the menu image resident in PSRAM, which theme_apply already
 ;      rewrote with the user's theme -- so copying from here is exactly what

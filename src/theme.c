@@ -55,7 +55,7 @@ static const char GFXPTR_MAGIC[8] = { '_','G','F','X','P','T','R','_' };
 #define THEME_FONT_LEN          0x1000u   /* 256 tiles x 16 B == snes/font.a65
                                              asset size == bytes genfonts DMAs.
                                              Kept in sync by pack_theme.py. */
-#define THEME_MENU_SIZE         0x20000u  /* snes/Makefile MENU_SIZE (128 KB) */
+#define THEME_MENU_SIZE         0x30000u  /* snes/Makefile MENU_SIZE (192 KB, 3 banks) */
 
 /* Window of the loaded menu image scanned for the _GFXPTR_ magic. The table's
  * offset shifts with the menu layout: ~0x2EB1 in the old 128px-logo build, but

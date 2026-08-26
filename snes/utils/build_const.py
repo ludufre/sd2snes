@@ -179,14 +179,15 @@ def main():
 
     # Item descriptions (mdesc_*) ARE rendered now (the menu draws the selected
     # entry's description), so they get localized too. The localized string pool
-    # + dispatch tables are emitted into a SEPARATE bank ($C1, see below) so the
-    # menu spans banks $C0-$C1 (m3nu.bin grows to 128K) instead of overflowing.
+    # + dispatch tables are emitted into a SEPARATE bank ($C2, see below) so the
+    # menu spans banks $C0-$C2 (m3nu.bin = 192K) instead of overflowing.  $C2 is
+    # RESIDENT in-game too (igmenu moved to $C8), so the overlay's pool reads keep working.
     #
     # text_igm_* labels are consumed ONLY by gen_igmenu_lang.py, which parses
-    # const.a65 directly and emits them into the igmenu's own bank ($C2, a
+    # const.a65 directly and emits them into the igmenu's own bank ($C8, a
     # separate link) -- nothing in the m3nu link references them, so emitting
     # them here would waste bytes in the full $C0 bank (neutral labels) and the
-    # $C1 pool (dispatch tables). Drop them from BOTH the verbatim copy and the
+    # $C2 pool (dispatch tables). Drop them from BOTH the verbatim copy and the
     # localized pool. They must stay in const.a65 itself: it is the single
     # source the igmenu generator reads.
     DROP_PREFIXES = ("text_igm_",)
@@ -347,11 +348,11 @@ def main():
         for label, args in plaindefs:
             out.append(f"{label} .byt {args}")
 
-    # The interned pool + dispatch tables live in a SEPARATE bank ($C1) so the
-    # menu can grow past one 64K bank. resolve_str reads every pooled string with
+    # The interned pool + dispatch tables live in a SEPARATE bank ($C2) so the
+    # menu can grow past 128K. resolve_str reads every pooled string with
     # bank ^strtab_lo, and menudata reaches each dispatch table via ^label, so the
-    # bank split is transparent to the menu. Output -> <out>_str.a65, linked at $C1.
-    strout = [".link page $c1", "",
+    # bank split is transparent to the menu. Output -> <out>_str.a65, linked at $C2.
+    strout = [".link page $c2", "",
               "; ==== interned language string pool (deduplicated) ===="]
     for args in pool_order:
         strout.append(f"{pool[args]} .byt {args}")
@@ -387,7 +388,7 @@ def main():
     str_path = out_path.with_name(out_path.stem + "_str" + out_path.suffix)
     str_path.write_text("\n".join(strout) + "\n")
     print(f"generated {out_path} + {str_path}: {len(order)} localized labels "
-          f"({len(pool_order)} pooled strings in bank $C1), {nlang} language column(s)")
+          f"({len(pool_order)} pooled strings in bank $C2), {nlang} language column(s)")
 
 
 if __name__ == "__main__":

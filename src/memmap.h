@@ -74,8 +74,20 @@
 #define SUFAMI_SLOTA_SCRATCH_SIZE    (0x2000L)
 
 #define SRAM_MENU_ADDR               (0xC00000L)
-#define SRAM_DIR_ADDR                (0xC20000L)
-#define SRAM_DB_ADDR                 (0xC80000L)
+/* Browser directory buffer. Moved $C2 -> $DB when the menu image grew to 3 banks
+   ($C0-$C2): the pointer table lives here, the string table one bank up (scan_dir
+   keeps the base+0x10000 relation), growing until SRAM_DIR_STRINGS_END. Banks
+   $DB-$DF are idle in BOTH modes, so unlike the old $C3-$C7 home the listing now
+   even survives a game (the entries the SNES stores are offsets relative to
+   SRAM_MENU_ADDR, so every consumer followed the move for free). Lockstep with
+   ROOT_DIR in snes/memmap.i65. */
+#define SRAM_DIR_ADDR                (0xDB0000L)
+#define SRAM_DIR_STRINGS_END         (0xE00000L) /* string table may grow to here (SRAM_SAVE_ADDR) */
+/* In-game TAB menu (igmenu.bin) staging base -- bank $C8 is idle in both modes.
+   Used to piggyback on SRAM_DIR_ADDR back when that was $C20000 and dormant
+   in-game; now that $C2 is the menu's third (resident) bank the shell has its own
+   bank. Lockstep with IGMENU_* in snes/memmap.i65 and snes/igmenu.a65 (.link page $c8). */
+#define SRAM_IGMENU_ADDR             (0xC80000L)
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 #define SRAM_GAMEINFO_TILES_ADDR     (0xCA0000L) /* bank CA: game-info DirectColor 8bpp tiles (up to ~48KB) */
 #define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
@@ -107,11 +119,11 @@
  * window, unlike the 2x. A whole page (<=MAN_S1_MAX_ROWS=64 rows = 512px at 1x) fits in bank C3,
  * which is exactly the space the retired 8bpp block used to occupy; 1024 divides 65536, so no row
  * ever straddles a bank. 1x and 2x are BOTH resident, so toggling between them is instant. */
-#define SRAM_MANUAL_S1TILES_ADDR     (0xC30000L) /* scale-1 tile row r at +r*1024. Bank C3 is menu dir-cache territory, dormant in-game (same rationale as igmenu.bin @ C2). Lockstep with MANUAL_S1TILES in snes/memmap.i65. */
+#define SRAM_MANUAL_S1TILES_ADDR     (0xC30000L) /* scale-1 tile row r at +r*1024. Bank C3 is idle in menu mode since the dir buffer moved to $DB (it used to be the browser string table). Lockstep with MANUAL_S1TILES in snes/memmap.i65. */
 #define SRAM_MANUAL_S1TMAP_ADDR      (0xC4B000L) /* prebuilt tilemap, row r at +r*64 (32 entries) */
 #define SRAM_MANUAL_S1PAL_ADDR       (0xC4C000L) /* 8 palettes x 16 BGR555 -> CGRAM 0..127 */
-#define SRAM_MANUAL_SHELLSAVE_ADDR   (0xC40000L) /* in-game manual viewer: the $C2 shell saves its mode-5 state here before taking the PPU ($2139/$213B readback: VRAM $0000-$5FFF words + CGRAM 512B) and restores from it on viewer exit. Bank C4, dormant in-game. Lockstep with MANUAL_SHELLSAVE in snes/memmap.i65. */
-/* --- in-game manual viewer, SCROLLABLE 2x zoom page (banks C5/C6, dormant in-game like C2/C3/C4).
+#define SRAM_MANUAL_SHELLSAVE_ADDR   (0xC40000L) /* in-game manual viewer: the $C8 shell saves its mode-5 state here before taking the PPU ($2139/$213B readback: VRAM $0000-$5FFF words + CGRAM 512B) and restores from it on viewer exit. Bank C4, dormant in-game. Lockstep with MANUAL_SHELLSAVE in snes/memmap.i65. */
+/* --- in-game manual viewer, SCROLLABLE 2x zoom page (banks C5/C6, idle in-game like C3/C4).
  * ONE whole 2x page (512 x up-to-448, 4bpp, <=56 tile rows) is staged here by manual_stage_zpage on
  * SNES_CMD_MANUAL_ZPAGE, so panning over it costs the SNES nothing but PSRAM->VRAM DMA -- there is
  * NO per-row MCU traffic, which is what makes the pan smooth and unable to stall.

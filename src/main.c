@@ -76,16 +76,17 @@ printf("path=%s tgt=%06lx types=", path, tgt_addr);
 uart_puts_hex((char*)filetypes);
 uart_putc('\n');
   uint16_t n = scan_dir(path, tgt_addr, filetypes);
-  /* scan_dir grows the file-STRING table from SRAM_MANUAL_S1TILES_ADDR ($C30000) up to $C80000,
-     i.e. straight through BOTH manual staging regions. Drop the "page already resident" memo or
-     the next SNES_CMD_MANUAL_S1PAGE/_ZPAGE for the same page takes its skip branch and the viewer
-     DMAs these filenames into VRAM as tiles. (The menu-side viewer's exit fires exactly this
-     READDIR to rebuild the table -- see snes/manhost.a65.) */
+  /* Historical note: the file-STRING table used to grow through $C3..$C7 -- straight through
+     BOTH manual staging regions -- which is why every READDIR invalidates the "page already
+     resident" memo (a stale memo made the viewer DMA filenames into VRAM as tiles). The dir
+     buffer moved to $DB/$DC-$DF with the 3-bank menu, so the overlap is gone, but the
+     invalidation stays: it is cheap and the menu-side viewer exit still fires this READDIR
+     to rebuild the listing (see snes/manhost.a65). */
   manual_invalidate_resident();
   /* Hand the authoritative entry count back to the menu through the snescmd
      param region (BRAM-backed, reliable to read from the SNES immediately).
      The menu sets dirend_addr = n*4 from this instead of scanning the SDRAM dir
-     table at $C2 (SRAM_DIR_ADDR) itself, which can read a stale/partial buffer in the short
+     table at SRAM_DIR_ADDR itself, which can read a stale/partial buffer in the short
      window right after this write -> bogus short dirend -> broken pagination. */
   snescmd_writeshort(n, SNESCMD_MCU_PARAM);
 }
@@ -320,7 +321,6 @@ int main(void) {
 //  delay_ms(1000);
 //  printf("Estimated SNES master clock: %ld Hz\n", get_snes_sysclk());
 //}
-  //sram_hexdump(SRAM_DB_ADDR, 0x200);
   //sram_hexdump(SRAM_MENU_ADDR, 0x400);
     while(!cmd) {
       /* tell the menu we're ready to accept commands */

@@ -433,18 +433,13 @@ void manual_stage_meta_cached(uint8_t *rom_path) {
   }
 }
 
-/* Drop the "this page is already resident in PSRAM" memo. MANDATORY after anything overwrites
- * $C30000.. or $C50000.. behind our back -- concretely CMD_READDIR, whose file-STRING table grows
- * from SRAM_MANUAL_S1TILES_ADDR ($C30000) and runs right through both staging regions.
- *
- * Without this the menu-side viewer (snes/manhost.a65: X on the game-info screen) breaks on the
- * SECOND open: its restore fires a READDIR to rebuild the browser's string table, the re-query is
- * a manual_stage_meta_cached() HIT so nothing else resets anything, and the next
- * manual_stage_s1page() for the same (guide, page) takes the skip branch -- leaving the SNES to
- * DMA the browser's FILENAMES into VRAM as 4bpp tiles.
- *
- * Only the residency memo is dropped, on purpose: the guide TABLE stays valid, so this costs
- * nothing but one page restage instead of a whole directory pass per viewer exit. */
+/* Drop the "this page is already resident in PSRAM" memo on every CMD_READDIR.
+ * Historical + defensive: the browser file-STRING table used to grow from $C30000 right
+ * through both manual staging regions, so a READDIR corrupted the resident page and a stale
+ * memo made the viewer DMA the browser's FILENAMES into VRAM as 4bpp tiles (broken SECOND
+ * open via manhost.a65). The dir buffer moved to $DB/$DC-$DF with the 3-bank menu, so the
+ * overlap is gone -- the invalidation stays because it is cheap (one page restage) and keeps
+ * the memo conservative against any future writer of $C3../$C5.. behind our back. */
 void manual_invalidate_resident(void) {
   man_zres_guide  = 0xff;
   man_s1res_guide = 0xff;

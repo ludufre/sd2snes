@@ -1,8 +1,8 @@
 // cheatlist.i65 -- shared in-game cheat-list layout + render/input routines,
 // extracted from cheatoverlay.a65 so BOTH the $C0 single-tab fail-safe overlay
-// AND the $C2 igmenu tab shell can #include the SAME source (SEPARATE links, no
+// AND the $C8 igmenu tab shell can #include the SAME source (SEPARATE links, no
 // cross-bank symbol coupling). This file has NO .link directive -- it inherits the
-// including file's bank ($C0 for cheatoverlay.a65, $C2 for igmenu.a65).
+// including file's bank ($C0 for cheatoverlay.a65, $C8 for igmenu.a65).
 //
 // EXTRACTION GUARD (durable): every routine here is self-contained -- it addresses
 // $F4 scratch / VRAM / CHEAT_NAMES / CHEAT_FLAGS via @long (bank-agnostic) and only
@@ -58,7 +58,7 @@
 #define ovl_pal      $F48118     // list tilemap palette base: $2000 = FOCUSED (palette 0, normal),
                                  //   $2400 = GREYED (palette 1) when the tab bar has focus. Also
                                  //   gates the cursor '>' (drawn only when == $2000). The $C0
-                                 //   fail-safe overlay keeps it $2000 (always focused); the $C2
+                                 //   fail-safe overlay keeps it $2000 (always focused); the $C8
                                  //   igmenu shell drives it from the two-level focus state.
 // NOTE: nothing in the overlay may trigger a savestate
 // stage while it is open. load_backup_state reads the .state into $F00000 and it is
@@ -111,7 +111,7 @@
 #define ovl_sb_end   $F482E4     // one past the last thumb cell (= pos + thumb)
 #define ovl_sb_thumb $F482E6     // thumb height in cells (>= 1)
 // OVL_CUR_OFF ($F482E8, 1B) gates the '>' cursor below: 0 = draw it (the $C0 fail-safe path),
-// 1 = the $C2 shell suppresses it because the selection BAR marks the row. It is NOT defined
+// 1 = the $C8 shell suppresses it because the selection BAR marks the row. It is NOT defined
 // here -- it is a SHARED address, defined once in memmap.i65 (which both includers pull in
 // before this file) and zeroed by the overlay dispatch on every open. Defining it locally too
 // would fork the source of truth for an address another object writes.
@@ -472,7 +472,7 @@ ss_ovl_draw_full_row:
 	lda @ovl_pal : cmp #$2000               // cursor '>' only when the list is FOCUSED
 	bne ss_ovl_dfr_nocur                    //   (greyed / tab-bar level -> no selection marker)
 	lda @OVL_CUR_OFF : and #$00ff           // ...and only when the '>' is not suppressed
-	bne ss_ovl_dfr_nocur                    //   (the $C2 shell draws its own selection bar)
+	bne ss_ovl_dfr_nocur                    //   (the $C8 shell draws its own selection bar)
 	sep #$20 : .as
 	lda #$3e : sta OVL_RB+OVL_CURSOR_COL    // '>'
 	rep #$30 : .al : .xl
