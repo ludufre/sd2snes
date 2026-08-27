@@ -774,6 +774,10 @@ ss_ovl_do_exit:
 	sta @MCU_CMD
 ss_ovl_exit_noapply:
 	jsr ss_ovl_pad_drain                   ; don't hand the closing press to the game
+	lda @SS_SDD1_GATE
+	beq ss_ovl_exit_classic
+	jmp @load_state_noget                  ; lives in $C0 (savestate.a65)
+ss_ovl_exit_classic:
 	jmp ss_overlay_restore
 
 ; ---- ss_ovl_pad_drain: hold the close until every button is released.  The shell reads the

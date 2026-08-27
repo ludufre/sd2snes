@@ -75,6 +75,10 @@ module mcu_cmd(
   // feature enable
   output reg [15:0] featurebits_out,
 
+  // In-game menu combo mask (CMD 0xd6, MSB first).  Powers up at the historical
+  // L+R+Y+Left, so a core paired with a firmware that never writes it behaves as before.
+  output reg [15:0] ovl_combo_out = 16'h4230,
+
   output reg region_out,
   // SNES sync/clk
   input snes_sysclk,
@@ -117,6 +121,7 @@ reg [2:0] mcu_nextaddr_buf;
 
 reg [7:0] dsp_feat_tmp;
 reg [7:0] feat_tmp;
+reg [7:0] ovl_combo_tmp;
 
 wire mcu_nextaddr;
 
@@ -297,6 +302,15 @@ always @(posedge clk) begin
           32'h2: feat_tmp <= param_data;
           32'h3: featurebits_out <= {feat_tmp, param_data};
         endcase
+`ifndef MK2
+      // 0xd6: in-game menu combo mask.  Atomic on the second byte, like 0xed above.
+      // mk3 only: the mk2 build has no pad capture and ties overlay_combo to 0.
+      8'hd6:
+        case (spi_byte_cnt)
+          32'h2: ovl_combo_tmp <= param_data;
+          32'h3: ovl_combo_out <= {ovl_combo_tmp, param_data};
+        endcase
+`endif
       8'hee:
         region_out <= param_data[0];
       8'hef:

@@ -34,6 +34,9 @@ module cheat(
   input branch3_enable,
   input pad_latch,
   input snes_ajr,
+  input overlay_combo,   // FPGA-detected in-game menu/savestate combo (pad-capture
+                         // FSM in main.v; mask MCU-programmable via CMD 0xd6,
+                         // default $4230): gates the IRQ hook redirect
   input SNES_cycle_start,
   input [2:0] pgm_idx,
   input pgm_we,
@@ -182,6 +185,25 @@ always @(posedge clk) begin
   end
 end
 
+// IRQ hook rate limit + combo gate -- ported from the SA-1 core (see the SMRPG
+// freeze notes there): redirecting the game's IRQ vector delays its ISR by
+// ~50-200 cycles per hooked frame, and IRQ-driven games hang on that (hard
+// freeze on overlay exit, seen in HW on Star Ocean's NMI-off/V-IRQ dialogue
+// scenes -- CPU dead, HDMA still animating).  overlay_combo comes from the
+// pad-capture FSM in main.v (mk3; tied 0 on mk2): the redirect only arms while
+// the menu/savestate combo is physically held or a savestate is in flight, so
+// normal gameplay never takes the per-IRQ redirect that caused the freeze.
+reg [19:0] irq_hold = 0;
+wire irq_hold_ok = ~|irq_hold;
+wire irq_arm = irq_enable & irq_match_bits[1] & irq_hold_ok
+             & ((auto_irq_enable_sync & overlay_combo) | savestate_force_entry);
+always @(posedge clk) begin
+  if(SNES_reset_strobe) irq_hold <= 0;
+  else if(SNES_rd_strobe & hook_enable_sync & irq_arm & (cpu_push_cnt == 4))
+    irq_hold <= 20'hfffff;
+  else if(|irq_hold) irq_hold <= irq_hold - 1'b1;
+end
+
 // make patched vectors visible for last cycles of NMI/IRQ handling only
 always @(posedge clk) begin
   if(SNES_reset_strobe) begin
@@ -189,7 +211,7 @@ always @(posedge clk) begin
   end else if(SNES_rd_strobe) begin
     if(hook_enable_sync
       & ((auto_nmi_enable_sync & nmi_enable & nmi_match_bits[1])
-        |(auto_irq_enable_sync & irq_enable & irq_match_bits[1]))
+        | irq_arm)
       & cpu_push_cnt == 4) begin
       vector_unlock_r <= 2'b11;
     end else if(|vector_unlock_r) begin
@@ -225,7 +247,7 @@ always @(posedge clk) begin
       // *** GAME -> INGAME HOOK ***
       if(hook_enable_sync
         & ((auto_nmi_enable_sync & nmi_enable & nmi_match_bits[1])
-          |(auto_irq_enable_sync & irq_enable & irq_match_bits[1]))
+          | irq_arm)
         & cpu_push_cnt == 4) begin
         // remember where we came from (IRQ/NMI) for hook exit
         return_vector <= SNES_ADDR[7:0];

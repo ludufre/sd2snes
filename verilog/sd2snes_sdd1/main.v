@@ -427,6 +427,14 @@ wire [31:0] cheat_pgm_data;
 wire [7:0] cheat_data_out;
 wire [2:0] cheat_pgm_idx;
 
+// In-game menu combo mask from the MCU (CMD 0xd6) and the FPGA-side combo detect
+// fed to cheat.v's IRQ-redirect gate.  Declared HERE (before their use in the
+// instances below) and assigned further down -- XST otherwise makes the port
+// connection an implicit net and rejects the later declaration as an illegal
+// redeclaration (same pattern as the SA-1 core).
+wire [15:0] ovl_combo;
+wire overlay_combo;
+
 mcu_cmd snes_mcu_cmd(
   .clk(CLK2),
   .snes_sysclk(SNES_SYSCLK),
@@ -473,6 +481,7 @@ mcu_cmd snes_mcu_cmd(
   .msu_ptr_out(msu_ptr_addr),
   .msu_reset_out(msu_addr_reset),
   .featurebits_out(featurebits),
+  .ovl_combo_out(ovl_combo),
   .mcu_rrq(MCU_RRQ),
   .mcu_wrq(MCU_WRQ),
   .mcu_rq_rdy(MCU_RDY),
@@ -531,6 +540,7 @@ cheat snes_cheat(
   .SNES_reset_strobe(SNES_reset_strobe),
   .SNES_wr_strobe(SNES_WR_end),
   .SNES_rd_strobe(SNES_RD_start),
+  .overlay_combo(overlay_combo),
   .snescmd_enable(snescmd_enable),
   .nmicmd_enable(nmicmd_enable),
   .return_vector_enable(return_vector_enable),
@@ -559,8 +569,10 @@ reg [3:0] rs_pawr_cnt;   initial rs_pawr_cnt   = 0;
 reg       rs_pawr_end;   initial rs_pawr_end   = 0;
 reg       rs_pawr_end_r; initial rs_pawr_end_r = 0;
 reg [7:0] rs_data_r;     initial rs_data_r     = 0;
+reg [7:0] rs_wr_data_r;  initial rs_wr_data_r  = 0;
 reg       rs_abus_rd;    initial rs_abus_rd    = 0;
 reg       rs_abus_rd_r;  initial rs_abus_rd_r  = 0;
+reg       rs_dir_release_r;  initial rs_dir_release_r  = 0;
 always @(posedge CLK2) begin
   if (rs_pawr_end)               rs_pawr_cnt <= 0;
   else if (rs_pawr_start_early)  rs_pawr_cnt <= 1;
@@ -573,10 +585,128 @@ always @(posedge CLK2) begin
   if      (rs_pawr_start_early)  rs_abus_rd <= ~SNES_READ;
   else if (|rs_pawr_cnt)         rs_abus_rd <= rs_abus_rd | ~SNES_READ;
   rs_abus_rd_r  <= rs_abus_rd;
+  rs_dir_release_r <= ~SNES_PAWR & (SNES_PA < 8'h40) & ~ROM_HIT
+                    & ~(~IS_PATCH & sdd1_enable & (~SDD1_RAM_CE | ~SDD1_ROM_CE | FSM_DMA_Transferring | sdd1_reg_enable));
+  if (SNES_WRITEr[1:0] == 2'b00) rs_wr_data_r <= SNES_DATA;
 end
-// PPU (B-bus) -> the ctx-aligned captured byte; CPU ($42xx, A-bus/SNES_WR_end) uses
-// raw SNES_DATA (the native snes_ajr capture pattern).
-wire [7:0] rs_data = rs_pawr_end_r ? rs_data_r : SNES_DATA;
+// PPU (B-bus) -> the ctx-aligned captured byte; CPU ($42xx, A-bus/SNES_WR_end) ->
+// the /WR-window latch above (never the raw pad at strobe time).
+wire [7:0] rs_data = rs_pawr_end_r ? rs_data_r : rs_wr_data_r;
+
+`ifndef MK2
+reg [7:0]  pc_r421x[7:0];    // $4218-$421F capture slots (JOY1 = [1]:[0])
+reg [2:0]  pc_state;         initial pc_state = 0;
+reg [2:0]  pc_addr;          initial pc_addr = 0;
+reg        pc_double;        initial pc_double = 0;
+reg [7:0]  pc_inst[2:0];     // last 3 fetched bytes (capcom AND-idiom filter)
+reg [27:0] pc_counter;       initial pc_counter = 28'h3000000;
+integer pc_i;
+initial for (pc_i = 0; pc_i < 8; pc_i = pc_i + 1) pc_r421x[pc_i] = 0;
+initial for (pc_i = 0; pc_i < 3; pc_i = pc_i + 1) pc_inst[pc_i] = 0;
+// ctx.v alignment: run the FSM on strobes + data tap registered once, as a pair.
+reg pc_rd_end_r = 0, pc_wr_end_r = 0, pc_pard_end_r = 0, pc_pawr_end_r = 0;
+reg [7:0] pc_data_r = 0;
+reg pc_cpureg_rd_r = 0;
+reg [2:0] pc_rd_addr_r = 0;
+always @(posedge CLK2) begin
+  pc_rd_end_r    <= SNES_RD_end;
+  pc_wr_end_r    <= SNES_WR_end;
+  pc_pard_end_r  <= SNES_PARD_end;
+  pc_pawr_end_r  <= SNES_PAWR_end;
+  pc_data_r      <= SNES_DATAr[0];
+  pc_cpureg_rd_r <= ({1'b0,SNES_ADDR[22],6'b000000, SNES_ADDR[15:3], 3'b000} == 24'h04218);
+  pc_rd_addr_r   <= SNES_ADDR[2:0];
+end
+wire pc_cpureg_read = pc_rd_end_r & pc_cpureg_rd_r;
+// the ST-opcode window of ctx.v, verbatim ($80-$9F minus the non-store forms)
+wire pc_is_st = ({pc_data_r[7:5],1'b0} == 4'h8)
+              & ({1'b0,pc_data_r[2],1'b0,pc_data_r[0]} != 4'h0)
+              & (pc_data_r[3:0] != 4'hB) & (pc_data_r[7:0] != 8'h99);
+always @(posedge CLK2) begin
+  if (SNES_reset_strobe || (~pc_counter[25])) begin
+    // expire stale pads (a paused/idle game must not keep the redirect armed);
+    // don't zero non-counter state outside of reset, like ctx.v
+    for (pc_i = 0; pc_i < 8; pc_i = pc_i + 1) pc_r421x[pc_i] <= 0;
+    pc_state <= 0;
+    pc_counter <= 28'h3000000;
+  end else begin
+    // controller writes rewind the expiry clock; everything else lets it run
+    if ((pc_state == 3 || pc_state == 4) && pc_wr_end_r)
+      pc_counter <= 28'h3000000;
+    else if (pc_counter[25])
+      pc_counter <= pc_counter - 1;
+
+    if (pc_rd_end_r) begin
+      pc_inst[2] <= pc_inst[1];
+      pc_inst[1] <= pc_inst[0];
+      pc_inst[0] <= pc_data_r;
+    end
+
+    case (pc_state)
+      0: begin
+        // watch for a read of $4218-$421F -- outside the hook (prelatched junk)
+        // and not capcom's AND-with-previous-frame idiom (ctx.v filter, verbatim)
+        if (!snescmd_unlock && pc_cpureg_read
+            && ({pc_inst[2][7:5],1'b0,pc_inst[2][3:0],pc_inst[1][7:4],4'h0,pc_inst[0]} != 24'h2D1042)) begin
+          pc_state <= 1;
+          pc_addr <= pc_rd_addr_r;
+          pc_double <= 0;
+        end
+      end
+      1: begin
+        // 16-bit read pairs the +1 register before the store
+        if (pc_cpureg_read && (pc_rd_addr_r == pc_addr + 1)) begin
+          pc_state <= 2;
+          pc_double <= 1;
+        end
+        else if (pc_rd_end_r && pc_is_st) pc_state <= 3;
+        else if (pc_rd_end_r | pc_wr_end_r | pc_pard_end_r | pc_pawr_end_r) pc_state <= 0;
+      end
+      2: begin
+        if (pc_rd_end_r && pc_is_st) pc_state <= 3;
+        else if (pc_rd_end_r | pc_wr_end_r | pc_pard_end_r | pc_pawr_end_r) pc_state <= 0;
+      end
+      3: begin
+        // reads = rest of the store opcode; the write is the captured value
+        // (rs_wr_data_r: the /WR-window latch, robust against the late strobe)
+        if (pc_wr_end_r) begin
+          pc_r421x[pc_addr] <= rs_wr_data_r;
+          pc_state <= pc_double ? 3'd4 : 3'd0;
+        end
+        else if (pc_pard_end_r | pc_pawr_end_r) pc_state <= 0;
+      end
+      4: begin
+        // the two bytes of a 16-bit store are back-to-back: any other access
+        // (a fetch included) means this was not the idiom -- reset, like ctx.v
+        if (pc_wr_end_r) begin
+          pc_r421x[pc_addr + 3'd1] <= rs_wr_data_r;
+          pc_state <= 0;
+        end
+        else if (pc_rd_end_r | pc_pard_end_r | pc_pawr_end_r) pc_state <= 0;
+      end
+      default: pc_state <= 0;
+    endcase
+  end
+end
+wire [15:0] pc_pad1 = {pc_r421x[1], pc_r421x[0]};
+// A 0 mask folds back to $4230: (pad & 0) == 0 holds for every pad value,
+// including the zero the capture decays to on expiry, so it would leave the
+// redirect permanently armed (same guard as the SA-1 core).
+wire [15:0] ovl_mask = |ovl_combo ? ovl_combo : 16'h4230;
+// menu combo (MCU-programmable) plus the hardcoded savestate default inputs:
+// Start+R (save), Start+L (load), Select+dpad (slot load) -- so save/load work
+// in IRQ-driven scenes too, exactly like the SA-1 core's detector.
+reg overlay_combo_r = 1'b0;
+always @(posedge CLK2) begin
+  overlay_combo_r <= ((pc_pad1 & ovl_mask) == ovl_mask)
+                   | ((pc_pad1 & 16'h1010) == 16'h1010)
+                   | ((pc_pad1 & 16'h1020) == 16'h1020)
+                   | (pc_pad1[13] & |pc_pad1[11:8]);
+end
+assign overlay_combo = overlay_combo_r;
+`else
+assign overlay_combo = 1'b0;
+`endif
 
 // In-game cheat-overlay register shadow (regshadow.v).  The overlay restores the
 // PPU/CPU registers by reading a shadow of the last value(s) written to each, through
@@ -636,6 +766,10 @@ wire snoop_4200_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04200;
 // regshadow write-snoop windows: enable the data-bus level shifter (receive) so the
 // snoop sees the actual write byte instead of bus float -- see SNES_DATABUS_OE/DIR.
 wire snoop_42xx_enable = ~SNES_ADDR[22] & (SNES_ADDR[15:5] == 11'b01000010000);
+// Combinational receive window for the SNOOP CAPTURE (full /PAWR width: the CPU's
+// write data is only guaranteed near the END of the strobe, so the shifter must
+// stay in receive for the whole write).  The DIR mux uses the REGISTERED window
+// rs_snoop_pawr_oe_r instead -- see the note at the rs_* counter block.
 wire rs_snoop_pawr_oe  = ~SNES_PAWR & (SNES_PA < 8'h40);
 wire r4016_enable = {SNES_ADDR[22], SNES_ADDR[15:0]} == 17'h04016;
 
@@ -973,6 +1107,14 @@ assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
                          // PPU B-bus writes and $42xx A-bus writes, else the snoop
                          // reads float (base does this via SNES_SNOOPPAWR_DATA_OE).
                          rs_snoop_pawr_oe ? 1'b0 :
+`ifndef MK2
+                         // pad-capture FSM: the store of the LDA $4218 -> STA idiom
+                         // usually lands in WRAM, where no other term enables the
+                         // shifter -- receive on every A-bus write (the base core
+                         // does the same via its SNOOPWR window; DIR is already
+                         // SNES->FPGA during writes, so nothing can fight).
+                         ~SNES_WRITE ? 1'b0 :
+`endif
                          (snoop_42xx_enable & ~SNES_WRITE) ? 1'b0 :
                          snoop_4200_enable ? SNES_WRITE :
                          ((IS_ROM & SNES_ROMSEL) | (!IS_ROM & !IS_SAVERAM & !IS_WRITABLE) | (SNES_READ_narrow & SNES_WRITE)
@@ -989,7 +1131,7 @@ assign SNES_DATABUS_OE = msu_enable & ~(SNES_READ_narrow & SNES_WRITE) ? 1'b0 :
 // chip's own region), where it must keep driving (the snoop then reads back our own
 // value).  Missing the chip region term made CX4-RAM->PPU DMA read float (garbled
 // sprites in normal gameplay on the cx4 core) -- same class here.
-assign SNES_DATABUS_DIR = ((~SNES_READ & (~rs_snoop_pawr_oe | ROM_HIT | (~IS_PATCH & sdd1_enable & (~SDD1_RAM_CE | ~SDD1_ROM_CE | FSM_DMA_Transferring | sdd1_reg_enable)))) | (~SNES_PARD & (r213f_enable))) ?
+assign SNES_DATABUS_DIR = ((~SNES_READ & (~rs_dir_release_r | ROM_HIT | (~IS_PATCH & sdd1_enable & (~SDD1_RAM_CE | ~SDD1_ROM_CE | FSM_DMA_Transferring | sdd1_reg_enable)))) | (~SNES_PARD & (r213f_enable))) ?
               (1'b1 ^ (r213f_forceread & r213f_enable & ~SNES_PARD)
                   ^ (r2100_enable & ~SNES_PAWR & ~r2100_forcewrite & ~IS_ROM & ~IS_WRITABLE))
                            : ((~SNES_PAWR & r2100_enable) ? r2100_forcewrite

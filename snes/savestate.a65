@@ -430,6 +430,9 @@ ss_init
 ; 2. should a workaround be required it will be prepared by firmware before runtime
 
 	sta @CS_SAVE_REQ
+	; S-DD1 shadow-open latch: PSRAM survives resets; a stale 1 would turn the
+	; next real Start+R capture into a menu open.
+	sta @SS_SHADOW_PEND
 	; Clear the combo probe's edge state on first handler entry of this game load.
 	; These live in PSRAM and survive menu resets/game reloads; a stale CUR equal to
 	; the overlay-opening combo makes the edge check see "already held" and randomly
@@ -522,6 +525,8 @@ ss_start_skip
 	and #$0F
 	sta @CS_STATE
 	rep #$30 : .al : .xl
+	lda #$0000
+	sta @CS_INPUT_CUR
 
 ; input handling
 ss_input:
@@ -746,6 +751,16 @@ ss_ovl_mask_prev:
 	and #$0001
 	beq ss_probe_done                    ; stale scene -> do not open this frame
 ss_scene_ok:
+	lda @SS_SDD1_GATE
+	and #$00FF
+	beq ss_ovl_classic
+	sep #$20 : .as
+	lda #$01
+	sta @SS_SHADOW_PEND                  ; tells the pre-saveinputloop seam
+	lda #$00
+	sta @CS_STATE                        ; a post-save/load cooldown must not veto the open
+	jmp save_state
+ss_ovl_classic:
 	jmp @ss_overlay                      ; overlay lives in $C1 (cheatoverlay.a65); @ forces long jump cross-bank
 ss_probe_done:
 
@@ -1315,6 +1330,14 @@ ss_obc1_cap_done:
 	plb
 	plb
 
+	lda @SS_SHADOW_PEND
+	beq saveinputloop
+	lda #$00
+	sta @SS_SHADOW_PEND
+	sta @SS_STAGED_SLOT
+	sta @CS_STATE
+	jmp @ss_ovl_dmasave_done
+
 	; wait until release save input
 saveinputloop
 	- bit $4212 : bpl -
@@ -1368,6 +1391,12 @@ load_state
 	jsr ss_stage_slot                  ; carry set = abort (empty slot / MCU timeout)
 	bcs load_state_jump_exit
 
+; S-DD1 in-game-menu CLOSE enters here (cheatoverlay.a65): the shadow image is
+; resident by construction (the open captured it), so no staging and no slot
+; compare -- everything below is the proven Start+L path, ending in load_return
+; (which resets the stack from SRAM_SAVED_SP, discarding the shell's stack use)
+; and return_align (the proven resume, audio_fix included).
+load_state_noget:
 	lda @CS_STATE
 	bne load_state_jump_exit
 	inc
