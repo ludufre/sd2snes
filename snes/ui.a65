@@ -79,6 +79,30 @@ ui_call_resolve:
   jsr resolve_str
   rtl
 
+; --- $C0 trampolines for the RAM connection test screen (snes/memtest.a65, bank $C1).
+; The window and pad routines are `rts` near, so a far caller cannot reach them directly.
+; push_window and draw_window are paired into ONE stub because they are never called
+; apart -- the screen is a single window and the $C0 page has a few dozen bytes left, so
+; each stub is paid for out of a very small budget.
+ui_call_wopen:
+  jsr push_window
+  jsr draw_window
+  rtl
+
+ui_call_wclose:
+  jsr pop_window
+  rtl
+
+ui_call_pad:
+  jsr read_pad
+  rtl
+
+; Drain an in-flight cover request BEFORE the memtest command goes out: its $55 ACK
+; would otherwise read as the answer to ours (the same hazard patch_create_rom guards).
+ui_call_coversync:
+  jsr cover_sync_before_cmd
+  rtl
+
 ; resolve_yx: resolve_str for a (Y=addr, A=bank) pointer (as used by strlen).
 ; Entry .as/.xl. Exit same widths, A=resolved bank, Y=resolved addr.
 resolve_yx:

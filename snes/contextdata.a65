@@ -230,3 +230,102 @@ text_ccmin_15  .byt "15", 0
 text_ccmin_16  .byt "16", 0
 text_ccmin_17  .byt "17", 0
 text_ccmin_18  .byt "18", 0
+
+; ======================================================================
+;  menu_enttab_mm -- the MAIN menu (START in the browser).  Lives here, in $C1,
+;  for the same reason menu_enttab_chip does: it outgrew the $C0 page, and every
+;  reader of an entry table is bank-explicit (mainmenu sets DBR from
+;  ^menu_enttab_mm before jsr show_menu; show_menu itself captures the caller's
+;  DBR in w_menu_bank and reads entries long).  Moved from snes/menudata.a65.
+; ======================================================================
+menu_enttab_mm:
+; HEADER
+ .byt  1              ; listsel_step=1
+ .word !text_mainmenu ; window title
+ .byt  ^text_mainmenu ; for this menu
+; ENTRIES
+ .byt  MTYPE_FUNC
+ .word !text_mm_last
+ .byt  ^text_mm_last
+ .word !select_last_file-1
+ .byt  ^select_last_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_mm_last
+ .byt  ^mdesc_mm_last
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !text_mm_favorites
+ .byt  ^text_mm_favorites
+ .word !select_favorite_file-1
+ .byt  ^select_favorite_file-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_mm_favorites
+ .byt  ^mdesc_mm_favorites
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !mtext_mm_sysinfo
+ .byt  ^mtext_mm_sysinfo
+ .word !show_sysinfo-1
+ .byt  ^show_sysinfo-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_mm_sysinfo
+ .byt  ^mdesc_mm_sysinfo
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+; RAM connection test, next to System Information because it is the other half of
+; "what is wrong with my cartridge".  The handler lives in bank $C1 (snes/memtest.a65)
+; and that is fine: MTYPE_FUNC is dispatched through a LONG pointer, so a screen does
+; not have to fit in the nearly-full $C0 page to be reachable from here.
+ .byt  MTYPE_FUNC
+ .word !mtext_mm_memtest
+ .byt  ^mtext_mm_memtest
+ .word !show_memtest-1
+ .byt  ^show_memtest-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_mm_memtest
+ .byt  ^mdesc_mm_memtest
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_mm_cfg
+ .byt  ^mtext_mm_cfg
+ .word !menu_enttab_cfg
+ .byt  ^menu_enttab_cfg
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_mm_cfg
+ .byt  ^mdesc_mm_cfg
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
+ .word !text_mm_language
+ .byt  ^text_mm_language
+ .word !kv_language
+ .byt  ^kv_language
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_LANGUAGE
+ .byt  ^CFG_LANGUAGE
+ .word !mdesc_mm_language
+ .byt  ^mdesc_mm_language
+ .word !(mfunc_chg_language-1)
+ .byt  ^(mfunc_chg_language-1)
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  0

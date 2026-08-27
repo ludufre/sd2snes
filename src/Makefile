@@ -84,6 +84,10 @@ SRC += cfg.c cheat.c yaml.c savestate.c sgb.c sms.c atari.c nes.c nes_chr.c hwin
 # Shared helpers: menu command handlers, file->PSRAM streaming, string/path
 # utilities and the YAML sidecar writer.
 SRC += menucmd.c psram_io.c strutil.c yamlw.c
+# RAM connection test driven from the menu ("Memory test").  Every config: the Mk.II is
+# exactly where users need the triage, and it is the board that has no serial console to
+# run the standalone diagnostic through.
+SRC += memtest.c
 # SPC7110 RTC-4513 battery backup.  Linked into every config: both flavours of the
 # SPC7110 core carry the virtual battery.
 SRC += spc7110rtc.c

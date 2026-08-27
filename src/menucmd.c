@@ -20,6 +20,7 @@
 #include "cheat.h"
 #include "theme.h"
 #include "manual.h"
+#include "memtest.h"
 #include "menucmd.h"
 #include "util.h"
 
@@ -630,6 +631,32 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       *menu_reload = 1;
       return cmd;
     }
+    case SNES_CMD_MEMTEST:
+      /* "Memory test": walk the RAM wiring and report faults.  Two very different
+         answers, and which one it is decides whether the SNES survives the command.
+         (1) No fpga_test on the card -> nothing has happened yet, so refuse IN PLACE:
+             park the code, ACK, and the menu pops a modal over the live screen.  The
+             answer rides the persistent block rather than an $aa on SNES_CMD, the same
+             race SRAM_LOAD_NACK_ADDR exists for (the menu loop re-arms $55 immediately).
+         (2) Otherwise the test reconfigures the FPGA out from under the running menu, so
+             HALT THE SNES FIRST -- it is executing the menu out of PSRAM, and the moment
+             the test core comes up that code is gone.  Same reasoning as the patched-ROM
+             export, minus its trampoline: there is nowhere off-cartridge to park the CPU.
+         The result then has to survive to the next boot, which it does: memtest_run
+         publishes into $FF07xx and nothing on the reload path writes there. */
+      if(!memtest_available()) {
+        memtest_publish_nocore();
+        snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
+        return 0;
+      }
+      assert_reset();
+      memtest_run();
+      /* NOTE: returns cmd, not 0 -- menu_reload only takes effect once the menu loop
+         exits.  The reload is not optional: the FPGA is on the test core, the low PSRAM
+         is scribbled over, and the SNES is in reset.  main()'s outer loop puts fpga_base
+         back and re-stages the menu image. */
+      *menu_reload = 1;
+      return cmd;
     case SNES_CMD_LOAD_MENU_SPC:
       /* stage background menu music. Use the user-chosen .spc (CFG.bgm_name, a
          full SD path set via SNES_CMD_SET_MENU_SPC) when present, otherwise fall
@@ -827,6 +854,11 @@ NO_INLINE void menucmd_export_boot_nav(uint8_t firstboot) {
      and then asks for a menu reload, which re-enters main()'s outer loop, and
      the reloaded browser is exactly who consumes it. */
   if(firstboot) sram_writebyte(PATCH_EXPORT_NONE, SRAM_EXPORT_RESULT_ADDR);
+  /* Same story, same window: the memory-test block is persistent PSRAM, so a cold start
+     would otherwise render whatever the last power-on left there as a result screen.
+     Cleared only on firstboot for the same reason as the byte above -- a real run writes
+     this block and THEN asks for the reload that is supposed to display it. */
+  if(firstboot) memtest_clear();
   /* OK *and* PARTIAL: a partial export still WROTE the .sfc -- only some sidecar
      failed to copy -- and export_result_check (snes/patch.a65) navigates the
      browser to it in both cases.  Testing == PATCH_EXPORT_OK here left LASTGAME_

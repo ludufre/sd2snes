@@ -595,6 +595,17 @@ void fpga_set_213f(uint8_t data) {
   FPGA_DESELECT();
 }
 
+/* Point the MCU's memory window at RAM0 (the PSRAM, unit 0) or RAM1 (the 4 Mbit SRAM,
+   unit 1).  ONLY the fpga_test core decodes this -- see the opcode note in fpga_spi.h --
+   so it is exclusively the RAM connection test's (src/memtest.c), which reconfigures to
+   that core first.  Calling it under a runtime core would set an unrelated register. */
+void fpga_select_mem(uint8_t unit) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_SELECTMEM);
+  FPGA_TX_BYTE(unit);
+  FPGA_DESELECT();
+}
+
 void fpga_set_snescmd_addr(uint16_t addr) {
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_SNESCMD_SETADDR);

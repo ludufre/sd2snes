@@ -291,6 +291,25 @@ TRANSLATIONS = {
     'text_si_u16off': 'Ultra16 seriale {21} (Autoboot Off)',
     'text_si_model': 'Modello: {22}',
     'text_si_updatefw': '*** Aggiorna il firmware ***',
+    # --- RAM connection test screen (snes/memtest.a65). text_mtl_* are whole
+    #     40-column lines; text_mt_* are fragments printed after an untranslated
+    #     "U501: " chip prefix and followed by the LINE NUMBER, so each must end
+    #     exactly where that number goes.
+    'mtext_mm_memtest': 'Test memoria',
+    'mdesc_mm_memtest': 'Controlla le linee di indirizzo e dati tra FPGA e chip di RAM per interruzioni e cortocircuiti. Non verifica ogni cella. Riavvia la console, circa 10 s.',
+    'text_mtl_prompt': 'A: Avvia test (riavvia)  B: Chiudi',
+    'text_mtl_run': 'Test della memoria, attendere{127}{128}',
+    'text_mtl_none': 'Nessun test ancora eseguito.',
+    'text_mtl_pass': 'Tutte le linee RAM OK.',
+    'text_mtl_fail': 'Guasti rilevati:',
+    'text_mtl_nocore': '/sd2snes/fpga_test assente/non valido.',
+    'text_mtl_more': '(altri guasti non mostrati)',
+    'text_mt_data': 'controlla linea dati D',
+    'text_mt_addr': 'controlla linea indirizzi A',
+    'text_mt_short': 'possibile corto A',
+    'text_mt_bytesel': 'controlla LB# / UB#',
+    'text_mt_ctrl': 'controlla CE# / OE# / WE#',
+    'text_mt_fpgactrl': 'controlla CE#/OE#/WE# FPGA',
     'text_st_slotb_title': 'Sufami Turbo - Slot B',
     'text_st_slotb_footer': 'A:Gioca  B:Indietro  <>:Pag  LR:Inizio/Fine',
     'text_st_slotb_none': '[Nessuna cartuccia nello Slot B]',

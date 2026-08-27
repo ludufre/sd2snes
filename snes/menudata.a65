@@ -50,80 +50,11 @@
 
 #include "memmap.i65"
 
-menu_enttab_mm:
-; HEADER
- .byt  1              ; listsel_step=1
- .word !text_mainmenu ; window title
- .byt  ^text_mainmenu ; for this menu
-; ENTRIES
- .byt  MTYPE_FUNC
- .word !text_mm_last
- .byt  ^text_mm_last
- .word !select_last_file-1
- .byt  ^select_last_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_mm_last
- .byt  ^mdesc_mm_last
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC
- .word !text_mm_favorites
- .byt  ^text_mm_favorites
- .word !select_favorite_file-1
- .byt  ^select_favorite_file-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_mm_favorites
- .byt  ^mdesc_mm_favorites
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_FUNC
- .word !mtext_mm_sysinfo
- .byt  ^mtext_mm_sysinfo
- .word !show_sysinfo-1
- .byt  ^show_sysinfo-1
- .byt  0
- .byt  0,0,0
- .word !mdesc_mm_sysinfo
- .byt  ^mdesc_mm_sysinfo
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_SUBMENU
- .word !mtext_mm_cfg
- .byt  ^mtext_mm_cfg
- .word !menu_enttab_cfg
- .byt  ^menu_enttab_cfg
- .byt  0
- .byt  0,0,0
- .word !mdesc_mm_cfg
- .byt  ^mdesc_mm_cfg
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_VALUE
- .word !text_mm_language
- .byt  ^text_mm_language
- .word !kv_language
- .byt  ^kv_language
- .byt  OPTTYPE_KVBYTE
- .word !CFG_LANGUAGE
- .byt  ^CFG_LANGUAGE
- .word !mdesc_mm_language
- .byt  ^mdesc_mm_language
- .word !(mfunc_chg_language-1)
- .byt  ^(mfunc_chg_language-1)
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  0
+; menu_enttab_mm (the MAIN menu) MOVED to snes/contextdata.a65 (bank $C1).
+; It grew past what the $C0 page has left, and mainmenu (snes/menu.a65) already
+; sets DBR from ^menu_enttab_mm before jsr show_menu, so the table works from any
+; bank -- the same reason menu_enttab_chip lives there. Growth rule: a new TABLE
+; goes to $C1/$C2, only new near CODE costs $C0.
 
 menu_enttab_cfg:
 ; HEADER

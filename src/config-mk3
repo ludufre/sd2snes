@@ -269,3 +269,18 @@ HWREV6_REG = LPC_GPIO0
 HWREV6_BIT = 10
 HWREV7_REG = LPC_GPIO2
 HWREV7_BIT =  5
+
+# --- RAM connection test (src/memtest.c) ---------------------------------------
+# Board wiring the test walks, and how many times.  Mirrors src/tests/config-* (the
+# standalone diagnostic firmware) so a result from the menu names the same pins as one
+# from the official diagnostic image.
+#   RAM0_NUM_CHIPS   PSRAM devices on the board (Mk.II has one, Mk.III two interleaved)
+#   RAM0_BASES       byte address of the first cell of each of them
+#   RAM0_SECOND_ADDR offset of the chip's A0, i.e. the stride between its own cells
+#   MEMTEST_ITERATIONS  repeats of the whole walk; a marginal joint fails intermittently,
+#                    so one pass is not enough.  256 is the diagnostic firmware's count
+#                    and lands around ten seconds of SPI traffic.
+RAM0_NUM_CHIPS        = (2)
+RAM0_BASES            = {0, 2}
+RAM0_SECOND_ADDR      = (4)
+MEMTEST_ITERATIONS    = (256)

@@ -148,6 +148,11 @@
 #define FPGA_CMD_DACBOOST        (0xec)
 #define FPGA_CMD_SETFEATURE      (0xed)
 #define FPGA_CMD_SET213F         (0xee)
+/* 0xee is a PER-CORE opcode, like 0xfb below: every runtime core decodes it as SET213F,
+   the fpga_test core decodes it as "select MCU memory unit" (0 = RAM0/PSRAM, 1 = RAM1,
+   the 4 Mbit SRAM the runtime cores leave undriven).  The contexts never overlap --
+   fpga_select_mem is only reachable once memtest_run has configured fpga_test. */
+#define FPGA_CMD_SELECTMEM       (0xee)
 #define FPGA_CMD_CHIPFEAT        (0xef)
 #define FPGA_CMD_TEST            (0xf0)
 #define FPGA_CMD_GETSTATUS       (0xf1)
@@ -219,6 +224,8 @@ void fpga_set_dac_boost(uint8_t boost);
 void fpga_set_features(uint16_t feat);
 void fpga_set_ovl_combo(uint16_t combo);
 void fpga_set_213f(uint8_t data);
+/* fpga_test core ONLY (0xee is SET213F everywhere else): 0 = RAM0/PSRAM, 1 = RAM1. */
+void fpga_select_mem(uint8_t unit);
 void fpga_set_snescmd_addr(uint16_t addr);
 void fpga_write_snescmd(uint8_t data);
 uint8_t fpga_read_snescmd(void);

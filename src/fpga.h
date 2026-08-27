@@ -71,6 +71,12 @@ extern uint8_t fpga_boot_led;
    baked into the firmware to reclaim ~21 KB of the tight 128 KB flash. See
    fpga_rompgm(). mk3/mk3-stm32 keep it embedded (cfgware). */
 #define FPGA_MINI ((const uint8_t*)"/sd2snes/fpga_mini." FPGA_CONF_EXT)
+/* RAM wiring test core (verilog/sd2snes_test), used by the menu's "Memory test" entry.
+   The only core that wires the MCU to RAM1 (the runtime cores leave RAM_DATA/RAM_ADDR
+   undriven), and the same one the official diagnostic firmware uses -- so a result from
+   the menu is comparable with one from that image.  Loaded on demand and never left
+   configured: main()'s outer loop puts fpga_base back on the next menu boot. */
+#define FPGA_MEMTEST ((const uint8_t*)"/sd2snes/fpga_test." FPGA_CONF_EXT)
 #define FPGA_ROM ((const uint8_t*)"rom")
 
 #define FPGA_TEST_TOKEN	(0xa5)

@@ -200,6 +200,7 @@ text_mm_last                      .byt "Recent Games", 0
 text_mm_favorites                 .byt "Favorite Games", 0
 mtext_mm_cfg                      .byt "Configuration", 0
 mtext_mm_sysinfo                  .byt "System Information", 0
+mtext_mm_memtest                  .byt "Memory test", 0
 text_mm_language                  .byt "Language", 0
 text_lang_en                      .byt "English", 0
 text_lang_ptbr                    .byt "Portugu", 135, "s", 0
@@ -360,6 +361,7 @@ mdesc_mm_last                     .byt "Show up to 10 most recently played games
 mdesc_mm_favorites                .byt "Show up to 20 favorite games", 0
 mdesc_mm_cfg                      .byt "Configure the sd2snes", 0
 mdesc_mm_sysinfo                  .byt "Info about FW version, SD Card, SNES, CIC", 127, 128, 0
+mdesc_mm_memtest                  .byt "Checks the address and data lines between the FPGA and the RAM chips for breaks and shorts. Does not scan every cell. Resets the console, about 10 s.", 0
 mdesc_mm_language                 .byt "Set the menu/firmware language", 0
 mdesc_cfg_time                    .byt "Set the date and time", 0
 mdesc_cfg_bsx                     .byt "BS-X/Satellaview specific settings", 0
@@ -518,6 +520,27 @@ text_si_u16on     .byt "Ultra16 serial no. ", 21, " (Autoboot On)", 0
 text_si_u16off    .byt "Ultra16 serial no. ", 21, " (Autoboot Off)", 0
 text_si_model     .byt "Model: ", 22, 0
 text_si_updatefw  .byt "*** Please update the firmware ***", 0
+
+; --- RAM connection test screen (snes/memtest.a65) ---------------------------
+; Two families with different width budgets (build_const.py WIDTH_LIMITS):
+;   text_mtl_*  WHOLE lines, 40 columns.
+;   text_mt_*   FRAGMENTS appended after a "U501: " chip prefix, so 32 columns.
+; The chip names (U501/U502/U511) are board silkscreen and stay untranslated; they
+; live in memtest.a65, not here.  A fragment is followed by the line NUMBER, so it
+; must end where that number belongs -- "check data line D" + "3".
+text_mtl_prompt   .byt "A: Run test (resets console)  B: Close", 0
+text_mtl_run      .byt "Testing memory, please wait", 127, 128, 0
+text_mtl_none     .byt "No test has been run yet.", 0
+text_mtl_pass     .byt "All RAM lines OK.", 0
+text_mtl_fail     .byt "Faults found:", 0
+text_mtl_nocore   .byt "/sd2snes/fpga_test missing or bad.", 0
+text_mtl_more     .byt "(more faults not shown)", 0
+text_mt_data      .byt "check data line D", 0
+text_mt_addr      .byt "check address line A", 0
+text_mt_short     .byt "possible short A", 0
+text_mt_bytesel   .byt "check LB# / UB#", 0
+text_mt_ctrl      .byt "check CE# / OE# / WE#", 0
+text_mt_fpgactrl  .byt "check FPGA CE# / OE# / WE#", 0
 
 text_on_p1      .byt "On: P1", 0
 text_on_p2      .byt "On: P2", 0

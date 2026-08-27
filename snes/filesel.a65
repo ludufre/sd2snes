@@ -68,6 +68,9 @@ fileselloop_redraw
   jsr export_result_check ; fork: report a finished "create patched ROM" (self-gating;
                           ; one byte load unless the MCU actually left a result). Here,
                           ; after the repaint, so the modal sits on the real browser.
+  jsl @mt_result_check    ; fork: same deal for a finished RAM connection test (bank $C1,
+                          ; snes/memtest.a65). Also self-gating, and it demotes the block
+                          ; to MT_ST_SEEN on the way out so it opens exactly once.
   bra fileselloop
 
 filesel_cleanup:

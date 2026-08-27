@@ -237,8 +237,11 @@ def main():
     #                   substituted value can still be clipped at runtime.
     #   text_cheat_noname  drawn in the cheat list's name column, CHEAT_NAME_WIDTH = 42
     #                   (cheatmenu.a65); hiprint truncates past that
+    # First matching prefix wins, so text_mtl_ (whole lines) must precede text_mt_
+    # (fragments printed AFTER a "U501: " chip prefix, hence 8 columns less).
     WIDTH_LIMITS = (("text_si_", 40), ("text_cheat_noname", 42),
-                    ("text_no_", 22), ("cheat_tab_head", 48), ("mtext_", 40),
+                    ("text_no_", 22), ("cheat_tab_head", 48),
+                    ("text_mtl_", 40), ("text_mt_", 32), ("mtext_", 40),
                     ("mdesc_", 160), ("text_err_", 26))
     WIDTH_DEFAULT = 56
 

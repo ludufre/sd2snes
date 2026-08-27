@@ -228,6 +228,46 @@
 #define MAN_META_ZENTRYY            $FF076B /* u16 LE: where to start panning when entering zoom from a 1x block (2x pixels into the page) */
 #define MAN_META_ZFIRSTBLK          $FF076D /* u16 LE: first 1x block covering the staged zoom page (after page turns it is not the one we entered from) */
 #define MAN_META_ZNBLK              $FF076F /* u8: how many 1x blocks cover it, so leaving zoom returns to the BAND being read rather than always the first */
+/* --- RAM connection test result (snes/memtest.a65). 56 B of a 64 B reservation at
+ * $FF0780..$FF07BF, the last allocation in the free $FF0701..$FF07FF gap ($FF07C0 up is
+ * what remains). LOCKSTEP with memtest_blk_t in src/memtest.h: an offset that drifts on
+ * one side puts nonsense on screen with no build error.
+ * PERSISTENT, and that is the whole design: the test reconfigures the FPGA and holds this
+ * CPU in reset from start to finish, so nothing can be displayed while it runs -- the
+ * block survives the menu cold-boot and the reloaded browser reports it (mt_result_check),
+ * the same trick EXPORT_RESULT uses. The magic is re-checked before any field is read, so
+ * an older firmware (which never writes here) degrades to "update the firmware" instead of
+ * rendering leftover PSRAM as findings. */
+#define MEMTEST_BLK                 $FF0780
+#define MT_MAGIC0                   0   /* 'M' ($4d) */
+#define MT_MAGIC1                   1   /* 'T' ($54) */
+#define MT_VERSION                  2   /* u8, 1 = the layout below */
+#define MT_STATE                    3   /* u8 MT_ST_*: what, if anything, there is to report */
+#define MT_ST_NONE                  0   /* nothing to report (also what the firmware parks here at cold boot) */
+#define MT_ST_DONE                  1   /* a test ran; MT_FINDINGS is valid */
+#define MT_ST_NOCORE                2   /* refused: /sd2snes/fpga_test.<ext> is not on the card. Answered with this CPU still running, so it is shown in place */
+#define MT_ST_RUNNING               3   /* CAPABILITY SENTINEL the MENU parks before CMD_MEMTEST. The firmware always overwrites it (with DONE it never gets to write, since it halts us; with NOCORE it writes before the $55), so a RUNNING surviving the ACK means this firmware has no memtest handler -- an old dispatcher ACKs unknown commands */
+#define MT_ST_COREFAIL              5   /* fpga_test was on the card but did not configure (truncated/corrupt, or gone between the f_stat and the load). By then the SNES is already halted, so unlike NOCORE this one can only be reported AFTER the reload -- mt_result_check opens on it too. Rendered with the same line as NOCORE: either way the user needs a good fpga_test file */
+#define MT_ST_SEEN                  4   /* MENU-ONLY: a DONE result that has already been auto-shown after the reload. Renders exactly like DONE (so reopening the screen from the menu still shows the last result) but mt_result_check ignores it, which is what keeps the browser from reopening the screen on every repaint. The FIRMWARE never writes this value */
+#define MT_FLAGS                    4   /* u8, bits below */
+#define MT_F_FAIL                   $01 /* bit0: at least one fault was found */
+#define MT_F_TRUNC                  $02 /* bit1: more faults exist than MT_FINDINGS can hold */
+#define MT_CHIPS                    5   /* u8: PSRAM devices tested (1 on Mk.II, 2 on Mk.III) */
+#define MT_NFIND                    6   /* u8: valid entries in MT_FINDINGS (0..MT_MAX_FIND) */
+#define MT_FINDINGS                 8   /* MT_MAX_FIND records of MT_FIND_SIZE: +0 chip (MT_CHIP_*), +1 kind (MT_KIND_*), +2 line, +3 second line of a shorted pair (0 otherwise) */
+#define MT_FIND_SIZE                4
+#define MT_MAX_FIND                 12
+#define MT_SIZE                     56
+#define MT_CHIP_RAM0_1              0   /* U501 */
+#define MT_CHIP_RAM0_2              1   /* U502 (Mk.III only) */
+#define MT_CHIP_RAM1                2   /* U511 */
+#define MT_KIND_DATA                0   /* data line D<line1> */
+#define MT_KIND_ADDR                1   /* address line A<line1> */
+#define MT_KIND_SHORT               2   /* A<line1> and A<line2> look shorted together */
+#define MT_KIND_BYTESEL             3   /* byte enables: LB# / UB# */
+#define MT_KIND_CTRL                4   /* that chip's CE# / OE# / WE# */
+#define MT_KIND_FPGACTRL            5   /* the FPGA's CE# / OE# / WE# */
+#define MT_KIND_N                   6   /* kinds the renderer knows; anything else is skipped */
 #define MANUAL_S1META               $FF0770 /* scale-1 (1x) page meta, 16B after MANUAL_META: +0 flags (bit0 = staged and ready), +1 nrows, +2..3 pix_h u16 LE, +4 staged page, +5 staged guide, +6..7 page count u16 LE. Lockstep with SRAM_MANUAL_S1META_ADDR in src/memmap.h. */
 #define MAN_S1_F_READY              $01
 #define MAN_S1META_NROWS            $FF0771
@@ -453,6 +493,7 @@
 #define CMD_PATCH_META_SAVE         $3b /* patch selector: persist the header modes the menu edited (IPS_FLAGS) into /sd2snes/patches/<BB>/<stem>.yml. MCU_PARAM set like LOADROM. ($39 went to CMD_RESTORE_CLASSIC, developed in parallel.) */
 #define CMD_EXPORT_PATCHED_ROM      $3a /* patch selector: write a .sfc next to the ROM with the patch at MCU_PARAM+7 already applied, named after the PATCH FILE ("Foo - [BR].ips" -> "Foo - [BR].sfc"), then reload the menu. Slow (tens of seconds). */
 #define CMD_EXPORT_CHECK            $3c /* pre-flight for CMD_EXPORT_PATCHED_ROM (same MCU_PARAM, +7 = patch index): answers "would the .sfc collide?" in EXPORT_RESULT (0 free / 4 exists) and ACKs $55. Non-booting -- lets patch_create_rom refuse IN PLACE, before the screen teardown. Lockstep with src/snes.h. */
+#define CMD_MEMTEST                 $3d /* "Memory test": walk the RAM wiring, publish findings in MEMTEST_BLK. Reconfigures the FPGA to fpga_test and halts this CPU for the ~10s it runs, then reloads the menu -- so the RESULT is reported by the reloaded browser (mt_result_check), exactly like the patched-ROM export. Answers MT_STATE_NOCORE + $55 WITHOUT halting anything when fpga_test is missing, so that refusal is a modal over the live screen. Lockstep with src/snes.h. */
 /* WiFi-in-menu commands RESERVED for the Companion port (lockstep with src/snes.h):
    WiFi owns $30-$33, so game-info lives at $34-$37. No menu/MCU handler in this
    branch -- reserved so adding WiFi later needs zero command renumbering. */

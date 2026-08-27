@@ -494,4 +494,25 @@ dlg_footer_bank .byt 0
 dlg_name_cnt    .byt 0     ; characters a name may print (Slot B has no badge column)
 dlg_badge       .byt 0     ; 1 = draw the IPS/BPS badge column
 
+;----------RAM connection test screen (snes/memtest.a65) ----------
+; Own line buffer rather than si_linebuf's: the two screens never coexist, but sharing
+; would make one screen's layout a hidden dependency of the other's, and 41 bytes of the
+; ~47 KB free below $7EC000 is not worth that.
+mt_linebuf      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+                .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+                .byt 0     ; 41 B: 40 columns + the one byte hiprint reads past
+                           ;   print_count to fill print_over (same slack si_linebuf
+                           ;   documents; the value is irrelevant, the ADDRESS is not).
+mt_row          .byt 0     ; layout row being composed (0..MT_ROWS-1)
+mt_col          .word 0    ; output column while composing mt_linebuf (0..40)
+mt_tmp          .word 0    ; scratch for the chip-name and kind-table index maths
+mt_nvis         .byt 0     ; findings that fit on screen this pass (NOT mt_tmp: the
+                           ;   per-line helpers clobber that one mid-loop)
+mt_bright_bak   .byt 0     ; menu_brightness saved across the fade to black, so the
+                           ;   refusal path fades back in to the level the user had
+mt_off          .word 0    ; byte offset of the finding being drawn, inside MT_FINDINGS.
+                           ;   A VARIABLE and not X on purpose: mt_blank and mt_flush both
+                           ;   use X, so an index held in a register would not survive the
+                           ;   loop body that composes and prints each line.
+
 _END            .byt 0

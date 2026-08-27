@@ -1,0 +1,897 @@
+; RAM connection test screen.
+;
+; The firmware (src/memtest.c) walks the data and address lines of the PSRAM and of the
+; 4 Mbit SRAM and leaves a small BINARY block of findings in MEMTEST_BLK; this file is
+; what turns that block into readable, localized lines.  Same split as the System
+; Information screen and for the same reason: a table of localized fault messages in MCU
+; flash is exactly what the Mk.II has no room for.
+;
+; THE TEST HALTS THIS CPU.  It reconfigures the FPGA to fpga_test, which means the menu
+; image under our feet is gone, so the firmware holds the SNES in reset for the whole run
+; and cold-boots the menu afterwards.  Nothing can be displayed while it runs -- hence
+; the same two-part shape the patched-ROM export uses: paint a banner, ask, freeze; and
+; report the outcome from the RELOADED browser (mt_result_check).  The one case that does
+; NOT halt anything is a missing fpga_test file, which the firmware answers in place so
+; the refusal is a repaint of this very screen instead of a blind reload.
+;
+; WHY $C1: the $C0 page has a few dozen bytes left and this object is a couple of KB.
+; Only tiny `jsr X : rtl` trampolines live in $C0 (ui_call_wopen/wclose/pad/coversync in
+; ui.a65, gi_call_hiprint in gameinfo.a65, ui_call_resolve in ui.a65).  For the same
+; reason this screen has no sound effects: two more trampolines for snd_fx_* is not what
+; the remaining $C0 budget should be spent on, and a diagnostic screen nobody opens twice
+; a year is the right place to go without.
+;
+; ENTRY POINTS (both jsl, both self-contained -- they force DP=0 and DB=$7E, because a
+; menu FUNC runs with DP != 0 and every direct-page access here depends on DP=0):
+;   show_memtest     - the menu entry (MTYPE_FUNC dispatches through a LONG pointer, so
+;                      the handler does not have to live in $C0)
+;   mt_result_check  - called by the browser after a full repaint; self-gating
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+; '.link page' wins and they emit no bytes).  Same pattern as sysinfo_render.a65.
+.link page $c1
+
+#define MT_COLS         40
+; Layout inside the window, in content rows (row r prints at win_y + 2 + r), sized to the
+; same 14 rows the System Information screen uses -- this screen borrows sysinfo_win_*
+; outright, so the two are identical in position and, crucially, in what pop_window sees.
+#define MT_ROW_STATUS   0
+#define MT_ROW_FIRST    2
+#define MT_VIS_FIND     10      /* rows 2..11 */
+#define MT_ROW_END      12      /* == MT_ROW_FIRST + MT_VIS_FIND, spelled out: snescom
+                                   takes the operand of an immediate literally */
+#define MT_ROW_MORE     12
+#define MT_ROW_PROMPT   13
+#define MT_ROWS         14
+#define MT_VIS_FIND_1   11      /* == MT_VIS_FIND + 1, for the "more than fits" compare */
+/* Frames the "testing, please wait" banner stays up before the screen fades out. The
+   console is then dark for the ~6-10s the test takes, so this is the only chance the
+   user gets to read WHY it went dark -- long enough for that, short enough not to feel
+   like the button did nothing. */
+#define MT_BANNER_FRAMES 90
+
+; Board silkscreen, deliberately NOT localized and deliberately not in $C0: these are
+; printed as a "U501: " prefix in front of the localized fault fragment.  5 bytes each,
+; indexed by MT_CHIP_*.
+mt_chipname:
+  .byt "U501", 0
+  .byt "U502", 0
+  .byt "U511", 0
+
+; MT_KIND_* -> localized fragment.  4 bytes per entry (address, bank, pad) so the index
+; is a pair of shifts.  A kind outside this table prints nothing rather than garbage,
+; which is what lets a future firmware add a kind without breaking an older menu.
+mt_kindtbl:
+  .word !text_mt_data
+  .byt  ^text_mt_data
+  .byt  0
+  .word !text_mt_addr
+  .byt  ^text_mt_addr
+  .byt  0
+  .word !text_mt_short
+  .byt  ^text_mt_short
+  .byt  0
+  .word !text_mt_bytesel
+  .byt  ^text_mt_bytesel
+  .byt  0
+  .word !text_mt_ctrl
+  .byt  ^text_mt_ctrl
+  .byt  0
+  .word !text_mt_fpgactrl
+  .byt  ^text_mt_fpgactrl
+  .byt  0
+
+
+; ======================================================================
+;  show_memtest -- the menu entry.  Shows the last result (or "no test yet") and
+;  offers to run one.  A runs it, B closes.
+; ======================================================================
+; The unwind order is pld / plb / plp -- the MIRROR of php / phb / phd.  Getting it
+; backwards restores DP and DBR from each other's bytes, assembles clean, and hands the
+; caller a menu whose direct page points at rubbish.
+show_memtest:
+  php
+  phb
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld                         ; DP = 0 (show_menu dispatches FUNCs with DP != 0)
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb                         ; DB = $7E: every var below lives in the data segment
+  jsr mt_screen
+  pld
+  plb
+  plp
+  .as : .xl
+  rtl
+
+
+; ======================================================================
+;  mt_result_check -- called by the browser right after a full repaint.
+;  Self-gating: does nothing unless the firmware left a FRESH result behind.
+;
+;  The test holds the SNES in reset from start to finish, so this deferred screen is the
+;  only place a result can ever be shown.  "Fresh" means MT_ST_DONE specifically: on the
+;  way out the state is demoted to MT_ST_SEEN, which renders identically when the user
+;  opens the screen from the menu but never re-opens it by itself -- without that the
+;  browser would pop this screen on every single repaint.
+; ======================================================================
+mt_result_check:
+  php
+  phb
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb
+  jsr mt_magic_ok
+  bcs mt_rc_out
+  lda @MEMTEST_BLK+MT_STATE
+  cmp #MT_ST_DONE
+  beq mt_rc_show
+  cmp #MT_ST_COREFAIL         ; the one failure that can only be reported after the reload
+  bne mt_rc_out
+mt_rc_show:
+  jsr mt_screen
+  ; One-shot AFTER the screen, not before: the screen renders out of this very byte.
+  lda #MT_ST_SEEN
+  sta @MEMTEST_BLK+MT_STATE
+mt_rc_out:
+  pld
+  plb
+  plp
+  .as : .xl
+  rtl                         ; the browser ($C0) reaches this with a plain jsl
+
+
+; ======================================================================
+;  mt_screen -- the window: open, draw, run the input loop, close.
+;  Entry/exit .as/.xl, DB=$7E, DP=0.  Shared by both entry points above.
+; ======================================================================
+mt_screen:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; mt_put_str borrows longptr, the menu's general-purpose direct-page long pointer, so
+  ; save and put back whatever the caller had in it: this screen has to be a black box
+  ; for the browser it can pop up over, not just for the menu entry.
+  lda longptr+2
+  pha
+  rep #$20 : .al
+  lda longptr
+  pha
+  sep #$20 : .as
+  ; Park the selection bar off-screen.  It is a hardware colour window driven by the NMI
+  ; (bar_xl/yl/wl), not part of the pushed tilemap, so it would otherwise keep sweeping
+  ; across this window.  Saved and restored, because the caller may be the LIVE browser.
+  lda bar_xl
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #$ff
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+
+  lda #^mtext_mm_memtest
+  sta window_tbank
+  ldx #!mtext_mm_memtest
+  stx window_taddr
+  lda @sysinfo_win_x
+  sta window_x
+  stz print_x+1
+  lda @sysinfo_win_y
+  sta window_y
+  stz print_y+1
+  lda @sysinfo_win_w
+  sta window_w
+  lda @sysinfo_win_h
+  sta window_h                ; also what pop_window counts rows with, so nothing
+                              ; between here and the close may touch it
+  jsl @ui_call_wopen
+  stz print_pal
+
+  jsr mt_draw
+mt_loop:
+  lda isr_done
+  beq mt_loop
+  stz isr_done
+  jsl @ui_call_pad
+  lda pad_b
+  bne mt_screen_out
+  lda pad_a
+  beq mt_loop
+  jsr mt_run
+  bra mt_loop
+
+mt_screen_out:
+  jsl @ui_call_wclose
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  rep #$20 : .al
+  pla
+  sta longptr
+  sep #$20 : .as
+  pla
+  sta longptr+2
+  plp
+  .as : .xl
+  rts
+
+
+; ======================================================================
+;  mt_run -- ask the firmware to run the test.
+;
+;  Everything before the command exists because of ONE fact: the firmware asserts SNES
+;  reset within milliseconds of taking it, and the picture on screen at that instant is
+;  the picture for the whole run.  So the banner is painted AND uploaded first.
+; ======================================================================
+mt_run:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr mt_draw_running
+  jsr mt_wait_frame
+  jsr mt_wait_frame           ; two frames: let the NMI actually land it in VRAM
+  jsr mt_hold_banner          ; long enough to actually read it before the screen goes
+  jsr mt_fade_out             ; ...and then go dark, see the comment there
+
+  ; Drain an in-flight cover request FIRST -- its $55 ACK would read as the answer to
+  ; the command below (and would land after we are gone, putting box art back on screen).
+  jsl @ui_call_coversync
+
+  ; CAPABILITY SENTINEL.  A firmware that predates CMD_MEMTEST falls into its
+  ; dispatcher's default and re-arms $55 anyway, so the ACK alone cannot tell "refused"
+  ; from "no handler".  The real handler either halts us outright (a test that runs) or
+  ; writes MT_STATE before its $55 (the refusal), and never writes MT_ST_RUNNING -- so a
+  ; RUNNING that survives the ACK means this firmware has no memtest.
+  lda #MT_ST_RUNNING
+  sta @MEMTEST_BLK+MT_STATE
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_MEMTEST
+  sta @MCU_CMD
+mt_run_wait:
+  lda @SNES_CMD
+  cmp #$55
+  bne mt_run_wait
+  lda #$55
+  sta @MCU_CMD
+  ; Still executing => the test did NOT start (missing fpga_test, or no handler at all).
+  ; A run that started never reaches this instruction: the CPU is in reset until the menu
+  ; cold-boots, and the reloaded browser reports the result through mt_result_check.
+  ; Repaint BEFORE lifting the blank, so the refusal is what fades back in -- not the
+  ; "testing, please wait" banner the user would read as a test that is still running.
+  jsr mt_draw
+  jsr mt_wait_frame
+  jsr mt_wait_frame
+  jsr mt_fade_in
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_hold_banner -- keep the "testing" banner up long enough to be read.
+;  Entry/exit .as/.xl, DB=$7E.
+; ----------------------------------------------------------------------
+mt_hold_banner:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #MT_BANNER_FRAMES
+mt_hb_loop:
+  phx
+  jsr mt_wait_frame
+  plx
+  dex
+  bne mt_hb_loop
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_fade_out / mt_fade_in -- take the screen to black before the console freezes.
+;
+;  WHY: the firmware halts this CPU and reconfigures the FPGA a few milliseconds after
+;  the command, and whatever the PPU was showing is then frozen on screen for the whole
+;  run -- with the cartridge bus in flux underneath it, which is what put visible
+;  artefacts on the picture.  Going properly dark first replaces that with nothing.
+;
+;  Black in TWO steps, and both matter: the fade is only the brightness ramp, and a
+;  screen at brightness 0 is still a screen the PPU is fetching for.  The forced blank
+;  after it is what actually stops the fetching -- the same "hold black with FORCED
+;  BLANK, never with a window or colour math" rule the launch iris learned the hard way.
+;
+;  THE RAMP IS DRIVEN HERE, not by pointing the NMI's fade engine at 0 and waiting.
+;  That was the first version and it can DEADLOCK: the NMI's screensaver block
+;  (snes/reset.a65) re-arms tgt_bright from menu_brightness on every frame that
+;  pad1mem holds a button -- and pad1mem still holds the A that started the test,
+;  because nothing calls read_pad between here and the freeze.  With EnableScreensaver
+;  on, cur_bright would never reach 0 and the console would sit on the banner forever.
+;
+;  So each step pins cur_bright, tgt_bright AND menu_brightness together (what
+;  gi_set_bright exists to do): equal cur/tgt makes the NMI's ramp a no-op so the two
+;  never fight over $2100, and a zeroed menu_brightness is what the screensaver block
+;  would re-arm FROM, which defuses it.  The loop is bounded by construction -- one
+;  decrement per iteration, so at most 16.
+;  Entry/exit .as/.xl, DB=$7E.
+; ----------------------------------------------------------------------
+mt_fade_out:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @menu_brightness
+  pha                         ; the level to come back to (a dimmed screensaver leaves
+                              ; tgt_bright low but menu_brightness at the real setting)
+  lda @cur_bright
+mt_fo_step:
+  beq mt_fo_black
+  dec
+  jsr mt_set_bright
+  jsr mt_wait_frame
+  lda @cur_bright
+  bra mt_fo_step
+mt_fo_black:
+  ; Brightness 0 is already black, but the PPU is still fetching for it. The forced
+  ; blank is what stops that -- "hold black with FORCED BLANK, never with a window or
+  ; colour math", the rule the launch iris learned the hard way.
+  lda #$80
+  sta @$002100
+  pla
+  sta @mt_bright_bak
+  plp
+  .as : .xl
+  rts
+
+mt_fade_in:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; Lift the forced blank while still at 0%, so what appears is black rather than one
+  ; field at full brightness, then hand the ramp back to the NMI.
+  lda #$00
+  sta @$002100
+  sta @cur_bright
+  lda @mt_bright_bak
+  sta @menu_brightness        ; the screensaver block re-arms tgt_bright from this
+  sta @tgt_bright
+  plp
+  .as : .xl
+  rts
+
+; mt_set_bright -- A = level, pinned across all three brightness variables plus $2100.
+; Pinning cur == tgt keeps the NMI's own ramp a no-op, so it cannot fight this one.
+mt_set_bright:
+  sta @cur_bright
+  sta @tgt_bright
+  sta @menu_brightness
+  sta @$002100
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_wait_frame -- one full NMI, so whatever was just composed is uploaded.
+; ----------------------------------------------------------------------
+mt_wait_frame:
+  php
+  sep #$20 : .as
+  stz isr_done
+mt_wf_loop:
+  lda isr_done
+  beq mt_wf_loop
+  stz isr_done
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_magic_ok -- carry CLEAR when MEMTEST_BLK is really ours.
+;  Re-checked before ANY field is read: this region is persistent PSRAM that an older
+;  firmware never writes, so without the check a cold start would render leftover bytes
+;  as findings.
+;  Entry/exit .as/.xl.
+; ----------------------------------------------------------------------
+mt_magic_ok:
+  lda @MEMTEST_BLK+MT_MAGIC0
+  cmp #$4d                    ; 'M'
+  bne mt_mo_no
+  lda @MEMTEST_BLK+MT_MAGIC1
+  cmp #$54                    ; 'T'
+  bne mt_mo_no
+  lda @MEMTEST_BLK+MT_VERSION
+  cmp #$01
+  bcc mt_mo_no
+  clc
+  rts
+mt_mo_no:
+  sec
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_draw -- the whole screen from MEMTEST_BLK.
+;  Fixed rows, so a branch never shifts the lines below it.
+;  Entry/exit .as/.xl, DB=$7E, DP=0.
+; ----------------------------------------------------------------------
+mt_draw:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz mt_row
+
+  ; --- row 0: what there is to say at all
+  jsr mt_blank
+  jsr mt_magic_ok
+  bcs mt_dr_oldfw
+  lda @MEMTEST_BLK+MT_STATE
+  cmp #MT_ST_NOCORE
+  beq mt_dr_nocore
+  cmp #MT_ST_COREFAIL         ; same message: the user needs a good fpga_test either way
+  beq mt_dr_nocore
+  cmp #MT_ST_RUNNING
+  beq mt_dr_oldfw             ; the sentinel survived an ACK: no handler on the other side
+  cmp #MT_ST_DONE
+  beq mt_dr_ran
+  cmp #MT_ST_SEEN             ; SEEN renders exactly like DONE
+  bne mt_dr_none
+mt_dr_ran:
+  lda @MEMTEST_BLK+MT_NFIND
+  bne mt_dr_fail
+  lda #^text_mtl_pass
+  ldx #!text_mtl_pass
+  bra mt_dr_status
+mt_dr_fail:
+  lda #^text_mtl_fail
+  ldx #!text_mtl_fail
+  bra mt_dr_status
+mt_dr_none:
+  lda #^text_mtl_none
+  ldx #!text_mtl_none
+  bra mt_dr_status
+mt_dr_nocore:
+  lda #^text_mtl_nocore
+  ldx #!text_mtl_nocore
+  bra mt_dr_status
+mt_dr_oldfw:
+  lda #^text_si_updatefw      ; already localized, so this branch costs no new string
+  ldx #!text_si_updatefw
+mt_dr_status:
+  jsr mt_put_str
+  jsr mt_flush
+
+  ; --- row 1: blank separator
+  jsr mt_blank
+  jsr mt_flush
+
+  ; --- rows 2..11: one line per finding, blank for the rest
+  jsr mt_visible              ; A = findings to draw
+  sta mt_nvis                 ; NOT mt_tmp: mt_put_chip/mt_put_kind clobber that one
+                              ; inside the loop below
+  rep #$20 : .al
+  lda #$0000
+  sta mt_off                  ; likewise NOT a register: mt_blank and mt_flush both use X
+  sep #$20 : .as
+mt_dr_floop:
+  lda mt_row
+  cmp #MT_ROW_END
+  bcs mt_dr_fdone
+  lda mt_row
+  sec
+  sbc #MT_ROW_FIRST
+  cmp mt_nvis
+  bcs mt_dr_fblank
+  jsr mt_line_finding         ; reads mt_off
+  rep #$20 : .al
+  lda mt_off
+  clc
+  adc #MT_FIND_SIZE
+  sta mt_off
+  sep #$20 : .as
+  bra mt_dr_fflush
+mt_dr_fblank:
+  jsr mt_blank
+mt_dr_fflush:
+  jsr mt_flush
+  bra mt_dr_floop
+mt_dr_fdone:
+
+  ; --- row 12: the "there are more of these" note
+  jsr mt_blank
+  jsr mt_more_needed
+  bcs mt_dr_nomore
+  lda #^text_mtl_more
+  ldx #!text_mtl_more
+  jsr mt_put_str
+mt_dr_nomore:
+  jsr mt_flush
+
+  ; --- row 13: the key legend, which is also the confirmation prompt: there is no
+  ;     separate "are you sure?", the button that runs the test says what it costs.
+  jsr mt_blank
+  lda #^text_mtl_prompt
+  ldx #!text_mtl_prompt
+  jsr mt_put_str
+  jsr mt_flush
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_draw_running -- the frame the console FREEZES on.  Everything but the banner is
+;  cleared: the old result must not sit there looking like it belongs to this run.
+;  Entry/exit .as/.xl, DB=$7E, DP=0.
+; ----------------------------------------------------------------------
+mt_draw_running:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz mt_row
+  jsr mt_blank
+  lda #^text_mtl_run
+  ldx #!text_mtl_run
+  jsr mt_put_str
+  jsr mt_flush
+mt_dw_loop:
+  jsr mt_blank
+  jsr mt_flush
+  lda mt_row
+  cmp #MT_ROWS
+  bcc mt_dw_loop
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_visible -- how many findings fit on screen (A, 8-bit).
+; ----------------------------------------------------------------------
+mt_visible:
+  jsr mt_magic_ok
+  bcs mt_vi_none
+  lda @MEMTEST_BLK+MT_STATE
+  cmp #MT_ST_DONE
+  beq mt_vi_have
+  cmp #MT_ST_SEEN
+  bne mt_vi_none
+mt_vi_have:
+  lda @MEMTEST_BLK+MT_NFIND
+  cmp #MT_VIS_FIND_1
+  bcc mt_vi_out
+  lda #MT_VIS_FIND
+mt_vi_out:
+  rts
+mt_vi_none:
+  lda #$00
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_more_needed -- carry CLEAR when findings were left off the screen, either because
+;  more were reported than fit or because the FIRMWARE itself ran out of room.
+; ----------------------------------------------------------------------
+mt_more_needed:
+  jsr mt_magic_ok
+  bcs mt_mn_no
+  lda @MEMTEST_BLK+MT_FLAGS
+  and #MT_F_TRUNC
+  bne mt_mn_yes
+  lda @MEMTEST_BLK+MT_NFIND
+  cmp #MT_VIS_FIND_1
+  bcc mt_mn_no
+mt_mn_yes:
+  clc
+  rts
+mt_mn_no:
+  sec
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_line_finding -- compose ONE finding into mt_linebuf.
+;  Entry: mt_off = byte offset of the record inside MT_FINDINGS.  .as/.xl, DB=$7E.
+;  The offset arrives in a VARIABLE, not X, because mt_blank below needs X for its own
+;  fill loop -- an index in a register would not survive the first instruction here.
+;  Shape: "U501: check data line D3"  /  "U501: possible short A3 - A7".
+;  The chip name is untranslated silkscreen; the fragment is localized and ENDS where
+;  its number goes, which is why the numbers are appended here and not baked into the
+;  strings (a translation would have to keep them in the right place otherwise).
+; ----------------------------------------------------------------------
+mt_line_finding:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr mt_blank
+  ldx mt_off
+
+  lda @MEMTEST_BLK+MT_FINDINGS, x
+  phx
+  jsr mt_put_chip
+  plx
+  lda #$3a                    ; ':'
+  phx
+  jsr mt_emit
+  plx
+  lda #$20                    ; ' '
+  phx
+  jsr mt_emit
+  plx
+
+  lda @MEMTEST_BLK+MT_FINDINGS+1, x
+  phx
+  jsr mt_put_kind
+  plx
+
+  ; BYTESEL / CTRL / FPGACTRL name a signal, not a numbered line, so they stop here.
+  lda @MEMTEST_BLK+MT_FINDINGS+1, x
+  cmp #MT_KIND_BYTESEL
+  bcs mt_lf_done
+
+  lda @MEMTEST_BLK+MT_FINDINGS+2, x
+  phx
+  jsr mt_put_num
+  plx
+
+  lda @MEMTEST_BLK+MT_FINDINGS+1, x
+  cmp #MT_KIND_SHORT
+  bne mt_lf_done
+  ; " - A" then the partner line.  The separator is punctuation, not language.
+  lda #$20
+  phx
+  jsr mt_emit
+  plx
+  lda #$2d                    ; '-'
+  phx
+  jsr mt_emit
+  plx
+  lda #$20
+  phx
+  jsr mt_emit
+  plx
+  lda #$41                    ; 'A'
+  phx
+  jsr mt_emit
+  plx
+  lda @MEMTEST_BLK+MT_FINDINGS+3, x
+  phx
+  jsr mt_put_num
+  plx
+mt_lf_done:
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_put_chip -- emit the board name for chip A (MT_CHIP_*).
+;  Entry/exit .as/.xl, DB=$7E.  Preserves nothing but the flags.
+; ----------------------------------------------------------------------
+mt_put_chip:
+  php
+  rep #$30 : .al : .xl
+  and #$00ff
+  cmp #$0003
+  bcc mt_pc_ok
+  lda #$0000                  ; out of range: print U501 rather than nothing, so the
+                              ; line still tells the user WHAT the fault was
+mt_pc_ok:
+  sta mt_tmp
+  asl
+  asl
+  clc
+  adc mt_tmp                  ; *5 (four characters plus the terminator)
+  tax
+  sep #$20 : .as
+mt_pc_loop:
+  lda @mt_chipname, x
+  beq mt_pc_done
+  phx
+  jsr mt_emit
+  plx
+  inx
+  bra mt_pc_loop
+mt_pc_done:
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_put_kind -- emit the localized fragment for kind A (MT_KIND_*).
+;  An unknown kind emits NOTHING: a future firmware may report a kind this menu has
+;  never heard of, and a blank tail beats a garbage pointer.
+;  Entry/exit .as/.xl, DB=$7E, DP=0.
+; ----------------------------------------------------------------------
+mt_put_kind:
+  php
+  rep #$30 : .al : .xl
+  and #$00ff
+  cmp #MT_KIND_N
+  bcs mt_pk_out
+  asl
+  asl                         ; 4 bytes per entry
+  tax
+  lda @mt_kindtbl, x          ; 16-bit: the string address
+  pha
+  sep #$20 : .as
+  lda @mt_kindtbl+2, x        ; ...and its bank
+  plx                         ; X (still 16-bit) = address
+  jsr mt_put_str
+mt_pk_out:
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_put_str -- language-resolve (A = bank, X = address) and append the whole string.
+;  Entry/exit .as/.xl, DB=$7E, DP=0.
+;
+;  Borrows longptr, the menu's general-purpose direct-page long pointer.  The two entry
+;  points save and restore the caller's value, so this file is a black box to whatever
+;  screen calls it -- the same contract si_line documents.
+; ----------------------------------------------------------------------
+mt_put_str:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  sta print_bank
+  stx print_src
+  jsl @ui_call_resolve
+  rep #$20 : .al
+  lda print_src
+  sta longptr
+  sep #$20 : .as
+  lda print_bank
+  sta longptr+2
+  ldy #$0000
+mt_ps_loop:
+  lda [longptr], y
+  beq mt_ps_done
+  iny
+  phy
+  jsr mt_emit
+  ply
+  bra mt_ps_loop
+mt_ps_done:
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_put_num -- emit A (8-bit) as decimal, no leading zero.
+;  TWO DIGITS ONLY, and that is a real bound, not laziness: the numbers here are line
+;  indices, and the widest walk is RAM0's 22 address lines (A0..A23).
+;  Entry/exit .as/.xl, DB=$7E.
+; ----------------------------------------------------------------------
+mt_put_num:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldy #$0000
+mt_pn_tens:
+  cmp #10
+  bcc mt_pn_emit
+  sec
+  sbc #10
+  iny
+  bra mt_pn_tens
+mt_pn_emit:
+  pha                         ; the units digit
+  cpy #$0000
+  beq mt_pn_units             ; < 10: suppress the leading zero
+  tya
+  clc
+  adc #$30
+  jsr mt_emit
+mt_pn_units:
+  pla
+  clc
+  adc #$30
+  jsr mt_emit
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_blank -- fill mt_linebuf with MT_COLS spaces and rewind the write column.
+;  Entry/exit .as/.xl, DB=$7E.
+; ----------------------------------------------------------------------
+mt_blank:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+  lda #$20
+mt_bl_loop:
+  sta !mt_linebuf, x
+  inx
+  cpx #MT_COLS
+  bne mt_bl_loop
+  rep #$20 : .al
+  lda #$0000
+  sta mt_col
+  sep #$20 : .as
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_emit -- append the glyph in A to mt_linebuf while there is room.  Anything past
+;  column MT_COLS is DROPPED, which is what keeps an over-long translation from running
+;  into the window border.
+;  Entry/exit .as/.xl, DB=$7E.  Preserves X.
+; ----------------------------------------------------------------------
+mt_emit:
+  phx
+  pha
+  rep #$20 : .al
+  lda mt_col
+  cmp #MT_COLS
+  bcs mt_em_full
+  tax
+  inc
+  sta mt_col
+  sep #$20 : .as
+  pla
+  sta !mt_linebuf, x
+  plx
+  rts
+mt_em_full:
+  sep #$20 : .as
+  pla
+  plx
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_flush -- print mt_linebuf at layout row mt_row, then advance the row.
+;  Rows land at (sysinfo_win_x+2, sysinfo_win_y+2+mt_row).
+;  Entry/exit .as/.xl, DB=$7E, DP=0.
+; ----------------------------------------------------------------------
+mt_flush:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  sta print_bank
+  ldx #!mt_linebuf
+  stx print_src
+  stz print_pal
+  lda #MT_COLS
+  sta print_count
+  lda @sysinfo_win_x
+  clc
+  adc #$02
+  sta print_x
+  lda @sysinfo_win_y
+  clc
+  adc #$02
+  clc
+  adc mt_row
+  sta print_y
+  jsl @gi_call_hiprint
+  inc mt_row
+  plp
+  .as : .xl
+  rts
