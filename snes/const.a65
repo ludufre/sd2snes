@@ -361,7 +361,7 @@ mdesc_mm_last                     .byt "Show up to 10 most recently played games
 mdesc_mm_favorites                .byt "Show up to 20 favorite games", 0
 mdesc_mm_cfg                      .byt "Configure the sd2snes", 0
 mdesc_mm_sysinfo                  .byt "Info about FW version, SD Card, SNES, CIC", 127, 128, 0
-mdesc_mm_memtest                  .byt "Checks the address and data lines between the FPGA and the RAM chips for breaks and shorts. Does not scan every cell. Resets the console, about 10 s.", 0
+mdesc_mm_memtest                  .byt "Checks the FPGA-to-RAM address and data lines for breaks and shorts (10 s). A full test also verifies every cell (30 s). Resets the console.", 0
 mdesc_mm_language                 .byt "Set the menu/firmware language", 0
 mdesc_cfg_time                    .byt "Set the date and time", 0
 mdesc_cfg_bsx                     .byt "BS-X/Satellaview specific settings", 0
@@ -528,13 +528,21 @@ text_si_updatefw  .byt "*** Please update the firmware ***", 0
 ; The chip names (U501/U502/U511) are board silkscreen and stay untranslated; they
 ; live in memtest.a65, not here.  A fragment is followed by the line NUMBER, so it
 ; must end where that number belongs -- "check data line D" + "3".
-text_mtl_prompt   .byt "A: Run test (resets console)  B: Close", 0
+; text_mtl_cellfail ends the same way, but with a six-digit hex ADDRESS after it.
+; The prompt is two lines because three buttons plus the warning do not fit in 40
+; columns -- and note build_const.py measures the TRANSLATIONS only, never the English
+; below, so an over-long line here is clipped on screen with no build error.
+text_mtl_prompt   .byt "A: Wiring test  X: Full test  B: Close", 0
+text_mtl_prompt2  .byt "Both reset the console. X takes 30s.", 0
 text_mtl_run      .byt "Testing memory, please wait", 127, 128, 0
 text_mtl_none     .byt "No test has been run yet.", 0
 text_mtl_pass     .byt "All RAM lines OK.", 0
 text_mtl_fail     .byt "Faults found:", 0
 text_mtl_nocore   .byt "/sd2snes/fpga_test missing or bad.", 0
 text_mtl_more     .byt "(more faults not shown)", 0
+text_mtl_cellpass .byt "All cells verified.", 0
+text_mtl_cellfail .byt "First bad cell at 0x", 0
+text_mtl_cellskip .byt "Cell scan skipped: fix wiring first.", 0
 text_mt_data      .byt "check data line D", 0
 text_mt_addr      .byt "check address line A", 0
 text_mt_short     .byt "possible short A", 0

@@ -27,10 +27,30 @@
  * official diagnostic uses, so a result here is comparable with one from the official
  * diagnostic firmware.  Reconfiguring the FPGA means the SNES must be held in reset for
  * the duration and the menu cold-booted afterwards, exactly like the patched-ROM export.
+ *
+ * TWO MODES, because wiring and cells cost very different amounts of time.  The default
+ * (MEMTEST_MODE_WIRING) is the walk above, ~10s.  MEMTEST_MODE_FULL adds a sweep of every
+ * cell -- one write pass and one verify pass over all of RAM0 and RAM1 -- which is another
+ * ~20s, so the menu offers it on a separate button rather than making everyone pay for it.
+ *
+ * WHY THE CELL SWEEP EXISTS AT ALL.  The official diagnostic never sweeps either: its
+ * test_mem() has no caller and the SNES-side memtest: in snes/tests/tests.a65 is commented
+ * out, so the only cells it ever verifies are the first 1 MiB of 16, as a side effect of
+ * test_sddma().  A cell that fails above 1 MiB passes its whole suite, which is exactly the
+ * "large ROMs break, small ones are fine" report this mode is meant to settle.
  */
 #define MEMTEST_MAGIC0               ('M')
 #define MEMTEST_MAGIC1               ('T')
-#define MEMTEST_VERSION              (1)
+#define MEMTEST_VERSION              (2)
+
+/* What the menu asks for, passed in MCU_PARAM+7.  Anything that is not MODE_FULL means
+   MODE_WIRING: an old menu never writes the byte and whatever the last command left in
+   MCU_PARAM reads back instead, so the cheap test has to be the value garbage decays to.
+   MODE_FULL is a marker rather than 1 for the same reason -- a stale 1 is a plausible
+   leftover (indices and counts live in MCU_PARAM), and it would silently turn a 10s test
+   into a 30s one. */
+#define MEMTEST_MODE_WIRING          (0)
+#define MEMTEST_MODE_FULL            (0x5a)
 
 /* Block state.  Persistent in PSRAM across the menu reload -- that reload is what carries
    the result back to the user, since the SNES is in reset while the test runs. */
@@ -43,6 +63,18 @@
 
 #define MEMTEST_FLAG_FAIL            (0x01)  /* at least one fault was found */
 #define MEMTEST_FLAG_TRUNCATED       (0x02)  /* more faults exist than findings[] can hold */
+
+/* cell_info -- the cell sweep's own verdict, kept apart from flags because "the wiring is
+   fine but a cell is bad" and "the wiring is bad" are different answers with different
+   next steps for the user. */
+#define MEMTEST_CELL_RAN             (0x01)  /* the sweep actually ran; without this the cell fields are meaningless and the menu leaves its line blank */
+#define MEMTEST_CELL_RAM1            (0x02)  /* the FIRST bad byte was in RAM1 (U511), so cell_addr is a RAM1 offset; clear means RAM0 */
+#define MEMTEST_CELL_TIMEOUT         (0x04)  /* the sweep gave up on FPGA_WAIT_RDY: the counts below are partial and say nothing about the untested remainder */
+#define MEMTEST_CELL_SKIPPED         (0x08)  /* MODE_FULL was asked for but the wiring walk already failed, so sweeping was pointless -- a broken address line makes every cell "bad" */
+
+/* cell_bad saturates instead of wrapping: 24 bits cannot hold 16777216, and past a few
+   thousand the exact count stops meaning anything anyway. */
+#define MEMTEST_CELL_BAD_MAX         (0xFFFFFFUL)
 
 /* findings[].chip */
 #define MEMTEST_CHIP_RAM0_1          (0)  /* U501 */
@@ -76,24 +108,37 @@ typedef struct __attribute__((__packed__)) _memtest_blk {
   uint8_t  nfind;      /* +6 ($06) valid entries in findings[] */
   uint8_t  pad;        /* +7 ($07) */
   memtest_finding_t findings[MEMTEST_MAX_FINDINGS]; /* +8 ($08) 4 bytes each */
-} memtest_blk_t;       /* 56 bytes; 64 are reserved at SRAM_MEMTEST_ADDR */
+  /* --- cell sweep (MEMTEST_MODE_FULL).  These fill the 8 bytes the reservation had left
+     over, which is also all the room there will ever be: SRAM_PCMPLAY_ADDR starts at
+     $FF07C0, immediately after. 24-bit fields are byte arrays rather than a uint32 so the
+     menu can read them a byte at a time without caring about the struct's padding. */
+  uint8_t  cell_bad[3];   /* +56 ($38) bad bytes found, little-endian, saturating at MEMTEST_CELL_BAD_MAX */
+  uint8_t  cell_got;      /* +59 ($3B) the byte actually read at cell_addr (the expected one is derivable from the address) */
+  uint8_t  cell_addr[3];  /* +60 ($3C) address of the FIRST bad byte, little-endian */
+  uint8_t  cell_info;     /* +63 ($3F) MEMTEST_CELL_* */
+} memtest_blk_t;       /* 64 bytes = the whole reservation at SRAM_MEMTEST_ADDR */
 
 _Static_assert(offsetof(memtest_blk_t, state) == 3, "memtest_blk_t.state must stay at MT_STATE (+3)");
 _Static_assert(offsetof(memtest_blk_t, flags) == 4, "memtest_blk_t.flags must stay at MT_FLAGS (+4)");
 _Static_assert(offsetof(memtest_blk_t, nfind) == 6, "memtest_blk_t.nfind must stay at MT_NFIND (+6)");
 _Static_assert(offsetof(memtest_blk_t, findings) == 8, "memtest_blk_t.findings must stay at MT_FINDINGS (+8)");
+_Static_assert(offsetof(memtest_blk_t, cell_bad) == 56, "memtest_blk_t.cell_bad must stay at MT_CELL_BAD (+56)");
+_Static_assert(offsetof(memtest_blk_t, cell_got) == 59, "memtest_blk_t.cell_got must stay at MT_CELL_GOT (+59)");
+_Static_assert(offsetof(memtest_blk_t, cell_addr) == 60, "memtest_blk_t.cell_addr must stay at MT_CELL_ADDR (+60)");
+_Static_assert(offsetof(memtest_blk_t, cell_info) == 63, "memtest_blk_t.cell_info must stay at MT_CELL_INFO (+63)");
 _Static_assert(sizeof(memtest_finding_t) == 4, "memtest_finding_t must stay 4 bytes (MT_FIND_SIZE in snes/memmap.i65)");
-_Static_assert(sizeof(memtest_blk_t) == 56, "memtest_blk_t must stay 56 bytes (MT_SIZE in snes/memmap.i65)");
+_Static_assert(sizeof(memtest_blk_t) == 64, "memtest_blk_t must stay 64 bytes (MT_SIZE in snes/memmap.i65) -- it fills the reservation, PCMPLAY starts right after");
 
 /* Is /sd2snes/fpga_test.<ext> on the card?  Asked BEFORE the SNES is halted so a missing
    core is refused in place, over the live screen, instead of costing a blind menu reload. */
 int memtest_available(void);
 
-/* Run the whole thing: reconfigure the FPGA to fpga_test, walk both RAMs, publish the
-   block.  The CALLER must have halted the SNES (assert_reset) first and must cold-boot
-   the menu afterwards -- this leaves the FPGA on the test core and the low PSRAM
+/* Run the whole thing: reconfigure the FPGA to fpga_test, walk both RAMs, optionally sweep
+   every cell, publish the block.  MODE is MEMTEST_MODE_*; anything unrecognized is treated
+   as MODE_WIRING.  The CALLER must have halted the SNES (assert_reset) first and must
+   cold-boot the menu afterwards -- this leaves the FPGA on the test core and the PSRAM
    scribbled over.  main()'s outer loop restores fpga_base on its own. */
-void memtest_run(void);
+void memtest_run(uint8_t mode);
 
 /* Park MEMTEST_STATE_NONE in the block.  Called once at cold boot, next to the export
    result: PSRAM keeps whatever the last power-on left in it, and garbage here would pop

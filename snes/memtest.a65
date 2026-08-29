@@ -36,19 +36,27 @@
 ; Layout inside the window, in content rows (row r prints at win_y + 2 + r), sized to the
 ; same 14 rows the System Information screen uses -- this screen borrows sysinfo_win_*
 ; outright, so the two are identical in position and, crucially, in what pop_window sees.
+/* Row 1 was a blank separator and now carries the cell-sweep verdict, and the prompt grew
+   to two rows (one naming the buttons, one explaining them).  Both had to come out of the
+   findings list -- MT_ROWS is fixed at 14 by the borrowed window height, so a row added
+   here is a row taken from there.  Nine visible faults instead of ten costs nothing in
+   practice: past a couple of broken lines the verdict is already "check this chip", and
+   MT_ROW_MORE says the list was cut. */
 #define MT_ROW_STATUS   0
+#define MT_ROW_CELL     1
 #define MT_ROW_FIRST    2
-#define MT_VIS_FIND     10      /* rows 2..11 */
-#define MT_ROW_END      12      /* == MT_ROW_FIRST + MT_VIS_FIND, spelled out: snescom
+#define MT_VIS_FIND     9       /* rows 2..10 */
+#define MT_ROW_END      11      /* == MT_ROW_FIRST + MT_VIS_FIND, spelled out: snescom
                                    takes the operand of an immediate literally */
-#define MT_ROW_MORE     12
-#define MT_ROW_PROMPT   13
+#define MT_ROW_MORE     11
+#define MT_ROW_PROMPT   12
+#define MT_ROW_PROMPT2  13
 #define MT_ROWS         14
-#define MT_VIS_FIND_1   11      /* == MT_VIS_FIND + 1, for the "more than fits" compare */
+#define MT_VIS_FIND_1   10      /* == MT_VIS_FIND + 1, for the "more than fits" compare */
 /* Frames the "testing, please wait" banner stays up before the screen fades out. The
-   console is then dark for the ~6-10s the test takes, so this is the only chance the
-   user gets to read WHY it went dark -- long enough for that, short enough not to feel
-   like the button did nothing. */
+   console is then dark for the ~6-10s the test takes (~30s for the full one), so this is
+   the only chance the user gets to read WHY it went dark -- long enough for that, short
+   enough not to feel like the button did nothing. */
 #define MT_BANNER_FRAMES 90
 
 ; Board silkscreen, deliberately NOT localized and deliberately not in $C0: these are
@@ -209,8 +217,17 @@ mt_loop:
   jsl @ui_call_pad
   lda pad_b
   bne mt_screen_out
+  ; X = the full test (wiring walk AND every cell), A = the walk alone.  The mode travels
+  ; in A into mt_run, which is the only routine that knows how to hand it to the firmware.
+  lda pad_x
+  beq mt_loop_a
+  lda #MT_MODE_FULL
+  jsr mt_run
+  bra mt_loop
+mt_loop_a:
   lda pad_a
   beq mt_loop
+  lda #MT_MODE_WIRING
   jsr mt_run
   bra mt_loop
 
@@ -244,6 +261,8 @@ mt_run:
   php
   sep #$20 : .as
   rep #$10 : .xl
+  sta mt_mode                 ; MT_MODE_* from the caller, parked before anything else
+                              ; touches A (the banner and the fade are next)
   jsr mt_draw_running
   jsr mt_wait_frame
   jsr mt_wait_frame           ; two frames: let the NMI actually land it in VRAM
@@ -261,6 +280,11 @@ mt_run:
   ; RUNNING that survives the ACK means this firmware has no memtest.
   lda #MT_ST_RUNNING
   sta @MEMTEST_BLK+MT_STATE
+  ; Which test, in the slot LOADROM and EXPORT_PATCHED_ROM use for their own parameter.
+  ; Written AFTER the cover sync on purpose: a cover request in flight goes through
+  ; set_mcu_addr and would leave its own bytes here.
+  lda mt_mode
+  sta @MCU_PARAM+7
   lda #$00
   sta @SNES_CMD
   lda #CMD_MEMTEST
@@ -476,11 +500,12 @@ mt_dr_status:
   jsr mt_put_str
   jsr mt_flush
 
-  ; --- row 1: blank separator
-  jsr mt_blank
+  ; --- row 1: the cell sweep's verdict (blank when it did not run, which is also what
+  ;     makes this row read as the separator it used to be for a wiring-only test)
+  jsr mt_line_cell
   jsr mt_flush
 
-  ; --- rows 2..11: one line per finding, blank for the rest
+  ; --- rows 2..10: one line per finding, blank for the rest
   jsr mt_visible              ; A = findings to draw
   sta mt_nvis                 ; NOT mt_tmp: mt_put_chip/mt_put_kind clobber that one
                               ; inside the loop below
@@ -512,7 +537,7 @@ mt_dr_fflush:
   bra mt_dr_floop
 mt_dr_fdone:
 
-  ; --- row 12: the "there are more of these" note
+  ; --- row 11: the "there are more of these" note
   jsr mt_blank
   jsr mt_more_needed
   bcs mt_dr_nomore
@@ -522,11 +547,18 @@ mt_dr_fdone:
 mt_dr_nomore:
   jsr mt_flush
 
-  ; --- row 13: the key legend, which is also the confirmation prompt: there is no
-  ;     separate "are you sure?", the button that runs the test says what it costs.
+  ; --- rows 12-13: the key legend, which is also the confirmation prompt: there is no
+  ;     separate "are you sure?", the buttons say what they cost.  Two rows because three
+  ;     buttons plus the warning do not fit in 40 columns, and an over-long line would be
+  ;     silently clipped by mt_emit rather than caught at build time.
   jsr mt_blank
   lda #^text_mtl_prompt
   ldx #!text_mtl_prompt
+  jsr mt_put_str
+  jsr mt_flush
+  jsr mt_blank
+  lda #^text_mtl_prompt2
+  ldx #!text_mtl_prompt2
   jsr mt_put_str
   jsr mt_flush
   plp
@@ -601,6 +633,111 @@ mt_mn_yes:
   rts
 mt_mn_no:
   sec
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_line_cell -- compose the cell-sweep line into mt_linebuf (row 1).
+;  Entry/exit .as/.xl, DB=$7E, DP=0.  Always leaves a blanked buffer, so the caller can
+;  flush unconditionally: a wiring-only run just prints an empty row, which is exactly the
+;  blank separator this row used to be.
+;
+;  Note MT_CI_TIMEOUT sharing text_mtl_nocore.  A timeout means the test core stopped
+;  answering the MCU mid-sweep, and whether that is a corrupt fpga_test file or a core that
+;  died, the user's next move is the same one that message already names.
+; ----------------------------------------------------------------------
+mt_line_cell:
+  jsr mt_blank
+  jsr mt_magic_ok
+  bcs mt_lc_out
+  ; VERSION GATE, and it is not decoration.  mt_magic_ok accepts version 1 because the
+  ; findings half of the block never changed -- but a v1 firmware writes 56 bytes and
+  ; leaves the eight below untouched, so MT_CELL_INFO would be read out of whatever the
+  ; last power-on left in PSRAM.  That is a coin flip on MT_CI_RAN, i.e. an invented bad
+  ; address on screen, which is the exact failure the magic check exists to prevent.
+  lda @MEMTEST_BLK+MT_VERSION
+  cmp #$02
+  bcc mt_lc_out
+  lda @MEMTEST_BLK+MT_STATE
+  cmp #MT_ST_DONE
+  beq mt_lc_have
+  cmp #MT_ST_SEEN
+  bne mt_lc_out
+mt_lc_have:
+  lda @MEMTEST_BLK+MT_CELL_INFO
+  and #MT_CI_RAN
+  beq mt_lc_out               ; wiring-only run: the cell fields below mean nothing
+  lda @MEMTEST_BLK+MT_CELL_INFO
+  and #MT_CI_SKIPPED
+  bne mt_lc_skip
+  lda @MEMTEST_BLK+MT_CELL_INFO
+  and #MT_CI_TIMEOUT
+  bne mt_lc_nocore
+  ; A 24-bit count is zero only if all three bytes are
+  lda @MEMTEST_BLK+MT_CELL_BAD
+  ora @MEMTEST_BLK+MT_CELL_BAD+1
+  ora @MEMTEST_BLK+MT_CELL_BAD+2
+  bne mt_lc_fail
+  lda #^text_mtl_cellpass
+  ldx #!text_mtl_cellpass
+  bra mt_lc_str
+mt_lc_fail:
+  lda #^text_mtl_cellfail
+  ldx #!text_mtl_cellfail
+  jsr mt_put_str
+  jsr mt_put_addr             ; the fragment ends where the address goes
+  rts
+mt_lc_skip:
+  lda #^text_mtl_cellskip
+  ldx #!text_mtl_cellskip
+  bra mt_lc_str
+mt_lc_nocore:
+  lda #^text_mtl_nocore
+  ldx #!text_mtl_nocore
+mt_lc_str:
+  jsr mt_put_str
+mt_lc_out:
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_put_addr -- append MT_CELL_ADDR as six hex digits, most significant first.
+;  Entry/exit .as/.xl, DB=$7E.
+;
+;  mt_put_num is decimal and stops at two digits, which is all a line number needs and
+;  nowhere near enough for a 24-bit address.  The digit table is si_hextab from
+;  sysinfo_render.a65: same bank, so a long read reaches it, and copying sixteen bytes to
+;  avoid one cross-file reference would be the wrong trade.
+; ----------------------------------------------------------------------
+mt_put_addr:
+  ldx #$0002                  ; little-endian field, printed high byte first
+mt_pa_byte:
+  phx
+  lda @MEMTEST_BLK+MT_CELL_ADDR, x
+  pha
+  lsr
+  lsr
+  lsr
+  lsr
+  jsr mt_put_hexdig
+  pla
+  jsr mt_put_hexdig
+  plx
+  dex
+  bpl mt_pa_byte
+  rts
+
+; Low nibble of A as one hex digit.  The and is done in 16-bit A on purpose: an 8-bit and
+; leaves the hidden high byte alone, and it is the whole 16-bit value that indexes here.
+mt_put_hexdig:
+  phx
+  rep #$20 : .al
+  and #$000f
+  tax
+  sep #$20 : .as
+  lda @si_hextab, x
+  jsr mt_emit
+  plx
   rts
 
 

@@ -651,7 +651,7 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       *menu_reload = 1;
       return cmd;
     }
-    case SNES_CMD_MEMTEST:
+    case SNES_CMD_MEMTEST: {
       /* "Memory test": walk the RAM wiring and report faults.  Two very different
          answers, and which one it is decides whether the SNES survives the command.
          (1) No fpga_test on the card -> nothing has happened yet, so refuse IN PLACE:
@@ -664,19 +664,25 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
              export, minus its trampoline: there is nowhere off-cartridge to park the CPU.
          The result then has to survive to the next boot, which it does: memtest_run
          publishes into $FF07xx and nothing on the reload path writes there. */
+      /* Which of the two tests the menu asked for.  Read in a statement of its own and
+         BEFORE anything that touches the FPGA address latch, exactly like the xidx of
+         EXPORT_PATCHED_ROM above: snescmd_readbyte goes through set_mcu_addr, so folding
+         it into a later expression makes the order the compiler's business. */
+      uint8_t mtmode = snescmd_readbyte(SNESCMD_MCU_PARAM + 7);
       if(!memtest_available()) {
         memtest_publish_nocore();
         snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
         return 0;
       }
       assert_reset();
-      memtest_run();
+      memtest_run(mtmode);
       /* NOTE: returns cmd, not 0 -- menu_reload only takes effect once the menu loop
          exits.  The reload is not optional: the FPGA is on the test core, the low PSRAM
          is scribbled over, and the SNES is in reset.  main()'s outer loop puts fpga_base
          back and re-stages the menu image. */
       *menu_reload = 1;
       return cmd;
+    }
     case SNES_CMD_PLAY_PCM:
       /* A .pcm was picked in the browser: play it on the cartridge DAC.  MCU_PARAM was
          set up like a ROM launch (cwd + selected entry), so get_selected_name yields the

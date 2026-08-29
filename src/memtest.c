@@ -4,13 +4,19 @@
  * Same walks, same conclusions, but the findings are published as the binary block in
  * memtest.h instead of printed over a serial console the Mk.II does not have.
  *
- * WHAT IT ACTUALLY PROVES: this is a WIRING test, not a capacity test.  It writes one
- * word at a handful of addresses (the base, plus one address per address line) and checks
- * that every data line toggles independently, that every address line reaches a distinct
- * cell, and that no two address lines are shorted together.  It does NOT sweep the whole
- * 16 MB -- that is test_mem() in the diagnostic firmware, which needs several minutes and
- * would tell a user with a marginal cell nothing they can act on.  The failures users
- * actually hit (a cracked solder joint, a bridged pin, a dead chip) all show up here.
+ * WHAT THE WIRING WALK PROVES: it writes one word at a handful of addresses (the base,
+ * plus one address per address line) and checks that every data line toggles
+ * independently, that every address line reaches a distinct cell, and that no two address
+ * lines are shorted together.  The failures users hit most (a cracked solder joint, a
+ * bridged pin, a dead chip) all show up here, in ~10 seconds.
+ *
+ * WHAT IT DOES NOT PROVE, and why the cell sweep below exists: a single weak cell in the
+ * middle of the array passes every walk above.  That is not a hypothetical gap -- the
+ * official diagnostic has the same one.  Its test_mem() sweeps all 16 MB but has NO
+ * CALLER, and the SNES-side memtest: in snes/tests/tests.a65 is commented out, so the only
+ * cells it ever verifies are the first 1 MiB of 16, incidentally, inside test_sddma().
+ * MEMTEST_MODE_FULL closes that: one write pass and one verify pass over both arrays,
+ * ~20 seconds on top of the walk, on its own button so nobody pays for it by default.
  *
  * WHY IT NEEDS THE fpga_test CORE: the runtime cores leave RAM1 (U511, the 4 Mbit SRAM)
  * completely undriven -- RAM_DATA/RAM_ADDR have no assignment in sd2snes_base/main.v --
@@ -27,9 +33,11 @@
 #include "fileops.h"
 #include "fpga.h"
 #include "fpga_spi.h"
+#include "led.h"
 #include "memmap.h"
 #include "memory.h"
 #include "memtest.h"
+#include "timer.h"
 
 /* Scratch word used to load the FPGA's internal data register WITHOUT writing the test
    location -- that is what makes the byte-select check below meaningful.  Any address
@@ -38,9 +46,28 @@
 
 /* Highest address-line offset walked on RAM0.  16 MB PSRAM -> A23. */
 #define MT_RAM0_TOP     (0x800000L)
-/* ...and on RAM1: 4 Mbit = 512 KB -> A18 (the diagnostic firmware walks one past, to
-   0x20000, which is what catches an address line that is open ABOVE the array). */
+/* ...and on RAM1: up to A17, which is the diagnostic firmware's own bound and the one
+   that matches what the MCU can actually reach on this array (A0..A17 => 0x40000 bytes).
+   Do NOT "fix" this to A18 by reasoning from the "4 Mbit" on the schematic: the sweep
+   below derives its extent from this constant, and everything past 0x40000 measures as
+   garbage on known-good hardware. */
 #define MT_RAM1_TOP     (0x20000L)
+
+/* Full extent of each array, for the cell sweep.  Not to be confused with the *_TOP
+   address-line offsets above: those are the highest BIT walked, these are the byte count.
+   RAM0 is 16 MB on both boards (Mk.II reaches it with one 128 Mbit chip, Mk.III with two
+   64 Mbit ones interleaved), so the sweep is board-independent.
+
+   MT_RAM1_SIZE IS DERIVED FROM MT_RAM1_TOP, NOT FROM "4 Mbit".  The walk above covers
+   A0..A17, i.e. 2^18 == 0x40000 addressable bytes, and that is the extent the official
+   diagnostic trusts on this array too.  Sweeping the 0x80000 that "4 Mbit = 512 KB"
+   suggests reads past the end: measured on a healthy Mk.III, every byte below 0x40000
+   verifies clean while everything above it comes back unrelated to the pattern, with a
+   different error count on every run (2406 / 2439 / 4082) -- the signature of reading
+   nothing, not of a bad cell.  Keep the two in step: a board with more RAM1 has to raise
+   MT_RAM1_TOP, and this follows from it. */
+#define MT_RAM0_SIZE    (0x1000000UL)
+#define MT_RAM1_SIZE    (MT_RAM1_TOP * 2)
 
 /* Distinct faults on ONE chip past which its own CE#/OE#/WE# becomes the better
    explanation than that many independent broken lines, and the same across all chips for
@@ -260,6 +287,161 @@ static void mt_ram1(mt_ctx_t *ctx) {
   mt_check_ctrl(ctx, MEMTEST_CHIP_RAM1);
 }
 
+/* ---- RAM0 and RAM1: the cell sweep (MEMTEST_MODE_FULL) --------------------------- */
+
+/* The diagnostic firmware's pattern (test_mem, src/tests/tests.c).  Every byte differs
+   from its neighbours AND from the same offset one 64 KB page up, so an address line that
+   aliases reads back as mismatched DATA rather than as a plausible value.  Kept
+   byte-identical to that one on purpose: it is what makes a result from here comparable
+   with a result from the official diagnostic image. */
+#define MT_PATTERN(a)   ((uint8_t)((a) + ((a) >> 8) + ((a) >> 16)))
+
+/* Ticks between LED flips (10 ms each), and how often the sweep bothers to look.  The
+   screen is black and the SNES is in reset for half a minute, so with no LED the console
+   is indistinguishable from a hung one.  Checking the clock every 64 KB costs 256 reads
+   per pass instead of one per byte, and 64 KB is ~40 ms of sweeping, finer than the blink
+   rate either way. */
+#define MT_LED_TICKS    (25)
+#define MT_LED_MASK     (0xFFFFUL)
+
+typedef struct {
+  uint32_t bad;     /* bad bytes seen, saturating at MEMTEST_CELL_BAD_MAX */
+  uint32_t addr;    /* address of the first one */
+  uint8_t  got;     /* what was actually read there */
+  uint8_t  info;    /* MEMTEST_CELL_* */
+  uint8_t  led;     /* current LED state, so the flip does not have to read it back */
+  tick_t   led_at;  /* tick of the last flip */
+} mt_cell_t;
+
+/* Straight writeled(), never toggle_write_led(): that one passes ~state, and in PWM mode
+   -- which is how the menu runs, see led_pwm() in main() -- ~1 is still non-zero, so the
+   LED would come on and never go dark again. */
+static void mt_cell_led(mt_cell_t *cc) {
+  tick_t now = getticks();
+  if(now - cc->led_at < MT_LED_TICKS) return;
+  cc->led_at = now;
+  cc->led ^= 1;
+  writeled(cc->led);
+}
+
+/* One write pass: the burst shape of sram_memset (memory.c) with the pattern in place of
+   a constant.  The bounded wait is the difference that matters at this length -- 16 M
+   unbounded FPGA_WAIT_RDYs wedge the MCU forever if the core ever stops asserting ready,
+   and there is no SNES left running to notice. */
+static void mt_cell_write(mt_cell_t *cc, uint32_t len) {
+  uint32_t i;
+  uint8_t timeout = 0;
+
+  set_mcu_addr(0);
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_WRITEMEM | FPGA_MEM_AUTOINC);
+  for(i = 0; i < len; i++) {
+    if(!(i & MT_LED_MASK)) mt_cell_led(cc);
+    FPGA_TX_BYTE(MT_PATTERN(i));
+    FPGA_WAIT_RDY_TO_INLINE(timeout);
+    if(timeout) break;
+  }
+  FPGA_DESELECT();
+  if(timeout) cc->info |= MEMTEST_CELL_TIMEOUT;
+}
+
+static void mt_cell_verify(mt_cell_t *cc, uint32_t len, uint8_t ram1) {
+  uint32_t i;
+  uint8_t timeout = 0, data;
+
+  set_mcu_addr(0);
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_READMEM | FPGA_MEM_AUTOINC);
+  for(i = 0; i < len; i++) {
+    if(!(i & MT_LED_MASK)) mt_cell_led(cc);
+    FPGA_WAIT_RDY_TO_INLINE(timeout);
+    if(timeout) break;
+    data = FPGA_RX_BYTE();
+    if(data == MT_PATTERN(i)) continue;
+    /* Only the FIRST bad byte is located.  One address is what a user can act on; a list
+       of millions would not fit the block and would not say anything the count does not. */
+    if(!cc->bad) {
+      cc->addr = i;
+      cc->got  = data;
+      if(ram1) cc->info |= MEMTEST_CELL_RAM1;
+    }
+    if(cc->bad < MEMTEST_CELL_BAD_MAX) cc->bad++;
+  }
+  FPGA_DESELECT();
+  if(timeout) cc->info |= MEMTEST_CELL_TIMEOUT;
+}
+
+/* RAM1 is swept ONE BYTE AT A TIME, not in a burst like RAM0, which is what the diagnostic
+   firmware's test_mem does and is worth keeping.  The burst version of this reported
+   thousands of scattered bad bytes on a board whose wiring walk passes clean and whose
+   RAM0 sweep is spotless -- and since no runtime core even drives RAM1 (RAM_DATA/RAM_ADDR
+   have no assignment outside fpga_test), there is no independent evidence to check that
+   against.  Per-byte accesses are the same path test_memconn uses on this array and the
+   same one the official image trusts, so a fault reported here is a fault two different
+   methods agree on.  512 KB at ~4 us/byte is ~4 s; that is the price of an answer worth
+   printing on screen. */
+static void mt_cell_ram1(mt_cell_t *cc) {
+  uint32_t i;
+  uint8_t data;
+
+  for(i = 0; i < MT_RAM1_SIZE; i++) {
+    if(!(i & MT_LED_MASK)) mt_cell_led(cc);
+    sram_writebyte(MT_PATTERN(i), i);
+  }
+  for(i = 0; i < MT_RAM1_SIZE; i++) {
+    if(!(i & MT_LED_MASK)) mt_cell_led(cc);
+    data = sram_readbyte(i);
+    if(data == MT_PATTERN(i)) continue;
+    if(!cc->bad) {
+      cc->addr = i;
+      cc->got  = data;
+      cc->info |= MEMTEST_CELL_RAM1;
+    }
+    if(cc->bad < MEMTEST_CELL_BAD_MAX) cc->bad++;
+  }
+}
+
+/* The sweep writes its pattern over ALL of RAM0, and the top page of that is the block the
+   menu and the firmware talk through: SRAM_MENU_CFG_ADDR, every in-game gate, SAVEINFO,
+   MANUAL_META, EXPORT_RESULT, and this test's own result block.  Leaving the pattern there
+   is not "scribbled over the PSRAM, the reload fixes it" -- the reload only rebuilds the
+   MENU IMAGE.  Nobody clears this page outside first boot, so a pattern byte in
+   SRAM_EXPORT_RESULT_ADDR comes back as a "ROM export failed" modal on the very next
+   browser repaint (MT_PATTERN(0xFF071E) == 0x24, which is not any PATCH_EXPORT_* value but
+   is not zero either).  Zero the page and let each subsystem's boot path refill what it
+   owns -- which is exactly what a cold start would hand them anyway.
+   Called BEFORE the result is published, since MEMTEST_BLK lives in this page too. */
+#define MT_STATE_PAGE_ADDR   (0xFF0000L)
+#define MT_STATE_PAGE_SIZE   (0x800L)
+
+static void mt_cells(mt_cell_t *cc) {
+  fpga_select_mem(0);
+  mt_cell_write(cc, MT_RAM0_SIZE);
+#ifdef MEMTEST_SELFTEST
+  /* Mutation gate: corrupt one byte at a known address between the passes, so the failure
+     path can be exercised on healthy hardware.  MEMTEST_SELFTEST is deliberately absent
+     from every config-mk*, i.e. this is never in a shipped image -- define it on the
+     command line for one build, check that the screen names exactly this address and that
+     cell_bad reads 1, then rebuild without it. */
+  sram_writebyte((uint8_t)~MT_PATTERN(MEMTEST_SELFTEST), MEMTEST_SELFTEST);
+#endif
+  if(!(cc->info & MEMTEST_CELL_TIMEOUT)) mt_cell_verify(cc, MT_RAM0_SIZE, 0);
+
+  /* RAM1 only if RAM0 finished: a timeout means the ready line is gone, and hammering a
+     second array through the same dead handshake just costs another wait bound. */
+  if(!(cc->info & MEMTEST_CELL_TIMEOUT)) {
+    fpga_select_mem(1);
+    mt_cell_ram1(cc);
+  }
+
+  /* Back to RAM0 for the cleanup above -- mt_cell_verify left the window on RAM1. */
+  fpga_select_mem(0);
+  sram_memset(MT_STATE_PAGE_ADDR, MT_STATE_PAGE_SIZE, 0);
+
+  writeled(0);
+  cc->info |= MEMTEST_CELL_RAN;
+}
+
 /* ---- publishing ------------------------------------------------------------------ */
 
 static void mt_write_blk(const memtest_blk_t *blk) {
@@ -293,12 +475,14 @@ int memtest_available(void) {
   return f_stat((TCHAR *)FPGA_MEMTEST, &fno) == FR_OK;
 }
 
-void memtest_run(void) {
+void memtest_run(uint8_t mode) {
   mt_ctx_t ctx;
+  mt_cell_t cc;
   memtest_blk_t blk;
   uint8_t i;
 
   memset(&ctx, 0, sizeof(ctx));
+  memset(&cc, 0, sizeof(cc));
 
   printf("memtest: configuring %s\n", (const char *)FPGA_MEMTEST);
   fpga_pgm((uint8_t *)FPGA_MEMTEST);
@@ -319,15 +503,33 @@ void memtest_run(void) {
   mt_ram1(&ctx);
   mt_check_fpgactrl(&ctx);
 
-  /* The block lives in PSRAM, and mt_ram1 left the MCU window pointed at RAM1. */
+  /* The sweep only says something over wiring that already checked out: one open address
+     line aliases half the array onto the other half, so every cell in it reads back wrong
+     and the real answer disappears under millions of "bad cells".  Say it was skipped
+     rather than reporting a number that means nothing. */
+  if(mode == MEMTEST_MODE_FULL) {
+    if(ctx.nfind) cc.info = MEMTEST_CELL_RAN | MEMTEST_CELL_SKIPPED;
+    else mt_cells(&cc);
+  }
+
+  /* The block lives in PSRAM, and both mt_ram1 and mt_cells leave the MCU window on RAM1. */
   fpga_select_mem(0);
 
   mt_blk_init(&blk, MEMTEST_STATE_DONE);
   blk.nfind = ctx.nfind;
-  if(ctx.nfind) blk.flags |= MEMTEST_FLAG_FAIL;
+  if(ctx.nfind || cc.bad) blk.flags |= MEMTEST_FLAG_FAIL;
   if(ctx.truncated) blk.flags |= MEMTEST_FLAG_TRUNCATED;
   for(i = 0; i < ctx.nfind; i++) blk.findings[i] = ctx.find[i];
+  blk.cell_bad[0]  = cc.bad & 0xff;
+  blk.cell_bad[1]  = (cc.bad >> 8) & 0xff;
+  blk.cell_bad[2]  = (cc.bad >> 16) & 0xff;
+  blk.cell_got     = cc.got;
+  blk.cell_addr[0] = cc.addr & 0xff;
+  blk.cell_addr[1] = (cc.addr >> 8) & 0xff;
+  blk.cell_addr[2] = (cc.addr >> 16) & 0xff;
+  blk.cell_info    = cc.info;
   mt_write_blk(&blk);
 
-  printf("memtest: %d finding(s)%s\n", ctx.nfind, ctx.truncated ? " (truncated)" : "");
+  printf("memtest: %d finding(s)%s, %lu bad cell(s)\n", ctx.nfind,
+         ctx.truncated ? " (truncated)" : "", (unsigned long)cc.bad);
 }

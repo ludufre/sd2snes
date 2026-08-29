@@ -514,6 +514,9 @@ mt_off          .word 0    ; byte offset of the finding being drawn, inside MT_F
                            ;   A VARIABLE and not X on purpose: mt_blank and mt_flush both
                            ;   use X, so an index held in a register would not survive the
                            ;   loop body that composes and prints each line.
+mt_mode         .byt 0     ; MT_MODE_* for the run being started. Held here rather than on
+                           ;   the stack across mt_run's banner-and-fade preamble, which is
+                           ;   a long stretch of calls to keep a balanced push alive over.
 
 ;----------PCM player screen (snes/pcmplay.a65) ----------
 ; The line-composition engine itself (mt_linebuf / mt_col / mt_row and the mt_blank /

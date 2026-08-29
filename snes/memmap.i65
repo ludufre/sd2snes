@@ -237,10 +237,10 @@
 #define MAN_META_ZENTRYY            $FF076B /* u16 LE: where to start panning when entering zoom from a 1x block (2x pixels into the page) */
 #define MAN_META_ZFIRSTBLK          $FF076D /* u16 LE: first 1x block covering the staged zoom page (after page turns it is not the one we entered from) */
 #define MAN_META_ZNBLK              $FF076F /* u8: how many 1x blocks cover it, so leaving zoom returns to the BAND being read rather than always the first */
-/* --- RAM connection test result (snes/memtest.a65). 56 B of a 64 B reservation at
- * $FF0780..$FF07BF, the last allocation in the free $FF0701..$FF07FF gap ($FF07C0 up is
- * what remains). LOCKSTEP with memtest_blk_t in src/memtest.h: an offset that drifts on
- * one side puts nonsense on screen with no build error.
+/* --- RAM test result (snes/memtest.a65). Fills its 64 B reservation at $FF0780..$FF07BF
+ * exactly, which is also all the room it will ever have: PCMPLAY_BLK starts at $FF07C0,
+ * immediately after. LOCKSTEP with memtest_blk_t in src/memtest.h: an offset that drifts
+ * on one side puts nonsense on screen with no build error.
  * PERSISTENT, and that is the whole design: the test reconfigures the FPGA and holds this
  * CPU in reset from start to finish, so nothing can be displayed while it runs -- the
  * block survives the menu cold-boot and the reloaded browser reports it (mt_result_check),
@@ -250,7 +250,7 @@
 #define MEMTEST_BLK                 $FF0780
 #define MT_MAGIC0                   0   /* 'M' ($4d) */
 #define MT_MAGIC1                   1   /* 'T' ($54) */
-#define MT_VERSION                  2   /* u8, 1 = the layout below */
+#define MT_VERSION                  2   /* u8, 2 = the layout below (1 was the same minus the MT_CELL_* tail) */
 #define MT_STATE                    3   /* u8 MT_ST_*: what, if anything, there is to report */
 #define MT_ST_NONE                  0   /* nothing to report (also what the firmware parks here at cold boot) */
 #define MT_ST_DONE                  1   /* a test ran; MT_FINDINGS is valid */
@@ -266,7 +266,25 @@
 #define MT_FINDINGS                 8   /* MT_MAX_FIND records of MT_FIND_SIZE: +0 chip (MT_CHIP_*), +1 kind (MT_KIND_*), +2 line, +3 second line of a shorted pair (0 otherwise) */
 #define MT_FIND_SIZE                4
 #define MT_MAX_FIND                 12
-#define MT_SIZE                     56
+/* --- cell sweep (the X button / MEMTEST_MODE_FULL). The wiring walk above only touches
+ * one address per line, so a single weak cell in the middle of the array passes it; these
+ * report the write/verify sweep of all 16 MB + 512 KB. 24-bit fields are three bytes
+ * little-endian, read a byte at a time. */
+#define MT_CELL_BAD                 56  /* u24: bad bytes found, saturating at $FFFFFF */
+#define MT_CELL_GOT                 59  /* u8: the byte actually read at MT_CELL_ADDR */
+#define MT_CELL_ADDR                60  /* u24: address of the FIRST bad byte */
+#define MT_CELL_INFO                63  /* u8, bits below */
+#define MT_CI_RAN                   $01 /* bit0: the sweep ran. Clear = wiring-only test, and the fields above mean nothing -- the screen leaves its line blank */
+#define MT_CI_RAM1                  $02 /* bit1: the first bad byte was in RAM1 (U511), so MT_CELL_ADDR is a RAM1 offset; clear means RAM0 */
+#define MT_CI_TIMEOUT               $04 /* bit2: the sweep gave up waiting on the FPGA. The counts are partial and say nothing about the rest */
+#define MT_CI_SKIPPED               $08 /* bit3: a full test was asked for but the wiring walk had already failed, so sweeping was pointless -- one open address line makes every aliased cell "bad" */
+#define MT_SIZE                     64
+/* Which test to run, handed to the firmware in MCU_PARAM+7 with the command (lockstep with
+ * MEMTEST_MODE_* in src/memtest.h). FULL is a marker rather than 1 so that a stale byte
+ * left in MCU_PARAM by an earlier command cannot turn a 10-second test into a 30-second
+ * one; anything the firmware does not recognize means WIRING. */
+#define MT_MODE_WIRING              0
+#define MT_MODE_FULL                $5a
 #define MT_CHIP_RAM0_1              0   /* U501 */
 #define MT_CHIP_RAM0_2              1   /* U502 (Mk.III only) */
 #define MT_CHIP_RAM1                2   /* U511 */
