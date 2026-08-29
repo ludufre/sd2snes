@@ -58,7 +58,12 @@ int  menu_sfx_active(void);               /* nonzero while an effect is playing 
 int  menu_music_play(const char *filename); /* 0xA0 playing / 0x01 open-fail / 0x02 bad-magic */
 void menu_music_stop(void);
 int  menu_music_active(void);             /* nonzero while a looping clip is playing */
+void menu_music_lock(int locked);         /* claim the DAC: the FMV stop paths leave it alone */
+int  menu_music_locked(void);             /* nonzero while somebody holds that claim */
 uint32_t menu_music_samples(void);        /* DAC samples since loop start (FMV frame clock) */
+void menu_music_pause(int paused);        /* freeze/unfreeze the DAC, keeping the clip open */
+uint32_t menu_music_tell(void);           /* byte read position in the clip (progress display) */
+uint32_t menu_music_size(void);           /* clip size in bytes, header included */
 
 uint8_t msu_readbyte(uint16_t addr);
 uint16_t msu_readshort(uint16_t addr);

@@ -83,6 +83,7 @@ printf("start\n");
         switch(type) {
           case TYPE_ROM:
           case TYPE_SPC:
+          case TYPE_PCM:    /* .pcm (MSU-1 track) -- listed like a .spc, played by the menu PCM player */
           case TYPE_SKIN:   /* theme files (.thm/.skin) are listed like ROMs */
           case TYPE_NES:    /* .nes (core NES, mk3-only) -- listado como ROM */
           case TYPE_SUBDIR:
@@ -180,6 +181,11 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
   }*/
   if(!strcasecmp(ext+1, "SPC")) {
     return TYPE_SPC;
+  }
+  /* .pcm -- an MSU-1 audio track. Listed so the menu PCM player can play it
+     straight from the browser (src/pcmplay.c). */
+  if(!strcasecmp(ext+1, "PCM")) {
+    return TYPE_PCM;
   }
   if(!strcasecmp(ext+1, "CHT")) {
     return TYPE_CHT;

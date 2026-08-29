@@ -88,6 +88,9 @@ SRC += menucmd.c psram_io.c strutil.c yamlw.c
 # exactly where users need the triage, and it is the board that has no serial console to
 # run the standalone diagnostic through.
 SRC += memtest.c
+# Menu PCM player: play a .pcm (MSU-1 track) from the browser.  Thin shell over the
+# menu_music_* engine msu1.c already carries for the game-info FMV soundtrack.
+SRC += pcmplay.c
 # SPC7110 RTC-4513 battery backup.  Linked into every config: both flavours of the
 # SPC7110 core carry the virtual battery.
 SRC += spc7110rtc.c

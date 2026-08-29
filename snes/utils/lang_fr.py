@@ -307,6 +307,15 @@ TRANSLATIONS = {
     'text_mt_bytesel': 'LB# / UB# à vérifier',
     'text_mt_ctrl': 'CE# / OE# / WE# à vérifier',
     'text_mt_fpgactrl': 'CE#/OE#/WE# du FPGA à vérifier',
+
+    # --- PCM player screen (snes/pcmplay.a65) ---
+    'text_pcm_title': 'Lecteur PCM',
+    'text_pcm_prompt': 'A: Lecture/Pause   B: Fermer',
+    'text_pcm_promptb': 'B: Fermer',
+    'text_pcm_paused': 'En pause',
+    'text_pcm_erropen': 'Impossible de lire ce fichier.',
+    'text_pcm_errmagic': "Ce n'est pas un fichier PCM MSU-1.",
+    'text_pcm_nosup': '*** Mettez le firmware à jour ***',
     'text_st_slotb_title': 'Sufami Turbo - Port B',
     'text_st_slotb_footer': 'A:Jouer  B:Retour  <>:Page  LR:Debut/Fin',
     'text_st_slotb_none': '[Aucune cartouche en port B]',

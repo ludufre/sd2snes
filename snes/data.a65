@@ -515,4 +515,20 @@ mt_off          .word 0    ; byte offset of the finding being drawn, inside MT_F
                            ;   use X, so an index held in a register would not survive the
                            ;   loop body that composes and prints each line.
 
+;----------PCM player screen (snes/pcmplay.a65) ----------
+; The line-composition engine itself (mt_linebuf / mt_col / mt_row and the mt_blank /
+; mt_emit / mt_put_str / mt_put_num helpers in memtest.a65) is SHARED with the memory
+; test: same 40-column geometry, and the two screens can never be open at once.  Only
+; the state that is genuinely this screen's lives here.
+pcm_tmp         .word 0    ; scratch for the seconds -> mm:ss division
+pcm_paused      .byt 0     ; what WE last asked for, so A can toggle without waiting a
+                           ;   whole MCU round trip for PCM_STATE to catch up
+pcm_seen        .byt 0     ; PCM_STATE the last redraw rendered; the screen only recomposes
+                           ;   when something actually changed (see pcm_dirty)
+pcm_seen_pos    .byt 0     ; PCM_POS (low byte) likewise: the clock ticks once a second and
+                           ;   the bar is derived from the same position, so this alone is
+                           ;   enough to catch every visible change
+pcm_nosup       .byt 0     ; 1 = this firmware has no PCM handler (the magic never came
+                           ;   back). The screen still opens, to say so.
+
 _END            .byt 0

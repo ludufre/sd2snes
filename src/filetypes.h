@@ -47,6 +47,7 @@ typedef enum {
   TYPE_CHT     =   5,
   TYPE_SKIN    =   6,
   TYPE_NES     =   7,   /* .nes (iNES) -- core NES mk3-only; lockstep com TYPE_NES em snes/memmap.i65 */
+  TYPE_PCM     =   8,   /* .pcm (MSU-1 audio track) -- played by the menu PCM player; lockstep com TYPE_PCM em snes/memmap.i65 */
   TYPE_SUBDIR  =  64,
   TYPE_PARENT  = 128
 } SNES_FTYPE;

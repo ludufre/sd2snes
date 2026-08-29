@@ -1,0 +1,782 @@
+; PCM player screen -- plays a .pcm (an MSU-1 audio track) picked in the browser.
+;
+; WHAT MAKES THIS DIFFERENT FROM THE SPC PLAYER.  An .spc has to be uploaded into the
+; S-SMP, so spcplay.a65 can only run with the APU at IPL and can only STOP by resetting
+; the console.  A .pcm plays on the CARTRIDGE DAC instead (src/pcmplay.c over the
+; menu_music_* engine in src/msu1.c), which the MCU drives on its own: starting, pausing
+; and stopping are ordinary commands, and the menu keeps running underneath.
+;
+; THE ONE THING THE APU STILL DECIDES.  The console gates the cart's DAC while the S-DSP
+; sits in its IPL reset/mute state, so the DSP has to be out of reset for us to be heard
+; -- the same fact sfx_dsp_unmute exists for.  And if the menu music IS playing, the SPC
+; and this track would play on top of each other, so that case warm-resets first (the
+; only way to stop a running S-SMP) and hands the DSP the silent stub instead.  Which of
+; those applies is what pcm_prepare_audio reads out of BGM_STATE.
+;
+; PROGRESS COMES FROM A BLOCK, NOT FROM COMMANDS.  This screen redraws off PCMPLAY_BLK,
+; which the firmware republishes on its own once per menu-loop pass.  We never poll it by
+; command: the MCU_CMD handshake runs at ~20 ms, and a per-frame command would both miss
+; frames and eat the time budget the DAC pump needs.  Position and length arrive in
+; SECONDS and as a 0..255 fraction because this CPU has no divide.
+;
+; WHY $C1: same as memtest.a65 -- $C0 is down to its last hundred-odd bytes, so only the
+; `jsr X : rtl` trampolines live there (ui_call_* in ui.a65, gi_call_hiprint in
+; gameinfo.a65).  The line-composition engine (mt_blank / mt_emit / mt_put_str /
+; mt_put_num and the mt_linebuf / mt_col / mt_row vars) is SHARED with the memory-test
+; screen: same 40-column geometry, and the two can never be open at once.  Only the flush
+; is our own, because this window is not the memtest one.
+;
+; ENTRY POINT (jsl, self-contained -- forces DP=0 and DB=$00):
+;   select_pcm  - the browser's A action on a TYPE_PCM entry (filesel.a65 sel_is_pcm)
+.link page $c1
+#include "memmap.i65"
+// memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+// '.link page' wins and they emit no bytes).  Same pattern as memtest.a65.
+.link page $c1
+
+#define PCM_COLS        40
+// Row r prints at win_y + 2 + r.  The layout is the CALL ORDER in pcm_draw (mt_row starts
+// at 0 and pcm_flush advances it), so it is spelled out there and not duplicated here as
+// defines nothing reads.
+// The bar is 32 cells, not 40, and that is the whole reason there is no multiply here:
+// filled = PCM_PROGRESS >> 3 exactly.  4 blank columns each side centre it in the 40.
+#define PCM_BAR_CELLS   32
+#define PCM_BAR_X       4
+#define PCM_GLYPH_TRACK 18
+#define PCM_GLYPH_FILL  19
+// Bound on the wait for an MCU answer.  The play command opens the file and primes the
+// whole 2 KB DAC buffer, so it is the slow one; everything else is immediate.  A timeout
+// closes the screen instead of hanging the menu (same contract as the manual viewer).
+#define PCM_TIMEOUT_HI  $0020
+
+
+; ======================================================================
+;  select_pcm -- browser entry.  A on a .pcm.
+; ======================================================================
+select_pcm:
+  php
+  phb
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld                         ; DP = 0 (every direct-page access below needs it)
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  pha
+  plb                         ; DB = $00, the bank the browser itself runs in.  NOT $7E
+                              ; like memtest.a65: the trampolines below reach code that
+                              ; pokes hardware registers ABSOLUTELY -- bgm_silence_reset
+                              ; alone does `stz $2100` -- and under DB=$7E every one of
+                              ; those would land in WRAM instead, failing silently.  The
+                              ; line-composition vars are all below $2000, i.e. inside the
+                              ; $00:0000-$1FFF mirror of bank $7E, so they read the same
+                              ; memory either way.
+  jsr pcm_screen
+  pld
+  plb
+  plp
+  .as : .xl
+  rtl
+
+
+; ======================================================================
+;  pcm_screen -- prepare the audio path, start the track, run the window.
+;  Entry/exit .as/.xl, DB=$00, DP=0.
+; ======================================================================
+pcm_screen:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; mt_put_str borrows longptr, the menu's general-purpose direct-page long pointer, and
+  ; so does the filename lookup here.  Save the browser's value and put it back: this
+  ; screen has to be a black box for the listing it pops up over.
+  lda longptr+2
+  pha
+  rep #$20 : .al
+  lda longptr
+  pha
+  sep #$20 : .as
+
+  ; Drain an in-flight cover request BEFORE anything talks to the MCU.  This has to be
+  ; here and not just in pcm_start, because on the music-playing path the FIRST command
+  ; out is the warm reset's CMD_RESET -- and that one spins UNBOUNDED.  A .pcm entry fires
+  ; a cover like any other (the same hazard select_spc guards against), and if the MCU is
+  ; still inside that cover command, finishing it re-enters menu_main_loop, whose first
+  ; statement zeroes MCU_CMD -- erasing our CMD_RESET before it is ever dispatched, and
+  ; hanging the console for good.
+  jsl @ui_call_coversync
+  jsr pcm_prepare_audio       ; may warm-reset; repaints the list itself if it does
+  jsr pcm_start               ; sets pcm_nosup when this firmware has no handler
+
+  ; Park the selection bar off-screen.  It is a hardware colour window driven by the NMI
+  ; (bar_xl/yl/wl), not part of the pushed tilemap, so it would otherwise keep sweeping
+  ; across this window.  Saved and restored: the caller is the LIVE browser.
+  lda bar_xl
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #$ff
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+
+  lda #^text_pcm_title
+  sta window_tbank
+  ldx #!text_pcm_title
+  stx window_taddr
+  lda @spcstart_win_x
+  sta window_x
+  stz print_x+1
+  lda @spcstart_win_y
+  sta window_y
+  stz print_y+1
+  lda @spcstart_win_w
+  sta window_w
+  lda @spcstart_win_h
+  sta window_h                ; also what pop_window counts rows with, so nothing
+                              ; between here and the close may touch it
+  jsl @ui_call_wopen
+  stz print_pal
+
+  lda #$ff
+  sta pcm_seen                ; no state rendered yet -> force the first draw
+  sta pcm_seen_pos
+  jsr pcm_draw
+pcm_loop:
+  lda isr_done
+  beq pcm_loop
+  stz isr_done
+  jsr pcm_draw                ; self-gating: recomposes only when something changed
+  jsl @ui_call_pad
+  lda pad_b
+  bne pcm_scr_out
+  lda pad_a
+  beq pcm_loop
+  lda pcm_nosup
+  bne pcm_loop                ; nothing is playing: A has nothing to toggle
+  jsr pcm_toggle
+  bra pcm_loop
+
+pcm_scr_out:
+  jsr pcm_stop
+  jsl @ui_call_wclose
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  jsr pcm_restore_audio
+  rep #$20 : .al
+  pla
+  sta longptr
+  sep #$20 : .as
+  pla
+  sta longptr+2
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_prepare_audio -- get the APU into a state where the cart DAC is audible.
+;
+;  BGM_STATE (see bgm_update in filesel.a65):
+;    0 not attempted / 2 tried-no-spc  -> S-SMP idle at IPL, DSP still in reset/mute:
+;                                         the DAC would be silent, so upload the stub.
+;    1 playing                         -> the SPC would play OVER the track, and the only
+;                                         way to stop a running S-SMP is a reset.  Warm-
+;                                         reset (which also returns it to IPL), repaint
+;                                         the list the reset's VRAM clear wiped, then the
+;                                         stub as above.
+;    3 / 4 stub already running        -> exactly the state we want; nothing to do.
+;
+;  In practice bgm_update has already moved the browser to 1 or 3 long before the user
+;  can press A, but the 0/2 arm costs a compare and removes a silent-player failure mode.
+;  Entry/exit .as/.xl, DB=$00, DP=0.
+; ----------------------------------------------------------------------
+pcm_prepare_audio:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @BGM_STATE
+  cmp #$03
+  bcs pcm_pa_done             ; 3/4: stub up, DAC audible
+  cmp #$01
+  bne pcm_pa_stub             ; 0/2: at IPL already
+  ; --- music playing: silence it the only way there is ---
+  lda #$00
+  sta @BGM_STATE              ; snescom has no long stz
+  jsl @ui_call_bgm_silence    ; returns HERE, after the warm boot (APU back at IPL)
+  sep #$20 : .as              ; the warm boot's plp restored the caller's P, so re-assert
+  rep #$10 : .xl
+  lda #$01
+  sta filesel_dirty           ; the browser owes itself a repaint when we hand it back
+  jsl @ui_call_listrepaint    ; ...but the window opens NOW, so paint the list first
+  jsr pcm_wait_frame          ; and let one NMI DMA it, or the window overlays a blank screen
+pcm_pa_stub:
+  ; NOT bounded: spc_begin_upload waits for the IPL hello forever, deliberately (sfx.a65
+  ; explains why a bounded wait there silently skipped the stub instead).  Same exposure
+  ; bgm_update already carries on every browser frame, so this adds no new failure mode.
+  jsl @ui_call_dsp_unmute
+  lda #$03
+  sta @BGM_STATE              ; mark it even on timeout: no retry storm
+pcm_pa_done:
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_restore_audio -- hand the APU back to the browser.
+;
+;  State 3 -- "music off, DSP-unmute stub running" -- because that is exactly what the
+;  S-SMP is doing when we leave, and bgm_update takes it from there on its own: with music
+;  ON its state-3 arm (bgm_upd_unstub) warm-resets back to IPL and the pass after that does
+;  the fresh menu_bgm_load; with music OFF, 3 IS the resting state and nothing happens.
+;
+;  It must NOT be 0.  State 0 means "S-SMP untouched, sitting at IPL", which would be a
+;  LIE here -- the stub is running.  bgm_update would then go straight to menu_bgm_load,
+;  whose spc700_load waits for an IPL hello that never comes: the menu freezes solid with
+;  the MCU still alive (seen in hardware -- close the player, open it again, dead).
+;  Entry/exit .as/.xl, DB=$00, DP=0.
+; ----------------------------------------------------------------------
+pcm_restore_audio:
+  php
+  sep #$20 : .as
+  lda #$03
+  sta @BGM_STATE
+  lda #$01
+  sta filesel_dirty           ; bgm_update may warm-reset (clearing VRAM) on its way back
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_start -- CMD_PLAY_PCM for the selected entry.  The window opens either way; a
+;  firmware with no handler (or a timeout) just sets pcm_nosup, which is what the screen
+;  reports.  No carry contract -- there is only one exit.
+;
+;  MCU_PARAM is laid out exactly like a ROM launch: pointer to FILESEL_CWD, then the
+;  selected direntry, which is what lets the firmware reuse get_selected_name.  It is
+;  built HERE and not before pcm_prepare_audio on purpose -- a warm reset clears
+;  MCU_PARAM+0..+3 (the lesson bgm_clear_aram_for_launch documents).
+;  Entry/exit .as/.xl, DB=$00, DP=0.
+; ----------------------------------------------------------------------
+pcm_start:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr pcm_sel_index           ; Y = byte offset of the selected direntry
+  iny
+  iny
+  rep #$20 : .al
+  lda [dirptr_addr], y        ; +2: bank byte (high half is the type, masked off)
+  and #$00ff
+  sta @MCU_PARAM+6
+  dey
+  dey
+  lda [dirptr_addr], y        ; +0: address
+  sta @MCU_PARAM+4
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+
+  ; CAPABILITY SENTINEL: an older dispatcher ACKs an unknown command, so the ACK alone
+  ; proves nothing.  Zero the magic; the firmware writes it back on every publish, so a
+  ; zero surviving the ACK means this firmware has no PCM player.
+  lda #$00
+  sta @PCMPLAY_BLK+PCM_MAGIC0
+  lda #CMD_PLAY_PCM
+  sta @MCU_CMD
+  jsr pcm_wait_mcu
+  bcs pcm_st_nosup            ; timed out -> treat it like "not supported"
+  jsr pcm_magic_ok
+  bcs pcm_st_nosup
+  stz pcm_paused
+  stz pcm_nosup
+  plp
+  .as : .xl
+  rts
+pcm_st_nosup:
+  ; No handler (or a wedged MCU): nothing was opened and nothing is playing.  The screen
+  ; still opens -- it is the only surface there is to say so on, and a modal would cost
+  ; another $C0 trampoline for show_modal_msg.
+  lda #$01
+  sta pcm_nosup
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_stop / pcm_toggle -- transport.  MCU_PARAM low byte carries PCM_CTL_*.
+;  Entry/exit .as/.xl, DB=$00, DP=0.
+; ----------------------------------------------------------------------
+pcm_stop:
+  lda pcm_nosup
+  bne pcm_stop_none           ; never started -> nothing to tell the firmware
+  lda #PCM_CTL_STOP
+  bra pcm_ctl
+pcm_stop_none:
+  rts
+
+pcm_toggle:
+  lda pcm_paused
+  bne pcm_tg_resume
+  lda #PCM_CTL_PAUSE
+  ldx #$0001
+  bra pcm_tg_send
+pcm_tg_resume:
+  lda #PCM_CTL_RESUME
+  ldx #$0000
+pcm_tg_send:
+  ; Remember what WE asked for rather than waiting for PCM_STATE to catch up: the block
+  ; is republished on the firmware's own ~20 ms cadence, so a second press inside that
+  ; window would otherwise repeat the first command.
+  phx
+  jsr pcm_ctl
+  plx
+  txa
+  sta pcm_paused
+  rts
+
+pcm_ctl:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  sta @MCU_PARAM
+  lda #CMD_PCM_CTL
+  sta @MCU_CMD
+  jsr pcm_wait_mcu            ; carry on timeout is ignored: nothing left to undo
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_wait_mcu -- bounded wait for MCU_CMD to clear.  Carry SET = timed out.
+;  Bounded and not a bare spin so a wedged MCU closes the screen instead of taking the
+;  menu down with it (the manual viewer's contract).
+;  Entry .as/.xl; exit .as/.xl.
+; ----------------------------------------------------------------------
+pcm_wait_mcu:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #PCM_TIMEOUT_HI
+pcm_wm_outer:
+  ldy #$0000
+pcm_wm_inner:
+  lda @MCU_CMD
+  beq pcm_wm_ok
+  dey
+  bne pcm_wm_inner
+  dex
+  bne pcm_wm_outer
+  plp
+  .as : .xl
+  sec
+  rts
+pcm_wm_ok:
+  plp
+  .as : .xl
+  clc
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_magic_ok -- carry CLEAR when PCMPLAY_BLK is really ours.  Re-checked before any
+;  field is read: this is persistent PSRAM an older firmware never writes.
+;  Entry/exit .as/.xl.
+; ----------------------------------------------------------------------
+pcm_magic_ok:
+  lda @PCMPLAY_BLK+PCM_MAGIC0
+  cmp #$50                    ; 'P'
+  bne pcm_mo_no
+  lda @PCMPLAY_BLK+PCM_MAGIC1
+  cmp #$43                    ; 'C'
+  bne pcm_mo_no
+  lda @PCMPLAY_BLK+PCM_VERSION
+  cmp #$01
+  bcc pcm_mo_no
+  clc
+  rts
+pcm_mo_no:
+  sec
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_sel_index -- Y = byte offset of the selected entry inside the direntry table.
+;  Recomputed from filesel_sel (a WRAM var) rather than carried in a register, because
+;  the warm reset in pcm_prepare_audio destroys registers but not WRAM.
+;  Entry .as/.xl; exit .as/.xl, Y = offset.
+; ----------------------------------------------------------------------
+pcm_sel_index:
+  rep #$20 : .al
+  lda filesel_sel
+  and #$00ff
+  asl
+  asl
+  tay
+  sep #$20 : .as
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_wait_frame -- one full NMI, so whatever was just composed is uploaded.
+; ----------------------------------------------------------------------
+pcm_wait_frame:
+  php
+  sep #$20 : .as
+  stz isr_done
+pcm_wf_loop:
+  lda isr_done
+  beq pcm_wf_loop
+  stz isr_done
+  plp
+  .as : .xl
+  rts
+
+
+; ======================================================================
+;  pcm_draw -- the whole screen from PCMPLAY_BLK.
+;
+;  Self-gating: PCMPLAY_BLK is republished at the firmware's pace, so recomposing all six
+;  rows every frame would burn vblank redrawing identical text.  Redraw when the STATE or
+;  the elapsed SECOND changed -- the bar is derived from the same position, so it can
+;  never lag behind the clock.
+;  Fixed rows, so a branch never shifts the lines below it.
+;  Entry/exit .as/.xl, DB=$00, DP=0.
+; ======================================================================
+pcm_draw:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda pcm_nosup
+  bne pcm_dr_nosup
+  jsr pcm_magic_ok
+  bcs pcm_dr_done             ; block went away under us -> leave the last frame up
+  lda @PCMPLAY_BLK+PCM_STATE
+  cmp pcm_seen
+  bne pcm_dr_go
+  lda @PCMPLAY_BLK+PCM_POS
+  cmp pcm_seen_pos
+  beq pcm_dr_done
+pcm_dr_go:
+  lda @PCMPLAY_BLK+PCM_STATE
+  sta pcm_seen
+  lda @PCMPLAY_BLK+PCM_POS
+  sta pcm_seen_pos
+
+  stz mt_row                  ; layout: 0 name, 1 blank, 2 bar, 3 clock, 4 blank, 5 keys.
+                              ;   pcm_flush advances the row, so the call order below IS
+                              ;   the layout -- keep the blanks, they hold the positions.
+  jsr pcm_row_name            ; row 0
+  jsr pcm_row_blank           ; row 1
+  lda @PCMPLAY_BLK+PCM_STATE
+  cmp #PCM_ST_ERR_OPEN
+  bcs pcm_dr_err
+  jsr pcm_row_bar             ; row 2
+  jsr pcm_row_time            ; row 3
+  bra pcm_dr_tail
+pcm_dr_err:
+  jsr pcm_row_blank           ; row 2
+  jsr pcm_row_errmsg          ; row 3
+pcm_dr_tail:
+  jsr pcm_row_blank           ; row 4
+  lda #^text_pcm_prompt
+  ldx #!text_pcm_prompt
+  jsr pcm_row_str             ; row 5
+pcm_dr_done:
+  plp
+  .as : .xl
+  rts
+
+; Static screen: composed once (pcm_seen starts at $ff) and then left alone.
+pcm_dr_nosup:
+  lda pcm_seen
+  beq pcm_dr_done
+  stz pcm_seen
+  stz mt_row
+  jsr pcm_row_name            ; row 0
+  jsr pcm_row_blank           ; row 1
+  jsr pcm_row_blank           ; row 2
+  lda #^text_pcm_nosup
+  ldx #!text_pcm_nosup
+  jsr pcm_row_str             ; row 3
+  jsr pcm_row_blank           ; row 4
+  lda #^text_pcm_promptb      ; only B does anything here
+  ldx #!text_pcm_promptb
+  jsr pcm_row_str             ; row 5
+  bra pcm_dr_done
+
+
+; -- row 0: the selected file's name, straight out of the direntry --------------
+; Its own copy loop rather than mt_put_str, for one reason: with "Hide extensions" on,
+; scan_dir overwrites the DOT with code 1 instead of truncating (fileops.c), and 1 is a
+; string terminator to hiprint but not to mt_put_str.  Feeding it through that helper
+; would park a live 1 in the middle of mt_linebuf, and hiprint would then stop there --
+; leaving the rest of the row unpainted, i.e. showing whatever the previous frame drew.
+; Stopping at anything below 2 is also what makes resolve_str irrelevant here: this is
+; raw text out of the dir buffer, never a language-table pointer.
+pcm_row_name:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr mt_blank
+  jsr pcm_sel_index
+  rep #$20 : .al
+  lda [dirptr_addr], y        ; +0: entry address
+  clc
+  adc #$0006                  ; the name starts 6 bytes into the entry
+  sta longptr
+  iny
+  iny
+  sep #$20 : .as
+  lda [dirptr_addr], y        ; +2: bank, relative to $C0 like every dir pointer
+  clc
+  adc #$c0
+  sta longptr+2
+  ldy #$0000
+pcm_rn_loop:
+  lda [longptr], y
+  cmp #$02
+  bcc pcm_rn_done             ; 0 = end of name, 1 = the hidden extension marker
+  iny
+  phy
+  jsr mt_emit
+  ply
+  cpy #PCM_COLS               ; mt_emit drops the overflow anyway; stop walking for it
+  bcc pcm_rn_loop
+pcm_rn_done:
+  jsr pcm_flush
+  plp
+  .as : .xl
+  rts
+
+pcm_row_blank:
+  jsr mt_blank
+  jsr pcm_flush
+  rts
+
+; -- one whole row from one string.  A = bank, X = address (mt_put_str's own contract).
+;    mt_blank CLOBBERS BOTH (it walks the buffer with X and fills with A), so the pointer
+;    has to be stacked across it -- writing the two jsr's in the obvious order printed one
+;    stray glyph instead of the line.  A is 8-bit and X 16-bit here, hence the pull order.
+pcm_row_str:
+  phx
+  pha
+  jsr mt_blank
+  pla
+  plx
+  jsr mt_put_str
+  jsr pcm_flush
+  rts
+
+pcm_row_errmsg:
+  lda @PCMPLAY_BLK+PCM_STATE
+  cmp #PCM_ST_ERR_MAGIC
+  beq pcm_re_magic
+  lda #^text_pcm_erropen
+  ldx #!text_pcm_erropen
+  bra pcm_row_str
+pcm_re_magic:
+  lda #^text_pcm_errmagic
+  ldx #!text_pcm_errmagic
+  bra pcm_row_str
+
+
+; -- row 2: the bar.  32 cells, filled = PCM_PROGRESS >> 3 -- an exact shift, which is
+;    the entire reason the cell count is 32 and not the full 40 columns.
+pcm_row_bar:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr mt_blank
+  rep #$20 : .al
+  lda #PCM_BAR_X
+  sta mt_col                  ; leave the first columns blank -> the bar sits centred
+  sep #$20 : .as
+  lda @PCMPLAY_BLK+PCM_PROGRESS
+  cmp #$ff
+  beq pcm_bar_full            ; 255>>3 is 31, so the last cell would never light up
+  lsr
+  lsr
+  lsr
+  bra pcm_bar_count
+pcm_bar_full:
+  lda #PCM_BAR_CELLS
+pcm_bar_count:
+  rep #$20 : .al
+  and #$00ff                  ; the shifts leave the high half of A untouched
+  sta pcm_tmp
+  sep #$20 : .as
+  ldx #$0000
+pcm_bar_loop:
+  cpx pcm_tmp
+  bcs pcm_bar_track
+  lda #PCM_GLYPH_FILL
+  bra pcm_bar_put
+pcm_bar_track:
+  lda #PCM_GLYPH_TRACK
+pcm_bar_put:
+  jsr mt_emit                 ; preserves X
+  inx
+  cpx #PCM_BAR_CELLS
+  bne pcm_bar_loop
+  jsr pcm_flush
+  plp
+  .as : .xl
+  rts
+
+
+; -- row 3: "m:ss / m:ss", plus "Paused" when the DAC is frozen -----------------
+pcm_row_time:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr mt_blank
+  rep #$20 : .al
+  lda #PCM_BAR_X
+  sta mt_col                  ; line the clock up with the left end of the bar
+  lda @PCMPLAY_BLK+PCM_POS
+  sta pcm_tmp
+  sep #$20 : .as
+  jsr pcm_put_time
+  lda #$20
+  jsr mt_emit
+  lda #$2f                    ; '/'
+  jsr mt_emit
+  lda #$20
+  jsr mt_emit
+  rep #$20 : .al
+  lda @PCMPLAY_BLK+PCM_TOTAL
+  sta pcm_tmp
+  sep #$20 : .as
+  jsr pcm_put_time
+  lda @PCMPLAY_BLK+PCM_STATE
+  cmp #PCM_ST_PAUSED
+  bne pcm_rt_flush
+  lda #$20
+  jsr mt_emit
+  jsr mt_emit
+  lda #^text_pcm_paused
+  ldx #!text_pcm_paused
+  jsr mt_put_str
+pcm_rt_flush:
+  jsr pcm_flush
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_put_time -- emit pcm_tmp (seconds, 16-bit) as m:ss.
+;  Minutes go through mt_put_num (no leading zero, two digits -- a track past 99 minutes
+;  is not a thing); the seconds always get both digits, which mt_put_num will not do.
+;  Divide by repeated subtraction: no hardware divide, and at most a few dozen passes.
+;  Entry/exit .as/.xl, DB=$00.
+; ----------------------------------------------------------------------
+pcm_put_time:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000                  ; minutes
+pcm_pt_div:
+  rep #$20 : .al
+  lda pcm_tmp
+  cmp #60
+  bcc pcm_pt_done
+  sec
+  sbc #60
+  sta pcm_tmp
+  sep #$20 : .as
+  inx
+  bra pcm_pt_div
+pcm_pt_done:
+  sep #$20 : .as
+  txa                         ; X is 16-bit but minutes never leave the low byte
+  jsr mt_put_num
+  lda #$3a                    ; ':'
+  jsr mt_emit
+  lda pcm_tmp                 ; remainder, 0..59
+  jsr pcm_put_2d
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_put_2d -- emit A (0..99) as exactly two digits, leading zero included.
+;  Entry/exit .as/.xl, DB=$00.
+; ----------------------------------------------------------------------
+pcm_put_2d:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldy #$0000
+pcm_2d_tens:
+  cmp #10
+  bcc pcm_2d_emit
+  sec
+  sbc #10
+  iny
+  bra pcm_2d_tens
+pcm_2d_emit:
+  pha
+  tya
+  clc
+  adc #$30
+  jsr mt_emit
+  pla
+  clc
+  adc #$30
+  jsr mt_emit
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  pcm_flush -- print mt_linebuf at layout row mt_row, then advance the row.
+;  Rows land at (spcstart_win_x+2, spcstart_win_y+2+mt_row).  Own copy rather than
+;  mt_flush: everything else in the composition engine is geometry-free, but that one
+;  hard-codes the memory test's window.
+;  Entry/exit .as/.xl, DB=$00, DP=0.
+; ----------------------------------------------------------------------
+pcm_flush:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  sta print_bank              ; the BUFFER's bank, unrelated to DB
+  ldx #!mt_linebuf
+  stx print_src
+  stz print_pal
+  lda #PCM_COLS
+  sta print_count
+  lda @spcstart_win_x
+  clc
+  adc #$02
+  sta print_x
+  lda @spcstart_win_y
+  clc
+  adc #$02
+  clc
+  adc mt_row
+  sta print_y
+  jsl @gi_call_hiprint
+  inc mt_row
+  plp
+  .as : .xl
+  rts

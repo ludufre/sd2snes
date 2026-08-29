@@ -309,6 +309,15 @@ TRANSLATIONS = {
     'text_mt_bytesel': 'ver LB# / UB#',
     'text_mt_ctrl': 'ver CE# / OE# / WE#',
     'text_mt_fpgactrl': 'ver CE# / OE# / WE# de la FPGA',
+
+    # --- PCM player screen (snes/pcmplay.a65) ---
+    'text_pcm_title': 'Reproductor PCM',
+    'text_pcm_prompt': 'A: Reproducir/Pausar   B: Cerrar',
+    'text_pcm_promptb': 'B: Cerrar',
+    'text_pcm_paused': 'En pausa',
+    'text_pcm_erropen': 'No se pudo leer el archivo.',
+    'text_pcm_errmagic': 'No es un archivo PCM de MSU-1.',
+    'text_pcm_nosup': '*** Actualiza el firmware ***',
     'text_st_slotb_title': 'Sufami Turbo - Ranura B',
     'text_st_slotb_footer': 'A:Jugar  B:Volver  <>:Pag  LR:Ini/Fin',
     'text_st_slotb_none': '[Sin cartucho en Ranura B]',

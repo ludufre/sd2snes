@@ -13,6 +13,7 @@ Usage:
     python3 fontedit.py addfrench          Insert French chars (è ù î ï ë û)
     python3 fontedit.py additalian         Insert Italian chars (ì ò È Ì Ò Ù)
     python3 fontedit.py addscrollbar       Write scrollbar glyphs (codes 16,17)
+    python3 fontedit.py addprogressbar    Write progress-bar glyphs (codes 18,19)
     python3 fontedit.py export [opts]      Dump the font to an editable PNG
     python3 fontedit.py import <png> [opts]  Read a PNG sheet back into font.a65
     python3 fontedit.py freeslots          List slots with no glyph in them
@@ -359,6 +360,49 @@ def _bar_tile(pattern, color):
     pixels painted `color`."""
     row = [color if ch == "1" else 0 for ch in pattern]
     return pixels_to_tile([row[:] for _ in range(8)])
+
+
+# -- Progress bar glyphs (menu PCM player) -----------------------------------
+# The scrollbar glyphs above are VERTICAL bars: the same pattern on all 8 rows,
+# so cells stacked downwards join up. Laid out sideways they would read as dots,
+# which is why a horizontal bar needs its own pair. These fill all 8 COLUMNS of
+# a few centre rows instead, so cells placed side by side join into one line.
+# Codes 18/19 continue in the same 0..31 blank range (nothing printable moves).
+#   code 18 = track: 2 centre rows, color 1 (discreet).
+#   code 19 = filled: 4 centre rows, color 3 (same as normal text).
+PROGRESSBAR_GLYPHS = {
+    18: (2, 1),
+    19: (4, 3),
+}
+
+
+def _hbar_tile(thickness, color):
+    """Build an 8x8 tile: `thickness` fully-lit centre rows, painted `color`."""
+    top = (8 - thickness) // 2
+    rows = []
+    for y in range(8):
+        lit = top <= y < top + thickness
+        rows.append([color if lit else 0 for _ in range(8)])
+    return pixels_to_tile(rows)
+
+
+def add_progressbar():
+    header, tiles = load_font()
+    new_tiles = dict(enumerate(tiles))  # code -> tile
+    for code, (thickness, color) in PROGRESSBAR_GLYPHS.items():
+        new_tiles[code] = _hbar_tile(thickness, color)
+
+    out_lines = list(header)
+    total = max(len(tiles), max(new_tiles) + 1)
+    for code in range(total):
+        tile = new_tiles.get(code, [0] * 16)
+        label = "font" if code == 0 else None
+        out_lines.extend(encode_tile_lines(tile, label=label))
+    FONT.write_text("\n".join(out_lines) + "\n")
+    print(f"Updated {FONT}")
+    for code in PROGRESSBAR_GLYPHS:
+        print(f"  progress-bar glyph {code}:")
+        print(render_ascii(tile_to_pixels(new_tiles[code])))
 
 
 def add_scrollbar():
@@ -764,6 +808,8 @@ def main():
         add_italian()
     elif cmd == "addscrollbar":
         add_scrollbar()
+    elif cmd == "addprogressbar":
+        add_progressbar()
     elif cmd == "export":
         import argparse
         ap = argparse.ArgumentParser(prog="fontedit.py export")

@@ -21,6 +21,8 @@
 #include "theme.h"
 #include "manual.h"
 #include "memtest.h"
+#include "msu1.h"     /* menu_music_locked: the DAC claim menucmd_fmv_gate honours */
+#include "pcmplay.h"
 #include "menucmd.h"
 #include "util.h"
 
@@ -462,6 +464,15 @@ static int cmd_keeps_fmv(uint8_t cmd) {
    (Returning to the Favorites/Recents list issues NO command -> the idle watchdog in snes.c
    covers it.) */
 void menucmd_fmv_gate(uint8_t cmd) {
+  /* The PCM player owns the DAC through the same menu_music_* engine, and it issues
+     commands this gate does not know (play, pause, resume).  Without this guard the gate
+     stopped the player's own track on its own transport command -- pressing pause killed
+     the clip, and the screen then reported a read error (hardware).  Guarding on "the
+     player is live" rather than listing its opcodes also keeps the gate correct for the
+     CMD_PLAY_PCM that STARTS it: at that point the player is not active yet, so a real
+     FMV still gets stopped, which is exactly what should happen. */
+  if(menu_music_locked())
+    return;
   if(!cmd_keeps_fmv(cmd))
     gameinfo_fmv_stop();
 }
@@ -657,6 +668,26 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
          back and re-stages the menu image. */
       *menu_reload = 1;
       return cmd;
+    case SNES_CMD_PLAY_PCM:
+      /* A .pcm was picked in the browser: play it on the cartridge DAC.  MCU_PARAM was
+         set up like a ROM launch (cwd + selected entry), so get_selected_name yields the
+         full SD path.  Nothing here boots or reloads -- the menu stays live and the
+         player screen (snes/pcmplay.a65) reads PCMPLAY_BLK, which the MCU republishes on
+         its own once per menu-loop pass.  Fail-safe: a missing / non-"MSU1" file only
+         publishes an error state, so a bad file costs a message, not a hang. */
+      get_selected_name(file_lfn);
+      pcmplay_start((const char*)file_lfn);
+      return 0;
+    case SNES_CMD_PCM_CTL:
+      /* Transport for the player above; MCU_PARAM low byte = PCM_CTL_*.  Pause freezes
+         the DAC read pointer only: the file stays open at its position, which is what
+         makes resuming instant (see pcmplay_pause). */
+      switch(snescmd_readbyte(SNESCMD_MCU_PARAM) ) {
+        case PCMPLAY_CTL_PAUSE:  pcmplay_pause(1); break;
+        case PCMPLAY_CTL_RESUME: pcmplay_pause(0); break;
+        default:                 pcmplay_stop();   break;
+      }
+      return 0;
     case SNES_CMD_LOAD_MENU_SPC:
       /* stage background menu music. Use the user-chosen .spc (CFG.bgm_name, a
          full SD path set via SNES_CMD_SET_MENU_SPC) when present, otherwise fall
@@ -858,7 +889,12 @@ NO_INLINE void menucmd_export_boot_nav(uint8_t firstboot) {
      would otherwise render whatever the last power-on left there as a result screen.
      Cleared only on firstboot for the same reason as the byte above -- a real run writes
      this block and THEN asks for the reload that is supposed to display it. */
-  if(firstboot) memtest_clear();
+  /* Same for the PCM player's block: leftover PSRAM here would have the browser think a
+     track is playing on a freshly powered-on console. */
+  if(firstboot) {
+    memtest_clear();
+    pcmplay_clear();
+  }
   /* OK *and* PARTIAL: a partial export still WROTE the .sfc -- only some sidecar
      failed to copy -- and export_result_check (snes/patch.a65) navigates the
      browser to it in both cases.  Testing == PATCH_EXPORT_OK here left LASTGAME_

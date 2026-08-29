@@ -47,6 +47,7 @@
 #include "version.h"
 #include "hwinfo.h"
 #include "msu1.h"   /* menu_sfx_* : menu sound effects via the MSU-1 DAC */
+#include "pcmplay.h"/* pcmplay_publish: menu PCM player status block */
 #include "gameinfo.h" /* gameinfo_fmv_idle_check : stop a lingering FMV when its screen closes */
 #include "cheat.h"
 #include "savestate.h"
@@ -599,6 +600,7 @@ uint8_t menu_main_loop() {
       cmd = 0;
     }
     gameinfo_fmv_idle_check();   /* stop a lingering FMV if its info screen closed quietly */
+    pcmplay_publish();           /* refresh the PCM player's progress block (no-op when idle) */
     /* While an effect is playing the FPGA drains a DAC half-buffer every ~6 ms
        (44.1 kHz) - far faster than this 20 ms poll - so busy-service the DAC to
        the same ~20 ms budget instead of sleeping (verbatim pattern from the

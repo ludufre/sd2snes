@@ -103,6 +103,33 @@ ui_call_coversync:
   jsr cover_sync_before_cmd
   rtl
 
+; --- $C0 trampolines for the PCM player screen (snes/pcmplay.a65, bank $C1).
+; Same reason as the block above: all three targets are `rts` near.
+;
+; ui_call_bgm_silence RETURNS THROUGH A WARM RESET.  bgm_silence_reset snapshots SP,
+; sets the warm signature and asks the MCU for a reset; the warm boot's set_bank does
+; `plp; rts`, which lands right back after that jsr and falls into the rtl below -- the
+; far caller never knows a reset happened.  It costs the VRAM, hence the repaint stub.
+ui_call_bgm_silence:
+  jsr bgm_silence_reset
+  rtl
+
+; Repaint the browser listing into the tilemap buffers.  Needed after a warm reset (which
+; clears VRAM) BEFORE any window opens on top, or the window would overlay a blank screen
+; instead of the file list.  Same three calls spc_play_now_redraw makes.
+ui_call_listrepaint:
+  jsr filesel_statusbar
+  jsr filesel_redraw
+  jsr filesel_cleanup
+  rtl
+
+; Put the S-DSP into its known-silent-but-running state.  The console gates the cart's
+; MSU-1 DAC while the DSP is in IPL reset/mute, so a PCM track started with no menu music
+; playing would be inaudible without this.  Requires the S-SMP at IPL.
+ui_call_dsp_unmute:
+  jsr sfx_dsp_unmute
+  rtl
+
 ; resolve_yx: resolve_str for a (Y=addr, A=bank) pointer (as used by strlen).
 ; Entry .as/.xl. Exit same widths, A=resolved bank, Y=resolved addr.
 resolve_yx:

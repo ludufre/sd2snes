@@ -546,6 +546,8 @@ static int menusfx_open = 0;               /* menusfx_fil currently holds an ope
 static const char *menusfx_open_name = 0;  /* which effect is open (same static strings) */
 static tick_t menusfx_deadline = 0;        /* watchdog: latest tick an effect may run to */
 static int menusfx_loop_forever = 0;       /* 1 = FMV music: loop the clip, no one-shot deadline */
+static int menusfx_locked = 0;             /* 1 = a caller claimed the DAC exclusively (see
+                                              menu_music_lock) */
 static uint32_t menusfx_samples = 0;       /* FMV music: stereo samples fed to the DAC since the
                                               loop start -> the FMV video frame clock (sync) */
 
@@ -773,6 +775,21 @@ int menu_music_active(void) {
   return menusfx_active && menusfx_loop_forever;
 }
 
+/* Claim / release the DAC exclusively.
+   There is one DAC and three things want it: the info screen's FMV soundtrack, the nav
+   blips, and the menu PCM player.  The FMV paths stop "the clip" from two places that know
+   nothing about each other -- the 300 ms idle watchdog (gameinfo_fmv_idle_check) and the
+   per-command gate (menucmd_fmv_gate) -- so a consumer that wants to survive them has to be
+   able to say so.  The flag lives HERE, in the module that owns the DAC, rather than each
+   of those sites asking a different module whether some particular screen is up. */
+void menu_music_lock(int locked) {
+  menusfx_locked = locked;
+}
+
+int menu_music_locked(void) {
+  return menusfx_locked;
+}
+
 /* Stereo samples fed to the DAC since the loop start = the FMV video frame clock. The menu
    drives the displayed frame off this so the video stays locked to the audio (no drift). */
 uint32_t menu_music_samples(void) {
@@ -782,6 +799,30 @@ uint32_t menu_music_samples(void) {
 void menu_music_stop(void) {
   if(menusfx_active && menusfx_loop_forever) menu_sfx_stop();
   menusfx_loop_forever = 0;
+}
+
+/* Byte position of the clip's READ head, and its size, for a progress display (the menu
+   PCM player, src/pcmplay.c).  The handle is static in here, hence the accessors.
+   NOT menu_music_samples(): that counter restarts at every loop wrap (it is the FMV frame
+   clock, not a file position).  f_tell runs up to one DAC buffer (2 KB = ~11 ms) ahead of
+   what is actually audible, which is invisible on a progress bar. */
+uint32_t menu_music_tell(void) {
+  return menusfx_open ? (uint32_t)f_tell(&menusfx_fil) : 0;
+}
+
+uint32_t menu_music_size(void) {
+  return menusfx_open ? (uint32_t)f_size(&menusfx_fil) : 0;
+}
+
+
+
+/* Freeze / unfreeze the DAC read pointer, keeping the file open and menusfx_active set.
+   Deliberately NOT menu_sfx_stop(): that disarms the FPGA fetcher and clears the active
+   flag, which would drop the open handle and the position.  With the DAC paused the
+   DAC_READ_MSB bit stops toggling, so menu_sfx_pump() turns into a no-op on its own. */
+void menu_music_pause(int paused) {
+  if(!menusfx_active || !menusfx_loop_forever) return;
+  if(paused) dac_pause(); else dac_play();
 }
 
 uint8_t msu_readbyte(uint16_t addr) {

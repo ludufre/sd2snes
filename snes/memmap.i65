@@ -268,6 +268,31 @@
 #define MT_KIND_CTRL                4   /* that chip's CE# / OE# / WE# */
 #define MT_KIND_FPGACTRL            5   /* the FPGA's CE# / OE# / WE# */
 #define MT_KIND_N                   6   /* kinds the renderer knows; anything else is skipped */
+
+/* Menu PCM player status block (src/pcmplay.h). The FIRMWARE is the sole writer and
+ * republishes it once per menu-loop pass WITHOUT a command: the player screen redraws at
+ * 60 Hz while MCU_CMD handshakes run off a ~20 ms loop, so polling it by command would
+ * both miss frames and eat the DAC pump's time budget. We only READ it -- except for the
+ * magic, which we zero before CMD_PLAY_PCM as a capability sentinel (an older dispatcher
+ * ACKs an unknown command, so the $55 alone proves nothing; same trick as MT_ST_RUNNING).
+ * Position and length arrive in SECONDS and as a 0..255 fraction because this CPU has no
+ * divide -- the bar is PCM_PROGRESS * width / 256. */
+#define PCMPLAY_BLK                 $FF07C0
+#define PCM_MAGIC0                  0   /* 'P' ($50) */
+#define PCM_MAGIC1                  1   /* 'C' ($43) */
+#define PCM_VERSION                 2   /* u8, 1 = the layout below */
+#define PCM_STATE                   3   /* u8 PCM_ST_* */
+#define PCM_ST_NONE                 0   /* nothing playing (also what the firmware parks here at cold boot) */
+#define PCM_ST_PLAYING              1
+#define PCM_ST_PAUSED               2   /* DAC read pointer frozen; the track stays open at its position */
+#define PCM_ST_ERR_OPEN             3   /* the file would not open */
+#define PCM_ST_ERR_MAGIC            4   /* opened, but it is not an "MSU1" PCM */
+#define PCM_POS                     4   /* u16 LE: elapsed seconds */
+#define PCM_TOTAL                   6   /* u16 LE: track length in seconds */
+#define PCM_PROGRESS                8   /* u8 0..255: position fraction, pre-divided for the bar */
+#define PCM_FLAGS                   9   /* u8, bits below */
+#define PCM_F_LOOPS                 $01 /* bit0: the header carries a non-zero loop point */
+#define PCM_SIZE                    32
 #define MANUAL_S1META               $FF0770 /* scale-1 (1x) page meta, 16B after MANUAL_META: +0 flags (bit0 = staged and ready), +1 nrows, +2..3 pix_h u16 LE, +4 staged page, +5 staged guide, +6..7 page count u16 LE. Lockstep with SRAM_MANUAL_S1META_ADDR in src/memmap.h. */
 #define MAN_S1_F_READY              $01
 #define MAN_S1META_NROWS            $FF0771
@@ -494,6 +519,11 @@
 #define CMD_EXPORT_PATCHED_ROM      $3a /* patch selector: write a .sfc next to the ROM with the patch at MCU_PARAM+7 already applied, named after the PATCH FILE ("Foo - [BR].ips" -> "Foo - [BR].sfc"), then reload the menu. Slow (tens of seconds). */
 #define CMD_EXPORT_CHECK            $3c /* pre-flight for CMD_EXPORT_PATCHED_ROM (same MCU_PARAM, +7 = patch index): answers "would the .sfc collide?" in EXPORT_RESULT (0 free / 4 exists) and ACKs $55. Non-booting -- lets patch_create_rom refuse IN PLACE, before the screen teardown. Lockstep with src/snes.h. */
 #define CMD_MEMTEST                 $3d /* "Memory test": walk the RAM wiring, publish findings in MEMTEST_BLK. Reconfigures the FPGA to fpga_test and halts this CPU for the ~10s it runs, then reloads the menu -- so the RESULT is reported by the reloaded browser (mt_result_check), exactly like the patched-ROM export. Answers MT_STATE_NOCORE + $55 WITHOUT halting anything when fpga_test is missing, so that refusal is a modal over the live screen. Lockstep with src/snes.h. */
+#define CMD_PLAY_PCM                $3e /* menu PCM player: play the selected .pcm (an MSU-1 track) on the cartridge DAC. MCU_PARAM carries cwd+direntry exactly like a ROM launch. Non-booting and non-reloading: the menu stays up and the player screen reads PCMPLAY_BLK, which the firmware republishes on its own. Lockstep with src/snes.h. */
+#define CMD_PCM_CTL                 $3f /* menu PCM player transport: MCU_PARAM low byte = PCM_CTL_* below. Non-booting. Lockstep with src/snes.h. */
+#define PCM_CTL_STOP                0
+#define PCM_CTL_PAUSE               1   /* freezes the DAC only -- the file stays open at its position */
+#define PCM_CTL_RESUME              2
 /* WiFi-in-menu commands RESERVED for the Companion port (lockstep with src/snes.h):
    WiFi owns $30-$33, so game-info lives at $34-$37. No menu/MCU handler in this
    branch -- reserved so adding WiFi later needs zero command renumbering. */
@@ -710,6 +740,7 @@
 #define TYPE_CHT                    $05
 #define TYPE_SKIN                   $06
 #define TYPE_NES                    $07 /* .nes (core NES mk3-only); lockstep com filetypes.h */
+#define TYPE_PCM                    $08 /* .pcm (MSU-1 audio track, menu PCM player); lockstep com filetypes.h */
 #define TYPE_SUBDIR                 $40
 #define TYPE_PARENT                 $80
 

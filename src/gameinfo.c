@@ -445,6 +445,9 @@ void gameinfo_fmv_stop(void) {
  * list, which issues none) -> stop the FMV so the audio doesn't linger. Call from the menu
  * loop; bounded, no-op when nothing is playing. */
 void gameinfo_fmv_idle_check(void) {
+  /* Somebody else holds the DAC (the menu PCM player) and gets no CMD_FMV_NEXT at all --
+     without this bail-out the watchdog below would stop their track 300 ms in. */
+  if(menu_music_locked()) return;
   if(!gi_fmv_open && !menu_music_active()) return;
   if(time_after(getticks(), gi_fmv_last_tick + MS_TO_TICKS(300)))
     gameinfo_fmv_stop();

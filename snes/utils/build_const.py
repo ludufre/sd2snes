@@ -241,7 +241,8 @@ def main():
     # (fragments printed AFTER a "U501: " chip prefix, hence 8 columns less).
     WIDTH_LIMITS = (("text_si_", 40), ("text_cheat_noname", 42),
                     ("text_no_", 22), ("cheat_tab_head", 48),
-                    ("text_mtl_", 40), ("text_mt_", 32), ("mtext_", 40),
+                    ("text_mtl_", 40), ("text_mt_", 32), ("text_pcm_", 40),
+                    ("mtext_", 40),
                     ("mdesc_", 160), ("text_err_", 26))
     WIDTH_DEFAULT = 56
 

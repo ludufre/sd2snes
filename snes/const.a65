@@ -542,6 +542,20 @@ text_mt_bytesel   .byt "check LB# / UB#", 0
 text_mt_ctrl      .byt "check CE# / OE# / WE#", 0
 text_mt_fpgactrl  .byt "check FPGA CE# / OE# / WE#", 0
 
+; --- PCM player screen (snes/pcmplay.a65) ------------------------------------
+; Whole lines, 40 columns (build_const.py WIDTH_LIMITS "text_pcm_").  The window
+; borrows the SPC player's geometry so the two look like the same feature.
+text_pcm_title    .byt "PCM Player", 0
+text_pcm_prompt   .byt "A: Play/Pause   B: Close", 0
+text_pcm_promptb  .byt "B: Close", 0
+text_pcm_paused   .byt "Paused", 0
+text_pcm_erropen  .byt "Cannot read this file.", 0
+text_pcm_errmagic .byt "Not an MSU-1 PCM file.", 0
+text_pcm_nosup    .byt "*** Please update the firmware ***", 0
+; Geometry: the PCM player borrows spcstart_win_* verbatim.  Deliberate on both counts --
+; the two players should look like the same feature, and four more bytes of window geometry
+; is not what the last hundred-odd bytes of $C0 should be spent on.
+
 text_on_p1      .byt "On: P1", 0
 text_on_p2      .byt "On: P2", 0
 text_on         .byt "On", 0

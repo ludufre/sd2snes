@@ -290,7 +290,10 @@ dirent_is_file
   bra dirent_type_cont
 +
   cmp #TYPE_SPC ; SPC -> palette 2
+  beq dirent_type_pal2
+  cmp #TYPE_PCM ; .pcm (MSU-1 track) -> palette 2, same as an .spc
   bne +
+dirent_type_pal2
   lda #$0002
   bra dirent_type_cont
 +
@@ -584,6 +587,8 @@ select_item:
   beq sel_is_file       ; .nes boota como ROM (CMD_LOADROM; o MCU detecta via nes_id)
   cmp #TYPE_SPC
   beq sel_is_spc
+  cmp #TYPE_PCM
+  beq sel_is_pcm
   cmp #TYPE_SKIN
   beq sel_is_theme
   cmp #TYPE_SUBDIR
@@ -611,6 +616,15 @@ sel_is_spc
 sel_is_theme
   jsr snd_fx_confirm
   jsr select_theme
+  bra select_item_cont
+sel_is_pcm
+; .pcm (MSU-1 track): hand it to the PCM player. Unlike an .spc this never touches
+; the S-SMP -- the track plays on the cartridge DAC -- so there is no fork on
+; BGM_STATE here and no reset in the common case; select_pcm ($C1) sorts out the
+; audio path. Nothing but the jsl lives in $C0: this bank is down to its last
+; hundred-odd bytes (see snes/utils/bankcheck.py).
+  jsr snd_fx_confirm
+  jsl @select_pcm
   bra select_item_cont
 
 select_file:
@@ -3395,8 +3409,10 @@ filesel_request_filelist:
   lda #TYPE_NES
   sta @MCU_PARAM+13       ; .nes (core NES): o firmware mk2 nunca devolve esse
                           ; tipo (determine_filetype gated), pedir e' inocuo la'
+  lda #TYPE_PCM
+  sta @MCU_PARAM+14       ; .pcm (trilha MSU-1) -> tocador de PCM do menu
   lda #$00
-  sta @MCU_PARAM+14
+  sta @MCU_PARAM+15       ; terminador; menu_cmd_readdir le 16 slots a partir de +8
   sta @SNES_CMD
   lda #CMD_READDIR
   sta @MCU_CMD
@@ -3734,6 +3750,8 @@ fnl_sf_loop:
   cmp #TYPE_ROM
   beq fnl_sf_check
   cmp #TYPE_SPC
+  beq fnl_sf_check
+  cmp #TYPE_PCM
   beq fnl_sf_check
   cmp #TYPE_NES
   beq fnl_sf_check
