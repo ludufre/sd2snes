@@ -30,7 +30,10 @@
 #define GI_IMG_VRAM1     $6000     ; 8bpp image tiles, window 1 ($6000-$7FFF = tile #768..1023)
 #define GI_BG1_TMAP      $5800
 #define GI_BG2_TMAP      $5000
-#define GI_TMAP_BUF      $7E2000   ; WINDOW_STACK_BASE scratch (remapped band tilemap)
+; GI_TMAP_BUF (remapped band tilemap scratch, 1 KB) is defined in memmap.i65 -- it lives in
+; the free $7E8000 block, NOT on WINDOW_STACK_BASE: this screen is reachable from the MENU
+; (Menu > Recents/Favorites) with three windows pushed, and overwriting the stack made every
+; later pop_window restore garbage.
 #define GI_BAND_ROWS     16        ; image band height in tile rows (rows 0..15)
 #define GI_BAND_TMAP_B   $0400     ; 32*16*2 bytes
 #define GI_BODY_ROW0     16        ; first body (text) row

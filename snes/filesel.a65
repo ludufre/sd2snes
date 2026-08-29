@@ -2321,6 +2321,21 @@ gi_repaint_browser:
   plp
   rts
 
+; listsel_after_nack: the MCU refused a launch started from the Recents/Favorites list
+; (missing chip BIOS / unsupported chip). game_handshake_error already showed the popup,
+; but on its way there gi_dc_restore rebuilt the menu graphics from scratch -- the tile
+; buffers are blank, so the browser has to be repainted before the caller redraws its
+; list over it (exactly the game-info B-return path above). bgm_update first: with the
+; menu music on, the launch ran the ARAM wipe, whose warm reset left BGM_STATE=0 and the
+; S-SMP silent -- and bgm_update is otherwise only reached from fileselloop, so the music
+; would stay dead for as long as the user kept navigating inside the menu. Callers reach
+; this with DP=0 (select_last/favorite_file force it at entry), which gi_repaint_browser
+; requires. Tail-calls into it, so P is the caller's on return.
+listsel_after_nack:
+  jsr bgm_update
+  jsr disable_screen_update
+  jmp gi_repaint_browser
+
 select_last_file:
   php
   phd                        ; show_menu's FUNC dispatch (rtl) leaves DP at its AllocStack
@@ -2454,8 +2469,14 @@ slfp_load:
                                    ; whose restore traffic rewrites MCU_PARAM -- manhost
                                    ; backs it up, but this re-arm survives any future path
   lda #CMD_LOADLAST
-  jsr game_handshake               ; boots on success; on failure returns -> exit to browser
-  jmp select_last_file_out
+  jsr game_handshake               ; boots on success; on refusal returns here
+  lda @LOAD_NACK                   ; refused? -> back to the list instead of falling out to
+  beq +                            ; the main menu (the popup is already gone)
+  jsr listsel_after_nack
+  stz listsel_backup               ; the MCU wrote Recents BEFORE the pre-check, so the game
+                                   ; it just refused is now entry 0 of the republished list
+  jmp select_last_redraw
++ jmp select_last_file_out
 ; Context-menu entry point: "Game info" was picked in the recents context menu, which only
 ; carries that row when ShowGameInfo == 2. Same teardown as the A path above -- the recents
 ; window is still up (the context menu popped only its own) and the selection bar is an
@@ -2631,8 +2652,12 @@ sffp_load:
   lda listsel_backup               ; boot index re-armed locally -- see slfp_load
   sta @MCU_PARAM
   lda #CMD_LOADFAVORITE
-  jsr game_handshake               ; boots on success; on failure returns -> exit to browser
-  jmp select_favorite_file_out
+  jsr game_handshake               ; boots on success; on refusal returns here
+  lda @LOAD_NACK                   ; refused? -> back to the list (see slfp_load). Favorites
+  beq +                            ; are not reordered by the launch, so the index stands
+  jsr listsel_after_nack
+  jmp select_favorite_redraw
++ jmp select_favorite_file_out
 ; Context-menu entry point -- mirror of select_last_file_play_ctx; see the note there.
 select_favorite_file_play_ctx:
   sep #$20 : .as

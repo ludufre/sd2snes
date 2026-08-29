@@ -44,7 +44,21 @@ GAME_MAIN:
   jsr apu_ram_init
   jsr waitblank
   jsr snes_init
+; fork: setup_gfx ends with `window_stack_head = $ffff` -- right at a COLD boot, wrong
+; here.  A warm reset is something the live menu asks for (the SPC player, the music
+; on/off switch, and the ARAM wipe that runs on every launch with the music playing),
+; and the WRAM restore above has just brought the real head back; orphaning the stack
+; makes every later pop_window a no-op, so the windows under the caller are never put
+; back: the menu comes back drawn straight over the browser list, with no frame (the
+; reported bug).  The backups themselves live at WINDOW_STACK_BASE ($7E2000) and survive
+; -- setup_gfx only zeroes $7E8000+ -- so carrying the head across is all it takes.
+; Same fix, same reason as gi_dc_restore (gameinfo.a65).
+  ldx window_stack_head
+  phx
   jsr setup_gfx
+  rep #$10 : .xl
+  plx
+  stx window_stack_head
   jsr store_wram_routines
   jsr colortest
   jsr video_init

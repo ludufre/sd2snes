@@ -577,6 +577,15 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
   /* load aborted (missing chip BIOS etc.): clear the file error state -- or the LED
      blinks -- and NACK, so game_handshake_error shows the message. */
   file_res = FR_OK;
+  /* Republish Recents.  The write above happens BEFORE the pre-check, so a refused game
+     has already been moved to the top of lastgame.cfg while the SNES-side mirror still
+     holds the old order -- and the menu resolves a cover, a game-info query or a retry by
+     INDEX into the list the MCU reads.  Left stale, the row the user sees and the entry
+     the MCU acts on are different games (the refused .nes shows up as the title below it,
+     its cover and its info screen).  Only the dump: the entries themselves are fine, so
+     there is nothing to validity-check. */
+  STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
+  status_load_to_menu();
   snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
   return 0;
 }

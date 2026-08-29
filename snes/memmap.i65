@@ -163,6 +163,15 @@
    the iris set is picked and in the NACK error path. Free byte in the iris scratch block. */
 #define GH_SDD_SAVE                 $7E8409
 
+/* Game-info (ficha) band tilemap scratch, 1024 bytes ($7E8800..$7E8BFF), in the same free
+   iris block. It USED to sit on WINDOW_STACK_BASE ($7E2000) and quietly ate the first KB of
+   the window stack: harmless from the browser (empty stack) but destructive from the MENU
+   (Menu > Recents/Favorites keeps mainmenu + show_menu + the FUNC greyout pushed), where the
+   later pop_window calls replayed the ficha's blank char ($03D8) as tilemap -- the "browser
+   turns into rows of garbage on leaving the menu" bug. Keep it clear of IRIS_* / GH_SDD_SAVE
+   (which end at $7E840A) and below BG2_TILE_BUF. */
+#define GI_TMAP_BUF                 $7E8800
+
 /* (the iris-frame sampler that used to live here is gone -- see LOAD_NACK) */
 
 #define BG2_TILE_BUF                $7EA000
