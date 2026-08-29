@@ -517,6 +517,20 @@ mt_off          .word 0    ; byte offset of the finding being drawn, inside MT_F
 mt_mode         .byt 0     ; MT_MODE_* for the run being started. Held here rather than on
                            ;   the stack across mt_run's banner-and-fade preamble, which is
                            ;   a long stretch of calls to keep a balanced push alive over.
+mt_top          .byt 0     ; first finding drawn in the list viewport. Up/Down move it; the
+                           ;   firmware can report more faults than the nine rows fit.
+; Scrollbar working set, mirroring listsel_scrollbar's lsb_* in filesel.a65.  Separate
+; variables and not those: mt_result_check pops this screen up OVER the live browser, so
+; borrowing the browser's own viewport state would leave its bar describing our list.
+mts_n           .word 0    ; N = findings in the block
+mts_h           .word 0    ; H = visible rows (MT_VIS_FIND)
+mts_topw        .word 0    ; 16-bit copy of mt_top
+mts_thumb       .word 0    ; thumb height in cells (1..H)
+mts_max         .word 0    ; max scroll = N - H
+mts_pos         .word 0    ; thumb top cell
+mts_end         .word 0    ; thumb end cell (exclusive)
+mts_col         .byt 0     ; screen column the bar is drawn in
+mts_i           .byt 0     ; cell being drawn (0..H-1)
 
 ;----------PCM player screen (snes/pcmplay.a65) ----------
 ; The line-composition engine itself (mt_linebuf / mt_col / mt_row and the mt_blank /

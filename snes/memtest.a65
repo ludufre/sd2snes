@@ -53,6 +53,12 @@
 #define MT_ROW_PROMPT2  13
 #define MT_ROWS         14
 #define MT_VIS_FIND_1   10      /* == MT_VIS_FIND + 1, for the "more than fits" compare */
+#define MT_MAX_FIND_1   13      /* == MT_MAX_FIND + 1; snescom takes immediates literally */
+#define MT_BAR_COL      41      /* == 2 + (MT_COLS - 1): the last content column, which is
+                                   where the scrollbar goes.  Same place listsel_scrollbar
+                                   puts the browser's (window_x + window_w - 2), reached
+                                   from sysinfo_win_x so this screen never has to read the
+                                   window_* bytes pop_window is counting rows with. */
 /* Frames the "testing, please wait" banner stays up before the screen fades out. The
    console is then dark for the ~6-10s the test takes (~30s for the full one), so this is
    the only chance the user gets to read WHY it went dark -- long enough for that, short
@@ -209,6 +215,7 @@ mt_screen:
   jsl @ui_call_wopen
   stz print_pal
 
+  stz mt_top                  ; always open at the head of the list
   jsr mt_draw
 mt_loop:
   lda isr_done
@@ -226,9 +233,31 @@ mt_loop:
   bra mt_loop
 mt_loop_a:
   lda pad_a
-  beq mt_loop
+  beq mt_loop_dn
   lda #MT_MODE_WIRING
   jsr mt_run
+  bra mt_loop
+  ; Up/Down scroll the findings viewport.  Both self-gate on mt_maxtop, so on a screen
+  ; whose list fits (every healthy board, and every refusal) they do nothing at all and
+  ; the prompt has no reason to mention them -- the scrollbar appears exactly when they
+  ; start working.
+mt_loop_dn:
+  lda pad_down
+  beq mt_loop_up
+  jsr mt_maxtop               ; A = the largest first-visible index
+  cmp mt_top
+  beq mt_loop                 ; already at the bottom
+  bcc mt_loop
+  inc mt_top
+  jsr mt_draw
+  bra mt_loop
+mt_loop_up:
+  lda pad_up
+  beq mt_loop
+  lda mt_top
+  beq mt_loop                 ; already at the top
+  dec mt_top
+  jsr mt_draw
   bra mt_loop
 
 mt_screen_out:
@@ -300,6 +329,7 @@ mt_run_wait:
   ; cold-boots, and the reloaded browser reports the result through mt_result_check.
   ; Repaint BEFORE lifting the blank, so the refusal is what fades back in -- not the
   ; "testing, please wait" banner the user would read as a test that is still running.
+  stz mt_top                  ; a fresh verdict is read from the top
   jsr mt_draw
   jsr mt_wait_frame
   jsr mt_wait_frame
@@ -510,7 +540,10 @@ mt_dr_status:
   sta mt_nvis                 ; NOT mt_tmp: mt_put_chip/mt_put_kind clobber that one
                               ; inside the loop below
   rep #$20 : .al
-  lda #$0000
+  lda mt_top
+  and #$00ff
+  asl                         ; * MT_FIND_SIZE (4): the viewport starts at mt_top, not at
+  asl                         ;   the head of the list
   sta mt_off                  ; likewise NOT a register: mt_blank and mt_flush both use X
   sep #$20 : .as
 mt_dr_floop:
@@ -561,6 +594,13 @@ mt_dr_nomore:
   ldx #!text_mtl_prompt2
   jsr mt_put_str
   jsr mt_flush
+
+  ; LAST, and that ordering is the whole reason the bar is safe: it writes one column
+  ; that the finding lines above are also allowed to reach, so it has to win.  It cannot
+  ; actually collide -- a finding line is "U501: " plus a fragment capped at 32 columns,
+  ; so 38 of the 40 -- but drawing it after the rows makes that a margin rather than a
+  ; constraint on the translations.
+  jsr mt_scrollbar
   plp
   .as : .xl
   rts
@@ -616,8 +656,190 @@ mt_vi_none:
 
 
 ; ----------------------------------------------------------------------
-;  mt_more_needed -- carry CLEAR when findings were left off the screen, either because
-;  more were reported than fit or because the FIRMWARE itself ran out of room.
+;  mt_maxtop -- largest mt_top the list allows (A, 8-bit).  0 when the whole list fits,
+;  which is what self-gates both the Up/Down handlers and the scrollbar.
+; ----------------------------------------------------------------------
+mt_maxtop:
+  jsr mt_magic_ok
+  bcs mt_mx_none
+  lda @MEMTEST_BLK+MT_STATE
+  cmp #MT_ST_DONE
+  beq mt_mx_have
+  cmp #MT_ST_SEEN
+  bne mt_mx_none
+mt_mx_have:
+  lda @MEMTEST_BLK+MT_NFIND
+  ; Clamp to what the block can actually hold before deriving a scroll range from it: a
+  ; firmware that reports more findings than MT_MAX_FIND would otherwise let mt_top walk
+  ; mt_off straight past the array and into PCMPLAY_BLK.  The screen shows what is there.
+  cmp #MT_MAX_FIND_1
+  bcc mt_mx_ok
+  lda #MT_MAX_FIND
+mt_mx_ok:
+  cmp #MT_VIS_FIND_1
+  bcc mt_mx_none              ; nfind <= MT_VIS_FIND: nothing to scroll
+  sec
+  sbc #MT_VIS_FIND
+  rts
+mt_mx_none:
+  lda #$00
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_scrollbar -- the viewport indicator down the findings rows, in the same shape (and
+;  with the same glyphs 16/17 and palette) as listsel_scrollbar in filesel.a65.  Written
+;  here rather than called over there because that one draws from window_y + 1, and this
+;  screen's list starts nine rows further down; and because a $C0 trampoline is not what
+;  the couple of dozen bytes left in that bank should be spent on.
+;
+;  Self-gating: draws nothing at all when the list fits.
+;  Entry/exit .as/.xl, DB=$7E, DP=0.
+; ----------------------------------------------------------------------
+mt_scrollbar:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr mt_maxtop
+  beq mt_sb_out               ; whole list on screen -> no bar
+  rep #$20 : .al
+  and #$00ff
+  sta mts_max                 ; maxscroll, > 0 past the gate above
+  clc
+  adc #MT_VIS_FIND
+  sta mts_n                   ; N = maxscroll + H, so the clamp in mt_maxtop is not redone
+  lda #MT_VIS_FIND
+  sta mts_h
+  lda mt_top
+  and #$00ff
+  sta mts_topw
+  ; thumb = (H*H) / N, at least one cell
+  lda mts_h
+  tay
+  lda #$0000
+mt_sb_sq:
+  cpy #$0000
+  beq mt_sb_sqd
+  clc
+  adc mts_h
+  dey
+  bra mt_sb_sq
+mt_sb_sqd:
+  ldx #$0000
+mt_sb_tdiv:
+  cmp mts_n
+  bcc mt_sb_tdone
+  sbc mts_n                   ; carry set by the cmp above (A >= N)
+  inx
+  bra mt_sb_tdiv
+mt_sb_tdone:
+  cpx #$0001
+  bcs mt_sb_thok
+  ldx #$0001
+mt_sb_thok:
+  stx mts_thumb
+  ; pos = top * (H - thumb) / maxscroll, floor
+  lda mts_h
+  sec
+  sbc mts_thumb
+  tay
+  lda #$0000
+mt_sb_mul:
+  cpy #$0000
+  beq mt_sb_muld
+  clc
+  adc mts_topw
+  dey
+  bra mt_sb_mul
+mt_sb_muld:
+  ldx #$0000
+mt_sb_pdiv:
+  cmp mts_max
+  bcc mt_sb_pdone
+  sbc mts_max
+  inx
+  bra mt_sb_pdiv
+mt_sb_pdone:
+  ; Endpoint-exact top, same rule as listsel_scrollbar: an interior position that floors
+  ; to cell 0 is bumped to cell 1, so the thumb sits at the very top only at top == 0.
+  cpx #$0000
+  bne mt_sb_posok
+  lda mts_topw
+  beq mt_sb_posok
+  lda mts_h
+  sec
+  sbc mts_thumb
+  cmp #$0002
+  bcc mt_sb_posok             ; no interior cell to bump into
+  ldx #$0001
+mt_sb_posok:
+  stx mts_pos
+  txa
+  clc
+  adc mts_thumb
+  sta mts_end                 ; exclusive
+  ; --- draw the H cells ---
+  sep #$20 : .as
+  lda @sysinfo_win_x
+  clc
+  adc #MT_BAR_COL
+  sta mts_col
+  stz mt_linebuf+1            ; NUL after the glyph; the bar runs after every mt_flush,
+                              ;   so borrowing the line buffer for two bytes is free
+  stz mts_i
+mt_sb_row:
+  ; 8-bit compares against the low bytes of mts_pos/mts_end: both are < H <= MT_VIS_FIND,
+  ; so their high bytes are always zero.
+  lda mts_i
+  cmp mts_pos
+  bcc mt_sb_track
+  cmp mts_end
+  bcs mt_sb_track
+  lda #17                     ; thumb
+  bra mt_sb_glyph
+mt_sb_track:
+  lda #16                     ; track
+mt_sb_glyph:
+  sta mt_linebuf
+  lda mts_col
+  sta print_x
+  lda @sysinfo_win_y
+  clc
+  adc #$02
+  clc
+  adc #MT_ROW_FIRST
+  clc
+  adc mts_i
+  sta print_y
+  lda #$03                    ; palette 3 = the window border's, as draw_window uses
+  sta print_pal
+  lda #$02
+  sta print_count
+  rep #$20 : .al
+  lda #!mt_linebuf
+  sta print_src
+  sep #$20 : .as
+  lda #$7e
+  sta print_bank
+  jsl @gi_call_hiprint
+  inc mts_i
+  lda mts_i
+  cmp #MT_VIS_FIND
+  bcc mt_sb_row
+  stz print_pal               ; hand the shared print state back the way mt_flush leaves it
+mt_sb_out:
+  plp
+  .as : .xl
+  rts
+
+
+; ----------------------------------------------------------------------
+;  mt_more_needed -- carry CLEAR when faults exist that this screen can NEVER show.
+;
+;  That now means one thing only: MT_F_TRUNC, i.e. the firmware itself ran out of room at
+;  MT_MAX_FIND and stopped recording.  A list merely longer than the nine rows is no
+;  longer "not shown" -- it scrolls, and the bar says so.  Keeping the old test here would
+;  print "(more faults not shown)" under a list the user can simply scroll through.
 ; ----------------------------------------------------------------------
 mt_more_needed:
   jsr mt_magic_ok
@@ -625,14 +847,11 @@ mt_more_needed:
   lda @MEMTEST_BLK+MT_FLAGS
   and #MT_F_TRUNC
   bne mt_mn_yes
-  lda @MEMTEST_BLK+MT_NFIND
-  cmp #MT_VIS_FIND_1
-  bcc mt_mn_no
-mt_mn_yes:
-  clc
-  rts
 mt_mn_no:
   sec
+  rts
+mt_mn_yes:
+  clc
   rts
 
 
