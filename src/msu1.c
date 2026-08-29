@@ -634,8 +634,10 @@ static menusfx_slot_t *menusfx_slot_for(const char *filename) {
 }
 
 /* Drop the preload cache: the PSRAM slots may be clobbered while a game runs, so
-   re-preload on the next blip after returning to the menu. */
-static void menusfx_forget_all(void) {
+   re-preload on the next blip after returning to the menu.  Public because anything that
+   writes over 0xCC0000..0xCFFFFF has to say so -- the cache lives in .bss and survives a
+   menu reload, so a stale "ready" slot plays whatever now sits there (memtest.c). */
+void menu_sfx_forget(void) {
   int i;
   for(i = 0; i < MENU_SFX_SLOTS; i++) { menusfx_slots[i].name = 0; menusfx_slots[i].ready = 0; }
 }
@@ -653,7 +655,7 @@ void menu_sfx_stop(void) {
 void menu_sfx_shutdown(void) {
   menu_sfx_stop();
   menusfx_close();        /* release the FMV-music handle */
-  menusfx_forget_all();   /* PSRAM slots may be clobbered by the game -> re-preload later */
+  menu_sfx_forget();      /* PSRAM slots may be clobbered by the game -> re-preload later */
   if(current_features & FEAT_MSU1)
     fpga_set_features(current_features & ~FEAT_MSU1);
 }

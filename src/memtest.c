@@ -37,6 +37,7 @@
 #include "memmap.h"
 #include "memory.h"
 #include "memtest.h"
+#include "msu1.h"
 #include "timer.h"
 
 /* Scratch word used to load the FPGA's internal data register WITHOUT writing the test
@@ -437,6 +438,14 @@ static void mt_cells(mt_cell_t *cc) {
   /* Back to RAM0 for the cleanup above -- mt_cell_verify left the window on RAM1. */
   fpga_select_mem(0);
   sram_memset(MT_STATE_PAGE_ADDR, MT_STATE_PAGE_SIZE, 0);
+
+  /* The nav-SFX PCM bodies live at SRAM_MENU_SFX_ADDR (0xCC0000..0xCFFFFF), so the sweep
+     just overwrote all four with the address pattern -- and the slot table that says they
+     are loaded is MCU .bss, which a menu reload does not touch.  Without this the next
+     blip streams the pattern into the DAC at 44.1 kHz: a loud tone, not a click, and it
+     stays that way until the console is power-cycled.  Same shape as the state-page
+     clobber above: reload rebuilds the MENU IMAGE, nothing else. */
+  menu_sfx_forget();
 
   writeled(0);
   cc->info |= MEMTEST_CELL_RAN;

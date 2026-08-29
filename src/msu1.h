@@ -51,6 +51,7 @@ void menu_sfx_stop(void);                 /* pause + close (keeps FEAT_MSU1 for 
 void menu_sfx_shutdown(void);             /* stop + drop FEAT_MSU1 (game load / console reset) */
 int  menu_sfx_active(void);               /* nonzero while an effect is playing */
 void menu_sfx_silence(void);              /* drain the DAC ring after a SNES reset (see msu1.c) */
+void menu_sfx_forget(void);               /* drop the PSRAM preload cache (its slots were overwritten) */
 
 /* Looping background music via the same DAC (FMV info-screen audio): like menu_sfx but
    no one-shot deadline -- loops the whole clip from sample 0 until menu_music_stop. Shares
