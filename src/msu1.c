@@ -682,6 +682,10 @@ void menu_sfx_play(const char *filename) {
                   (unsigned long)s->base, (unsigned long)s->bytelen);
 }
 
+void menu_sfx_silence(void) {
+  fpga_sfx_play(SRAM_MENU_SFX_ADDR, 0);
+}
+
 void menu_sfx_pump(void) {
   uint16_t now;
   if(!menusfx_active) return;

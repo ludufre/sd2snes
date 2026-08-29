@@ -364,6 +364,7 @@ int main(void) {
           /* process RESET request from SNES */
           printf("RESET requested by SNES\n");
           snes_reset_pulse();
+          menu_sfx_silence();
           cmd=0; /* stay in menu loop */
           break;
 /*        case SNES_CMD_SET_ALLOW_PAIR:
