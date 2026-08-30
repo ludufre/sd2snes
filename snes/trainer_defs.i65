@@ -1,0 +1,182 @@
+// trainer_defs.i65 -- layout, i18n indices, scratch map and the scan macros for the
+// in-game RAM TRAINER tab.  SPLIT from trainer.i65 (which carries the code) for the same
+// reason manviewer_defs.i65 is split from manviewer.i65: cpp is textual, and igmenu.a65
+// references tr_bar_row from ig_bar_sync -- hundreds of lines BEFORE the code include --
+// so the defines have to be in scope early or that reference silently becomes an
+// undefined label at link time.
+//
+// trainer.i65 -- in-game RAM TRAINER tab (bank $C8, included by igmenu.a65).
+//
+// Search the console's own WRAM ($7E0000-$7FFFFF) while the in-game menu holds the game
+// frozen, narrow the candidates down over several visits, then write or freeze the value
+// that was found.  Only the 65816 can do the reading: the cartridge never sees $7E/$7F,
+// which is exactly why the savestate handler captures WRAM with CPU loads too (see the
+// "ground-truth capture" block in snes/savestate.a65).
+//
+// STORAGE -- PSRAM banks $FA-$FC (TRAINER_* in snes/memmap.i65, lockstep with src/memmap.h).
+// The snapshot is BANK-IDENTITY with WRAM ($7E->$FB, $7F->$FC), so a comparison is
+// `lda @$7E0000,x` / `cmp @$FB0000,x` with no address arithmetic at all.  It is reachable
+// because the hook holds snescmd_unlock, which maps $C0-$FF identity AND writable
+// (IS_PATCH, verilog/sd2snes_*/address.v).  Nothing clears it automatically, so the session
+// is gated by TR_MAGIC, which the MCU zeroes on every game load (src/trainer.c).
+//
+// The search is strictly READ-ONLY with respect to the game: only SET VALUE and FREEZE
+// ever write to WRAM.
+//
+// snescom preprocessing: // comments only, never `;` inside an included file.
+
+// ---- geometry -------------------------------------------------------------------------
+// ig_frame_geom[TRAINER] = x 13, y 4, w 38, h 18 -> rows 4..21, interior columns 14..49.
+// Field labels sit at col 16 and their values at col 34: that is what caps them at 16 / 14
+// encoded columns in utils/gen_igmenu_lang.py.
+#define TR_INT_COL      14
+#define TR_INT_W        36
+#define TR_LBL_COL      16
+#define TR_VAL_COL      34
+#define TR_VAL_HEX_COL  35         // the value field reads "$76  (118)": the sigil marks the
+#define TR_VAL_DEC_COL  41         //   hex, the parens the decimal.  Two bare numbers side by
+                                   //   side were unreadable -- nothing said which base was which.
+#define TR_ROW_TITLE    5
+#define TR_ROW_HINT     20
+#define TR_RES_ROW0     7          // result browser: first listed row
+#define TR_RES_ROWS     12         // ... and how many fit above the hint
+#define TR_MAXROWS      12         // selectable rows on the busiest screen (the browser)
+
+// Above this many candidates the browser refuses to list and asks for another filter.
+// Walking the bitmap to row N is cheap; a list nobody can read is not a feature.
+#define TR_BROWSE_MAX   1000
+
+// Up/Down auto-repeat.  Without it a nibble takes up to fifteen separate presses, which is
+// the difference between a usable editor and a chore; the cadence is the one the shared
+// cheat list already uses (OVL_REP_INIT / OVL_REP_RATE in cheatlist.i65).
+#define TR_REP_INIT     16
+#define TR_REP_RATE     3
+
+// ---- i18n indices: lockstep with TRAINER_LABELS in utils/gen_igmenu_lang.py -------------
+#define IGM_TR_TITLE        0
+#define IGM_TR_SEARCHTYPE   1
+#define IGM_TR_DATATYPE     2
+#define IGM_TR_VALUE        3
+#define IGM_TR_CANDIDATES   4
+#define IGM_TR_COMPARE      5
+#define IGM_TR_EXACT        6
+#define IGM_TR_UNKNOWN      7
+#define IGM_TR_8BIT         8
+#define IGM_TR_16BIT        9
+#define IGM_TR_EQ           10     // IGM_TR_EQ + (mode - TR_MODE_EQ) spans the whole
+#define IGM_TR_NEWSEARCH    18     //   compare list, in TR_MODE_* order
+#define IGM_TR_FILTER       19
+#define IGM_TR_RESULTS      20
+#define IGM_TR_RESET        21
+#define IGM_TR_ADDRESS      22
+#define IGM_TR_CURRENT      23
+#define IGM_TR_SETVALUE     24
+#define IGM_TR_FREEZE       25
+#define IGM_TR_UNFREEZE     26
+#define IGM_TR_ADDCHEAT     27
+#define IGM_TR_FROZEN       28
+#define IGM_TR_SEARCHING    29
+#define IGM_TR_NORESULTS    30
+#define IGM_TR_TOOMANY      31
+#define IGM_TR_DROPPED_SS   32
+#define IGM_TR_DROPPED_RST  33
+#define IGM_TR_NOFREEZE     34
+#define IGM_TR_HINT_SETUP   35
+#define IGM_TR_HINT_EDIT    36
+#define IGM_TR_HINT_LIST    37
+#define IGM_TR_MASTER_OFF   38
+
+// ---- scratch (PSRAM $FA4040.., i.e. inside the trainer's OWN bank) ----------------------
+// Deliberately not in the $F4 shell scratch: $F48000-$F4FFFF doubles as the SA-1/GSU
+// BW-RAM savestate scratch, and this bank does not.  The hot variables have a second,
+// bank-$FA absolute spelling used while DBR=$FA in the scan loops, because ROR and AND
+// have no long addressing mode -- the same trick cheatlist.i65 uses for OVL_RB.
+#define tr_bar_row      $FA4040    // u16 absolute tile row for the selection BAR (0 = none)
+#define tr_sel          $FA4042    // u16 selected row index, 0..tr_nrows-1
+#define tr_nrows        $FA4044    // u16 selectable rows on the current screen
+#define tr_tmp          $FA4046    // u16 scratch
+#define tr_lang         $FA4048    // u16 clamped CFG.language
+#define tr_needle       $FA404A    // u16 value being matched
+#define tr_mask         $FA404C    // u8  bitmap byte under construction
+#define tr_editing      $FA404E    // u16 1 = the value editor owns the D-pad
+#define tr_rep          $FA4050    // u16 auto-repeat countdown for Up/Down
+#define tr_walk_off     $FA4052    // u16 result-walk cursor: WRAM offset, low word
+#define tr_walk_bank    $FA4054    // u16 result-walk cursor: 0 = $7E, 1 = $7F
+#define tr_walk_idx     $FA4056    // u16 result-walk cursor: results passed so far
+#define tr_cnt_lo       $FA405A    // u16 popcount accumulator, low word
+#define tr_cnt_hi       $FA405C    // u16 popcount accumulator, high word
+#define tr_dec_lo       $FA405E    // u16 decimal-conversion working value, low
+#define tr_dec_hi       $FA4060    // u16 ... high
+#define tr_scr          $FA4062    // u16 general per-draw scratch (label index, flags)
+#define tr_hexn         $FA4064    // u16 hex digits to emit (2 or 4)
+#define tr_col          $FA4066    // u16 column scratch
+#define tr_off_lo       $FA4068    // u16 selected offset, low word
+#define tr_off_bank     $FA406A    // u16 selected offset, bank (0 = $7E, 1 = $7F)
+#define tr_slot         $FA406C    // u16 freeze slot matching the selection ($ffff = none)
+#define tr_notice       $FA406E    // u16 pending drop-notice string index ($ffff = none)
+#define tr_rowmap       $FA4070    // u8[TR_MAXROWS] tile row of each selectable row
+#define tr_cur          $FA407C    // u16 staged current value for the generic filter step
+#define tr_prev         $FA407E    // u16 staged previous (snapshot) value
+#define tr_inv          $FA4080    // u8  $FF when the mode's natural carry means "keep"
+#define tr_needle_p1    $FA4082    // u16 TR_VALUE + 1, so "greater than" is one CMP
+#define tr_kind         $FA4084    // u16 kind of the row tr_addrow is about to record
+#define tr_rowkind      $FA4086    // u8[TR_MAXROWS] what each selectable row DOES
+#define tr_digits       $FA4092    // u16 hex digits the editor is showing (2 or 4)
+
+// Row kinds.  Rows come and go between screens (the Value field disappears for a relative
+// compare, for instance), so both A and Left/Right dispatch on what a row IS rather than on
+// its index -- an index-based switch silently means something different the moment a row is
+// hidden.
+#define TR_K_NEW        1
+#define TR_K_FILTER     2
+#define TR_K_RESULTS    3
+#define TR_K_RESET      4
+#define TR_K_SET        5
+#define TR_K_FREEZE     6
+#define TR_K_ADD        7
+#define TR_K_VALUE      8
+#define TR_K_TYPE       9
+#define TR_K_WIDTH      10
+#define TR_K_CMP        11
+#define TR_K_RESULT     12
+
+// bank-$FA absolute aliases -- valid ONLY while DBR = $FA
+#define tr_a_needle     $404A
+#define tr_a_mask       $404C
+#define tr_a_cnt_lo     $405A
+#define tr_a_cnt_hi     $405C
+#define tr_a_cur        $407C
+#define tr_a_prev       $407E
+#define tr_a_inv        $4080
+#define tr_a_needle_p1  $4082
+
+// One candidate byte, branchless.  `eor` makes the difference, `cmp #$01` turns "difference
+// is non-zero" into the carry, and `ror` shifts that carry into the mask -- so the mask ends
+// up INVERTED (bit set = mismatch) and the caller finishes with `eor #$ff`.  Branchless is
+// what keeps a 131072-byte pass near one second: 19 cycles per byte, no pipeline stalls on
+// a data-dependent branch.  LSB-first order falls out of ROR, matching "bit n = offset n".
+// (Object-like, one per bank, because a FUNCTION-like macro may not contain a `#` that is
+// not a parameter -- cpp reads it as the stringify operator and rejects the `cmp #$01`.)
+#define TR_BIT8_LO lda @$7e0000, x : eor tr_a_needle : cmp #$01 : ror tr_a_mask : inx
+#define TR_BIT8_HI lda @$7f0000, x : eor tr_a_needle : cmp #$01 : ror tr_a_mask : inx
+#define TR_BIT8X8_LO TR_BIT8_LO : TR_BIT8_LO : TR_BIT8_LO : TR_BIT8_LO : TR_BIT8_LO : TR_BIT8_LO : TR_BIT8_LO : TR_BIT8_LO
+#define TR_BIT8X8_HI TR_BIT8_HI : TR_BIT8_HI : TR_BIT8_HI : TR_BIT8_HI : TR_BIT8_HI : TR_BIT8_HI : TR_BIT8_HI : TR_BIT8_HI
+
+// ---- generic filter step ------------------------------------------------------------
+// Every comparison mode beyond "exact 8-bit" (which keeps the branchless fast path above)
+// goes through one shared per-byte step: stage the current and previous values, let
+// tr_test/tr_test16 set the carry, and ROR that into the mask exactly as the fast path
+// does.  The dispatch costs ~15 cycles a byte, which is what buys ONE loop per (bank,width)
+// instead of one per (bank, width, mode) -- 4 loops instead of 32, and only the first pass
+// after an unknown search ever walks all 131072 candidates.
+// The carry convention is the fast path's: SET = drop.  Modes whose natural test yields
+// "keep" flip it through tr_a_inv, which the caller sets once from TR_MODE.
+#define TR_STEP_LO8  lda @$7e0000, x : sta tr_a_cur : lda @$fb0000, x : sta tr_a_prev : jsr tr_test : ror tr_a_mask : inx
+#define TR_STEP_HI8  lda @$7f0000, x : sta tr_a_cur : lda @$fc0000, x : sta tr_a_prev : jsr tr_test : ror tr_a_mask : inx
+#define TR_STEP_LO16 rep #$20 : lda @$7e0000, x : sta tr_a_cur : lda @$fb0000, x : sta tr_a_prev : sep #$20 : jsr tr_test16 : ror tr_a_mask : inx
+#define TR_STEP_HI16 rep #$20 : lda @$7f0000, x : sta tr_a_cur : lda @$fc0000, x : sta tr_a_prev : sep #$20 : jsr tr_test16 : ror tr_a_mask : inx
+#define TR_STEPX8_LO  TR_STEP_LO8 : TR_STEP_LO8 : TR_STEP_LO8 : TR_STEP_LO8 : TR_STEP_LO8 : TR_STEP_LO8 : TR_STEP_LO8 : TR_STEP_LO8
+#define TR_STEPX8_HI  TR_STEP_HI8 : TR_STEP_HI8 : TR_STEP_HI8 : TR_STEP_HI8 : TR_STEP_HI8 : TR_STEP_HI8 : TR_STEP_HI8 : TR_STEP_HI8
+#define TR_STEPX8_LO16 TR_STEP_LO16 : TR_STEP_LO16 : TR_STEP_LO16 : TR_STEP_LO16 : TR_STEP_LO16 : TR_STEP_LO16 : TR_STEP_LO16 : TR_STEP_LO16
+#define TR_STEPX8_HI16 TR_STEP_HI16 : TR_STEP_HI16 : TR_STEP_HI16 : TR_STEP_HI16 : TR_STEP_HI16 : TR_STEP_HI16 : TR_STEP_HI16 : TR_STEP_HI16
+

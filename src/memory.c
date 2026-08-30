@@ -49,6 +49,7 @@ memory.c: RAM operations
 #include "cli.h"
 #include "cheat.h"
 #include "igmenu.h"
+#include "trainer.h"
 #include "manual.h"
 #include "rtc.h"
 #include "savestate.h"
@@ -1542,6 +1543,7 @@ void init(uint8_t *filename) {
      Bounded + fail-safe: a missing/bad bin just leaves IGMENU_GATE 0 (single-tab). */
   if (filename != (uint8_t *)MENU_FILENAME) {
     igmenu_stage();
+    trainer_stage();   /* drop any RAM-trainer session so it cannot leak into this ROM */
     /* Stage the SAVES-tab status block for the in-game menu (game load only). */
     saveinfo_stage(filename);
     /* Stage the in-game MANUAL-tab meta (<rom>.man header/index -> MANUAL_META $FF0760).

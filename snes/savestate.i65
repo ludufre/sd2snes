@@ -62,8 +62,9 @@
 // anything at/above $FE1014 gets clobbered by it (learned the hard way).
 #define CS_SA1_LOAD   $FE1013
 
-#define SS_CODE       $FC0000 ; should be unused
-#define SS_DATA       $FC2000 ; should be unused
+// SS_CODE/SS_DATA ($FC0000/$FC2000) retired: they were never referenced by any
+// .a65 (the twin SS_CODE_ADDR in src/savestate.h had already been commented out)
+// and bank $FC now holds the trainer's WRAM snapshot (TRAINER_SNAP_HI).
 #define SS_RETURN     $002C04
 
 #define MCU_CMD       $002A00

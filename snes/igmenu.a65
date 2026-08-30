@@ -37,6 +37,9 @@ igmenu_header:
 
 #include "cheatlist.i65"           ; shared cheat-list layout defines + render/input routines
                                    ; (OWN copy in $C8; SEPARATE link -> no symbol collision)
+#include "trainer_defs.i65"        ; TRAINER tab layout/scratch/macros. Must be in scope
+                                   ; EARLY: ig_bar_sync reads tr_bar_row long before the
+                                   ; code include at the bottom of this file.
 #include "igmenu_lang.i65"         ; GENERATED: HELP tab i18n string tables + IGM_HELP_NLINES/
                                    ; IGM_LANG_COUNT (bank $C8 data, jumped over -- included
                                    ; BEFORE help_enter so its #defines are in scope)
@@ -296,13 +299,14 @@ igmenu_header:
                                    ;   BAR marks the guide-list cursor now (see ig_bar_sync)
 #define GD_TITLE_COL    18         ; guide title column
 
-#define IGMENU_TABS     4          ; AJUDA (tab 4) removed from the BAR by request -- its
-                                   ;   code/tables stay (5 entries) for a future options screen
+#define IGMENU_TABS     5          ; TRAINER (tab 4) took the visible slot AJUDA gave up;
+                                   ;   HELP is now tab 5, still off the bar (6 table entries)
 #define TABBAR_ROW      1          ; tab bar tile row (over the $C0 "CHEATS" title)
 #define TABBAR_COL0     2          ; first tab's base logical column (tabs at 2/14/26/38/50)
-#define IGM_TAB_FIELD   13         ; label field width (4 tabs x 15 = 60 cols)
-                                   ;   guarded in gen_igmenu_lang.py (TAB_LABEL_MAX)
-#define TABBAR_SLOT     15         ; sep(1) + field(13) + sep(1); bases 2/17/32/47
+#define IGM_TAB_FIELD   10         ; label field width (5 tabs x 12 = 60 cols). Safe by
+                                   ;   construction: gen_igmenu_lang.py has ALWAYS capped tab
+                                   ;   labels at 10 (TAB_LABEL_MAX), so no translation moves
+#define TABBAR_SLOT     12         ; sep(1) + field(10) + sep(1); bases 2/14/26/38/50
 ; Footer is PER FOCUS LEVEL x tab (igmenu_draw_footer reads igmenu_flags bit1): at the tab-bar
 ; level a universal tab-nav line; at the content level a per-tab line (Cheats advertises X /
 ; ON-OFF, the others a generic SELECT / BACK). All three live in ig_footer_str, concatenated in
@@ -575,6 +579,15 @@ ig_not_viewer:
 	bit #$8000                              ; B -> back to the tab bar (re-grey), NOT close
 	sep #$20 : .as
 	beq ig_content_disp
+	rep #$30 : .al : .xl
+	lda @active_tab : and #$00ff
+	cmp #$0004
+	bne ig_b_leave
+	jsr trainer_back                        ; TRAINER has screens of its own (results ->
+	bcc ig_b_leave                          ;   detail): offer it B first, and only drop
+	jmp ig_loop_tail                        ;   focus when it declines (carry clear)
+ig_b_leave:
+	sep #$20 : .as
 	jsr ig_focus_leave
 	jmp ig_loop_tail
 ig_content_disp:
@@ -716,7 +729,7 @@ ifl_footer:
 	plp
 	rts
 
-; ---- tab_focus_tbl[1..4]: STATES/SAVES/GUIDES/HELP just take content focus (their input handler
+; ---- tab_focus_tbl[1..5]: STATES/SAVES/GUIDES/TRAINER/HELP just take content focus (their input handler
 ;      becomes live); no grey visual. (GUIDES: manual_input then handles A -> enter the viewer.) ----
 ig_focus_setbit1:
 	php
@@ -2636,11 +2649,12 @@ itb_tinted:
 	jsr ovl_row_clear
 	ldy #$0000                                ; Y = tab index 0..4
 ig_tb_loop:
-	; base col = TABBAR_COL0 + tab*TABBAR_SLOT(15 = 1 + 13 + 1)
+	; base col = TABBAR_COL0 + tab*TABBAR_SLOT(12 = 1 + 10 + 1)
 	tya
 	sta @ovl_rowoff                           ; tab (held for the whole iteration)
-	asl : asl : asl : asl                     ; *16
-	sec : sbc @ovl_rowoff                     ; *15 (= TABBAR_SLOT)
+	asl                                       ; *2
+	clc : adc @ovl_rowoff                     ; *3
+	asl : asl                                 ; *12 (= TABBAR_SLOT)
 	clc : adc #TABBAR_COL0
 	sta @ovl_idx                              ; base col
 	; --- source offset = igm_tab_tbl[(tab*IGM_LANG_STRIDE + lang)*2] ---
@@ -2692,7 +2706,7 @@ it_copy_d:
 	sep #$20 : .as
 	lda #26 : sta OVL_RB, x                      ; window_wv border (left)
 	rep #$20 : .al
-	lda @ovl_idx : clc : adc #(IGM_TAB_FIELD+1) : tax   ; X = base+14 (16-bit A -> clean tax)
+	lda @ovl_idx : clc : adc #(IGM_TAB_FIELD+1) : tax   ; X = base+11 (16-bit A -> clean tax)
 	sep #$20 : .as
 	lda #27 : sta OVL_RB, x                       ; window_ev border (right)
 	rep #$30 : .al : .xl
@@ -2710,30 +2724,32 @@ itb_lbl_ok:
 	jsr ovl_flush_abs
 	; --- recolor the active tab's WHOLE slot (base .. base+11 = cap + label field + cap) to the
 	;     frame cyan: with every tab capsuled, colour is the ONLY active marker. OVL_RB still holds
-	;     the flushed bar row; DBR=$F4. base col = TABBAR_COL0 + active_tab*TABBAR_SLOT(12). ---
+	;     the flushed bar row; DBR=$F4. base col = TABBAR_COL0 + active_tab*TABBAR_SLOT. ---
 	lda @igm_tab_tint : cmp #$2c00
 	bne itb_no_hl                             ; greyed bar = uniform, no active highlight
 	lda @active_tab : and #$00ff
 	sta @ovl_cur                              ; tab-bar scratch, dead after the loop
-	asl : asl : asl : asl                     ; *16
-	sec : sbc @ovl_cur                        ; *15 (= TABBAR_SLOT)
+	asl                                       ; *2
+	clc : adc @ovl_cur                        ; *3
+	asl : asl                                 ; *12 (= TABBAR_SLOT)
 	clc : adc #TABBAR_COL0                    ; base col
 	sta @ig_rc_col
-	clc : adc #TABBAR_SLOT                    ; base + slot (exclusive end -> cols base..base+14)
+	clc : adc #TABBAR_SLOT                    ; base + slot (exclusive end -> cols base..base+11)
 	sta @ig_rc_end
 	lda #TABBAR_ROW : sta @ig_rc_row
 	lda #$2c00 : sta @ig_rc_pal
 	jsr ig_recolor
 itb_no_hl:
 	; --- row 1's separators in the frame amber, ALL of them (the active-slot recolor above
-	;     already made its own pair amber; repainting all 8 is idempotent). Single-cell VRAM
+	;     already made its own pair amber; repainting all 10 is idempotent). Single-cell VRAM
 	;     writes, row 1: even col -> BG2 entry, odd -> BG1, entry index = 32 + col>>1. ---
 	lda #$0000 : sta @ovl_rowoff              ; tab counter
 igt_sep_l:
 	lda @ovl_rowoff
 	sta @ovl_cur
-	asl : asl : asl : asl                     ; *16
-	sec : sbc @ovl_cur                        ; *15 (= TABBAR_SLOT)
+	asl                                       ; *2
+	clc : adc @ovl_cur                        ; *3
+	asl : asl                                 ; *12 (= TABBAR_SLOT)
 	clc : adc #TABBAR_COL0
 	sta @ovl_cur                              ; current col = base (left separator)
 	lda #$0034 : ora @igm_tab_tint            ; WV = (26<<1) | tint
@@ -2744,21 +2760,22 @@ igt_sep_l:
 	lda @ovl_rowoff : inc : sta @ovl_rowoff
 	cmp #IGMENU_TABS
 	bcc igt_sep_l
-	; --- rows 0 and 2: the boxes' TOP and BOTTOM borders, the four tabs JOINED edge to edge
+	; --- rows 0 and 2: the boxes' TOP and BOTTOM borders, the five tabs JOINED edge to edge
 	;     (NE|NW and SE|SW corner pairs back to back at the shared edges) -- the dialogs'
 	;     border look wrapped around every tab. Flushed in the frame amber. ---
 	jsr ovl_row_clear
 	ldy #$0000                                ; tab index
 igt_top_l:
 	tya : sta @ovl_cur
-	asl : asl : asl : asl
-	sec : sbc @ovl_cur                        ; *15
+	asl
+	clc : adc @ovl_cur
+	asl : asl                                 ; *12 (= TABBAR_SLOT)
 	clc : adc #TABBAR_COL0
 	tax                                       ; X = base col (A clean 16-bit)
 	phy
 	sep #$20 : .as
 	lda #20 : sta OVL_RB, x                   ; NW corner
-	ldy #$000d                                ; 13 edge cells (the label field)
+	ldy #IGM_TAB_FIELD                        ; edge cells across the label field
 	lda #24                                   ; NH edge
 igt_top_e:
 	inx
@@ -2779,14 +2796,15 @@ igt_top_e:
 	ldy #$0000
 igt_bot_l:
 	tya : sta @ovl_cur
-	asl : asl : asl : asl
-	sec : sbc @ovl_cur
+	asl
+	clc : adc @ovl_cur
+	asl : asl                                 ; *12 (= TABBAR_SLOT)
 	clc : adc #TABBAR_COL0
 	tax
 	phy
 	sep #$20 : .as
 	lda #22 : sta OVL_RB, x                   ; SW corner
-	ldy #$000d
+	ldy #IGM_TAB_FIELD
 	lda #25                                   ; SH edge
 igt_bot_e:
 	inx
@@ -3141,7 +3159,20 @@ igb_content:
 	cmp #$0001 : beq igb_t_states
 	cmp #$0002 : beq igb_t_saves
 	cmp #$0003 : beq igb_t_guides
-	jmp igb_place                                ; tab 4 (HELP) is static -> keep the capsule
+	cmp #$0004 : beq igb_t_trainer
+	jmp igb_place                                ; tab 5 (HELP) is static -> keep the capsule
+
+igb_t_trainer:
+	; the TRAINER tab publishes its own selectable row (tr_bar_row, 0 = none: the RESULTS
+	; browser and the busy/message screens have no per-row cursor of their own).
+	lda @tr_bar_row
+	bne igb_tr_row
+	jmp igb_place
+igb_tr_row:
+	sta @ig_bar_row
+	lda @ig_win_x : and #$00ff : inc : sta @ig_bar_xl     ; the frame's interior span, the
+	lda @ig_win_w : and #$00ff : dec : dec : sta @ig_bar_wl ; same shape GUIDES uses
+	jmp igb_place
 
 igb_t_cheats:
 	lda @ovl_count
@@ -3238,8 +3269,9 @@ igb_target_tab:
 	lda #TABBAR_ROW : sta @ig_bar_row
 	lda @active_tab : and #$00ff
 	sta @ig_bar_tmp
-	asl : asl : asl : asl                        ; *16
-	sec : sbc @ig_bar_tmp                        ; *15 (= TABBAR_SLOT)
+	asl                                          ; *2
+	clc : adc @ig_bar_tmp                        ; *3
+	asl : asl                                    ; *12 (= TABBAR_SLOT)
 	clc : adc #TABBAR_COL0
 	inc                                          ; +1: INSIDE the box (skip the left border cell)
 	sta @ig_bar_xl
@@ -3680,6 +3712,12 @@ iot_done:
 	plp
 	rts
 
+; TRAINER tab (WRAM search / filter / freeze). Included LAST so every #define above is
+; in scope (cpp is textual: at the top of the file active_tab/IGM_TAB_FIELD/... do not
+; exist yet) and every igmenu helper it calls is already assembled -- no forward
+; references, no short-branch surprises. Its data tail is followed only by labels.
+#include "trainer.i65"
+
 ; ======================================================================
 ;  Data (bank $C8; never executed).
 ; ======================================================================
@@ -3688,25 +3726,29 @@ tab_enter_tbl:
 	.word states_enter                       ; 1 SAVESTATES (savestate slot selector)
 	.word saves_enter                        ; 2 SAVES  (battery save status)
 	.word manual_enter                       ; 3 GUIDES (image viewer prompt)
-	.word help_enter                         ; 4 HELP   (static i18n reference)
+	.word trainer_enter                      ; 4 TRAINER (WRAM search)
+	.word help_enter                         ; 5 HELP   (static i18n reference, off the bar)
 tab_input_tbl:
 	.word cheats_input                       ; 0 CHEATS
 	.word states_input                       ; 1 SAVESTATES
 	.word saves_input                        ; 2 SAVES: SRAM slot nav (noop when slots off)
 	.word manual_input                       ; 3 GUIDES: list nav / A -> enter the viewer
-	.word ig_noop                            ; 4 HELP  (static page, no input)
+	.word trainer_input                      ; 4 TRAINER
+	.word ig_noop                            ; 5 HELP  (static page, no input)
 tab_tick_tbl:
 	.word cheats_tick                        ; 0 CHEATS
 	.word ig_noop                            ; 1 SAVESTATES
 	.word ig_noop                            ; 2 SAVES
 	.word ig_noop                            ; 3 GUIDES
-	.word ig_noop                            ; 4 HELP
+	.word ig_noop                            ; 4 TRAINER
+	.word ig_noop                            ; 5 HELP
 tab_leave_tbl:
 	.word cheats_leave                       ; 0 CHEATS
 	.word ig_noop                            ; 1 SAVESTATES
 	.word ig_noop                            ; 2 SAVES
 	.word ig_noop                            ; 3 GUIDES
-	.word ig_noop                            ; 4 HELP
+	.word trainer_leave                      ; 4 TRAINER (persist the session block)
+	.word ig_noop                            ; 5 HELP
 
 ; ---- two-level focus: A at the tab bar drills into a tab's content. Tab 0 (Cheats) un-greys +
 ;      shows the cursor; tabs 1-4 just take content focus (their input becomes live). ----
@@ -3715,7 +3757,8 @@ tab_focus_tbl:
 	.word ig_focus_setbit1                   ; 1 SAVESTATES
 	.word ig_focus_setbit1                   ; 2 SAVES
 	.word ig_focus_setbit1                   ; 3 GUIDES (manual_input then A -> viewer)
-	.word ig_focus_setbit1                   ; 4 HELP
+	.word ig_focus_setbit1                   ; 4 TRAINER
+	.word ig_focus_setbit1                   ; 5 HELP
 
 ig_footer_str:
 	.byt "<>:TAB L/R:ENDS A:OPEN B:CLOSE"                    ; IG_FT_TAB_LEN = 30 (tab-bar level)
@@ -3728,7 +3771,7 @@ ig_master_str:
 	.byt "CHEATS: ON "
 	.byt "CHEATS: OFF"
 
-; Tab icons: 5 x 8x8 1bpp (bit set = ink). Order = tab order (Cheats/Savestates/Saves/Guides/Help).
+; Tab icons: 6 x 8x8 1bpp (bit set = ink). Order = tab order (Cheats/Savestates/Saves/Guides/Trainer/Help).
 ; Uploaded to OBJ tiles 0..4 by ig_obj_load; ig_obj_tabbar draws ONE sprite (tile = active_tab)
 ; at a fixed X/Y -- and ig_obj_load leaves OBJ off the main screen, so nothing renders today
 ; (8x8 icons read as garbled stripes; a good icon needs 16x16 custom art).
@@ -3737,7 +3780,8 @@ ig_icon_font:
 	.byt $00,$7e,$ff,$db,$db,$ff,$7e,$00   ; 1 SAVESTATES (camera)
 	.byt $18,$7e,$42,$5a,$5a,$5a,$7e,$00   ; 2 SAVES      (battery)
 	.byt $00,$66,$ff,$db,$db,$db,$ff,$00   ; 3 GUIDES     (book)
-	.byt $3c,$66,$06,$0c,$18,$00,$18,$00   ; 4 HELP       (question mark)
+	.byt $18,$3c,$7e,$18,$18,$7e,$3c,$18   ; 4 TRAINER    (magnifier/target)
+	.byt $3c,$66,$06,$0c,$18,$00,$18,$00   ; 5 HELP       (question mark)
 
 ; HELP tab layout: absolute tile row + start column per line. Language-independent;
 ; lockstep with HELP_LABELS order in gen_igmenu_lang.py (IGM_HELP_NLINES=13 entries).
@@ -3760,7 +3804,8 @@ ig_frame_geom:
 	.byt 13, 4, 38, 18     ; 2 SAVES: the slot selector (EnableSramSlots is retired/always-on;
 	                       ;   the wide status-only view is dead code) -- same box as SAVESTATES
 	.byt 13, 4, 40, 18     ; 3 GUIDES: list r5-14 / prompt r6..19 (keys r18/19) -> cols 13..52
-	.byt  1, 3, 62, 22     ; 4 HELP (kept for the future options screen; the old full body)
+	.byt 13, 4, 38, 18     ; 4 TRAINER: title r6, fields r8+, actions, hint r20 -> cols 13..50
+	.byt  1, 3, 62, 22     ; 5 HELP (kept for the future options screen; the old full body)
 
 ig_thm_math_def:
 	.byt $01, $00, $2a                       ; 1 line : $2131 = $00, $2132 = $2a  (bar colour)

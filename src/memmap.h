@@ -163,6 +163,28 @@
 #define SRAM_MANUAL_GUIDES_ADDR      (0xFF9000L) /* in-game guides list, 260B ($FF9000..$FF9103) staged at game load by manual.c (free area above CHEAT_NAMES $FF8000-$FF8FFF, below scratchpad $FFFF00). Layout: +0 count (0..8), +1 selected (active guide; SNES writes it; default 0), +2..3 rsvd, then record[8] of 32B each at +4: +0 present (1=valid; the list is compacted so 0..count-1 are present), +1 nn (0=".man", 2..8=".0N.man"), +2 flags (raw .man header flags: bit0 = LEGACY quadrant zoom -- IGNORED, never produced any more; bit1 = scrollable zoom section present), +3 npages, +4 nblocks u16 LE, +6 zoom_pages u16 LE (= nblocks when bit1 is set, else 0; a zoom page IS a 1x block rendered at 2x), +8 title[24] font-encoded NUL-term (copied raw from the .man header). Read by the GUIDES tab. Lockstep with MANUAL_GUIDES in snes/memmap.i65. */
 #define IGMENU_PERSIST_MAGIC_ADDR    (0xF4819EL) /* in-game menu session gate = the SNES-side man_pos_magic (PSRAM bank $F4), which keeps the remembered manual reading position AND the last-open tab across overlay close/reopen. Cleared to 0 here on every game load (manual_stage_meta) so position/tab never LEAK across games -- PSRAM $F4 survives a short power-cycle, so relying on stale-PSRAM alone was not enough. Lockstep with man_pos_magic / MN_POS_MAGIC in snes/igmenu.a65. */
 
+/* ---- in-game RAM trainer (src/trainer.c, snes/trainer.i65) ---------------
+   PSRAM banks $FA-$FC, the only contiguous SNES-visible hole big enough for a
+   128 KiB WRAM snapshot plus a candidate bitmap. Why it is safe:
+     - no other region in this header or in snes/memmap.i65 lives in $FA-$FC;
+       the only tokens in the range were the dead SS_CODE/SS_DATA defines that
+       snes/savestate.i65 marked "should be unused" (retired with this block).
+     - the savestate image is $F00000..$F4FFFF and the FPGA mirrors are $F5-$F9,
+       so init()'s sram_memset(0xF70000, 0x30000, 0) ends EXACTLY at $FA0000.
+     - inside the in-game IS_PATCH window ($C0-$FF identity, held while the hook
+       owns snescmd_unlock) only $F905xx/$F907xx (and $F90720 on the SA-1 core)
+       are served by the FPGA; $FA-$FC is plain PSRAM on every core.
+     - RAM0 is 16 MB on BOTH boards (see MT_RAM0_SIZE in src/memtest.c), so this
+       does not fork Mk.II vs Mk.III.
+   Like $F4 it is NOT cleared at game load and survives a short power-cycle, so
+   the block is gated by its own magic, which trainer_stage() zeroes every load. */
+#define SRAM_TRAINER_BITMAP_ADDR     (0xFA0000L) /* candidate bitmap: 131072 bits = 16 KiB, bit n = "WRAM offset n is still a candidate" (byte n>>3, bit n&7, LSB = lowest offset). */
+#define TRAINER_BITMAP_BYTES         (16384)
+#define SRAM_TRAINER_META_ADDR       (0xFA4000L) /* trainer_blk_t (src/trainer.h): magic "TRNR" + search state + the freeze slot table. 64 B in a bank with 47 KiB to spare. */
+#define TRAINER_META_BYTES           (64)
+#define SRAM_TRAINER_SNAP_LO_ADDR    (0xFB0000L) /* previous-value snapshot of WRAM $7E0000-$7EFFFF. Bank-identity with $7E so the scan is `lda @$7E0000,x` / `cmp @$FB0000,x` with no address arithmetic. */
+#define SRAM_TRAINER_SNAP_HI_ADDR    (0xFC0000L) /* previous-value snapshot of WRAM $7F0000-$7FFFFF (bank-identity with $7F). */
+
 #define SRAM_SKIN_ADDR               (0xF00000L)
 
 #define SRAM_SPC_DATA_ADDR           (0xFD0000L)
@@ -297,6 +319,17 @@ _Static_assert(SRAM_SYSINFO_ADDR + 128 <= SRAM_LASTGAME_ADDR,
                "the sysinfo block (128 B) must stay below LAST_GAME");
 _Static_assert(SRAM_WIFI_ADDR + 437 <= SRAM_LASTGAME_FILE_ADDR,
                "the WiFi block (437 B) must stay below LAST_GAME_FILE");
+_Static_assert(SRAM_TRAINER_BITMAP_ADDR + TRAINER_BITMAP_BYTES <= SRAM_TRAINER_META_ADDR,
+               "the trainer bitmap (16 KiB) must stay below the trainer meta block");
+_Static_assert(SRAM_TRAINER_META_ADDR + TRAINER_META_BYTES <= SRAM_TRAINER_SNAP_LO_ADDR,
+               "the trainer meta block must stay below the WRAM snapshot");
+_Static_assert(SRAM_TRAINER_SNAP_LO_ADDR + 0x10000L == SRAM_TRAINER_SNAP_HI_ADDR,
+               "the two trainer snapshot banks must be adjacent and bank-aligned");
+_Static_assert(SRAM_TRAINER_SNAP_HI_ADDR + 0x10000L <= SRAM_SPC_DATA_ADDR,
+               "the trainer snapshot must stay below the menu SPC data bank");
+_Static_assert(SRAM_TRAINER_BITMAP_ADDR >= 0xF70000L + 0x30000L,
+               "the trainer state must start at or above the end of init()'s mirror clear");
+
 /* address.v derives the Slot B window by ORing bit 19 into SAVERAM_ADDR: the two
    constants cannot drift apart without the FPGA and the MCU disagreeing. */
 _Static_assert(SUFAMI_SLOTB_SAVE_ADDR == (SRAM_SAVE_ADDR | 0x80000L),

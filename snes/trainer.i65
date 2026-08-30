@@ -1,0 +1,2569 @@
+// trainer.i65 -- in-game RAM TRAINER tab: the code.  Layout/scratch/macros live in
+// trainer_defs.i65, which igmenu.a65 includes early (see the note there).
+//
+// snescom preprocessing: // comments only, never `;` inside an included file.
+
+// ========================================================================================
+//  Small helpers
+// ========================================================================================
+
+// ---- clamp CFG.language into tr_lang (same shape as help_enter / saves_enter) ----
+tr_lang_get:
+	php
+	sep #$20 : .as
+	lda @CFG_LANGUAGE
+	cmp #IGM_LANG_COUNT
+	bcc trl_ok
+	lda #$00
+trl_ok:
+	rep #$30 : .al : .xl
+	and #$00ff
+	sta @tr_lang
+	plp
+	rts
+
+// ---- A(16) = string index -> copy the NUL-terminated $C8 string into OVL_RB at column Y.
+//      Y ends past the last character.  DBR must be $F4 (OVL_RB is written absolute). ----
+tr_copy:
+	php
+	rep #$30 : .al : .xl
+	asl : asl : asl                            // line*IGM_LANG_STRIDE (IGM_LANG_SHIFT asl)
+	clc : adc @tr_lang
+	asl                                        // *2 -> word index
+	tax
+	lda @igm_trainer_tbl, x                    // offset of the string within bank $C8
+	tax
+	sep #$20 : .as
+trc_l:
+	lda @$c80000, x
+	beq trc_done
+	sta OVL_RB, y
+	inx
+	iny
+	cpy #(TR_INT_COL+TR_INT_W)
+	bne trc_l
+trc_done:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- A(16) = string index -> A(16) = encoded length, capped at the interior width ----
+tr_strlen:
+	php
+	rep #$30 : .al : .xl
+	asl : asl : asl
+	clc : adc @tr_lang
+	asl
+	tax
+	lda @igm_trainer_tbl, x
+	tax
+	ldy #$0000
+	sep #$20 : .as
+trs_l:
+	lda @$c80000, x
+	beq trs_done
+	inx
+	iny
+	cpy #TR_INT_W
+	bne trs_l
+trs_done:
+	rep #$30 : .al : .xl
+	tya
+	plp
+	rts
+
+// ---- A(16) = string index, X = absolute tile row: clear the row, centre the string in the
+//      interior, flush it.  DBR = $F4. ----
+tr_draw_centered:
+	php
+	rep #$30 : .al : .xl
+	phx
+	pha
+	jsr ovl_row_clear
+	pla : pha
+	jsr tr_strlen
+	sta @tr_col
+	lda #TR_INT_W
+	sec : sbc @tr_col
+	lsr
+	clc : adc #TR_INT_COL
+	tay                                        // Y = start column (A clean 16-bit)
+	pla
+	jsr tr_copy
+	plx
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- blank one interior row (used to hide a field that does not apply).  X = row. ----
+tr_draw_blank:
+	php
+	rep #$30 : .al : .xl
+	phx
+	jsr ovl_row_clear
+	plx
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- label (tr_scr) at TR_LBL_COL + value string (A) at TR_VAL_COL, flushed to row X.
+//      DBR = $F4. ----
+tr_kv_row:
+	php
+	rep #$30 : .al : .xl
+	phx
+	pha
+	jsr ovl_row_clear
+	lda @tr_scr
+	ldy #TR_LBL_COL
+	jsr tr_copy
+	pla
+	ldy #TR_VAL_COL
+	jsr tr_copy
+	plx
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- A(16) low nibble -> hex glyph at OVL_RB,Y ; Y++.  DBR = $F4. ----
+tr_hex_emit:
+	and #$000f
+	tax
+	sep #$20 : .as
+	lda @tr_hexdig, x
+	sta OVL_RB, y
+	rep #$30 : .al : .xl
+	iny
+	rts
+
+// ---- A(16) = value, Y = column, tr_hexn = 2 or 4 -> hex digits into OVL_RB.  DBR = $F4.
+//      Explicit shifts, no hardware divider: $4202-$4206 belong to the frozen game and the
+//      overlay deliberately does not restore them (see snes/cheatoverlay.a65). ----
+tr_put_hex:
+	php
+	rep #$30 : .al : .xl
+	sta @tr_tmp
+	lda @tr_hexn
+	cmp #$0004
+	bne trh_two
+	lda @tr_tmp
+	lsr : lsr : lsr : lsr : lsr : lsr : lsr : lsr : lsr : lsr : lsr : lsr
+	jsr tr_hex_emit
+	lda @tr_tmp
+	lsr : lsr : lsr : lsr : lsr : lsr : lsr : lsr
+	jsr tr_hex_emit
+trh_two:
+	lda @tr_tmp
+	lsr : lsr : lsr : lsr
+	jsr tr_hex_emit
+	lda @tr_tmp
+	jsr tr_hex_emit
+	plp
+	rts
+
+// ---- tr_dec_lo/hi (u32) -> decimal into OVL_RB at column Y, no leading zeros, at least
+//      one digit.  Y advances.  Repeated subtraction of the power-of-ten table, same reason
+//      as tr_put_hex.  Bounded: six fixed powers, each inner loop runs at most nine times. ----
+tr_put_dec:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @tr_scr                                // bit0 = "a digit has been emitted"
+	ldx #$0000                                 // X = power index * 2
+trd_pow:
+	cpx #(5*2)
+	beq trd_units
+	lda #$0000
+	sta @tr_tmp                                // this power's digit
+trd_sub:
+	lda @tr_dec_hi
+	cmp @tr_pow10_hi, x
+	bcc trd_next
+	bne trd_do
+	lda @tr_dec_lo
+	cmp @tr_pow10_lo, x
+	bcc trd_next
+trd_do:
+	sec
+	lda @tr_dec_lo
+	sbc @tr_pow10_lo, x
+	sta @tr_dec_lo
+	lda @tr_dec_hi
+	sbc @tr_pow10_hi, x
+	sta @tr_dec_hi
+	lda @tr_tmp : inc : sta @tr_tmp
+	jmp trd_sub
+trd_next:
+	lda @tr_tmp
+	bne trd_emit
+	lda @tr_scr
+	beq trd_skip                               // still inside the leading-zero run
+trd_emit:
+	lda #$0001 : sta @tr_scr
+	lda @tr_tmp
+	clc : adc #$0030                           // '0'
+	sep #$20 : .as
+	sta OVL_RB, y
+	rep #$30 : .al : .xl
+	iny
+trd_skip:
+	inx : inx
+	jmp trd_pow
+trd_units:
+	lda @tr_dec_lo
+	clc : adc #$0030
+	sep #$20 : .as
+	sta OVL_RB, y
+	rep #$30 : .al : .xl
+	iny
+	plp
+	rts
+
+// ---- live WRAM value at tr_off_lo / tr_off_bank -> A(16) (high byte 0 when 8-bit) ----
+tr_read_wram:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_off_lo
+	tax
+	lda @tr_off_bank
+	bne trw_hi
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq trw_lo16
+	lda @$7e0000, x
+	rep #$30 : .al : .xl
+	and #$00ff
+	jmp trw_out
+trw_lo16:
+	rep #$30 : .al : .xl
+	lda @$7e0000, x
+	jmp trw_out
+trw_hi:
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq trw_hi16
+	lda @$7f0000, x
+	rep #$30 : .al : .xl
+	and #$00ff
+	jmp trw_out
+trw_hi16:
+	rep #$30 : .al : .xl
+	lda @$7f0000, x
+trw_out:
+	plp
+	rts
+
+// ========================================================================================
+//  Search engine.  All three passes run with the game already frozen and the shell owning
+//  the screen; none of them touches VRAM, so the "Searching..." line stays up throughout.
+// ========================================================================================
+
+// ---- initial exact search: every WRAM byte equal to TR_VALUE becomes a candidate. ----
+tr_scan_exact:
+	php
+	phb
+	rep #$30 : .al : .xl
+	lda @TR_VALUE
+	and #$00ff
+	sta @tr_needle
+	lda #$fafa : pha : plb : plb               // DBR = $FA (bitmap + hot scratch)
+	ldx #$0000                                 // WRAM offset inside the bank
+	ldy #$0000                                 // bitmap byte index
+	sep #$20 : .as
+trse_lo:
+	TR_BIT8X8_LO
+	lda tr_a_mask
+	eor #$ff                                   // the macro builds the inverse
+	sta $0000, y
+	iny
+	cpy #$2000
+	beq trse_lo_done
+	jmp trse_lo
+trse_lo_done:
+	// X wrapped back to $0000 after 65536 increments -- bank $7F starts there
+trse_hi:
+	TR_BIT8X8_HI
+	lda tr_a_mask
+	eor #$ff
+	sta $0000, y
+	iny
+	cpy #$4000
+	beq trse_hi_done
+	jmp trse_hi
+trse_hi_done:
+	rep #$30 : .al : .xl
+	plb
+	plp
+	rts
+
+// ---- exact filter: clear every candidate whose byte no longer equals TR_VALUE.
+//      An all-zero bitmap byte skips eight offsets outright, which is what makes each
+//      later pass far cheaper than the first. ----
+tr_filter_exact:
+	php
+	phb
+	rep #$30 : .al : .xl
+	lda @TR_VALUE
+	and #$00ff
+	sta @tr_needle
+	lda #$fafa : pha : plb : plb
+	ldx #$0000
+	ldy #$0000
+	sep #$20 : .as
+trfe_lo:
+	lda $0000, y
+	bne trfe_lo_test
+	jmp trfe_lo_skip
+trfe_lo_test:
+	TR_BIT8X8_LO
+	lda tr_a_mask
+	eor #$ff
+	and $0000, y
+	sta $0000, y
+	jmp trfe_lo_next
+trfe_lo_skip:
+	inx : inx : inx : inx : inx : inx : inx : inx
+trfe_lo_next:
+	iny
+	cpy #$2000
+	beq trfe_lo_done
+	jmp trfe_lo
+trfe_lo_done:
+trfe_hi:
+	lda $0000, y
+	bne trfe_hi_test
+	jmp trfe_hi_skip
+trfe_hi_test:
+	TR_BIT8X8_HI
+	lda tr_a_mask
+	eor #$ff
+	and $0000, y
+	sta $0000, y
+	jmp trfe_hi_next
+trfe_hi_skip:
+	inx : inx : inx : inx : inx : inx : inx : inx
+trfe_hi_next:
+	iny
+	cpy #$4000
+	beq trfe_hi_done
+	jmp trfe_hi
+trfe_hi_done:
+	rep #$30 : .al : .xl
+	plb
+	plp
+	rts
+
+// ---- copy the whole of WRAM into the snapshot banks.  Bank-identity ($7E->$FB, $7F->$FC)
+//      means this is two flat 16-bit copies with no address arithmetic; ~0.5 s for 128 KiB,
+//      the same cost the savestate handler pays for its own ground-truth WRAM capture. ----
+tr_snapshot:
+	php
+	rep #$30 : .al : .xl
+	ldx #$0000
+trsn_lo:
+	lda @$7e0000, x
+	sta @$fb0000, x
+	inx : inx
+	bne trsn_lo
+	ldx #$0000
+trsn_hi:
+	lda @$7f0000, x
+	sta @$fc0000, x
+	inx : inx
+	bne trsn_hi
+	sep #$20 : .as
+	lda #$01
+	sta @TR_HAVE_SNAP
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- unknown-value search: every position is a candidate and the snapshot becomes the
+//      baseline the relative filters compare against.  In 16-bit mode the LAST position has
+//      no room for a whole value, so its bit is cleared -- that is the only place the two
+//      widths differ here. ----
+tr_scan_unknown:
+	php
+	phb
+	rep #$30 : .al : .xl
+	lda #$fafa : pha : plb : plb
+	ldy #$0000
+	sep #$20 : .as
+	lda #$ff
+trsu_l:
+	sta $0000, y
+	iny
+	cpy #$4000
+	bne trsu_l
+	lda @TR_WIDTH
+	cmp #$02
+	bne trsu_done
+	lda $3fff                                  // clear bit 15 of the last byte: offset $1FFFF
+	and #$7f                                   //   cannot start a 16-bit value
+	sta $3fff
+trsu_done:
+	rep #$30 : .al : .xl
+	plb
+	jsr tr_snapshot
+	plp
+	rts
+
+// ---- per-candidate test for the generic filter.  In: tr_a_cur / tr_a_prev staged by the
+//      step macro.  Out: carry, XOR-ed at the end of the byte with tr_a_inv so every mode
+//      lands on the fast path's convention (SET = drop).  8-bit A on entry and exit. ----
+tr_test:
+	sep #$20 : .as                             // MANDATORY, not merely defensive: snescom carries
+	                                           //   the accumulator width forward in SOURCE order,
+	                                           //   so without this the CMPs below assemble as
+	                                           //   16-bit immediates (three bytes) while the
+	                                           //   caller runs 8-bit -- and the extra byte is
+	                                           //   then executed as an instruction.
+	lda @TR_MODE
+	cmp #TR_MODE_NE
+	beq trt_eqne
+	cmp #TR_MODE_EQ
+	beq trt_eqne
+	cmp #TR_MODE_GT
+	beq trt_gt
+	cmp #TR_MODE_LT
+	beq trt_lt
+	cmp #TR_MODE_CHANGED
+	beq trt_chg
+	cmp #TR_MODE_UNCHANGED
+	beq trt_chg
+	cmp #TR_MODE_INCREASED
+	beq trt_inc
+	// decreased: drop when cur >= prev
+	lda tr_a_cur
+	cmp tr_a_prev
+	rts
+trt_eqne:
+	lda tr_a_cur
+	eor tr_a_needle
+	cmp #$01                                   // carry = "differs"
+	rts
+trt_gt:
+	lda tr_a_cur
+	cmp tr_a_needle_p1                         // carry = cur >= needle+1 = cur > needle (keep)
+	rts
+trt_lt:
+	lda tr_a_cur
+	cmp tr_a_needle                            // carry = cur >= needle (drop)
+	rts
+trt_chg:
+	lda tr_a_cur
+	eor tr_a_prev
+	cmp #$01                                   // carry = "changed" (keep)
+	rts
+trt_inc:
+	lda tr_a_prev
+	cmp tr_a_cur                               // carry = prev >= cur = NOT increased (drop)
+	rts
+
+// ---- the same test on 16-bit little-endian values ----
+tr_test16:
+	sep #$20 : .as                             // same reason as tr_test
+	lda @TR_MODE
+	cmp #TR_MODE_NE
+	beq trt16_eqne
+	cmp #TR_MODE_EQ
+	beq trt16_eqne
+	cmp #TR_MODE_GT
+	beq trt16_gt
+	cmp #TR_MODE_LT
+	beq trt16_lt
+	cmp #TR_MODE_CHANGED
+	beq trt16_chg
+	cmp #TR_MODE_UNCHANGED
+	beq trt16_chg
+	cmp #TR_MODE_INCREASED
+	beq trt16_inc
+	rep #$20 : .al
+	lda tr_a_cur
+	cmp tr_a_prev
+	sep #$20 : .as
+	rts
+trt16_eqne:
+	rep #$20 : .al
+	lda tr_a_cur
+	eor tr_a_needle
+	cmp #$0001
+	sep #$20 : .as
+	rts
+trt16_gt:
+	rep #$20 : .al
+	lda tr_a_cur
+	cmp tr_a_needle_p1
+	sep #$20 : .as
+	rts
+trt16_lt:
+	rep #$20 : .al
+	lda tr_a_cur
+	cmp tr_a_needle
+	sep #$20 : .as
+	rts
+trt16_chg:
+	rep #$20 : .al
+	lda tr_a_cur
+	eor tr_a_prev
+	cmp #$0001
+	sep #$20 : .as
+	rts
+trt16_inc:
+	rep #$20 : .al
+	lda tr_a_prev
+	cmp tr_a_cur
+	sep #$20 : .as
+	rts
+
+// ---- stage the needle and needle+1 for this pass ----
+tr_set_needle:
+	php
+	rep #$30 : .al : .xl
+	lda @TR_VALUE
+	sta @tr_needle
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq trsnd_wide
+	rep #$30 : .al : .xl
+	lda @tr_needle : and #$00ff : sta @tr_needle
+trsnd_wide:
+	rep #$30 : .al : .xl
+	lda @tr_needle
+	inc
+	sta @tr_needle_p1                          // "greater than" is CMP against needle+1; the
+	                                           //   degenerate needle (max value) is caught by
+	                                           //   tr_degenerate before we ever get here
+	plp
+	rts
+
+// ---- "> max" and "< 0" have no possible match, and the CMP form used by trt_gt/trt_lt
+//      would wrap into keeping everything instead of nothing.  Carry SET = the filter is
+//      degenerate and the caller must simply empty the candidate set. ----
+tr_degenerate:
+	php
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda @TR_MODE
+	cmp #TR_MODE_GT
+	beq trdg_gt
+	cmp #TR_MODE_LT
+	beq trdg_lt
+trdg_no:
+	rep #$30 : .al : .xl
+	plp
+	clc
+	rts
+trdg_gt:
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq trdg_gt16
+	rep #$30 : .al : .xl
+	lda @TR_VALUE : and #$00ff
+	cmp #$00ff
+	beq trdg_yes
+	jmp trdg_no
+trdg_gt16:
+	rep #$30 : .al : .xl
+	lda @TR_VALUE
+	cmp #$ffff
+	beq trdg_yes
+	jmp trdg_no
+trdg_lt:
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq trdg_lt16
+	rep #$30 : .al : .xl
+	lda @TR_VALUE : and #$00ff
+	beq trdg_yes
+	jmp trdg_no
+trdg_lt16:
+	rep #$30 : .al : .xl
+	lda @TR_VALUE
+	beq trdg_yes
+	jmp trdg_no
+trdg_yes:
+	rep #$30 : .al : .xl
+	plp
+	sec
+	rts
+
+// ---- the generic filter: one loop per (bank, width), the mode resolved per byte by
+//      tr_test.  Skipping an all-zero mask byte still costs only eight INX, which is what
+//      makes every pass after the first cheap. ----
+tr_filter_generic:
+	php
+	phb
+	rep #$30 : .al : .xl
+	jsr tr_set_needle
+	// tr_inv = $FF for the modes whose natural carry means "keep".  Inline on purpose: it
+	// runs once per filter, and a subroutine here only adds a width/stack contract to get
+	// wrong.
+	sep #$20 : .as
+	lda #$00
+	sta @tr_inv
+	lda @TR_MODE
+	cmp #TR_MODE_NE
+	beq trfg_flip
+	cmp #TR_MODE_GT
+	beq trfg_flip
+	cmp #TR_MODE_CHANGED
+	bne trfg_inv_done
+trfg_flip:
+	lda #$ff
+	sta @tr_inv
+trfg_inv_done:
+	rep #$30 : .al : .xl
+
+	rep #$30 : .al : .xl                       // MUST be 16-bit here: `lda #$fafa : pha : plb :
+	lda #$fafa : pha : plb : plb               //   plb` is how the DBR is set, and an 8-bit
+	                                           //   immediate pushes one byte while two are
+	                                           //   popped -- wrong DBR AND an unbalanced stack
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq trfg_w16
+	rep #$30 : .al : .xl
+	ldx #$0000
+	ldy #$0000
+	sep #$20 : .as
+trfg8_lo:
+	lda $0000, y
+	bne trfg8_lo_test
+	inx : inx : inx : inx : inx : inx : inx : inx
+	jmp trfg8_lo_next
+trfg8_lo_test:
+	TR_STEPX8_LO
+	lda tr_a_mask
+	eor tr_a_inv
+	eor #$ff
+	and $0000, y
+	sta $0000, y
+trfg8_lo_next:
+	iny
+	cpy #$2000
+	beq trfg8_hi
+	jmp trfg8_lo
+trfg8_hi:
+	lda $0000, y
+	bne trfg8_hi_test
+	inx : inx : inx : inx : inx : inx : inx : inx
+	jmp trfg8_hi_next
+trfg8_hi_test:
+	TR_STEPX8_HI
+	lda tr_a_mask
+	eor tr_a_inv
+	eor #$ff
+	and $0000, y
+	sta $0000, y
+trfg8_hi_next:
+	iny
+	cpy #$4000
+	beq trfg_done
+	jmp trfg8_hi
+trfg_w16:
+	rep #$30 : .al : .xl
+	ldx #$0000
+	ldy #$0000
+	sep #$20 : .as
+trfg16_lo:
+	lda $0000, y
+	bne trfg16_lo_test
+	inx : inx : inx : inx : inx : inx : inx : inx
+	jmp trfg16_lo_next
+trfg16_lo_test:
+	TR_STEPX8_LO16
+	lda tr_a_mask
+	eor tr_a_inv
+	eor #$ff
+	and $0000, y
+	sta $0000, y
+trfg16_lo_next:
+	iny
+	cpy #$2000
+	beq trfg16_hi
+	jmp trfg16_lo
+trfg16_hi:
+	lda $0000, y
+	bne trfg16_hi_test
+	inx : inx : inx : inx : inx : inx : inx : inx
+	jmp trfg16_hi_next
+trfg16_hi_test:
+	TR_STEPX8_HI16
+	lda tr_a_mask
+	eor tr_a_inv
+	eor #$ff
+	and $0000, y
+	sta $0000, y
+trfg16_hi_next:
+	iny
+	cpy #$4000
+	beq trfg_done
+	jmp trfg16_hi
+trfg_done:
+	rep #$30 : .al : .xl
+	plb
+	plp
+	rts
+
+// ---- recount the candidates from the bitmap and publish TR_COUNT.  A separate pass on
+//      purpose: a running total would have to be kept correct across every filter path,
+//      and one popcount sweep of 16 KiB costs about a fifth of a second. ----
+tr_count:
+	php
+	phb
+	rep #$30 : .al : .xl
+	lda #$fafa : pha : plb : plb
+	lda #$0000
+	sta tr_a_cnt_lo
+	sta tr_a_cnt_hi
+	ldy #$0000
+trcn_l:
+	sep #$20 : .as
+	lda $0000, y
+	rep #$30 : .al : .xl
+	and #$00ff
+	tax
+	lda @tr_popcnt, x                          // 16-bit read: the next entry rides along
+	and #$00ff
+	clc : adc tr_a_cnt_lo
+	sta tr_a_cnt_lo
+	bcc trcn_nohi
+	lda tr_a_cnt_hi : inc : sta tr_a_cnt_hi
+trcn_nohi:
+	iny
+	cpy #$4000
+	bne trcn_l
+	lda tr_a_cnt_lo
+	sta @TR_COUNT
+	lda tr_a_cnt_hi
+	sta @TR_COUNT_HI
+	plb
+	plp
+	rts
+
+// ---- clear the whole bitmap (RESET SEARCH). ----
+tr_bitmap_clear:
+	php
+	phb
+	rep #$30 : .al : .xl
+	lda #$fafa : pha : plb : plb
+	ldy #$0000
+	sep #$20 : .as
+	lda #$00
+trbc_l:
+	sta $0000, y
+	iny
+	cpy #$4000
+	bne trbc_l
+	rep #$30 : .al : .xl
+	plb
+	plp
+	rts
+
+// ---- walk the bitmap to the Nth candidate (N in A, 0-based).  Returns the offset in
+//      tr_walk_off / tr_walk_bank, carry SET when found.  The cursor is cached, so paging
+//      forward continues from where the last call stopped instead of rescanning from 0. ----
+tr_nth_set:
+	php
+	rep #$30 : .al : .xl
+	sta @tr_scr                                // wanted index
+	cmp @tr_walk_idx
+	bcs trn_forward                            // wanted >= cached -> continue forward
+	lda #$0000                                 // otherwise restart the walk
+	sta @tr_walk_off
+	sta @tr_walk_bank
+	sta @tr_walk_idx
+trn_forward:
+	lda @tr_walk_bank
+	bne trn_hi_start
+trn_lo:
+	lda @tr_walk_off
+	tax
+trn_lo_l:
+	jsr tr_bit_test_lo
+	bcc trn_lo_next
+	lda @tr_walk_idx
+	cmp @tr_scr
+	bne trn_lo_hit_skip
+	txa
+	sta @tr_walk_off
+	lda #$0000 : sta @tr_walk_bank
+	plp
+	sec
+	rts
+trn_lo_hit_skip:
+	lda @tr_walk_idx : inc : sta @tr_walk_idx
+trn_lo_next:
+	inx
+	bne trn_lo_l
+	lda #$0001 : sta @tr_walk_bank
+	lda #$0000 : sta @tr_walk_off
+trn_hi_start:
+	lda @tr_walk_off
+	tax
+trn_hi_l:
+	jsr tr_bit_test_hi
+	bcc trn_hi_next
+	lda @tr_walk_idx
+	cmp @tr_scr
+	bne trn_hi_hit_skip
+	txa
+	sta @tr_walk_off
+	lda #$0001 : sta @tr_walk_bank
+	plp
+	sec
+	rts
+trn_hi_hit_skip:
+	lda @tr_walk_idx : inc : sta @tr_walk_idx
+trn_hi_next:
+	inx
+	bne trn_hi_l
+	plp
+	clc
+	rts
+
+// ---- carry = bitmap bit for offset X in bank $7E / $7F.  X preserved. ----
+tr_bit_test_lo:
+	phx
+	txa
+	lsr : lsr : lsr                            // byte index within the low half
+	tax
+	sep #$20 : .as
+	lda @TRAINER_BITMAP, x
+	sta @tr_mask
+	rep #$30 : .al : .xl
+	plx
+	jmp tr_bit_test_common
+tr_bit_test_hi:
+	phx
+	txa
+	lsr : lsr : lsr
+	clc : adc #$2000                           // bank $7F starts at bitmap byte $2000
+	tax
+	sep #$20 : .as
+	lda @TRAINER_BITMAP, x
+	sta @tr_mask
+	rep #$30 : .al : .xl
+	plx
+tr_bit_test_common:
+	txa
+	and #$0007
+	tay                                        // Y = bit number (A clean 16-bit)
+	sep #$20 : .as
+	lda @tr_mask
+tr_btc_l:
+	cpy #$0000
+	beq tr_btc_done
+	lsr
+	dey
+	jmp tr_btc_l
+tr_btc_done:
+	lsr                                        // bit 0 -> carry
+	rep #$30 : .al : .xl
+	rts
+
+// ---- data ------------------------------------------------------------------------------
+tr_hexdig:
+	.byt "0123456789ABCDEF"
+
+// Powers of ten, split into low/high word tables so the reader can index them without a
+// `label+2,x` addend (a form this tree deliberately does not use).  The units digit is
+// handled directly by tr_put_dec, so the table stops at 10.
+tr_pow10_lo:
+	.word $86a0, $2710, $03e8, $0064, $000a
+tr_pow10_hi:
+	.word $0001, $0000, $0000, $0000, $0000
+
+// Population count of every byte value.
+tr_popcnt:
+	.byt 0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4
+	.byt 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5
+	.byt 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5
+	.byt 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6
+	.byt 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5
+	.byt 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6
+	.byt 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6
+	.byt 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7
+	.byt 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5
+	.byt 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6
+	.byt 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6
+	.byt 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7
+	.byt 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6
+	.byt 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7
+	.byt 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7
+	.byt 4,5,5,6,5,6,6,7,5,6,6,7,6,7,7,8
+
+// ========================================================================================
+//  Session block
+// ========================================================================================
+// "TRNR" as the two words the 65816 actually loads.
+#define TR_MAGIC_W0     $5254                      // 'T','R'
+#define TR_MAGIC_W1     $524e                      // 'N','R'
+
+// ---- validate the session, or start a fresh one.  The freeze bookkeeping (TR_FZ_*) is
+//      deliberately NOT reset here: those are cheat records the MCU owns, they outlive a
+//      dropped search, and src/trainer.c is what clears them on a game load. ----
+tr_session_check:
+	php
+	rep #$30 : .al : .xl
+	lda #$ffff : sta @tr_notice
+	sep #$20 : .as
+	lda @TR_NOTICE                             // read OUTSIDE the magic guard: by the time a
+	beq trsc_no_notice                         //   drop is recorded the magic is already gone
+	cmp #$01
+	bne trsc_notice_rst
+	rep #$30 : .al : .xl
+	lda #IGM_TR_DROPPED_SS : sta @tr_notice
+	sep #$20 : .as
+	jmp trsc_notice_clr
+trsc_notice_rst:
+	rep #$30 : .al : .xl
+	lda #IGM_TR_DROPPED_RST : sta @tr_notice
+	sep #$20 : .as
+trsc_notice_clr:
+	lda #$00 : sta @TR_NOTICE
+trsc_no_notice:
+	rep #$30 : .al : .xl
+	lda @TR_MAGIC
+	cmp #TR_MAGIC_W0
+	bne trsc_init
+	lda @TR_MAGIC+2
+	cmp #TR_MAGIC_W1
+	bne trsc_init
+	sep #$20 : .as
+	lda @TR_VERSION
+	cmp #$01
+	bne trsc_init8
+	rep #$30 : .al : .xl
+	plp
+	rts
+trsc_init8:
+	rep #$30 : .al : .xl
+trsc_init:
+	sep #$20 : .as
+	lda #$01 : sta @TR_VERSION
+	lda #$00
+	sta @TR_ACTIVE
+	sta @TR_HAVE_SNAP
+	sta @TR_UI                                 // TR_UI_SETUP
+	sta @TR_UI_ROW
+	sta @TR_EDIT_DIGIT
+	lda #TR_MODE_EXACT : sta @TR_MODE
+	lda #$01 : sta @TR_WIDTH
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @TR_COUNT
+	sta @TR_COUNT_HI
+	sta @TR_VALUE
+	sta @TR_CURSOR
+	sta @TR_TOP
+	sta @TR_SEL_OFF
+	sta @TR_SEL_OFF+2
+	lda #TR_MAGIC_W0 : sta @TR_MAGIC
+	lda #TR_MAGIC_W1 : sta @TR_MAGIC+2
+	plp
+	rts
+
+// ---- append X (a tile row) to tr_rowmap and bump tr_nrows.  Clobbers A. ----
+tr_addrow:
+	php
+	rep #$30 : .al : .xl
+	pha
+	lda @tr_nrows
+	cmp #TR_MAXROWS
+	bcs tra_full
+	txa
+	sta @tr_tmp                                // the tile row
+	lda @tr_nrows
+	tax
+	lda @tr_tmp
+	sep #$20 : .as
+	sta @tr_rowmap, x                          // sta long,X exists; ldx/stx long do not
+	rep #$30 : .al : .xl
+	lda @tr_kind
+	sep #$20 : .as
+	sta @tr_rowkind, x
+	rep #$30 : .al : .xl
+	lda @tr_nrows : inc : sta @tr_nrows
+	lda @tr_tmp
+	tax                                        // restore X for the caller
+tra_full:
+	pla
+	plp
+	rts
+
+// ---- park the BAR on the selected row (0 = the screen has no cursor of its own) ----
+tr_bar_update:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_nrows
+	bne trbu_have
+	lda #$0000 : sta @tr_bar_row
+	plp
+	rts
+trbu_have:
+	dec
+	cmp @tr_sel
+	bcs trbu_selok
+	sta @tr_sel                                // clamp: the screen shrank under the cursor
+trbu_selok:
+	lda @tr_sel
+	tax
+	sep #$20 : .as
+	lda @tr_rowmap, x
+	rep #$30 : .al : .xl
+	and #$00ff
+	sta @tr_bar_row
+	plp
+	rts
+
+// ========================================================================================
+//  Screens.  Every draw runs in FORCED BLANK (trainer_enter / a state transition); the
+//  per-keypress updates go through tr_row_refresh, which flushes ONE row inside the vblank
+//  the input loop is already in.  A full body is ~10 rows -- far past the vblank budget,
+//  which is why a state change blanks and a value change does not.
+// ========================================================================================
+
+// ---- tr_hexn = the digit count the current data width needs (2 or 4) ----
+tr_hexn_set:
+	php
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda @TR_WIDTH
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #$0002
+	beq trhs_wide
+	lda #$0002
+	sta @tr_hexn
+	plp
+	rts
+trhs_wide:
+	lda #$0004
+	sta @tr_hexn
+	plp
+	rts
+
+// ---- label (tr_scr) + hex value (A) + decimal echo, flushed to row X.  DBR = $F4. ----
+tr_row_value:
+	php
+	rep #$30 : .al : .xl
+	phx
+	pha
+	jsr ovl_row_clear
+	lda @tr_scr
+	ldy #TR_LBL_COL
+	jsr tr_copy
+	sep #$20 : .as
+	lda #$24 : sta OVL_RB+TR_VAL_COL           // '$'
+	rep #$30 : .al : .xl
+	pla : pha
+	ldy #TR_VAL_HEX_COL
+	jsr tr_put_hex
+	pla
+	sta @tr_dec_lo
+	lda #$0000 : sta @tr_dec_hi
+	ldy #TR_VAL_DEC_COL
+	sep #$20 : .as
+	lda #$28 : sta OVL_RB, y                   // '('
+	rep #$30 : .al : .xl
+	iny
+	jsr tr_put_dec                             // leaves Y past the last digit
+	sep #$20 : .as
+	lda #$29 : sta OVL_RB, y                   // ')'
+	rep #$30 : .al : .xl
+	plx
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- label (tr_scr) + decimal tr_dec_lo/hi, flushed to row X.  DBR = $F4. ----
+tr_row_dec:
+	php
+	rep #$30 : .al : .xl
+	phx
+	jsr ovl_row_clear
+	lda @tr_scr
+	ldy #TR_LBL_COL
+	jsr tr_copy
+	ldy #TR_VAL_COL
+	jsr tr_put_dec
+	plx
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- the SETUP screen (no search running yet) ----
+#define TR_SU_ROW_TYPE   7
+#define TR_SU_ROW_WIDTH  8
+#define TR_SU_ROW_VALUE  10
+#define TR_SU_ROW_GO     12
+#define TR_SU_ROW_NOTICE 17
+
+tr_draw_setup:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_nrows
+	// search type: Exact or Unknown (Left/Right toggles)
+	lda #IGM_TR_SEARCHTYPE : sta @tr_scr
+	sep #$20 : .as
+	lda @TR_MODE
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_MODE_UNKNOWN
+	beq trds_unk
+	lda #IGM_TR_EXACT
+	jmp trds_type_draw
+trds_unk:
+	lda #IGM_TR_UNKNOWN
+trds_type_draw:
+	ldx #TR_SU_ROW_TYPE
+	jsr tr_kv_row
+	lda #TR_K_TYPE : sta @tr_kind
+	ldx #TR_SU_ROW_TYPE
+	jsr tr_addrow
+	// data type: 8-bit or 16-bit
+	lda #IGM_TR_DATATYPE : sta @tr_scr
+	sep #$20 : .as
+	lda @TR_WIDTH
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #$0002
+	beq trds_w16
+	lda #IGM_TR_8BIT
+	jmp trds_w_draw
+trds_w16:
+	lda #IGM_TR_16BIT
+trds_w_draw:
+	ldx #TR_SU_ROW_WIDTH
+	jsr tr_kv_row
+	lda #TR_K_WIDTH : sta @tr_kind
+	ldx #TR_SU_ROW_WIDTH
+	jsr tr_addrow
+	// value -- an unknown-value search has nothing to type in, so the row is not drawn
+	sep #$20 : .as
+	lda @TR_MODE
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_MODE_UNKNOWN
+	beq trds_novalue
+	jsr tr_hexn_set
+	lda #IGM_TR_VALUE : sta @tr_scr
+	lda @TR_VALUE
+	ldx #TR_SU_ROW_VALUE
+	jsr tr_row_value
+	lda #TR_K_VALUE : sta @tr_kind
+	ldx #TR_SU_ROW_VALUE
+	jsr tr_addrow
+trds_novalue:
+	// action
+	lda #IGM_TR_NEWSEARCH
+	ldx #TR_SU_ROW_GO
+	jsr tr_draw_centered
+	lda #TR_K_NEW : sta @tr_kind
+	ldx #TR_SU_ROW_GO
+	jsr tr_addrow
+	// why the previous session went away, shown once
+	lda @tr_notice
+	cmp #$ffff
+	beq trds_hint                              // tr_wipe_body already cleared the row
+	ldx #TR_SU_ROW_NOTICE
+	jsr tr_draw_centered
+trds_hint:
+	lda #IGM_TR_HINT_SETUP
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	plp
+	rts
+
+// ---- the ACTIVE screen (a search is running) ----
+#define TR_AC_ROW_WIDTH  7
+#define TR_AC_ROW_COUNT  8
+#define TR_AC_ROW_CMP    10
+#define TR_AC_ROW_VALUE  11
+#define TR_AC_ROW_FILTER 13
+#define TR_AC_ROW_RES    14
+#define TR_AC_ROW_RESET  15
+
+tr_draw_active:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_nrows
+	lda #IGM_TR_DATATYPE : sta @tr_scr
+	sep #$20 : .as
+	lda @TR_WIDTH
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #$0002
+	beq trda_w16
+	lda #IGM_TR_8BIT
+	jmp trda_w_draw
+trda_w16:
+	lda #IGM_TR_16BIT
+trda_w_draw:
+	ldx #TR_AC_ROW_WIDTH
+	jsr tr_kv_row
+	lda #IGM_TR_CANDIDATES : sta @tr_scr
+	lda @TR_COUNT    : sta @tr_dec_lo
+	lda @TR_COUNT_HI : sta @tr_dec_hi
+	ldx #TR_AC_ROW_COUNT
+	jsr tr_row_dec
+	// compare: IGM_TR_EQ + (mode - TR_MODE_EQ) walks the whole list in TR_MODE_* order
+	lda #IGM_TR_COMPARE : sta @tr_scr
+	sep #$20 : .as
+	lda @TR_MODE
+	rep #$30 : .al : .xl
+	and #$00ff
+	sec : sbc #TR_MODE_EQ
+	clc : adc #IGM_TR_EQ
+	ldx #TR_AC_ROW_CMP
+	jsr tr_kv_row
+	lda #TR_K_CMP : sta @tr_kind
+	ldx #TR_AC_ROW_CMP
+	jsr tr_addrow
+	// the relative compares take no operand, so their Value row is not drawn at all
+	jsr tr_mode_needs_value
+	bcc trda_novalue
+	jsr tr_hexn_set
+	lda #IGM_TR_VALUE : sta @tr_scr
+	lda @TR_VALUE
+	ldx #TR_AC_ROW_VALUE
+	jsr tr_row_value
+	lda #TR_K_VALUE : sta @tr_kind
+	ldx #TR_AC_ROW_VALUE
+	jsr tr_addrow
+trda_novalue:
+	lda #IGM_TR_FILTER
+	ldx #TR_AC_ROW_FILTER
+	jsr tr_draw_centered
+	lda #TR_K_FILTER : sta @tr_kind
+	ldx #TR_AC_ROW_FILTER
+	jsr tr_addrow
+	lda #IGM_TR_RESULTS
+	ldx #TR_AC_ROW_RES
+	jsr tr_draw_centered
+	lda #TR_K_RESULTS : sta @tr_kind
+	ldx #TR_AC_ROW_RES
+	jsr tr_addrow
+	lda #IGM_TR_RESET
+	ldx #TR_AC_ROW_RESET
+	jsr tr_draw_centered
+	lda #TR_K_RESET : sta @tr_kind
+	ldx #TR_AC_ROW_RESET
+	jsr tr_addrow
+	lda #IGM_TR_HINT_SETUP
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	plp
+	rts
+
+// ---- one result row: `7E1694  87` at the interior columns.  A = index into the result
+//      set, X = tile row. ----
+tr_draw_result_row:
+	php
+	rep #$30 : .al : .xl
+	phx
+	jsr tr_nth_set
+	bcs trdr_have
+	plx
+	jsr tr_draw_blank
+	plp
+	rts
+trdr_have:
+	lda @tr_walk_off  : sta @tr_off_lo
+	lda @tr_walk_bank : sta @tr_off_bank
+	jsr ovl_row_clear
+	// bank byte: $7E + walk_bank
+	lda @tr_off_bank
+	clc : adc #$007e
+	sta @tr_tmp
+	lda #$0002 : sta @tr_hexn
+	lda @tr_tmp
+	ldy #(TR_LBL_COL+2)
+	jsr tr_put_hex
+	lda #$0004 : sta @tr_hexn
+	lda @tr_off_lo
+	jsr tr_put_hex                             // Y already sits after the bank digits
+	// current value, two columns further right
+	jsr tr_read_wram
+	sta @tr_tmp
+	lda #$0002 : sta @tr_hexn
+	lda @tr_tmp
+	ldy #(TR_VAL_COL+2)
+	jsr tr_put_hex
+	plx
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- the RESULTS browser ----
+tr_draw_results:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_nrows
+	// nothing left?
+	lda @TR_COUNT
+	ora @TR_COUNT_HI
+	bne trdrs_some
+	lda #IGM_TR_NORESULTS
+	ldx #(TR_RES_ROW0+2)
+	jsr tr_draw_centered
+	jsr tr_clear_list_rows
+	jmp trdrs_hint
+trdrs_some:
+	// too many to browse?
+	lda @TR_COUNT_HI
+	bne trdrs_toomany
+	lda @TR_COUNT
+	cmp #(TR_BROWSE_MAX+1)
+	bcc trdrs_list
+trdrs_toomany:
+	lda #IGM_TR_TOOMANY
+	ldx #(TR_RES_ROW0+2)
+	jsr tr_draw_centered
+	jsr tr_clear_list_rows
+	jmp trdrs_hint
+trdrs_list:
+	// clamp TR_TOP so the cursor is on screen, then paint the page
+	jsr tr_clamp_view
+	lda #$0000 : sta @tr_scr                   // row within the page
+trdrs_l:
+	lda @tr_scr
+	clc : adc @TR_TOP
+	cmp @TR_COUNT
+	bcs trdrs_pad
+	lda @tr_scr
+	clc : adc #TR_RES_ROW0
+	tax
+	phx
+	lda @tr_scr
+	clc : adc @TR_TOP
+	plx
+	jsr tr_draw_result_row
+	lda #TR_K_RESULT : sta @tr_kind
+	lda @tr_scr
+	clc : adc #TR_RES_ROW0
+	tax
+	jsr tr_addrow
+	jmp trdrs_next
+trdrs_pad:
+	lda @tr_scr
+	clc : adc #TR_RES_ROW0
+	tax
+	jsr tr_draw_blank
+trdrs_next:
+	lda @tr_scr : inc : sta @tr_scr
+	cmp #TR_RES_ROWS
+	bne trdrs_l
+	// selection index within the page
+	lda @TR_CURSOR
+	sec : sbc @TR_TOP
+	sta @tr_sel
+trdrs_hint:
+	lda #IGM_TR_HINT_LIST
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	plp
+	rts
+
+tr_clear_list_rows:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_scr
+trclr_l:
+	lda @tr_scr
+	cmp #$0002
+	beq trclr_skip                             // the message row itself
+	clc : adc #TR_RES_ROW0
+	tax
+	jsr tr_draw_blank
+trclr_skip:
+	lda @tr_scr : inc : sta @tr_scr
+	cmp #TR_RES_ROWS
+	bne trclr_l
+	plp
+	rts
+
+// ---- keep TR_CURSOR inside [TR_TOP, TR_TOP+TR_RES_ROWS) and inside the result set ----
+tr_clamp_view:
+	php
+	rep #$30 : .al : .xl
+	lda @TR_COUNT
+	beq trcv_done
+	dec
+	cmp @TR_CURSOR
+	bcs trcv_curok
+	sta @TR_CURSOR
+trcv_curok:
+	lda @TR_CURSOR
+	cmp @TR_TOP
+	bcs trcv_notabove
+	sta @TR_TOP                                // scrolled above the page
+	jmp trcv_done
+trcv_notabove:
+	sec : sbc @TR_TOP
+	cmp #TR_RES_ROWS
+	bcc trcv_done
+	lda @TR_CURSOR
+	sec : sbc #(TR_RES_ROWS-1)
+	sta @TR_TOP
+trcv_done:
+	plp
+	rts
+
+// ---- the DETAIL screen for one address ----
+#define TR_DT_ROW_ADDR   7
+#define TR_DT_ROW_CUR    8
+#define TR_DT_ROW_FRZ    9
+#define TR_DT_ROW_VALUE  11
+#define TR_DT_ROW_SET    13
+#define TR_DT_ROW_FREEZE 14
+#define TR_DT_ROW_ADD    15
+
+tr_draw_detail:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_nrows
+	// ADDRESS
+	jsr ovl_row_clear
+	lda #IGM_TR_ADDRESS
+	ldy #TR_LBL_COL
+	jsr tr_copy
+	lda @tr_off_bank
+	clc : adc #$007e
+	sta @tr_tmp
+	lda #$0002 : sta @tr_hexn
+	lda @tr_tmp
+	ldy #TR_VAL_COL
+	jsr tr_put_hex
+	lda #$0004 : sta @tr_hexn
+	lda @tr_off_lo
+	jsr tr_put_hex
+	ldx #TR_DT_ROW_ADDR
+	jsr ovl_flush_abs
+	// CURRENT
+	jsr tr_read_wram
+	sta @tr_tmp
+	lda #IGM_TR_CURRENT : sta @tr_scr
+	jsr tr_hexn_set
+	lda @tr_tmp
+	ldx #TR_DT_ROW_CUR
+	jsr tr_row_value
+	// FROZEN marker
+	jsr tr_find_slot
+	lda @tr_slot
+	cmp #$ffff
+	beq trdd_nofrz
+	lda #IGM_TR_FROZEN
+	ldx #TR_DT_ROW_FRZ
+	jsr tr_draw_centered
+	// A freeze is an ordinary cheat record, so the master switch gates it (branch_wram =
+	// cheat_enable & wram_present, cheat.v). Silently doing nothing is the one outcome the
+	// user cannot diagnose, so say it out loud.
+	sep #$20 : .as
+	lda @CHEAT_MASTER
+	rep #$30 : .al : .xl
+	and #$00ff
+	bne trdd_nofrz
+	lda #IGM_TR_MASTER_OFF
+	ldx #(TR_DT_ROW_FRZ+1)
+	jsr tr_draw_centered
+trdd_nofrz:
+	jsr tr_hexn_set
+	lda #IGM_TR_VALUE : sta @tr_scr
+	lda @TR_VALUE
+	ldx #TR_DT_ROW_VALUE
+	jsr tr_row_value
+	lda #TR_K_VALUE : sta @tr_kind
+	ldx #TR_DT_ROW_VALUE
+	jsr tr_addrow
+	lda #IGM_TR_SETVALUE
+	ldx #TR_DT_ROW_SET
+	jsr tr_draw_centered
+	lda #TR_K_SET : sta @tr_kind
+	ldx #TR_DT_ROW_SET
+	jsr tr_addrow
+	lda @tr_slot
+	cmp #$ffff
+	beq trdd_frz_lbl
+	lda #IGM_TR_UNFREEZE
+	jmp trdd_frz_draw
+trdd_frz_lbl:
+	lda #IGM_TR_FREEZE
+trdd_frz_draw:
+	ldx #TR_DT_ROW_FREEZE
+	jsr tr_draw_centered
+	lda #TR_K_FREEZE : sta @tr_kind
+	ldx #TR_DT_ROW_FREEZE
+	jsr tr_addrow
+	lda #IGM_TR_ADDCHEAT
+	ldx #TR_DT_ROW_ADD
+	jsr tr_draw_centered
+	lda #TR_K_ADD : sta @tr_kind
+	ldx #TR_DT_ROW_ADD
+	jsr tr_addrow
+	lda #IGM_TR_HINT_LIST
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	plp
+	rts
+
+// ---- carry SET when the current compare mode reads TR_VALUE (equal / not equal / greater
+//      / less).  The relative ones compare against the snapshot and take no operand. ----
+tr_mode_needs_value:
+	php
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda @TR_MODE
+	cmp #TR_MODE_EQ
+	beq trmn_yes
+	cmp #TR_MODE_NE
+	beq trmn_yes
+	cmp #TR_MODE_GT
+	beq trmn_yes
+	cmp #TR_MODE_LT
+	beq trmn_yes
+	cmp #TR_MODE_EXACT
+	beq trmn_yes
+	rep #$30 : .al : .xl
+	plp
+	clc
+	rts
+trmn_yes:
+	rep #$30 : .al : .xl
+	plp
+	sec
+	rts
+
+// ---- which freeze slot (if any) already holds the selected offset -> tr_slot ----
+tr_find_slot:
+	php
+	rep #$30 : .al : .xl
+	lda #$ffff : sta @tr_slot
+	lda #$0000 : sta @tr_tmp                   // slot number
+trfs_l:
+	lda @tr_tmp
+	asl
+	tax
+	lda @TR_FZ_IDX, x
+	cmp #$ffff
+	beq trfs_next
+	lda @tr_tmp
+	asl : asl
+	tax
+	lda @TR_FZ_OFF, x
+	cmp @tr_off_lo
+	bne trfs_next
+	lda @TR_FZ_OFF+2, x
+	cmp @tr_off_bank
+	bne trfs_next
+	lda @tr_tmp
+	sta @tr_slot
+	jmp trfs_done
+trfs_next:
+	lda @tr_tmp : inc : sta @tr_tmp
+	cmp #TR_FREEZE_MAX
+	bne trfs_l
+trfs_done:
+	plp
+	rts
+
+// ---- redraw the whole body for the current TR_UI.
+//      tr_draw_body assumes the caller already owns the blank; tr_draw_screen takes it.
+//      The split is load-bearing: ig_switch_to calls tab_enter INSIDE its forced blank and
+//      then draws the window frame, so a tab_enter that unblanked would make those frame
+//      writes land with the display on -- where the PPU discards them (that is exactly what
+//      ate the side borders and half of the bottom edge). ----
+tr_draw_body:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr tr_wipe_body                           // the four screens use different rows; without
+	                                           //   this the leftovers of the previous one stay
+	lda #IGM_TR_TITLE
+	ldx #TR_ROW_TITLE
+	jsr tr_draw_centered
+	sep #$20 : .as
+	lda @TR_UI
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_UI_ACTIVE
+	beq trdsc_active
+	cmp #TR_UI_RESULTS
+	beq trdsc_results
+	cmp #TR_UI_DETAIL
+	beq trdsc_detail
+	jsr tr_draw_setup
+	jmp trdsc_done
+trdsc_active:
+	jsr tr_draw_active
+	jmp trdsc_done
+trdsc_results:
+	jsr tr_draw_results
+	jmp trdsc_done
+trdsc_detail:
+	jsr tr_draw_detail
+trdsc_done:
+	jsr tr_bar_update
+	plb
+	plp
+	rts
+
+// ---- blank every interior row the screens draw into (title and hint excluded, both are
+//      rewritten unconditionally).  Cheap here because tr_draw_body always runs blanked, and
+//      it is what keeps a screen from inheriting the previous one's rows. ----
+tr_wipe_body:
+	php
+	rep #$30 : .al : .xl
+	ldx #(TR_ROW_TITLE+1)
+trwb_l:
+	phx
+	jsr tr_draw_blank
+	plx
+	inx
+	cpx #TR_ROW_HINT
+	bne trwb_l
+	plp
+	rts
+
+// ---- the same body, but taking the blank: for the state transitions the input loop makes,
+//      where the display is live and a ~10-row repaint is far past the vblank budget. ----
+tr_draw_screen:
+	php
+	sep #$20 : .as
+	lda #$80 : sta @$002100
+	rep #$30 : .al : .xl
+	jsr tr_draw_body
+	jsr ig_frame_if_static                     // the body's full-row flushes ate the side
+	                                           //   columns; ig_draw_window puts them back
+	jsr ig_bar_sync                            // BAR in place BEFORE the unblank (no 1-frame lag)
+	sep #$20 : .as
+	lda #$0f : sta @$002100
+	plp
+	rts
+
+// ---- put back the two window side cells a full-row flush just erased.  X = tile row.
+//      Two VRAM word writes, which is all a vblank-time single-row repaint can afford (a
+//      whole ig_draw_window is three row flushes plus 2*18 cells).  Geometry comes from the
+//      ig_win_* that ig_frame_if_static loaded for this tab. ----
+tr_side_repair:
+	php
+	rep #$30 : .al : .xl
+	txa
+	asl : asl : asl : asl : asl                // row*32 tilemap entries
+	sta @tr_col
+	lda @ig_win_x : and #$00ff
+	lsr                                        // x is ODD -> left border lives on BG1
+	clc : adc @tr_col
+	clc : adc #OVL_BG1_MAP
+	sta @$002116
+	lda #$2c34 : sta @$002118                  // WV = (26<<1) | palette 3
+	lda @ig_win_x : and #$00ff : sta @tr_tmp
+	lda @ig_win_w : and #$00ff
+	clc : adc @tr_tmp : dec
+	lsr                                        // x+w-1 is EVEN -> right border on BG2
+	clc : adc @tr_col
+	clc : adc #OVL_BG2_MAP
+	sta @$002116
+	lda #$2c36 : sta @$002118                  // EV = (27<<1) | palette 3
+	plp
+	rts
+
+// ---- redraw ONE row (X = tile row) inside the vblank we are already in ----
+tr_row_refresh:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda @TR_UI
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_UI_DETAIL
+	beq trrr_detail
+	// SETUP / ACTIVE: the only refreshable row is the value field
+	lda #IGM_TR_VALUE : sta @tr_scr
+	lda #$0002 : sta @tr_hexn
+	lda @TR_VALUE
+	jsr tr_row_value
+	jmp trrr_done
+trrr_detail:
+	lda #IGM_TR_VALUE : sta @tr_scr
+	lda #$0002 : sta @tr_hexn
+	lda @TR_VALUE
+	jsr tr_row_value
+trrr_done:
+	jsr tr_value_row_x
+	jsr tr_side_repair
+	plb
+	plp
+	rts
+
+// ========================================================================================
+//  Actions
+// ========================================================================================
+
+// ---- put "Searching..." on the hint row.  Called from the input handler, i.e. inside the
+//      vblank the shell loop is already in, so one row is safely within budget.  The scan
+//      then runs for about a second with the display ON and this line up. ----
+tr_show_busy:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	lda #IGM_TR_SEARCHING
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr tr_side_repair
+	plb
+	plp
+	rts
+
+tr_act_newsearch:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_show_busy
+	sep #$20 : .as
+	lda @TR_MODE
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_MODE_UNKNOWN
+	beq trans_unknown
+	sep #$20 : .as
+	lda @TR_WIDTH
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #$0002
+	beq trans_wide
+	// 8-bit exact: the branchless fast path, then a baseline so the relative compares
+	// have something to work against on the very next filter
+	jsr tr_scan_exact
+	jsr tr_snapshot
+	jmp trans_mode_eq
+trans_wide:
+	// 16-bit exact: mark everything a candidate, then let the generic filter cut it down
+	jsr tr_scan_unknown
+	sep #$20 : .as
+	lda #TR_MODE_EQ : sta @TR_MODE
+	rep #$30 : .al : .xl
+	jsr tr_filter_generic
+	jmp trans_mode_eq
+trans_unknown:
+	jsr tr_scan_unknown
+	sep #$20 : .as
+	lda #TR_MODE_CHANGED : sta @TR_MODE        // the only useful next step without a value
+	rep #$30 : .al : .xl
+	jmp trans_counted
+trans_mode_eq:
+	sep #$20 : .as
+	lda #TR_MODE_EQ : sta @TR_MODE
+	rep #$30 : .al : .xl
+trans_counted:
+	jsr tr_count
+	sep #$20 : .as
+	lda #$01 : sta @TR_ACTIVE
+	lda #TR_UI_ACTIVE : sta @TR_UI
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @TR_CURSOR
+	sta @TR_TOP
+	sta @tr_sel
+	sta @tr_walk_idx
+	sta @tr_walk_off
+	sta @tr_walk_bank
+	lda #$ffff : sta @tr_notice
+	jsr tr_draw_screen
+	plp
+	rts
+
+tr_act_filter:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_show_busy
+	jsr tr_degenerate
+	bcc trafl_run
+	jsr tr_bitmap_clear                        // "> max" / "< 0" can match nothing
+	jmp trafl_counted
+trafl_run:
+	sep #$20 : .as
+	lda @TR_MODE
+	cmp #TR_MODE_EQ
+	bne trafl_generic
+	lda @TR_WIDTH
+	cmp #$02
+	beq trafl_generic
+	rep #$30 : .al : .xl
+	jsr tr_filter_exact                        // the validated branchless 8-bit path
+	jmp trafl_snap
+trafl_generic:
+	rep #$30 : .al : .xl
+	jsr tr_filter_generic
+trafl_snap:
+	// Re-baseline: "increased" always means "since the last time you filtered", which is
+	// the only reading that stays true across a long hunt.
+	jsr tr_snapshot
+trafl_counted:
+	jsr tr_count
+	lda #$0000
+	sta @TR_CURSOR
+	sta @TR_TOP
+	sta @tr_walk_idx
+	sta @tr_walk_off
+	sta @tr_walk_bank
+	sta @tr_sel
+	jsr tr_draw_screen
+	plp
+	rts
+
+tr_act_results:
+	php
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda #TR_UI_RESULTS : sta @TR_UI
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @tr_sel
+	sta @tr_walk_idx
+	sta @tr_walk_off
+	sta @tr_walk_bank
+	jsr tr_draw_screen
+	plp
+	rts
+
+tr_act_reset:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_bitmap_clear
+	sep #$20 : .as
+	lda #$00 : sta @TR_ACTIVE
+	lda #$00 : sta @TR_HAVE_SNAP
+	lda #TR_MODE_EXACT : sta @TR_MODE
+	lda #TR_UI_SETUP : sta @TR_UI
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @TR_COUNT
+	sta @TR_COUNT_HI
+	sta @TR_CURSOR
+	sta @TR_TOP
+	sta @tr_sel
+	lda #$ffff : sta @tr_notice
+	jsr tr_draw_screen
+	plp
+	rts
+
+// ---- SET VALUE: one write, right now, and nothing else.  This is the ONLY place besides
+//      the freeze path where the trainer touches the game's WRAM. ----
+tr_act_setvalue:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_off_lo
+	tax
+	lda @TR_VALUE
+	sep #$20 : .as
+	pha
+	lda @tr_off_bank
+	bne trsv_hi
+	pla
+	sta @$7e0000, x
+	jmp trsv_done
+trsv_hi:
+	pla
+	sta @$7f0000, x
+trsv_done:
+	rep #$30 : .al : .xl
+	jsr tr_draw_screen                         // CURRENT changed
+	plp
+	rts
+
+// ---- FREEZE / ADD TO CHEATS / UNFREEZE.  A(16) holds the TR_REQ opcode.  The request is
+//      written into the meta block (the tab owns it, and $FA is writable under IS_PATCH)
+//      because MCU_PARAM is 12 bytes and this needs nine; CMD_TRAINER_CHEAT then carries
+//      nothing.  The MCU turns it into an ordinary cheat record, which is what makes the
+//      frozen value obey the master switch and survive a reprogram. ----
+tr_send_req:
+	php
+	phb
+	rep #$30 : .al : .xl
+	sta @tr_scr                                // requested opcode
+	// pick a slot: the one already holding this offset, else the first free one
+	jsr tr_find_slot
+	lda @tr_slot
+	cmp #$ffff
+	bne trsr_haveslot
+	jsr tr_free_slot
+trsr_haveslot:
+	lda @tr_slot
+	cmp #$ffff
+	bne trsr_ok
+	sep #$20 : .as                             // all four taken: say so, change nothing
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	lda #IGM_TR_NOFREEZE
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr tr_side_repair
+	plb
+	plp
+	rts
+trsr_ok:
+	lda @tr_off_lo   : sta @TR_REQ_OFF
+	lda @tr_off_bank : sta @TR_REQ_OFF+2
+	lda @TR_VALUE    : sta @TR_REQ_VAL
+	lda @tr_slot
+	sep #$20 : .as
+	sta @TR_REQ_SLOT
+	lda @tr_scr
+	sta @TR_REQ                                // written LAST: TR_REQ is the MCU's gate
+	lda #CMD_TRAINER_CHEAT
+	sta @MCU_CMD
+	jsr saves_wait_ack                         // bounded spin; never hangs the SNES
+	rep #$30 : .al : .xl
+	jsr tr_draw_screen
+	plb
+	plp
+	rts
+
+// ---- first freeze slot with no record -> tr_slot ($ffff when all four are taken) ----
+tr_free_slot:
+	php
+	rep #$30 : .al : .xl
+	lda #$ffff : sta @tr_slot
+	ldx #$0000
+trfr_l:
+	lda @TR_FZ_IDX, x
+	cmp #$ffff
+	bne trfr_next
+	txa
+	lsr
+	sta @tr_slot
+	jmp trfr_done
+trfr_next:
+	inx : inx
+	cpx #(TR_FREEZE_MAX*2)
+	bne trfr_l
+trfr_done:
+	plp
+	rts
+
+// ========================================================================================
+//  Value editor (hex digits, D-pad only -- there is no keyboard and no general text entry)
+// ========================================================================================
+
+// ---- add A(16) (+1 or -1 as $ffff) to the nibble under the edit cursor, wrapping inside
+//      that nibble.  Digit 0 is the MOST significant of the displayed field, so the same
+//      routine serves the 2-digit and the 4-digit form. ----
+// ---- Up/Down with auto-repeat -> A = 0 none, 1 up, 2 down.  The counter is armed by the
+//      fresh press and cleared the moment neither direction is held, so a hold that started
+//      before this screen existed can never auto-fire on arrival. ----
+tr_nav_repeat:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_edge
+	bit #$0800
+	bne trnr_up_now
+	bit #$0400
+	bne trnr_dn_now
+	lda @ovl_cur
+	bit #$0800
+	bne trnr_up_hold
+	bit #$0400
+	bne trnr_dn_hold
+	lda #$0000 : sta @tr_rep
+	lda #$0000
+	plp
+	rts
+trnr_up_now:
+	lda #TR_REP_INIT : sta @tr_rep
+	lda #$0001
+	plp
+	rts
+trnr_dn_now:
+	lda #TR_REP_INIT : sta @tr_rep
+	lda #$0002
+	plp
+	rts
+trnr_up_hold:
+	jsr trnr_tick
+	bcc trnr_none
+	lda #$0001
+	plp
+	rts
+trnr_dn_hold:
+	jsr trnr_tick
+	bcc trnr_none
+	lda #$0002
+	plp
+	rts
+trnr_none:
+	lda #$0000
+	plp
+	rts
+trnr_tick:
+	lda @tr_rep
+	beq trnr_nofire                            // never armed by a press -> do not auto-fire
+	dec : sta @tr_rep
+	bne trnr_nofire
+	lda #TR_REP_RATE : sta @tr_rep
+	sec
+	rts
+trnr_nofire:
+	clc
+	rts
+
+// ---- add A(16) (+1 or -1 as $ffff) to the nibble under the edit cursor, wrapping inside
+//      that nibble.  Digit 0 is the MOST significant of the displayed field, so one routine
+//      serves both the 2-digit and the 4-digit form. ----
+tr_edit_delta:
+	php
+	rep #$30 : .al : .xl
+	sta @tr_tmp                                // delta (+1 / $ffff)
+	// bit shift of the nibble under the cursor = (digits - 1 - digit) * 4
+	lda @tr_digits : and #$00ff
+	dec
+	sta @tr_col
+	sep #$20 : .as
+	lda @TR_EDIT_DIGIT
+	rep #$30 : .al : .xl
+	and #$00ff
+	sta @tr_scr
+	lda @tr_col
+	sec : sbc @tr_scr
+	asl : asl
+	sta @tr_col
+	// old nibble -> tr_scr
+	lda @tr_col : tax                          // TAX sets Z from the value, so BEQ = shift 0
+	lda @TR_VALUE
+	cpx #$0000
+	beq tred_noshr
+tred_shr:
+	lsr
+	dex
+	bne tred_shr
+tred_noshr:
+	and #$000f
+	clc : adc @tr_tmp
+	and #$000f
+	sta @tr_scr
+	// shift it back into place
+	lda @tr_col : tax
+	lda @tr_scr
+	cpx #$0000
+	beq tred_noshl
+tred_shl:
+	asl
+	dex
+	bne tred_shl
+tred_noshl:
+	sta @tr_scr
+	// clear the old nibble and merge
+	lda @tr_col : tax
+	lda #$000f
+	cpx #$0000
+	beq tred_nomask
+tred_maskl:
+	asl
+	dex
+	bne tred_maskl
+tred_nomask:
+	eor #$ffff
+	and @TR_VALUE
+	ora @tr_scr
+	sta @TR_VALUE
+	plp
+	rts
+
+// ---- the editor owns the D-pad while tr_editing is set; A leaves it. ----
+tr_input_edit:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_edge
+	bit #$0080                                 // A -> commit and leave the editor
+	beq trie_dirs
+	lda #$0000 : sta @tr_editing
+	jsr tr_draw_screen
+	plp
+	rts
+trie_dirs:
+	jsr tr_nav_repeat
+	cmp #$0001
+	bne trie_dn
+	lda #$0001
+	jsr tr_edit_delta
+	jmp trie_refresh
+trie_dn:
+	cmp #$0002
+	bne trie_lf_pre
+	lda #$ffff
+	jsr tr_edit_delta
+	jmp trie_refresh
+trie_lf_pre:
+	lda @ovl_edge
+trie_lf:
+	bit #$0200                                 // Left -> previous digit
+	beq trie_rt
+	sep #$20 : .as
+	lda @TR_EDIT_DIGIT
+	beq trie_lf_wrap
+	dec
+	jmp trie_lf_st
+trie_lf_wrap:
+	lda @tr_digits
+	dec
+trie_lf_st:
+	sta @TR_EDIT_DIGIT
+	rep #$30 : .al : .xl
+	jmp trie_refresh
+trie_rt:
+	bit #$0100                                 // Right -> next digit
+	beq trie_out
+	sep #$20 : .as
+	lda @TR_EDIT_DIGIT
+	inc
+	cmp @tr_digits                             // low byte of the word = 2 or 4
+	bcc trie_rt_st
+	lda #$00
+trie_rt_st:
+	sta @TR_EDIT_DIGIT
+	rep #$30 : .al : .xl
+trie_refresh:
+	jsr tr_value_row_x                         // X = the value row for this screen
+	jsr tr_row_refresh
+	jsr tr_edit_mark
+trie_out:
+	plp
+	rts
+
+// ---- X = the tile row carrying the value field on the current screen ----
+tr_value_row_x:
+	php
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda @TR_UI
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_UI_ACTIVE
+	beq trvr_active
+	cmp #TR_UI_DETAIL
+	beq trvr_detail
+	ldx #TR_SU_ROW_VALUE
+	plp
+	rts
+trvr_active:
+	ldx #TR_AC_ROW_VALUE
+	plp
+	rts
+trvr_detail:
+	ldx #TR_DT_ROW_VALUE
+	plp
+	rts
+
+// ---- tint the digit under the edit cursor, so the D-pad has something to point at.
+//      ig_recolor re-reads OVL_RB, which still holds the row tr_row_refresh just flushed. ----
+tr_edit_mark:
+	php
+	phb
+	rep #$30 : .al : .xl
+	lda @tr_editing
+	beq trem_done
+	sep #$20 : .as                             // ig_recolor reads the glyph back with `lda
+	lda #$f4 : pha : plb                       //   OVL_RB, x` -- ABSOLUTE, so it inherits the
+	rep #$30 : .al : .xl                       //   caller's DBR.  Both call sites here run with
+	                                           //   the GAME's DBR, which made it read a stray
+	                                           //   bank and stamp garbage into the cell instead
+	                                           //   of tinting the digit.
+	jsr tr_value_row_x
+	txa
+	sta @ig_rc_row
+	sep #$20 : .as
+	lda @TR_EDIT_DIGIT
+	rep #$30 : .al : .xl
+	and #$00ff
+	clc : adc #TR_VAL_HEX_COL
+	sta @ig_rc_col
+	inc
+	sta @ig_rc_end
+	lda #$2800 : sta @ig_rc_pal                // green: the digit being edited
+	jsr ig_recolor
+trem_done:
+	plb
+	plp
+	rts
+
+// ========================================================================================
+//  Tab entry points (tab_enter_tbl / tab_input_tbl / tab_leave_tbl index 4)
+// ========================================================================================
+
+trainer_enter:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_lang_get
+	jsr tr_session_check
+	lda #$0000 : sta @tr_editing
+	lda @TR_UI_ROW : and #$00ff : sta @tr_sel
+	jsr tr_draw_body                           // ig_switch_to owns the blank here
+	plp
+	rts
+
+trainer_leave:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_sel
+	sep #$20 : .as
+	sta @TR_UI_ROW                             // remember the row across a tab switch
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_editing
+	lda #$0000 : sta @tr_bar_row               // no BAR target while another tab is up
+	plp
+	rts
+
+// ---- B at the content level: the shell offers it to us BEFORE dropping focus.  Carry set
+//      = consumed (we went back one screen), clear = let ig_focus_leave run. ----
+trainer_back:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_editing
+	beq trb_screens
+	lda #$0000 : sta @tr_editing               // cancel the editor first
+	jsr tr_draw_screen
+	plp
+	sec
+	rts
+trb_screens:
+	sep #$20 : .as
+	lda @TR_UI
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_UI_DETAIL
+	beq trb_to_results
+	cmp #TR_UI_RESULTS
+	beq trb_to_active
+	plp
+	clc                                        // SETUP / ACTIVE: leaving focus is correct
+	rts
+trb_to_results:
+	sep #$20 : .as
+	lda #TR_UI_RESULTS : sta @TR_UI
+	rep #$30 : .al : .xl
+	jmp trb_redraw
+trb_to_active:
+	sep #$20 : .as
+	lda #TR_UI_ACTIVE : sta @TR_UI
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_sel
+trb_redraw:
+	jsr tr_draw_screen
+	plp
+	sec
+	rts
+
+trainer_input:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_editing
+	beq tri_nav
+	jsr tr_input_edit
+	plp
+	rts
+tri_nav:
+	jsr tr_nav_repeat
+	cmp #$0001
+	bne tri_dn
+	lda @tr_sel
+	beq tri_bar                                // already at the top
+	dec : sta @tr_sel
+	jsr tri_track_cursor
+	jmp tri_bar
+tri_dn:
+	cmp #$0002
+	bne tri_lr
+	lda @tr_sel : inc
+	cmp @tr_nrows
+	bcs tri_bar
+	sta @tr_sel
+	jsr tri_track_cursor
+	jmp tri_bar
+tri_lr:
+	lda @ovl_edge
+	bit #$0200                                 // Left
+	beq tri_rt
+	lda #$ffff
+	jsr tr_option_step
+	plp
+	rts
+tri_rt:
+	lda @ovl_edge
+	bit #$0100                                 // Right
+	beq tri_a
+	lda #$0001
+	jsr tr_option_step
+	plp
+	rts
+tri_a:
+	lda @ovl_edge
+	bit #$0080                                 // A
+	beq tri_out
+	jsr tr_activate
+	plp
+	rts
+tri_bar:
+	jsr tr_bar_update
+	jsr ig_bar_sync
+tri_out:
+	plp
+	rts
+
+// ---- in the RESULTS browser the row cursor IS the result cursor ----
+tri_track_cursor:
+	php
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda @TR_UI
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_UI_RESULTS
+	bne trit_done
+	lda @tr_sel
+	clc : adc @TR_TOP
+	sta @TR_CURSOR
+trit_done:
+	plp
+	rts
+
+// ---- A on the selected row.  Dispatches on tr_rowkind, so hiding a row (the Value field
+//      disappears for a relative compare) can never make A mean something else. ----
+tr_activate:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_nrows
+	beq tra_out
+	lda @tr_sel
+	tax
+	sep #$20 : .as
+	lda @tr_rowkind, x
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_K_VALUE
+	beq tra_edit
+	cmp #TR_K_NEW
+	beq tra_new
+	cmp #TR_K_FILTER
+	beq tra_filter
+	cmp #TR_K_RESULTS
+	beq tra_results
+	cmp #TR_K_RESET
+	beq tra_reset
+	cmp #TR_K_RESULT
+	beq tra_pick
+	cmp #TR_K_SET
+	beq tra_set
+	cmp #TR_K_FREEZE
+	beq tra_freeze
+	cmp #TR_K_ADD
+	beq tra_add
+tra_out:
+	plp
+	rts
+tra_edit:
+	jsr tr_enter_editor
+	plp
+	rts
+tra_new:
+	jsr tr_act_newsearch
+	plp
+	rts
+tra_filter:
+	jsr tr_act_filter
+	plp
+	rts
+tra_results:
+	jsr tr_act_results
+	plp
+	rts
+tra_reset:
+	jsr tr_act_reset
+	plp
+	rts
+tra_set:
+	jsr tr_act_setvalue
+	plp
+	rts
+tra_add:
+	lda #TR_REQ_ADD
+	jsr tr_send_req
+	plp
+	rts
+tra_freeze:
+	jsr tr_find_slot
+	lda @tr_slot
+	cmp #$ffff
+	beq tra_do_freeze
+	lda #TR_REQ_UNFREEZE
+	jsr tr_send_req
+	plp
+	rts
+tra_do_freeze:
+	lda #TR_REQ_FREEZE
+	jsr tr_send_req
+	plp
+	rts
+tra_pick:
+	// the row under the cursor becomes the inspected address
+	lda @TR_CURSOR
+	jsr tr_nth_set
+	bcc tra_out
+	lda @tr_walk_off  : sta @tr_off_lo
+	lda @tr_walk_bank : sta @tr_off_bank
+	sta @TR_SEL_OFF+2
+	lda @tr_off_lo : sta @TR_SEL_OFF           // remembered across menu sessions
+	sep #$20 : .as
+	lda #TR_UI_DETAIL : sta @TR_UI
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_sel
+	jsr tr_draw_screen
+	plp
+	rts
+
+// ---- Left/Right on an option row.  A(16) = -1 for Left, +1 for Right.  Every change can
+//      add or remove a row, so the whole body is repainted. ----
+tr_option_step:
+	php
+	rep #$30 : .al : .xl
+	sta @tr_tmp
+	lda @tr_nrows
+	beq tros_out
+	lda @tr_sel
+	tax
+	sep #$20 : .as
+	lda @tr_rowkind, x
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #TR_K_TYPE
+	beq tros_type
+	cmp #TR_K_WIDTH
+	beq tros_width
+	cmp #TR_K_CMP
+	beq tros_cmp
+	cmp #TR_K_VALUE
+	beq tros_value
+tros_out:
+	plp
+	rts
+
+// ---- Left/Right on the Value row: +/-1 on the whole value.  Without this the row was the
+//      one place where the D-pad did nothing while the footer still said "D-Pad: change",
+//      and A (the digit editor) was the only way in -- which is exactly what made the field
+//      confusing.  A still opens the editor for a big jump; this is for the last few steps.
+//      One row repainted inside the vblank we are already in, so no blank flash. ----
+tros_value:
+	lda @TR_VALUE
+	clc : adc @tr_tmp
+	sta @TR_VALUE
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq tros_val_wide
+	rep #$30 : .al : .xl
+	lda @TR_VALUE : and #$00ff : sta @TR_VALUE  // 8-bit wraps inside the byte
+tros_val_wide:
+	rep #$30 : .al : .xl
+	jsr tr_value_row_x
+	jsr tr_row_refresh
+	plp
+	rts
+tros_type:
+	sep #$20 : .as
+	lda @TR_MODE
+	cmp #TR_MODE_UNKNOWN
+	beq tros_type_exact
+	lda #TR_MODE_UNKNOWN
+	jmp tros_type_st
+tros_type_exact:
+	lda #TR_MODE_EXACT
+tros_type_st:
+	sta @TR_MODE
+	rep #$30 : .al : .xl
+	jmp tros_redraw
+tros_width:
+	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq tros_w8
+	lda #$02
+	jmp tros_w_st
+tros_w8:
+	lda #$01
+tros_w_st:
+	sta @TR_WIDTH
+	rep #$30 : .al : .xl
+	// a width change invalidates a running search: the bitmap means "position n starts a
+	// value of the OLD width", which is not the same set of positions
+	sep #$20 : .as
+	lda @TR_ACTIVE
+	rep #$30 : .al : .xl
+	and #$00ff
+	beq tros_redraw
+	jsr tr_act_reset
+	plp
+	rts
+tros_cmp:
+	sep #$20 : .as
+	lda @TR_MODE
+	rep #$30 : .al : .xl
+	and #$00ff
+	sec : sbc #TR_MODE_EQ
+	clc : adc @tr_tmp
+	cmp #$8000
+	bcc tros_cmp_hi                            // borrowed past the first entry -> wrap to last
+	lda #(TR_MODE_COUNT-TR_MODE_EQ-1)
+	jmp tros_cmp_st
+tros_cmp_hi:
+	cmp #(TR_MODE_COUNT-TR_MODE_EQ)
+	bcc tros_cmp_st
+	lda #$0000
+tros_cmp_st:
+	clc : adc #TR_MODE_EQ
+	sep #$20 : .as
+	sta @TR_MODE
+	rep #$30 : .al : .xl
+tros_redraw:
+	jsr tr_draw_screen
+	plp
+	rts
+
+tr_enter_editor:
+	php
+	phb
+	rep #$30 : .al : .xl
+	jsr tr_hexn_set
+	lda @tr_hexn : sta @tr_digits
+	lda #$0001 : sta @tr_editing
+	sep #$20 : .as
+	lda #$00 : sta @TR_EDIT_DIGIT
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	lda #IGM_TR_HINT_EDIT
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr tr_side_repair
+	plb
+	// Repaint the value row BEFORE tinting the digit: ig_recolor re-reads the glyph out of
+	// OVL_RB, and the last thing flushed through it was the hint line above -- tinting
+	// against that buffer would stamp a character from the hint into the value field.
+	jsr tr_value_row_x
+	jsr tr_row_refresh
+	jsr tr_edit_mark
+	plp
+	rts

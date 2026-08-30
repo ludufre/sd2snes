@@ -366,6 +366,7 @@
 #define MAN_Z_TMAP_STRIDE           128     /* bytes per prebuilt tilemap row (64 entries) */
 #define MAN_Z_HALF_BYTES            1024    /* bytes per BG half of one tile row (32 tiles x 32B) */
 #define CMD_MANUAL_ZPAGE            $45     /* SNES_CMD_MANUAL_ZPAGE: stage one whole 2x zoom page into MANUAL_ZTILES_A/B + ZTMAP + ZPAL. MCU_PARAM[0] = compacted guide (0..7), [1..2] = index u16 LE, [3] = mode: 0 = index is a 1x BLOCK (resolved via the block map; entry Y published in MAN_META_ZENTRYY), 1 = index is a ZOOM PAGE directly (page turns). Re-staging an already-resident page is skipped. Publishes MAN_META_F_ZREADY + ZNROWS/ZPIXH/ZPAGE/ZENTRYY/ZFIRSTBLK. Lockstep with src/snes.h. */
+#define CMD_TRAINER_CHEAT          $43     /* SNES_CMD_TRAINER_CHEAT: consume the freeze request the TRAINER tab wrote into the meta block (TR_REQ/TR_REQ_SLOT/TR_REQ_OFF/TR_REQ_VAL) and turn it into a RUNTIME cheat record, then redeploy. No MCU_PARAM payload -- the block IS the payload (9 bytes would not fit the 12-byte param anyway, and the tab already owns the block). ACK = MCU_CMD cleared. Lockstep with src/snes.h. */
 #define CMD_SET_SRM_SLOT           $44     /* SNES_CMD_SET_SRM_SLOT: persist the selected SRAM slot (MCU_PARAM low byte 0..3) to the <stem>.slot sidecar; refreshes SAVEINFO+42 / SRM_SLOT_STATUS. Applies on next game load (never changes the live slot). Lockstep with src/snes.h. */
 #define CFG_ENABLE_GAME_MANUAL      CFG_ADDR+$0145 /* EnableGameManual toggle (default ON); next free after CFG_BUS_COMPAT $0144. Lockstep with src/cfg.h. */
 #define IGMENU_ABI_VERSION          $04     /* igmenu.bin ABI version. Checked by BOTH the MCU (igmenu_stage: magic+version+crc) AND the overlay ($C80004 vs this). Bump on ANY layout/ABI change so a mismatched bin degrades to the fail-safe. v4 moved the shell from bank $C2 to $C8 (the menu image grew to 3 banks; $C2 is now menu-resident in-game), so a stale bin never gets jsl-ed at the old bank. Lockstep with IGMENU_ABI_VERSION in src/igmenu.h. */
@@ -426,6 +427,77 @@
 #define CHEAT_OVL_MAX               64      /* size of the RESIDENT in-game name window: CHEAT_NAMES holds 64 names for [CHEAT_WIN_BASE, +64). The list slides the window (CMD_CHEAT_NAMES_WINDOW) to cover all cheats up to CHEAT_LIST_MAX. */
 #define CHEAT_LIST_MAX              512     /* hard cap on listed cheats (= CHEAT_RECORD_MAX in src/cheat.h); the TRUE count comes from NUM_CHEATS. */
 #define CHEAT_NAME_LEN              64      /* bytes per staged in-game name (power of 2 -> (idx-base)*LEN is a shift) */
+
+/* ---- in-game RAM trainer (snes/trainer.i65 + src/trainer.c) --------------
+   Lockstep with SRAM_TRAINER_* in src/memmap.h -- see the rationale block there
+   for why PSRAM banks $FA-$FC are provably free on every core and both boards.
+   Reachable from the SNES in BOTH modes: in the menu $F0-$FF is saveram under
+   mapper 7, and in-game the hook holds snescmd_unlock so IS_PATCH maps $C0-$FF
+   identity with IS_WRITABLE set. Never cleared automatically -> TR_MAGIC gates it. */
+#define TRAINER_BITMAP              $FA0000 /* 16 KiB candidate bitmap; bit n = WRAM offset n survives. byte = n>>3, bit = n&7 (LSB = lowest offset). */
+#define TRAINER_BITMAP_BYTES        $4000
+#define TRAINER_META                $FA4000 /* 64 B state block, layout below (lockstep with trainer_blk_t in src/trainer.h). */
+#define TRAINER_SNAP_LO             $FB0000 /* previous-value snapshot of $7E0000-$7EFFFF (bank-identity with $7E). */
+#define TRAINER_SNAP_HI             $FC0000 /* previous-value snapshot of $7F0000-$7FFFFF (bank-identity with $7F). */
+
+/* TRAINER_META field offsets -- lockstep with trainer_blk_t (src/trainer.h). */
+#define TR_MAGIC                    $FA4000 /* 4 B "TRNR"; 0 = no session (trainer_stage zeroes it every game load). */
+#define TR_VERSION                  $FA4004 /* u8 block version = TRAINER_VERSION. */
+#define TR_ACTIVE                   $FA4005 /* u8 1 = a search is in progress (the bitmap is meaningful). */
+#define TR_MODE                     $FA4006 /* u8 search mode, TR_MODE_* below. */
+#define TR_WIDTH                    $FA4007 /* u8 value width in bytes: 1 = 8-bit, 2 = 16-bit LE. */
+#define TR_COUNT                    $FA4008 /* u32 LE candidate count. 32-bit because an unknown-value search starts at 131072, which does NOT fit in 16 bits. */
+#define TR_COUNT_HI                 $FA400A /* high word of TR_COUNT, addressed on its own (the 65816 has no 32-bit load). */
+#define TR_VALUE                    $FA400C /* u16 LE last value the user entered. */
+#define TR_HAVE_SNAP                $FA400E /* u8 1 = TRAINER_SNAP_* holds the values as of the last scan (required by the relative filters). */
+#define TR_NOTICE                   $FA400F /* u8 why the session was dropped, so the tab can say so once: 0 none, 1 savestate load, 2 reset. Read OUTSIDE the magic guard (the magic is already gone by then) and cleared by the tab after it draws. */
+#define TR_CURSOR                   $FA4010 /* u32 LE selected result index. */
+#define TR_TOP                      $FA4014 /* u32 LE first result index shown in the browser. */
+#define TR_SEL_OFF                  $FA4018 /* u32 LE WRAM offset of the selected result (0..131071). */
+#define TR_UI                       $FA401C /* u8 screen: TR_UI_* below. */
+#define TR_UI_ROW                   $FA401D /* u8 selected row inside the current screen. */
+#define TR_EDIT_DIGIT               $FA401E /* u8 digit cursor inside the numeric editor. */
+#define TR_RSVD                     $FA401F /* u8 reserved (published 0). */
+#define TR_FZ_IDX                   $FA4020 /* u16 LE x TR_FREEZE_MAX: cheat-record index the MCU created for that freeze slot, $FFFF = slot empty. */
+#define TR_FZ_OFF                   $FA4028 /* u32 LE x TR_FREEZE_MAX: WRAM offset frozen in that slot. */
+/* Freeze request, written by the SNES and consumed by the MCU on CMD_TRAINER_CHEAT.
+   The block is the payload: MCU_PARAM is only 12 bytes and this needs 9, so the tab
+   fills these fields (it owns the block, and $FA is writable under IS_PATCH) and the
+   command carries nothing. The MCU clears TR_REQ after serving. */
+#define TR_REQ                      $FA4038 /* u8 0 = none, 1 = create/replace a freeze, 2 = remove one. */
+#define TR_REQ_SLOT                 $FA4039 /* u8 target freeze slot, 0..TR_FREEZE_MAX-1. */
+#define TR_REQ_OFF                  $FA403A /* u32 LE WRAM offset to freeze (address = $7E0000 + off). */
+#define TR_REQ_VAL                  $FA403E /* u16 LE value to hold. Width comes from TR_WIDTH. */
+
+/* TR_REQ opcodes -- lockstep with TRAINER_REQ_* in src/trainer.h. FREEZE and ADD build the
+   same runtime cheat record; the only difference is whether its enable bit starts set, so
+   "add to cheats" is genuinely "freeze it later from the CHEATS tab". */
+#define TR_REQ_NONE                 0
+#define TR_REQ_FREEZE               1       /* create/replace the record, ENABLED */
+#define TR_REQ_UNFREEZE             2       /* clear the record's enable bit (it stays listed) */
+#define TR_REQ_ADD                  3       /* create/replace the record, DISABLED */
+
+#define TR_FREEZE_MAX               4       /* freeze slots. Each costs 1 WRAM cheat patch (2 when 16-bit) out of the CHEAT_WRAM_MAX=20 shared with the .yml cheats. */
+#define TR_WRAM_BYTES               $20000  /* $7E0000..$7FFFFF = 131072 candidate positions. */
+
+/* TR_MODE values. EXACT/UNKNOWN start a search; the rest only filter one. */
+#define TR_MODE_EXACT               0
+#define TR_MODE_UNKNOWN             1
+#define TR_MODE_EQ                  2
+#define TR_MODE_NE                  3
+#define TR_MODE_CHANGED             4
+#define TR_MODE_UNCHANGED           5
+#define TR_MODE_INCREASED           6
+#define TR_MODE_DECREASED           7
+#define TR_MODE_GT                  8
+#define TR_MODE_LT                  9
+#define TR_MODE_COUNT               10
+
+/* TR_UI values (which screen the tab is drawing). */
+#define TR_UI_SETUP                 0
+#define TR_UI_ACTIVE                1
+#define TR_UI_RESULTS               2
+#define TR_UI_DETAIL                3
 
 #define SPC_DATA                    $FD0000
 #define SPC_HEADER                  $FE0000

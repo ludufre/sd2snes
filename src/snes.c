@@ -50,6 +50,7 @@
 #include "pcmplay.h"/* pcmplay_publish: menu PCM player status block */
 #include "gameinfo.h" /* gameinfo_fmv_idle_check : stop a lingering FMV when its screen closes */
 #include "cheat.h"
+#include "trainer.h"
 #include "savestate.h"
 #include "manual.h"
 #include "sufami.h"
@@ -121,6 +122,10 @@ const SramOffset SramOffsetTable[] = {
 };
 
 void prepare_reset() {
+  /* The game is about to restart with freshly initialised WRAM, so a live search
+     would be comparing against values that no longer mean anything. (A bare RESET
+     button press does not come through here -- that case is documented.) */
+  trainer_invalidate(TRAINER_NOTICE_RESET);
   snes_reset(1);
   delay_ms(SNES_RESET_PULSELEN_MS);
   if(romprops.sramsize_bytes && fpga_test() == FPGA_TEST_TOKEN) {
@@ -492,6 +497,13 @@ uint8_t game_cmd_serve(uint8_t cmd) {
       msu_dac_hold();
       load_backup_state();
       msu_dac_release();
+      /* A state load rewinds WRAM to an earlier instant, so the trainer's captured
+         snapshot would make "increased/decreased" report the opposite of what the
+         player just saw. Dropping the session (with a reason the tab shows once) is
+         the honest outcome; the freeze records are NOT touched -- they are ordinary
+         cheats and stay in effect. The trainer's own storage is outside $F0-$F4, so
+         nothing here corrupts it. */
+      trainer_invalidate(TRAINER_NOTICE_LOADSTATE);
       break;
     case SNES_CMD_CHEAT_REPROGRAM:
       cheat_reprogram_from_mirror();
@@ -515,6 +527,12 @@ uint8_t game_cmd_serve(uint8_t cmd) {
          (MCU_PARAM low 16 = absolute base index) from the $D00000 records so ALL cheats
          can be listed. Bounded (64 reads, no SD); the caller's snes_set_mcu_cmd(0) ACKs. */
       cheat_stage_names_window((int)(snes_get_mcu_param() & 0xffff));
+      break;
+    case SNES_CMD_TRAINER_CHEAT:
+      /* in-game TRAINER tab: turn the request the tab left in the meta block into a
+         runtime cheat record and redeploy. There is no second freeze engine -- see
+         src/trainer.h. Bounded, no SD. */
+      trainer_serve_request();
       break;
     case SNES_CMD_SET_SRM_SLOT:
       /* in-game SAVES tab: persist the selected SRAM slot to the sidecar (consumed on
