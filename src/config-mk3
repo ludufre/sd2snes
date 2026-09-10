@@ -160,7 +160,7 @@ MCR_FPGACLK_MRxR        = (1<<4) /* MR1R */
 TMR_FPGACLK_MR          = LPC_TIM3->MR1
 TMR_FPGACLK_DIV         = 5
 
-QSORT_MAXELEM           = 2048
+QSORT_MAXELEM           = 1024
 SORT_STRLEN             = 256
 CLTBL_SIZE              = 100
 

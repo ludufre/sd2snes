@@ -28,6 +28,8 @@ uint8_t  sram_readbyte(uint32_t addr);
 void     sram_writeblock(const void *buf, uint32_t addr, uint16_t size);
 void     sram_readblock(void *buf, uint32_t addr, uint16_t size);
 void     sram_readstrn(void *buf, uint32_t addr, uint16_t size);
+uint32_t sram_readlong(uint32_t addr);
+void     sram_writelong(uint32_t val, uint32_t addr);
 int      save_sram(uint8_t *filename, uint32_t sram_size, uint32_t base_addr);
 void     sram_writestrn(void *buf, uint32_t addr, uint16_t size);
 /* used by src/atari.c (a26_load_rom); stubbed by a26_detect_cli.c */

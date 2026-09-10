@@ -100,6 +100,21 @@ void sram_readblock(void *buf, uint32_t addr, uint16_t size) {
   for (uint16_t i = 0; i < size; i++)
     ((uint8_t *)buf)[i] = host_sdram[(addr + i) & SDRAM_MASK];
 }
+/* Little-endian, same byte order as the real memory.c (LSB shifted out first
+   over the FPGA SPI window). */
+uint32_t sram_readlong(uint32_t addr) {
+  uint32_t val = host_sdram[addr & SDRAM_MASK];
+  val |= (uint32_t)host_sdram[(addr + 1) & SDRAM_MASK] << 8;
+  val |= (uint32_t)host_sdram[(addr + 2) & SDRAM_MASK] << 16;
+  val |= (uint32_t)host_sdram[(addr + 3) & SDRAM_MASK] << 24;
+  return val;
+}
+void sram_writelong(uint32_t val, uint32_t addr) {
+  host_sdram[addr & SDRAM_MASK] = val & 0xff;
+  host_sdram[(addr + 1) & SDRAM_MASK] = (val >> 8) & 0xff;
+  host_sdram[(addr + 2) & SDRAM_MASK] = (val >> 16) & 0xff;
+  host_sdram[(addr + 3) & SDRAM_MASK] = (val >> 24) & 0xff;
+}
 /* NUL-terminated read, capped at size bytes INCLUDING the terminator -- same
    contract as the firmware's memory.c version. */
 void sram_readstrn(void *buf, uint32_t addr, uint16_t size) {
