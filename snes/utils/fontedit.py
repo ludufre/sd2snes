@@ -38,9 +38,11 @@ marks and writes ONLY the 6 new slots (224-229), preserving every other tile
 no new mark: every Italian glyph is the existing GRAVE over its base letter.
 
 `addrussian` writes the 46 Cyrillic letters that need a tile of their own over
-the dead katakana block (178-223), leaving 160-177 and 241-255 free. The other
-20 letters are HOMOGLYPHS -- an existing tile already draws them -- and that
-table is encode-only, never merged into ACCENT_MAP.
+the dead katakana block (178-223). font.a65 no longer matches its output --
+those glyphs were redrawn by hand afterwards -- so do not rerun it. У (177)
+has a tile of its own too, but it is not drawn by it (see the Cyrillic
+section). The other 19 letters are HOMOGLYPHS -- an existing tile already
+draws them -- and that table is encode-only, never merged into ACCENT_MAP.
 
 `addgerman` does the same for 236-240. It needs the diaeresis to be a mark of
 its own, which is why CIRC was redrawn as 3 contiguous pixels: while the
@@ -84,7 +86,7 @@ in the outer corners and along the bottom row, which stays empty so stacked
 menu rows do not touch. Copying an existing letter and reshaping its strokes
 keeps a new script consistent far more easily than drawing one from scratch.
 
-`import` defaults to --only 160-177,241-255 -- every slot still free: the tail
+`import` defaults to --only 160-176,241-255 -- every slot still free: the tail
 of the table plus what Cyrillic left of the dead katakana block (see
 RECYCLABLE_CODES: it is JIS X 0201 left over from the CP932 era, unreachable
 since 2010). A full-sheet write is not the default because it would silently
@@ -92,7 +94,7 @@ repaint the hand-made Spanish glyphs and the window art whenever an editor
 shifted a colour. Widen it deliberately (--only 130-159, --all) once the diff
 printed by --dry-run looks right.
 
-33 slots are left; `freeslots` prints the current tally.
+32 slots are left; `freeslots` prints the current tally.
 """
 
 import re
@@ -123,10 +125,10 @@ ACCENT_MAP = {
     # the hand-made ü/Ü; ß has no base letter and is drawn by hand (SHARP_S).
     "ä": 236, "ö": 237, "ß": 238, "Ä": 239, "Ö": 240,
     # Cyrillic, drawn over the dead katakana block (see CYRILLIC below). Only
-    # the 46 letters that need a tile of their own live here; the 20 that reuse
+    # the 47 letters that need a tile of their own live here; the 19 that reuse
     # an existing tile are in HOMOGLYPHS, which must stay OUT of this table so
     # the code -> char direction keeps one owner per code. Uppercase first,
-    # then lowercase, each in alphabet order:
+    # then lowercase, each in alphabet order, with У last:
     "Б": 178, "Г": 179, "Д": 180, "Ё": 181, "Ж": 182, "З": 183,
     "И": 184, "Й": 185, "Л": 186, "П": 187, "Ф": 188, "Ц": 189,
     "Ч": 190, "Ш": 191, "Щ": 192, "Ъ": 193, "Ы": 194, "Ь": 195,
@@ -135,9 +137,12 @@ ACCENT_MAP = {
     "л": 208, "м": 209, "н": 210, "п": 211, "т": 212, "ф": 213,
     "ц": 214, "ч": 215, "ш": 216, "щ": 217, "ъ": 218, "ы": 219,
     "ь": 220, "э": 221, "ю": 222, "я": 223,
+    # У sits just below the block. It shared the Latin Y tile until that one was
+    # redrawn with a straight stem; У keeps the old tailed shape, byte for byte:
+    "У": 177,
 }
 
-# Cyrillic letters that an existing tile already draws: 12 uppercase and 7
+# Cyrillic letters that an existing tile already draws: 11 uppercase and 7
 # lowercase Latin homoglyphs, plus ё, which is exactly the French ë (228).
 # ENCODE-ONLY. Folding them into ACCENT_MAP/ACCENTS would give a code two
 # owners, and the decode direction picks one -- a Latin 'A' would come back as
@@ -145,7 +150,7 @@ ACCENT_MAP = {
 HOMOGLYPHS = {
     "А": ord("A"), "В": ord("B"), "Е": ord("E"), "К": ord("K"), "М": ord("M"),
     "Н": ord("H"), "О": ord("O"), "Р": ord("P"), "С": ord("C"), "Т": ord("T"),
-    "У": ord("Y"), "Х": ord("X"),
+    "Х": ord("X"),
     "а": ord("a"), "е": ord("e"), "о": ord("o"), "р": ord("p"), "с": ord("c"),
     "у": ord("y"), "х": ord("x"),
     "ё": 228,
@@ -408,6 +413,11 @@ def add_italian():
 # fits because 19 letters are drawn by tiles that already exist -- 12 uppercase
 # and 7 lowercase Latin homoglyphs, plus ё which IS ë (228) -- leaving 46 to
 # draw, exactly the size of the dead katakana block (178-223).
+#
+# font.a65 has moved on since: those glyphs were redrawn by hand afterwards, so
+# this no longer reproduces them and running it again would overwrite that
+# work. У (177) is not drawn here either: it is the tailed shape the Latin Y
+# had before it got a straight stem, carried over byte for byte.
 #
 # Each glyph is given as its STROKE (colour 1) on the grid the Latin letters
 # use: uppercase and ascenders r0..r5, x-height r1..r5, descenders down to r6,
@@ -689,13 +699,13 @@ def add_scrollbar():
 
 
 # -- Katakana cleanup -------------------------------------------------------
-# Blank what is left of the dead JIS X 0201 block. Cyrillic took 178-223; this
-# clears the remaining 161-177 so the table stops showing glyphs nothing can
+# Blank what is left of the dead JIS X 0201 block. Cyrillic took 178-223 and
+# later 177 (У); this clears 161-176 so the table stops showing glyphs nothing can
 # emit. It frees no space -- the font is always 256 tiles -- but it does change
 # one thing for the better: a CP1252 file name whose bytes land here used to
 # draw a random katakana, and now draws nothing. The blanked tiles are ordinary
 # free slots (see RESERVED_CODES).
-KATAKANA_LEFTOVER = range(161, 178)
+KATAKANA_LEFTOVER = range(161, 177)
 
 
 def clear_katakana():
@@ -776,7 +786,7 @@ RECYCLABLE_CODES = set(range(162, 176))
 # what is left of the katakana block. Everything else -- the hand-made Spanish
 # glyphs, the window art -- needs an explicit --only/--all, so an editor
 # shifting a colour cannot quietly repaint them.
-DEFAULT_IMPORT_RANGE = "160-177,241-255"
+DEFAULT_IMPORT_RANGE = "160-176,241-255"
 
 DEFAULT_SHEET = "font_sheet.png"
 DEFAULT_GUIDE = "font_guide.png"
