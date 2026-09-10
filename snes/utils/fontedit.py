@@ -38,7 +38,7 @@ marks and writes ONLY the 6 new slots (224-229), preserving every other tile
 no new mark: every Italian glyph is the existing GRAVE over its base letter.
 
 `addrussian` writes the 46 Cyrillic letters that need a tile of their own over
-the dead katakana block (178-223), leaving 162-175 and 241-255 free. The other
+the dead katakana block (178-223), leaving 160-177 and 241-255 free. The other
 20 letters are HOMOGLYPHS -- an existing tile already draws them -- and that
 table is encode-only, never merged into ACCENT_MAP.
 
@@ -84,15 +84,15 @@ in the outer corners and along the bottom row, which stays empty so stacked
 menu rows do not touch. Copying an existing letter and reshaping its strokes
 keeps a new script consistent far more easily than drawing one from scratch.
 
-`import` defaults to --only 162-175,178-223,236-255 -- the free tail of the
-table plus the dead katakana block (see RECYCLABLE_CODES: it is JIS X 0201
-left over from the CP932 era, unreachable since 2010). A full-sheet write is
-not the default because it would silently repaint the hand-made Spanish glyphs
-and the window art whenever an editor shifted a colour. Widen it deliberately
-(--only 130-159, --all) once the diff printed by --dry-run looks right.
+`import` defaults to --only 160-177,241-255 -- every slot still free: the tail
+of the table plus what Cyrillic left of the dead katakana block (see
+RECYCLABLE_CODES: it is JIS X 0201 left over from the CP932 era, unreachable
+since 2010). A full-sheet write is not the default because it would silently
+repaint the hand-made Spanish glyphs and the window art whenever an editor
+shifted a colour. Widen it deliberately (--only 130-159, --all) once the diff
+printed by --dry-run looks right.
 
-Cyrillic has since taken the katakana block, so 29 slots are left; `freeslots`
-prints the current tally.
+33 slots are left; `freeslots` prints the current tally.
 """
 
 import re
@@ -110,9 +110,9 @@ ACCENT_MAP = {
     "Í": 148, "Ó": 149, "Ô": 150, "Õ": 151, "Ú": 152, "Ç": 153,
     # Spanish additions:
     "ñ": 154, "Ñ": 155, "ü": 156, "Ü": 157, "¿": 158, "¡": 159,
-    # French additions (codes 160-165 are NOT free -- 161-223 hold other art,
-    # gameinfo reuses 160/161/176/177 for the chip icon OBJ. 224-255 are blank
-    # and unreferenced, so the French block lives there):
+    # French additions. When they went in, 160-223 was not free (katakana art in
+    # 161-223, and a game info chip icon since removed was drawn over the VRAM
+    # of 160/161/176/177), so the block went to the blank tail at 224-255:
     "è": 224, "ù": 225, "î": 226, "ï": 227, "ë": 228, "û": 229,
     # Italian additions. The lowercase graves the earlier blocks never needed
     # (à/è/ù already exist), plus the uppercase graves: Italian headers are drawn
@@ -693,11 +693,8 @@ def add_scrollbar():
 # clears the remaining 161-177 so the table stops showing glyphs nothing can
 # emit. It frees no space -- the font is always 256 tiles -- but it does change
 # one thing for the better: a CP1252 file name whose bytes land here used to
-# draw a random katakana, and now draws nothing.
-#
-# 161/176/177 are blanked but do NOT become usable: gameinfo claims their VRAM
-# for the chip icon (see RESERVED_CODES), so they keep their reserved status
-# with an empty tile.
+# draw a random katakana, and now draws nothing. The blanked tiles are ordinary
+# free slots (see RESERVED_CODES).
 KATAKANA_LEFTOVER = range(161, 178)
 
 
@@ -759,7 +756,7 @@ RESERVED_CODES = set(range(0, 33))
 # these any more: a Japanese LFN no longer converts and FatFs substitutes '?'
 # (ff.c), the internal ROM header title -- the other JIS X 0201 source -- is
 # never displayed (smc.c only pattern-matches it), and no menu string uses the
-# range. 176/177 stay out of it: gameinfo reuses them for the chip icon.
+# range.
 #
 # The range is not inert, it is actively wrong: under CP1252 an accented file
 # name lands right here with no translation to our own accent slots, so
@@ -775,11 +772,11 @@ RESERVED_CODES = set(range(0, 33))
 # reports as plain free. Kept as the record of where those slots came from.
 RECYCLABLE_CODES = set(range(162, 176))
 
-# What a sheet import may write unasked: the free tail plus the katakana
-# block. Everything else -- the hand-made Spanish glyphs, the window art --
-# needs an explicit --only/--all, so an editor shifting a colour cannot
-# quietly repaint them.
-DEFAULT_IMPORT_RANGE = "162-175,241-255"
+# What a sheet import may write unasked: every free slot, i.e. the tail plus
+# what is left of the katakana block. Everything else -- the hand-made Spanish
+# glyphs, the window art -- needs an explicit --only/--all, so an editor
+# shifting a colour cannot quietly repaint them.
+DEFAULT_IMPORT_RANGE = "160-177,241-255"
 
 DEFAULT_SHEET = "font_sheet.png"
 DEFAULT_GUIDE = "font_guide.png"
