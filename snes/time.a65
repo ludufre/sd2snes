@@ -6,12 +6,12 @@
 
 timebox_data
 ; string offset, selection width, bcdtime offset
-  .byt  0, 4, 9
-  .byt  5, 2, 8
-  .byt  8, 2, 6
-  .byt 11, 2, 4
-  .byt 14, 2, 2
-  .byt 17, 2, 0
+  .byt  0, 2, 4
+  .byt  3, 2, 2
+  .byt  6, 2, 0
+  .byt  9, 2, 6
+  .byt 12, 2, 8
+  .byt 15, 4, 9
 
 time_month
   .byt 3, 1
@@ -616,82 +616,7 @@ rendertime
   AllocStack()
   sep #$20 : .as
   ldx #!stringbuf
-  ldy #$000b
-  lda [StackParam(p_time_addr)], y  ; y100
-  and #$0f
-  cmp #$0a
-  bpl y_skip1
-  clc
-  adc #$30
-  sta !1,x
-  lda #$31
-  sta !0,x
-  bra y_skip2
-y_skip1
-  clc
-  adc #$26
-  sta !1,x
-  lda #$32
-  sta !0,x
-y_skip2
-  inx
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; y10
-  and #$0f
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; y1
-  and #$0f
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  lda #$2d
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; mon
-  and #$0f
-  cmp #$0a
-  bpl mon_skip1
-  clc
-  adc #$30
-  sta !1,x
-  lda #$30
-  sta !0,x
-  bra mon_skip2
-mon_skip1
-  clc
-  adc #$26
-  sta !1,x
-  lda #$31
-  sta !0,x
-mon_skip2
-  inx
-  inx
-  lda #$2d
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; d10
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; d1
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  lda #$20
-  sta !0,x
-  inx
-  dey
+  ldy #$0005
   lda [StackParam(p_time_addr)], y  ; h10
   clc
   adc #$30
@@ -729,6 +654,81 @@ mon_skip2
   inx
   dey
   lda [StackParam(p_time_addr)], y  ; s1
+  clc
+  adc #$30
+  sta !0,x
+  inx
+  lda #$20
+  sta !0,x
+  inx
+  ldy #$0007
+  lda [StackParam(p_time_addr)], y  ; d10
+  clc
+  adc #$30
+  sta !0,x
+  inx
+  dey
+  lda [StackParam(p_time_addr)], y  ; d1
+  clc
+  adc #$30
+  sta !0,x
+  inx
+  lda #$2d
+  sta !0,x
+  inx
+  ldy #$0008
+  lda [StackParam(p_time_addr)], y  ; mon
+  and #$0f
+  cmp #$0a
+  bpl mon_skip1
+  clc
+  adc #$30
+  sta !1,x
+  lda #$30
+  sta !0,x
+  bra mon_skip2
+mon_skip1
+  clc
+  adc #$26
+  sta !1,x
+  lda #$31
+  sta !0,x
+mon_skip2
+  inx
+  inx
+  lda #$2d
+  sta !0,x
+  inx
+  ldy #$000b
+  lda [StackParam(p_time_addr)], y  ; y100
+  and #$0f
+  cmp #$0a
+  bpl y_skip1
+  clc
+  adc #$30
+  sta !1,x
+  lda #$31
+  sta !0,x
+  bra y_skip2
+y_skip1
+  clc
+  adc #$26
+  sta !1,x
+  lda #$32
+  sta !0,x
+y_skip2
+  inx
+  inx
+  dey
+  lda [StackParam(p_time_addr)], y  ; y10
+  and #$0f
+  clc
+  adc #$30
+  sta !0,x
+  inx
+  dey
+  lda [StackParam(p_time_addr)], y  ; y1
+  and #$0f
   clc
   adc #$30
   sta !0,x
