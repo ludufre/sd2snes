@@ -14,8 +14,8 @@ Usage:
     python3 fontedit.py additalian         Insert Italian chars (ì ò È Ì Ò Ù)
     python3 fontedit.py addgerman          Insert German chars (ä ö ß Ä Ö)
     python3 fontedit.py fixcircumflex      Redraw the 8 circumflex tiles
-    python3 fontedit.py addrussian         Insert Cyrillic (codes 178-223)
-    python3 fontedit.py clearkatakana      Blank the leftover katakana (161-177)
+    python3 fontedit.py addrussian         Insert Cyrillic (codes 177-223)
+    python3 fontedit.py clearkatakana      Blank the leftover katakana (161-176)
     python3 fontedit.py addscrollbar       Write scrollbar glyphs (codes 16,17)
     python3 fontedit.py addprogressbar    Write progress-bar glyphs (codes 18,19)
     python3 fontedit.py export [opts]      Dump the font to an editable PNG
@@ -37,12 +37,12 @@ marks and writes ONLY the 6 new slots (224-229), preserving every other tile
 `additalian` follows the same targeted pattern for codes 230-235 and introduces
 no new mark: every Italian glyph is the existing GRAVE over its base letter.
 
-`addrussian` writes the 46 Cyrillic letters that need a tile of their own over
-the dead katakana block (178-223). font.a65 no longer matches its output --
-those glyphs were redrawn by hand afterwards -- so do not rerun it. У (177)
-has a tile of its own too, but it is not drawn by it (see the Cyrillic
-section). The other 19 letters are HOMOGLYPHS -- an existing tile already
-draws them -- and that table is encode-only, never merged into ACCENT_MAP.
+`addrussian` writes the 47 Cyrillic letters that need a tile of their own: 46
+over the dead katakana block (178-223) and У at 177. The table holds the
+literal art, hand-tuned after the native-speaker review, so on an up-to-date
+font.a65 it is a no-op (tests/test_i18n_parity.py checks it). The other 19
+letters are HOMOGLYPHS -- an existing tile already draws them -- and that
+table is encode-only, never merged into ACCENT_MAP.
 
 `addgerman` does the same for 236-240. It needs the diaeresis to be a mark of
 its own, which is why CIRC was redrawn as 3 contiguous pixels: while the
@@ -407,78 +407,72 @@ def add_italian():
         print(render_ascii(tile_to_pixels(new_tiles[code])))
 
 
-# -- Cyrillic (targeted: writes ONLY codes 178-223) --------------------------
+# -- Cyrillic (targeted: writes ONLY codes 177-223) --------------------------
 # The Russian menu's second wall (see MENU-RUSSO-PLANO.md): the font is an
 # 8-bit codepage and Cyrillic is a whole alphabet, not a composed accent. It
-# fits because 19 letters are drawn by tiles that already exist -- 12 uppercase
-# and 7 lowercase Latin homoglyphs, plus ё which IS ë (228) -- leaving 46 to
-# draw, exactly the size of the dead katakana block (178-223).
+# fits because 19 letters are drawn by tiles that already exist -- 11 uppercase
+# and 7 lowercase Latin homoglyphs, plus ё which IS ë (228) -- leaving 47 to
+# draw: 46 over the dead katakana block (178-223) and У right below it (177).
 #
-# font.a65 has moved on since: those glyphs were redrawn by hand afterwards, so
-# this no longer reproduces them and running it again would overwrite that
-# work. У (177) is not drawn here either: it is the tailed shape the Latin Y
-# had before it got a straight stem, carried over byte for byte.
+# Each glyph is its LITERAL tile art in the ART_COLORS legend (. transparent,
+# x body, X outline, # half tone), so `addrussian` writes font.a65 back byte for
+# byte and tests/test_i18n_parity.py fails when the two drift. The first pass
+# was drafted as strokes through `stroke_to_pixels`; the native-speaker review
+# then redrew outlines and half tones by hand, which no stroke rule reproduces.
+# A glyph fixed in font.a65 has to come back into this table. У is the tailed
+# shape the Latin Y had before it got a straight stem.
 #
-# Each glyph is given as its STROKE (colour 1) on the grid the Latin letters
-# use: uppercase and ascenders r0..r5, x-height r1..r5, descenders down to r6,
-# r7 always empty so stacked menu rows do not touch. `stroke_to_pixels` then
-# wraps it in the outline. Ё/Й carry a mark on row 0 like an accent, so their
-# body is squeezed into r1..r5 to free that row.
+# Grid, same as the Latin letters: uppercase and ascenders r0..r5, x-height
+# r1..r5, descenders down to r6, r7 always empty so stacked menu rows do not
+# touch. Ё/Й/й carry their mark on r0 like an accent.
 CYRILLIC = {
-    "Б": ["######..", "##......", "#####...", "##...##.", "##...##.", "#####...", "........", "........"],
-    "Г": ["######..", "##......", "##......", "##......", "##......", "##......", "........", "........"],
-    "Д": ["..#####.", "..##.##.", "..##.##.", "..##.##.", "#######.", "##...##.", "........", "........"],
-    "Ж": ["##.#.##.", ".#.#.#..", "..###...", "..###...", ".#.#.#..", "##.#.##.", "........", "........"],
-    "З": [".#####..", "##...##.", "...###..", ".....##.", "##...##.", ".#####..", "........", "........"],
-    "И": ["##...##.", "##..###.", "##.#.##.", "###..##.", "###..##.", "##...##.", "........", "........"],
-    "Л": ["..#####.", "..##.##.", "..##.##.", "..##.##.", ".###.##.", "###..##.", "........", "........"],
-    "П": ["#######.", "##...##.", "##...##.", "##...##.", "##...##.", "##...##.", "........", "........"],
-    "Ф": ["...#....", ".#####..", "##.#.##.", "##.#.##.", ".#####..", "...#....", "........", "........"],
-    "Ц": ["##...##.", "##...##.", "##...##.", "##...##.", "#######.", ".....##.", "........", "........"],
-    "Ч": ["##...##.", "##...##.", "#######.", ".....##.", ".....##.", ".....##.", "........", "........"],
-    "Ш": ["##.#.##.", "##.#.##.", "##.#.##.", "##.#.##.", "##.#.##.", "#######.", "........", "........"],
-    "Щ": ["##.#.##.", "##.#.##.", "##.#.##.", "##.#.##.", "#######.", ".....##.", "........", "........"],
-    "Ъ": ["###.....", ".##.....", ".#####..", ".##..##.", ".##..##.", ".#####..", "........", "........"],
-    "Ы": ["##...##.", "##...##.", "####.##.", "##.#.##.", "##.#.##.", "####.##.", "........", "........"],
-    "Ь": ["##......", "##......", "#####...", "##..##..", "##..##..", "#####...", "........", "........"],
-    "Э": [".#####..", "##...##.", "..#####.", ".....##.", "##...##.", ".#####..", "........", "........"],
-    "Ю": ["##..##..", "##.#..#.", "####..#.", "####..#.", "##.#..#.", "##..##..", "........", "........"],
-    "Я": [".######.", "##...##.", "##...##.", ".######.", "..#..##.", "##...##.", "........", "........"],
-    "б": ["..####..", ".##.....", "####....", "##..##..", "##..##..", ".####...", "........", "........"],
-    "в": ["........", "####....", "##..##..", "####....", "##..##..", "####....", "........", "........"],
-    "г": ["........", "#####...", "##......", "##......", "##......", "##......", "........", "........"],
-    "д": ["........", "..####..", "..##.##.", "..##.##.", "#######.", "##...##.", "........", "........"],
-    "ж": ["........", "##.#.##.", ".#.#.#..", "..###...", ".#.#.#..", "##.#.##.", "........", "........"],
-    "з": ["........", ".####...", "....##..", "..###...", "....##..", ".####...", "........", "........"],
-    "и": ["........", "##...##.", "##..###.", "##.#.##.", "###..##.", "##...##.", "........", "........"],
-    "к": ["........", "##...##.", "##..##..", "#####...", "##..##..", "##...##.", "........", "........"],
-    "л": ["........", "..#####.", "..##.##.", "..##.##.", ".###.##.", "###..##.", "........", "........"],
-    "м": ["........", "##...##.", "###.###.", "##.#.##.", "##...##.", "##...##.", "........", "........"],
-    "н": ["........", "##...##.", "##...##.", "#######.", "##...##.", "##...##.", "........", "........"],
-    "п": ["........", "#######.", "##...##.", "##...##.", "##...##.", "##...##.", "........", "........"],
-    "т": ["........", "#######.", "...##...", "...##...", "...##...", "...##...", "........", "........"],
-    "ф": ["...#....", ".#####..", "##.#.##.", "##.#.##.", ".#####..", "...#....", "...#....", "........"],
-    "ц": ["........", "##...##.", "##...##.", "##...##.", "#######.", ".....##.", "........", "........"],
-    "ч": ["........", "##...##.", "##...##.", "#######.", ".....##.", ".....##.", "........", "........"],
-    "ш": ["........", "##.#.##.", "##.#.##.", "##.#.##.", "##.#.##.", "#######.", "........", "........"],
-    "щ": ["........", "##.#.##.", "##.#.##.", "##.#.##.", "#######.", ".....##.", ".....##.", "........"],
-    "ъ": ["........", "###.....", ".#####..", ".##..##.", ".##..##.", ".#####..", "........", "........"],
-    "ы": ["........", "##...##.", "####.##.", "##.#.##.", "##.#.##.", "####.##.", "........", "........"],
-    "ь": ["........", "##......", "#####...", "##..##..", "##..##..", "#####...", "........", "........"],
-    "э": ["........", ".####...", "##..##..", "..####..", "##..##..", ".####...", "........", "........"],
-    "ю": ["........", "##..##..", "####..#.", "####..#.", "####..#.", "##..##..", "........", "........"],
-    "я": ["........", ".#####..", "##..##..", ".#####..", "..#.##..", "##...##.", "........", "........"],
-}
-# Body squeezed into r1..r5 so row 0 can carry the mark, exactly like an accent.
-CYRILLIC_MARKED = {
-    # Ё has to give up row 0 (E fills it edge to edge, so a mark painted over it
-    # reads as dirt, not as a diaeresis), so its body is squeezed into r1..r5.
-    "Ё": (["........", "#######.", "##......", "#####...", "##......", "#######.", "........", "........"], DIAERESIS),
-    # Й keeps the full-height И: the top row of that letter is two stems with a
-    # gap between them, and the breve lands in the gap. Squeezing it instead
-    # would make it byte-identical to й, which has row 0 free anyway.
-    "Й": (CYRILLIC["И"], BREVE),
-    "й": (CYRILLIC["и"], BREVE),
+    "Б": ["xxxxxxxX", "xxXXXXXX", "xxxxxx#X", "xxXXXxxX", "xxXXXxxX", "xxxxxx#X", "XXXXXXX.", "........"],
+    "Г": ["xxxxxx#X", "xxXXXXX.", "xxX.....", "xxX.....", "xxX.....", "xxX.....", "XXX.....", "........"],
+    "Д": [".XxxxxX.", ".XxXxxX.", "XXxXxxX.", "XxXXxxX.", "xxxxxxxX", "xXXXXXxX", "X.....X.", "........"],
+    "Ё": ["XxXXxXXX", "xxxxxxxX", "xxXXXXX.", "xxxxxX..", "xxXXXXX.", "xxxxxxxX", "XXXXXXX.", "........"],
+    "Ж": ["xxXxXxxX", "xxXxXxxX", "X#xxx#X.", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "XX.X.XXX", "........"],
+    "З": ["Xxxxx#X.", "xXXXXxxX", "XXxxx#X.", "X.XXXxxX", "xXXXXxxX", "Xxxxx#X.", ".XXXXX..", "........"],
+    "И": ["xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xx#xxX", ".XXXXXX.", "........"],
+    "Й": ["xxXxXxxX", "xxXXXxxX", "xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xx#xxX", ".XXXXXX.", "........"],
+    "Л": ["..XxxxxX", ".XxxXxxX", "XxxXXxxX", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "XX...XX.", "........"],
+    "П": ["xxxxx#XX", "xxXXXxxX", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "XX...XX.", "........"],
+    "У": ["xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xxxxxX", "XXXXXxxX", "xxxxx#X.", "XXXXXX..", "........"],
+    "Ф": ["X#xxx#X.", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "X#xxx#X.", ".XXxXX..", "...X...."],
+    "Ц": ["xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xx#xx#", ".XXXXXXx", "........"],
+    "Ч": ["xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xxxxxX", ".XXXXxxX", "....XxxX", ".....XX.", "........"],
+    "Ш": ["xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "X#xxxxxX", ".XXXXXX.", "........"],
+    "Щ": ["xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "X#xxxxx#", "XXXXXXXx", "........"],
+    "Ъ": ["xxxX....", "XxxXXXX.", "Xxxxxx#X", "XxxXXXxX", "XxxXXXxX", "Xxxxxx#X", ".XXXXXX.", "........"],
+    "Ы": ["xxX.XxxX", "xxXXXxxX", "xxxx#xxX", "xxXXx#xX", "xxXXx#xX", "xxxx#xxX", "XXXXXXX.", "........"],
+    "Ь": ["XxxX....", "XxxXXXX.", "Xxxxxx#X", "XxxXXXxX", "XxxXXXxX", "Xxxxxx#X", "XXXXXXX.", "........"],
+    "Э": ["xxxxxx#X", "XXXXXxxX", ".XxxxxxX", ".XXXXxxX", "XXXXXxxX", "xxxxxx#X", "XXXXXXX.", "........"],
+    "Ю": ["xxXxxxX.", "xxxXXXxX", "xxxX.XxX", "xxxX.XxX", "xxxXXXxX", "xxXxxxXX", "XX.XXXX.", "........"],
+    "Я": ["X#xxxxxX", "xxXXXxxX", "xxXXXxxX", "X#xxxxxX", "xxXXXxxX", "xxX.XxxX", "XXX..XXX", "........"],
+    "б": ["XXXXXXX.", "xxxxxxxX", "xxXXXXX.", "xxxxxx#X", "xxXXXxxX", "xxxxxx#X", "XXXXXXX.", "........"],
+    "в": ["XXXXXX..", "xxxxx#X.", "xxXXXxxX", "xxxxx#X.", "xxXXXxxX", "xxxxx#X.", "XXXXXX..", "........"],
+    "г": ["XXXXXXX.", "xxxxxx#X", "xxXXXXX.", "xxX.....", "xxX.....", "xxX.....", "XXX.....", "........"],
+    "д": ["..XXXX..", ".XxxxxX.", ".XxXxxX.", "XxXXxxX.", "xxxxxxxX", "xXXXXXxX", "X.....X.", "........"],
+    "ж": ["XX.X.XX.", "xxXxXxxX", "xxXxXxxX", "X#xxx#X.", "xxXxXxxX", "xxXxXxxX", "XX.X.XX.", "........"],
+    "з": [".XXXXX..", "Xxxxx#X.", "xXXXXxxX", "XXXxxxX.", "xXXXXxxX", "Xxxxx#X.", ".XXXXX..", "........"],
+    "и": ["XX...XX.", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xx#xxX", ".XXXXXX.", "........"],
+    "й": ["XXXxXXX.", "xxXXXxxX", "xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xx#xxX", ".XXXXXX.", "........"],
+    "к": ["XX...XX.", "xxX.XxxX", "xxXXXxxX", "xxxxx#X.", "xxXXXxxX", "xxX.XxxX", "XX...XXX", "........"],
+    "л": ["...XXXX.", "..XxxxxX", ".XxxXxxX", "XxxXXxxX", "xxX.XxxX", "xxX.XxxX", "XX...XX.", "........"],
+    "м": ["XXX.XX..", "xxxXx#XX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXXXxxX", "XX...XX.", "........"],
+    "н": ["XX...XX.", "xxX.XxxX", "xxXXXxxX", "xxxxxxxX", "xxXXXxxX", "xxX.XxxX", "XX...XX.", "........"],
+    "п": ["XXXXXXX.", "xxxxx#XX", "xxXXXxxX", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "XX...XX.", "........"],
+    "т": ["XXXXXXX.", "xxxxxxxX", "XXXxxXX.", "..XxxX..", "..XxxX..", "..XxxX..", "...XX...", "........"],
+    "ф": [".XXXXX..", "X#xxx#X.", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "X#xxx#X.", ".XXxXX..", "...X...."],
+    "ц": ["XX...XX.", "xxX.XxxX", "xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xx#xx#", ".XXXXXXx", "........"],
+    "ч": ["XX...XX.", "xxX.XxxX", "xxX.XxxX", "xxXXXxxX", "X#xxxxxX", ".XXXXxxX", ".....XX.", "........"],
+    "ш": ["XX.X.XX.", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "X#xxxxxX", ".XXXXXX.", "........"],
+    "щ": ["XX.X.XX.", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "xxXxXxxX", "X#xxxxx#", "XXXXXXXx", "........"],
+    "ъ": ["XXX.....", "xxxXXXX.", "Xxxxxx#X", "XxxXXXxX", "XxxXXXxX", "Xxxxxx#X", ".XXXXXX.", "........"],
+    "ы": ["XX...XX.", "xxXXXxxX", "xxxx#xxX", "xxXXx#xX", "xxXXx#xX", "xxxx#xxX", "XXXXXXX.", "........"],
+    "ь": [".XX.....", "XxxXXXX.", "Xxxxxx#X", "XxxXXXxX", "XxxXXXxX", "Xxxxxx#X", ".XXXXXX.", "........"],
+    "э": [".XXXXXX.", "xxxxxx#X", ".XXXXxxX", ".XxxxxxX", ".XXXXxxX", "xxxxxx#X", ".XXXXXX.", "........"],
+    "ю": ["XX.XXX..", "xxXxxxX.", "xxxXXXxX", "xxxX.XxX", "xxxXXXxX", "xxXxxxX.", "XX.XXX..", "........"],
+    "я": ["XXXXXXX.", "X#xxxxxX", "xxXXXxxX", "xxXXXxxX", "X#xxxxxX", "xxXXXxxX", "XXX..XXX", "........"],
 }
 
 
@@ -492,6 +486,10 @@ def stroke_to_pixels(art, mark=None):
     drawn letters drop their anti-aliasing. Replaying it over the 94 printable
     Latin tiles reproduces 94.7% of their pixels and 24 of them exactly, so a
     glyph built this way sits next to them without looking foreign.
+
+    No command calls it any more: it drafted the first Cyrillic pass, which was
+    then tuned by hand and stored as literal art (see CYRILLIC). Draft a new
+    alphabet the same way.
     """
     st = [[1 if ch == "#" else 0 for ch in row] for row in art]
     out = [row[:] for row in st]
@@ -512,13 +510,15 @@ def stroke_to_pixels(art, mark=None):
     return out
 
 
+def russian_tiles():
+    """code -> tile for every Cyrillic letter with a tile of its own."""
+    return {ACCENT_MAP[ch]: pixels_to_tile(art_to_pixels(art)) for ch, art in CYRILLIC.items()}
+
+
 def add_russian():
     header, tiles = load_font()
     new_tiles = dict(enumerate(tiles))  # code -> tile (start from current file)
-    for ch, art in CYRILLIC.items():
-        new_tiles[ACCENT_MAP[ch]] = pixels_to_tile(stroke_to_pixels(art))
-    for ch, (art, mark) in CYRILLIC_MARKED.items():
-        new_tiles[ACCENT_MAP[ch]] = pixels_to_tile(stroke_to_pixels(art, mark))
+    new_tiles.update(russian_tiles())
 
     out_lines = list(header)
     total = max(len(tiles), max(new_tiles) + 1)
@@ -528,7 +528,7 @@ def add_russian():
         out_lines.extend(encode_tile_lines(tile, label=label))
     FONT.write_text("\n".join(out_lines) + "\n")
     print(f"Updated {FONT}")
-    print(f"  {len(CYRILLIC) + len(CYRILLIC_MARKED)} Cyrillic glyphs written "
+    print(f"  {len(CYRILLIC)} Cyrillic glyphs written "
           f"({min(ACCENT_MAP[c] for c in CYRILLIC)}-{max(ACCENT_MAP[c] for c in CYRILLIC)})")
     for ch, code in sorted(HOMOGLYPHS.items(), key=lambda kv: kv[1]):
         print(f"  {ch} = {code} (homoglyph, no tile of its own)")

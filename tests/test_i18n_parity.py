@@ -90,12 +90,28 @@ def test_accent_tiles_are_distinct():
     assert not clashes, f"accent tiles that are byte-identical: {clashes}"
 
 
+def test_cyrillic_table_matches_font():
+    """fontedit.CYRILLIC is the source of the Cyrillic tiles, so `addrussian`
+    must write font.a65 back unchanged. The review once redrew the glyphs
+    straight in font.a65 while the table kept the first pass, and rerunning
+    the command would have reverted that work without a word."""
+    _, tiles = fontedit.load_font()
+    generated = fontedit.russian_tiles()
+    uncovered = sorted(ch for ch, code in build_const.ACCENTS.items()
+                       if 177 <= code <= 223 and ch not in fontedit.CYRILLIC)
+    drift = [f"{ch!r}({fontedit.ACCENT_MAP[ch]})" for ch in fontedit.CYRILLIC
+             if generated[fontedit.ACCENT_MAP[ch]] != tiles[fontedit.ACCENT_MAP[ch]]]
+    assert not uncovered, f"Cyrillic tiles with no art in fontedit.CYRILLIC: {uncovered}"
+    assert not drift, f"font.a65 tiles that differ from fontedit.CYRILLIC: {drift}"
+
+
 if __name__ == "__main__":
     failed = 0
     for fn in (test_accents_match_accent_map, test_accent_codes_have_glyphs,
                test_homoglyphs_match_and_stay_out_of_accents,
                test_homoglyph_codes_point_at_a_real_glyph,
-               test_accent_tiles_are_distinct):
+               test_accent_tiles_are_distinct,
+               test_cyrillic_table_matches_font):
         try:
             fn()
             print(f"PASS {fn.__name__}")
