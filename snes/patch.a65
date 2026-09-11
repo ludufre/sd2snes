@@ -1129,6 +1129,8 @@ patch_export_screen:
     jsr waitblank               ; land in vblank before the first write
     lda #$8f
     sta $2100                   ; forced blank
+    stz $420c                   ; HDMA off: the wipes below outlast VBlank, and on S-CPU v1
+                                ;   a DMA ending right before HDMA can crash (see NMI_ROUTINE)
 
     ; --- wipe the WRAM tilemap buffers ($7EA000 BG2, $7EB000 BG1) ---
     ldx #$a000
@@ -1161,10 +1163,10 @@ patch_export_screen:
     ; 0-8 plus 9+ for BG2.  Rolling my own got one layer wrong and printed every
     ; other character.  The modal sits at rows 12-14, well inside what the NMI
     ; uploads, and the wiped BG1 rows 0-8 stay wiped because it never touches them.
+    jsr setup_hdma              ; HDMA + NMI back on at the next VBlank; the NMI raised
+                                ;   right there uploads the modal while still blanked
     lda cur_bright              ; un-blank: the modal is the only thing left
     sta $2100
-    lda #$81
-    sta $4200                   ; NMI + auto-joypad back on
     jsr waitblank
     jsr waitblank               ; two frames: let it actually land in VRAM
     plp

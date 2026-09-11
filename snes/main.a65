@@ -1042,6 +1042,9 @@ backup_wram:
   php
   rep #$10 : .xl
   sep #$20 : .as
+  stz $420c                  ; HDMA off: 8 KB of DMA outlasts VBlank, and on S-CPU v1 a
+                             ;   DMA ending right before HDMA can crash (see NMI_ROUTINE).
+                             ;   Every caller warm-resets next, and the warm boot re-arms it.
   ldx #$0000
   stx $2181
   stz $2183

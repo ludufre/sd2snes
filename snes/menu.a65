@@ -1978,13 +1978,12 @@ mfr_ready:
                              ;   genfonts, which uses the same channel.
   lda #$80
   sta $2100                  ; forced blank: VRAM writes are dropped with the screen on
+  stz $420c                  ; HDMA off: genfonts is a long run of DMAs that overruns the
+                             ;   blank, and on S-CPU v1 a DMA ending right before HDMA can
+                             ;   crash (see NMI_ROUTINE)
   jsr genfonts
-  jsr waitblank              ; genfonts overruns the blank, so come back on a frame
-                             ;   boundary: one clean black frame beats half of one
-  lda @$004210               ; drain the missed NMI so re-arming does not fire one
-                             ;   mid-frame, where its VRAM DMA would be discarded
-  lda #$81
-  sta $4200                  ; VBlank NMI + auto joypad read, as setup_hdma arms it
+  jsr setup_hdma             ; HDMA and NMI back on at the next VBlank: one clean black
+                             ;   frame, and the NMI raised right there uploads on time
   lda @cur_bright
   sta $2100                  ; screen back on at whatever the fade had reached
 mfr_done:

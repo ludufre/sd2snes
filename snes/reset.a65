@@ -10,7 +10,27 @@ NMI_ROUTINE:
   pha
   plb
   lda screen_dma_disable
+  bne nmi_skip_upload
+; A late NMI must not upload.  S-CPU version 1 (early consoles) can crash when a
+; DMA ends right before HDMA runs, and the three transfers below take all of NTSC
+; VBlank: started on line 225 they end on line 261 (measured), just short of the
+; HDMA init on line 0.  Any later start runs them into active display, where HDMA
+; fires on every line.  Late NMIs are routine: re-arming $4200 while the VBlank
+; flag is still set raises one on the spot (cover_blank_end does, after every
+; cover upload), and an NMI held back by a main-loop DMA arrives late too.
+; Skipping costs nothing visible: the buffers go up whole on every NMI, so the
+; next one catches up.
+  lda $2137                  ; SLHV: latch the counters (snes_init sets $4201 bit 7)
+  lda $213f                  ; STAT78: reset the OPVCT read flip-flop
+  lda $213d                  ; OPVCT low 8 bits
+  xba
+  lda $213d                  ; OPVCT bit 8 (bits 1-7 are open bus)
+  lsr
+  bcs nmi_skip_upload        ; line 256+
+  xba
+  cmp #225
   beq do_screen_dma
+nmi_skip_upload:
   jmp skip_screen_dma
 do_screen_dma:
   ldx #BG1_TILE_BASE+32*9
