@@ -37,6 +37,31 @@ nes_dev_poll_frame:
         cmp @nes_dev_last_seq
         sep #$20 : .as
         beq ndp_none
+        ; --- v3.9: DRENA EM ORDEM.  A mailbox e' um ping-pong de 2 buffers: se
+        ;     o renderer esta' 2 frames atras (seq - last == 2), o frame seq-1
+        ;     AINDA esta' intacto no outro buffer -- drena-lo primeiro e' o que
+        ;     evita o SKIP (e a recovery da bridge, que em silicio perdia as
+        ;     colunas do desenho de fase do SMB1: 4 de 12 frames sumiam do
+        ;     shadow sem badop, sem drain descartado e sem parse truncado).
+        ;     Se estiver 3+ atras, seq-1 e' o mais antigo que sobrou.  A
+        ;     verificacao pos-drain (abaixo) cobre a bridge publicar seq+1 no
+        ;     buffer de seq-1 no meio da copia.
+        rep #$20 : .al
+        lda NES_FRAME_SEQ
+        sec
+        sbc @nes_dev_last_seq
+        cmp #$0002
+        lda NES_FRAME_SEQ
+        bcc ndp_want_set          ; 1 atras: o proprio seq
+        dec                       ; >= 2 atras: seq-1 primeiro
+        pha
+        lda @nes_dbg_older
+        inc
+        sta @nes_dbg_older
+        pla
+ndp_want_set:
+        sta @nes_dev_want_seq
+        sep #$20 : .as
         ; --- v1.5.1 (Sintoma A, 2a rodada): escolhe o FRAME BUFFER alvo do
         ;     decode (ping-pong SEM stall -- ver protocolo em nes_data.a65).
         ;     Diferente do ready-gate v1.5.0 (que SERIALIZAVA decode->apply
@@ -49,7 +74,70 @@ nes_dev_poll_frame:
         bcs ndp_none               ; (nunca stalla; bcs fica por robustez)
         jsr nes_dev_drain_mailbox  ; captura o seq DRENADO em @nes_dev_drain_seq
                                     ; (o mesmo que escolheu NES_BUF_SEL) -- ver la.
+        ; --- v3.9: a COPIA E' SUSPEITA se a bridge publicou N+2 durante o drain.
+        ;     A mailbox e' um ping-pong de 2 buffers SEM stall: o frame N+2 vai
+        ;     para o MESMO buffer de N.  O drain e' um DMA em chunks de 512 B
+        ;     entre NMIs (ate' ~1 frame); a serializacao da bridge leva ~30 us
+        ;     no tick do NES.  Com o renderer >= 2 frames atrasado o tick cai
+        ;     DENTRO do drain e a copia sai MISTURADA -- e como os frames de um
+        ;     desenho de fase tem o MESMO formato (SMB1: 33 runs de 1-2 celulas
+        ;     por frame), ela PARSEIA limpa (badop = 0): entrega as colunas de
+        ;     N+2 no lugar das de N e ACKa N -> a bridge solta a uniao de N e
+        ;     as colunas de N somem para sempre (one-shot).  Medido em silicio
+        ;     (10/set/2026): 2 de 3 cargas com colunas perdidas e badop = 0.
+        ;     Se NES_FRAME_SEQ ja' esta' >= 2 a frente do seq drenado, o buffer
+        ;     copiado pode ter sido reescrito: DESCARTA a copia, NAO processa,
+        ;     NAO ACKa; o proximo poll drena o mais novo (serializacao ja'
+        ;     completa) e o salto do ACK (ack_skip) faz a bridge RE-ENTREGAR a
+        ;     uniao de N e N+1 (run_skipreal: recovery limpa sob skips).
+        ;     Avanco de 1 = o OUTRO buffer, seguro.
+        rep #$20 : .al
+        lda NES_FRAME_SEQ
+        sec
+        sbc @nes_dev_drain_seq
+        cmp #$0002
+        bcc ndp_fresh
+        lda @nes_dbg_stale
+        inc
+        sta @nes_dbg_stale
+        sep #$20 : .as
+        lda #$00                   ; A=0: nada consumido
+        plp
+        rts
+ndp_fresh:
+        sep #$20 : .as
         jsl nes_process_frame
+        ; --- v3.9: um frame cujo PARSE ABORTOU (nes_frame_valid = 0: opcode
+        ;     desconhecido no laco TLV) NAO e' ACKado.  O caso real, medido em
+        ;     silicio no SMB1 (colunas da fase perdidas no menu-load, +9
+        ;     overruns nos 12 frames do desenho): com o renderer >= 2 frames
+        ;     atrasado a bridge publica o frame N+2 no MESMO buffer que o
+        ;     drain do frame N ainda esta' copiando (ping-pong de 2 buffers,
+        ;     sem stall) -- a copia sai misturada, o parser perde o alinhamento
+        ;     e abortava... e ACKava.  Para a bridge um ACK e' "delta
+        ;     absorvido": ela soltava a uniao pendente daquele frame e as
+        ;     runs de nametable dele (as colunas) sumiam PARA SEMPRE -- e'
+        ;     um one-shot, nada as redesenha.  Sem o ACK o seq fica parado; a
+        ;     bridge ve o salto no ACK seguinte (ack_skip) e RE-ENTREGA a
+        ;     uniao (tb_skipreal: recovery limpa sob skips, so' o ACK mentia).
+        ;     Um 2o aborto do MESMO seq (o buffer nao foi sobrescrito: o dado
+        ;     e' ruim mesmo) ACKa como antes -- senao o renderer drenaria o
+        ;     mesmo lixo para sempre.  A=1 nos dois casos: um frame foi
+        ;     consumido do ponto de vista do chamador (pacing), e o
+        ;     nes_fb_commit do que o parse alcancou ja' saiu.
+        sep #$20 : .as
+        lda @nes_frame_valid
+        bne ndp_ack
+        rep #$20 : .al
+        lda @nes_dev_drain_seq
+        cmp @nes_dev_abort_seq
+        beq ndp_ack               ; 2o aborto do mesmo seq: desiste, ACKa
+        sta @nes_dev_abort_seq
+        sep #$20 : .as
+        lda #$01
+        plp
+        rts
+ndp_ack:
         ; consumido: grava @nes_dev_last_seq = seq DRENADO (nunca uma
         ; RELEITURA de NES_FRAME_SEQ -- essa releitura pegava o SEQ mais NOVO
         ; que a bridge incrementou DURANTE o process e reivindicava frames que
@@ -106,7 +194,7 @@ ndp_none:
 ; ------------------------------------------------------------
 nes_dev_drain_mailbox:
         rep #$20 : .al
-        lda NES_FRAME_SEQ         ; SEQ que ESCOLHE o buffer a drenar. Le UMA
+        lda @nes_dev_want_seq     ; v3.9: SEQ escolhido pelo poll (o mais antigo intacto). Le UMA
         sta @nes_dev_drain_seq    ; vez e reusa p/ os DOIS papeis: (1) NES_BUF_SEL
                                   ; = SEQ&1, o buffer que sera' processado; (2) o
                                   ; ACK (poll_frame grava @nes_dev_last_seq =

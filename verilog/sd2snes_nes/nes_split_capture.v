@@ -46,6 +46,25 @@ module nes_split_capture(
   reg [7:0]  spl_last_sl;     // scanline of the LAST CHANGE (coalesce chain)
   reg [14:0] spl_last_t;
   reg [2:0]  spl_last_fx;
+  // ---- RASTER-ADVANCED VERTICAL (v3.9) ----------------------------------
+  // v_shadow follows CPU writes ONLY (the $2006 pair / the pre-render copy).
+  // The PPU's own per-scanline Y increment was never modelled, so a split whose
+  // write pair is $2005-ONLY -- horizontal scroll, the classic status-bar split
+  // -- published the vertical the raster had at the ANCHOR, not at the split.
+  // Super Mario Bros. 1 is the pure case: it seeds v<=t (vertical 0) at the
+  // pre-render line and then writes only $2005 at the sprite-0 hit, so the
+  // playfield strip went out with sy=0 and the renderer anchored it at logical
+  // line 0 -- the status-bar rows, drawn again inside the playfield, with the
+  // ground pushed off the bottom.
+  //
+  // Instead of incrementing v_shadow per scanline (which would make eff_t
+  // change every line and fire the change detector on every one of them, K=4
+  // overflowing on any scrolling game), the vertical is carried as an ANCHOR
+  // plus the raster delta, and only the PUBLISHED value uses it.  Detection is
+  // untouched: it still compares eff_t, i.e. CPU intent.
+  reg [7:0]  va_line;   // line inside the nametable at the anchor (== the sy byte)
+  reg        va_nt;     // nametable Y (loopy bit 11) at the anchor
+  reg [7:0]  va_sl;     // scanline the anchor was taken at
   // ---- THE EFFECTIVE T: vertical from V, horizontal from T --------------
   // A mid-frame split is fixed by whichever register the game actually wrote,
   // and the two halves come from DIFFERENT ones:
@@ -108,6 +127,24 @@ module nes_split_capture(
   // tb_split_capture instead.
   wire [14:0] v_eff = q_vwe ? q_v : v_shadow;
   wire [14:0] eff_t = (v_eff & 15'h7BE0) | (q_t & 15'h041F);
+
+  // PUBLISHED T: same composition as eff_t, but the vertical is the anchor
+  // advanced by the raster.  One 240-line wrap at most (anchor <= 239 and
+  // delta <= 239 => 478 < 480), and it toggles the nametable Y like the PPU's
+  // coarse-Y wrap does.
+  // The anchor is consumed COMBINATIONALLY on a write cycle, for the same
+  // reason v_eff is: the registered update is not visible to this cycle's
+  // publish, and a $2006 split must go out with the vertical it just WROTE
+  // (delta 0), not the raster line.  Caught by the $2006 control bench.
+  wire [7:0]  va_line_eff = q_vwe ? {q_v[9:5], q_v[14:12]} : va_line;
+  wire        va_nt_eff   = q_vwe ? q_v[11]                : va_nt;
+  wire [7:0]  va_sl_eff   = q_vwe ? q_sl[7:0]              : va_sl;
+  wire [8:0]  va_raw   = {1'b0, va_line_eff} + ({1'b0, q_sl[7:0]} - {1'b0, va_sl_eff});
+  wire        va_wrap  = (va_raw >= 9'd240);
+  wire [8:0]  va_sub   = va_raw - 9'd240;
+  wire [7:0]  pub_line = va_wrap ? va_sub[7:0] : va_raw[7:0];
+  wire        pub_nt   = va_nt_eff ^ va_wrap;
+  wire [14:0] pub_t    = {pub_line[2:0], pub_nt, q_t[10], pub_line[7:3], q_t[4:0]};
 
   wire spl_changed = (eff_t != spl_last_t) | (q_fx != spl_last_fx);
   // RENDERING GATE (ppumask BG|OBJ): a T/fine_x change while rendering is OFF is
@@ -211,6 +248,7 @@ module nes_split_capture(
       spl_cnt<=3'd1; spl_ovf<=1'b0; spl_frozen<=1'b0;
       spl_sl[0]<=8'd0; spl_t[0]<=15'd0; spl_fx[0]<=3'd0;
       v_shadow<=15'd0;
+      va_line<=8'd0; va_nt<=1'b0; va_sl<=8'd0;
       spl_last_sl<=8'd0; spl_last_t<=15'd0; spl_last_fx<=3'd0;
       dp_v<=1'b0; dp_act<=3'd0; dp_idx<=3'd0;
       dp_sl<=8'd0; dp_t<=15'd0; dp_fx<=3'd0;
@@ -219,10 +257,17 @@ module nes_split_capture(
       spl_frozen<=1'b0; spl_ovf<=1'b0; spl_cnt<=3'd1;
       spl_sl[0]<=8'd0; spl_t[0]<=eff_t; spl_fx[0]<=q_fx;
       spl_last_sl<=8'd0; spl_last_t<=eff_t; spl_last_fx<=q_fx;
-      if (q_vwe) v_shadow<=q_v;
+      if (q_vwe) begin
+        v_shadow<=q_v;
+        va_line<={q_v[9:5], q_v[14:12]}; va_nt<=q_v[11]; va_sl<=8'd0;
+      end
     end else if (q_ce && q_sl <= 9'd239 && spl_render) begin
-      // the CPU wrote V ($2006 pair or a $2007 access): adopt it
-      if (q_vwe) v_shadow<=q_v;
+      // the CPU wrote V ($2006 pair or a $2007 access): adopt it, and
+      // re-anchor the raster vertical at THIS scanline
+      if (q_vwe) begin
+        v_shadow<=q_v;
+        va_line<={q_v[9:5], q_v[14:12]}; va_nt<=q_v[11]; va_sl<=q_sl[7:0];
+      end
       if (!spl_frozen) begin
         // entry 0 = display-start state (chain anchored at scanline 0)
         // PRE-RENDER COPY: v <= t, then entry 0 is composed from it (which
@@ -231,6 +276,8 @@ module nes_split_capture(
         // two apart).  Written to the shadow AND used for this entry, since the
         // non-blocking update is not visible to eff_t in this same cycle.
         v_shadow<=q_t;
+        // the pre-render copy is also the raster anchor of the frame
+        va_line<={q_t[9:5], q_t[14:12]}; va_nt<=q_t[11]; va_sl<=8'd0;
         // PARK(seed)
         dp_v<=1'b1; dp_act<=ACT_WR; dp_idx<=3'd0;
         dp_sl<=8'd0; dp_t<=q_t; dp_fx<=q_fx;
@@ -243,7 +290,7 @@ module nes_split_capture(
           // scanline; the chain advances so a pair may continue next line
           // PARK(coalesce)
           dp_v<=1'b1; dp_act<=ACT_COAL; dp_idx<=spl_cnt-3'd1;
-          dp_sl<=spl_sl_now; dp_t<=eff_t; dp_fx<=q_fx;
+          dp_sl<=spl_sl_now; dp_t<=pub_t; dp_fx<=q_fx;
           // ENDPARK
           spl_last_sl<=spl_sl_now;
           spl_last_t<=eff_t; spl_last_fx<=q_fx;
@@ -254,7 +301,7 @@ module nes_split_capture(
             dp_v<=1'b1;
             dp_act<=spl_ev1 ? ACT_EV1 : (spl_ev2 ? ACT_EV2 : ACT_EV3);
             dp_idx<=3'd3;
-            dp_sl<=spl_sl_now; dp_t<=eff_t; dp_fx<=q_fx;
+            dp_sl<=spl_sl_now; dp_t<=pub_t; dp_fx<=q_fx;
             // ENDPARK
             spl_last_sl<=spl_sl_now; spl_last_t<=eff_t; spl_last_fx<=q_fx;
           end
@@ -262,7 +309,7 @@ module nes_split_capture(
         end else begin
           // PARK(append)
           dp_v<=1'b1; dp_act<=ACT_WR; dp_idx<=spl_cnt;
-          dp_sl<=spl_sl_now; dp_t<=eff_t; dp_fx<=q_fx;
+          dp_sl<=spl_sl_now; dp_t<=pub_t; dp_fx<=q_fx;
           // ENDPARK
           spl_cnt<=spl_cnt+3'd1;
           spl_last_sl<=spl_sl_now; spl_last_t<=eff_t; spl_last_fx<=q_fx;

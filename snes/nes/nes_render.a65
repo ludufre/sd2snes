@@ -10001,7 +10001,9 @@ nav_s3_twok:
         sep #$20 : .as
 nav_s3_s3pub:
         sta @nes_dbg_s3
-        ; --- rodizio no canal de 1 byte ---
+        ; --- rodizio no canal de 1 byte (v3.9: k0 older, k1 badrun, k2 badop,
+        ;     k3 stale -- os instrumentos do transporte; a Sonda 3 (s0..s3) segue
+        ;     em nes_dbg_s0..s3 na WRAM, so' saiu do canal) ---
         lda @nes_dbg_k
         inc
         sta @nes_dbg_k
@@ -10011,16 +10013,18 @@ nav_s3_s3pub:
         beq nav_dbg_k1
         cmp #$02
         beq nav_dbg_k2
-        lda @nes_dbg_s3
+        lda @nes_dbg_stale         ; v3.9: drains descartados (k=3; o s3 da
+                                   ; Sonda 3 saiu do rodizio)
         bra nav_dbg_kpub
 nav_dbg_k0:
-        lda @nes_dbg_s0
+        lda @nes_dbg_older         ; v3.9: drains de seq-1 (renderer >= 2 atras)
         bra nav_dbg_kpub
 nav_dbg_k1:
-        lda @nes_dbg_s1
+        lda @nes_dbg_badrun        ; v3.9: runs de NT descartadas (off >= $800)
         bra nav_dbg_kpub
 nav_dbg_k2:
-        lda @nes_dbg_s2
+        lda @nes_dbg_badop         ; v3.9: parses ABORTADOS (o instrumento que
+                                   ; faltava no campo -- ver nes_dev_poll_frame)
 nav_dbg_kpub:
         sta NES_DBG_REND
 

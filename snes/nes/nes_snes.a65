@@ -193,6 +193,11 @@ nes_snes_start:
         lda #$0000
         sta @nes_dev_last_seq
         sta @nes_dev_pad2_state
+        lda #$ffff
+        sta @nes_dev_abort_seq   ; v3.9: nenhum aborto ainda (ver nes_data.a65)
+        lda #$0000
+        sta @nes_dbg_stale
+        sta @nes_dbg_older
         lda #$0001
         sta @nes_dev_pad1_state  ; latch do IGR nasce ARMADO: um combo ainda
                                   ; segurado atraves de um reset ($80) nao

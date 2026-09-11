@@ -1338,3 +1338,17 @@ nes_ndma_tab0    .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 nes_ndma_tab1    .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 *= $7F4BE0
 nes_ndma_live    .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
+; ============================================================
+; v3.9 -- NAO ACKAR frame com parse ABORTADO (nes_dev_poll_frame).  PINADO em
+; $7F4BF0 (livre ate' os buffers da fila de CHR em $7F8200).  Guarda o seq do
+; ultimo frame cujo parse abortou: um 2o aborto do MESMO seq e' dado bruto
+; ruim (nao a corrida de sobrescrita do buffer) e ai' o frame e' ACKado como
+; antes, senao o renderer re-drenaria o mesmo lixo para sempre.  Nasce $FFFF
+; (nes_snes.a65) -- um seq real nunca e' $FFFF no 1o frame.
+*= $7F4BF0
+nes_dev_abort_seq    .word 0
+nes_dbg_stale        .word 0  ; v3.9: drains DESCARTADOS (a bridge publicou N+2 no buffer
+                              ; que o drain de N copiava) -- canal $2BDF k=3
+nes_dev_want_seq     .word 0  ; v3.9: seq que o drain vai copiar (o mais ANTIGO intacto)
+nes_dbg_older        .word 0  ; v3.9: drains de seq-1 (renderer >= 2 atras) -- canal k=1
