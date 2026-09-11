@@ -4,14 +4,28 @@
 #include "dma.i65"
 #include "stack.i65"
 
+; Date separator per menu language, indexed by cur_lang (EN, BR, ES, DE, FR,
+; IT, RU). '-' keeps ISO year-month-day; '/' and '.' write day-month-year, the
+; order the other languages use. A new language needs its byte here.
+time_date_sep
+  .byt $2d, $2f, $2f, $2e, $2f, $2f, $2e
+
 timebox_data
 ; string offset, selection width, bcdtime offset
-  .byt  0, 2, 4
-  .byt  3, 2, 2
-  .byt  6, 2, 0
-  .byt  9, 2, 6
-  .byt 12, 2, 8
-  .byt 15, 4, 9
+; ISO: YYYY-MM-DD HH:MM:SS
+  .byt  0, 4, 9
+  .byt  5, 2, 8
+  .byt  8, 2, 6
+  .byt 11, 2, 4
+  .byt 14, 2, 2
+  .byt 17, 2, 0
+; day-month-year: DD/MM/YYYY HH:MM:SS
+  .byt  0, 2, 6
+  .byt  3, 2, 8
+  .byt  6, 4, 9
+  .byt 11, 2, 4
+  .byt 14, 2, 2
+  .byt 17, 2, 0
 
 time_month
   .byt 3, 1
@@ -86,9 +100,13 @@ time_update
     sta print_y
     stz print_pal
     jsr hiprint
-    lda time_sel
-    asl
-    clc
+    jsr time_date_order     ; C=1: day-month-year, whose boxes follow the ISO six
+    lda #$00
+    bcc +
+    lda #18
++   clc
+    adc time_sel
+    adc time_sel
     adc time_sel
     xba
     lda #$00
@@ -607,134 +625,111 @@ gettime:
   plp
   rts
 
+; time_date_order: A = the date separator of the menu language, C=1 when that
+; language writes day-month-year (C=0: ISO year-month-day). Clobbers X (.xl).
+time_date_order
+  rep #$20 : .al
+  lda @cur_lang
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda @time_date_sep, x
+  cmp #$2e
+  rts
+
 rendertime
 ; local variables
-#define _locals     $00
+#define _locals     $01
+#define w_rt_sep    $00
 ; caller variables
 #define p_time_addr $00
 #define p_time_bank $02
   AllocStack()
   sep #$20 : .as
+  jsr time_date_order
+  sta w_rt_sep
   ldx #!stringbuf
-  ldy #$0005
-  lda [StackParam(p_time_addr)], y  ; h10
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; h1
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  lda #$3a
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; m10
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; m1
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  lda #$3a
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; s10
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; s1
-  clc
-  adc #$30
-  sta !0,x
-  inx
+  bcs rt_dmy
+  jsr rt_year
+  jsr rt_sep
+  jsr rt_mon
+  jsr rt_sep
+  jsr rt_day
+  bra rt_clock
+rt_dmy
+  jsr rt_day
+  jsr rt_sep
+  jsr rt_mon
+  jsr rt_sep
+  jsr rt_year
+rt_clock
   lda #$20
-  sta !0,x
-  inx
-  ldy #$0007
-  lda [StackParam(p_time_addr)], y  ; d10
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; d1
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  lda #$2d
-  sta !0,x
-  inx
-  ldy #$0008
-  lda [StackParam(p_time_addr)], y  ; mon
-  and #$0f
-  cmp #$0a
-  bpl mon_skip1
-  clc
-  adc #$30
-  sta !1,x
-  lda #$30
-  sta !0,x
-  bra mon_skip2
-mon_skip1
-  clc
-  adc #$26
-  sta !1,x
-  lda #$31
-  sta !0,x
-mon_skip2
-  inx
-  inx
-  lda #$2d
-  sta !0,x
-  inx
-  ldy #$000b
-  lda [StackParam(p_time_addr)], y  ; y100
-  and #$0f
-  cmp #$0a
-  bpl y_skip1
-  clc
-  adc #$30
-  sta !1,x
-  lda #$31
-  sta !0,x
-  bra y_skip2
-y_skip1
-  clc
-  adc #$26
-  sta !1,x
-  lda #$32
-  sta !0,x
-y_skip2
-  inx
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; y10
-  and #$0f
-  clc
-  adc #$30
-  sta !0,x
-  inx
-  dey
-  lda [StackParam(p_time_addr)], y  ; y1
-  and #$0f
-  clc
-  adc #$30
-  sta !0,x
-  stz !1,x
+  jsr rt_char
+  ldy #$0005
+  jsr rt_digits             ; hours
+  lda #$3a
+  jsr rt_char
+  jsr rt_digits             ; minutes
+  lda #$3a
+  jsr rt_char
+  jsr rt_digits             ; seconds
+  stz !0,x
   FreeStack() : .as
   rts
+
+; The helpers below run inside rendertime's frame: X walks stringbuf, Y walks
+; the time block, DP still points at the frame. .as/.xl throughout.
+rt_sep
+  lda w_rt_sep
+rt_char
+  sta !0,x
+  inx
+  rts
+
+rt_day
+  ldy #$0007
+rt_digits                   ; BCD tens at Y, ones at Y-1; leaves Y two lower
+  jsr rt_digit
+rt_digit
+  lda [StackParam(p_time_addr)], y
+  and #$0f
+  ora #$30
+  dey
+  bra rt_char
+
+rt_mon                      ; the month is binary 1-12, not BCD
+  ldy #$0008
+  lda [StackParam(p_time_addr)], y
+  and #$0f
+  bra rt_bin2
+
+rt_year                     ; the century nibble counts from 10 (0 = 10xx, 10 = 20xx)
+  ldy #$000b
+  lda [StackParam(p_time_addr)], y
+  and #$0f
+  clc
+  adc #$0a
+  dey
+  jsr rt_bin2
+  bra rt_digits
+
+rt_bin2                     ; A = 0-29 binary -> two ASCII digits
+  xba
+  lda #$30
+  xba
+- cmp #$0a
+  bcc +
+  sbc #$0a
+  xba
+  inc
+  xba
+  bra -
++ pha
+  xba
+  jsr rt_char
+  pla
+  ora #$30
+  bra rt_char
 #undef _locals
 
 settime
