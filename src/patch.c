@@ -1740,6 +1740,57 @@ static const struct patch_asset patch_assets_save[] = {
     { SAVE_BASEDIR,  ".mpk"  },
 };
 
+/* Delete every PRESENTATION sidecar of `rom_path`.  Runs when the ROM itself is deleted
+   from the menu: its box art, info screen, guides, clip and cheat file describe a game
+   that is no longer there, and nothing else on the card ever collects them (the Web
+   Manager cannot tell an orphan from an asset whose ROM is simply not inserted).
+
+   Battery saves, memory packs and savestates are deliberately NOT touched: the context
+   menu has its own "delete save" action, and progress lost to a mis-pressed delete does
+   not come back.  That is why this walks patch_assets_rom and not patch_assets_save.
+
+   Sharing patch_assets_rom with the export is the point -- the two can never disagree
+   about what belongs to a ROM.  The patch sidecar (PATCH_BASEDIR) is the one addition:
+   it is keyed by the ROM but stays out of the export table, because a freshly exported
+   ROM starts with an empty patch list.
+
+   Best effort, and an absent file is the NORMAL case (f_unlink fails, we move on), so the
+   return value is informational only -- the caller's NACK belongs to the ROM itself. */
+__attribute__((noinline))
+int patch_unlink_rom_assets(const uint8_t *rom_path) {
+    char path[256];
+    char ext[12];
+    unsigned i;
+    int n = 0;
+
+    for (i = 0; i < sizeof(patch_assets_rom) / sizeof(patch_assets_rom[0]); i++) {
+        const char *aext = patch_assets_rom[i].ext;
+        if (patch_assets_rom[i].root) {
+            if (path_asset(path, sizeof(path), patch_assets_rom[i].root,
+                           (const char *)rom_path, aext) < 0) continue;
+        } else {
+            /* sibling of the ROM: swap the extension, exactly like patch_copy_sibling */
+            const char *dot = strrchr((const char *)rom_path, '.');
+            size_t len = dot ? (size_t)(dot - (const char *)rom_path)
+                             : strlen((const char *)rom_path);
+            if (len + strlen(aext) >= sizeof(path)) continue;
+            memcpy(path, rom_path, len);
+            strcpy(path + len, aext);
+        }
+        if (f_unlink((TCHAR *)path) == FR_OK) { printf("deleted %s\n", path); n++; }
+    }
+    /* guides 2..8 ("<stem>.0N.man"); 8 = MAN_MAX_GUIDES, private to manual.c:116 */
+    for (i = 2; i <= 8; i++) {
+        patch_numext(ext, ".", (int)i, ".man");
+        if (path_asset(path, sizeof(path), GAMEINFO_DIR, (const char *)rom_path, ext) >= 0
+            && f_unlink((TCHAR *)path) == FR_OK) n++;
+    }
+    /* per-ROM patch metadata: header mode + display name of each of its patches */
+    if (path_asset(path, sizeof(path), PATCH_BASEDIR, (const char *)rom_path, ".yml") >= 0
+        && f_unlink((TCHAR *)path) == FR_OK) n++;
+    return n;
+}
+
 int patch_export_copy_assets(const uint8_t *rom_path, const uint8_t *save_key) {
     uint8_t dst[IPS_PATH_LEN];
     char ext[12];

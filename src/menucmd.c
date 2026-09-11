@@ -239,6 +239,17 @@ static NO_INLINE void delete_file_from(sel_src_t s) {
   printf("Delete file: %s (src %d)\n", file_lfn, (int)s);
   if(f_unlink((TCHAR*)file_lfn) != FR_OK) {
     snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+  } else {
+    /* The ROM is gone, so its presentation sidecars describe nothing: cover, info
+       screen, guides, clip and cheats go with it (patch_unlink_rom_assets shares the
+       export's inventory).  Battery saves, memory packs and savestates stay -- "delete
+       save" is its own action and lost progress does not come back.
+       Gated on the file being a ROM: the browser also deletes .spc/.thm/.pcm, and one
+       of those sharing a game's stem would otherwise wipe that game's assets. */
+    SNES_FTYPE t = filetype_by_ext((const char*)file_lfn);
+    if(t == TYPE_ROM || t == TYPE_NES) {
+      printf("Deleted %d asset(s) of %s\n", patch_unlink_rom_assets(file_lfn), file_lfn);
+    }
   }
   revalidate_game_lists();
 }

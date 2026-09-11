@@ -9,6 +9,10 @@
 #include <stdint.h>
 #include "patch.h"
 
+/* Asset root, like the gameinfo/cheat shims: patch_unlink_rom_assets names the
+ * per-ROM patch sidecar with it. */
+#define PATCH_BASEDIR ("/sd2snes/patches/")
+
 int patchmeta_apply(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count);
 
 #endif

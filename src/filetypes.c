@@ -191,14 +191,25 @@ printf("%d entries, time: %d\n", numentries, getticks()-ticks);
 }
 
 SNES_FTYPE determine_filetype(FILINFO fno) {
-  char* ext;
   if(fno.fattrib & AM_DIR) {
     if(!strcmp(fno.fname, "..")) {
       return TYPE_PARENT;
     }
     return TYPE_SUBDIR;
   }
-  ext = strrchr(fno.fname, '.');
+  return filetype_by_ext(fno.fname);
+}
+
+/* Extension-only classification, for a leaf OR a full path -- the one place that knows which
+   extension means what. determine_filetype above hands it a directory entry's name; the
+   browser delete (menucmd.c) hands it the path it just unlinked, to decide whether that file
+   was a ROM and therefore owns the sidecars under /sd2snes. Only the LEAF is searched for the
+   '.', so a dot in a parent directory can never be mistaken for an extension. */
+SNES_FTYPE filetype_by_ext(const char *name) {
+  const char *leaf = strrchr(name, '/');
+  const char *ext;
+  leaf = leaf ? leaf + 1 : name;
+  ext = strrchr(leaf, '.');
   if(ext == NULL)
     return TYPE_UNKNOWN;
   if(  (!strcasecmp(ext+1, "SMC"))

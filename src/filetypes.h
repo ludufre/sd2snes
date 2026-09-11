@@ -54,6 +54,10 @@ typedef enum {
 
 
 SNES_FTYPE determine_filetype(FILINFO fno);
+/* Extension-only classification of a leaf or a full path (never a directory). THE list of
+   known extensions lives in filetype_by_ext; determine_filetype feeds it the directory
+   entry's name, and the delete path asks it whether what it removed was a ROM. */
+SNES_FTYPE filetype_by_ext(const char *name);
 /* *msu_rom: index, in the sorted table, of the ROM this folder opens as (CFG.open_msu_folders),
    or DIR_NO_MSU_ROM */
 #define DIR_NO_MSU_ROM (0xffff)

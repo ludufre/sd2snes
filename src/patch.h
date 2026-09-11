@@ -361,4 +361,15 @@ int patch_export_exists(const uint8_t *patch_path);
  */
 int patch_export_copy_assets(const uint8_t *rom_path, const uint8_t *save_key);
 
+/*
+ * patch_unlink_rom_assets
+ *   Delete the presentation sidecars of a ROM that is being deleted: browser box art
+ *   (<rom>.cov), the info-screen assets and the up-to-8 guides under /sd2snes/info, the
+ *   cheat file and the per-ROM patch metadata.  Saves, memory packs and savestates are
+ *   left alone on purpose (the menu deletes those through its own action).
+ *   Lives next to patch_export_copy_assets so both read ONE inventory of what belongs
+ *   to a ROM.  Missing files are the normal case; the count returned is informational.
+ */
+int patch_unlink_rom_assets(const uint8_t *rom_path);
+
 #endif /* IPS_H */
