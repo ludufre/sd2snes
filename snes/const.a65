@@ -359,6 +359,7 @@ mtext_scic_vmode_game             .byt " ",129,"Game video mode", 0
 mtext_scic_buscompat              .byt "Bus timing compat", 0
 mtext_browser_sort                .byt "Sort directories", 0
 mtext_browser_hide_ext            .byt "Hide file extensions", 0
+mtext_browser_msu_folders         .byt "Open MSU-1 folders as games", 0
 mtext_browser_screensaver         .byt "Screensaver", 0
 mtext_browser_screensaver_timeout .byt "Fade screen after", 0
 mtext_browser_ledbright           .byt "LED brightness", 0
@@ -413,7 +414,7 @@ mdesc_mm_last                     .byt "Show up to 10 most recently played games
 mdesc_mm_favorites                .byt "Show up to 20 favorite games", 0
 mdesc_mm_cfg                      .byt "Configure the sd2snes", 0
 mdesc_mm_sysinfo                  .byt "Info about FW version, SD Card, SNES, CIC", 127, 128, 0
-mdesc_mm_memtest                  .byt "Checks the FPGA-to-RAM address and data lines for breaks and shorts (10 s). A full test also verifies every cell (30 s). Resets the console.", 0
+mdesc_mm_memtest                  .byt "FPGA-RAM wiring check (10 s). The full test also checks every cell (30 s). Resets the console.", 0
 mdesc_mm_language                 .byt "Set the menu/firmware language", 0
 mdesc_cfg_time                    .byt "Set the date and time", 0
 mdesc_cfg_ask_clock               .byt "Ask for the time at startup while the clock is unset", 0
@@ -432,6 +433,7 @@ mdesc_scic_vmode_game             .byt "Set video mode for games", 0
 mdesc_scic_buscompat              .byt "Narrow cart bus timing for consoles where some games hang or glitch. Enable only if you see freezes on this console.", 0
 mdesc_browser_sort                .byt "Choose whether to sort file lists", 0
 mdesc_browser_hide_ext            .byt "Choose whether to hide file extensions", 0
+mdesc_browser_msu_folders         .byt "A on a folder whose only ROM is MSU-1 opens that game", 0
 mdesc_browser_screensaver         .byt "Fade-out the screen after some time", 0
 mdesc_browser_screensaver_timeout .byt "Set time after which to fade the screen", 0
 mdesc_browser_ledbright           .byt "Change brightness of LEDs", 0
@@ -458,7 +460,7 @@ mdesc_ingame_shortreset           .byt "Where a reset goes. Folder/ROM reopen th
 mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
 mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
 mdesc_ingame_cheat_overlay        .byt "In-game menu (hold L+R+Y+Left): cheats, savestates, saves and guides. Requires in-game hook. Not available on a few special-chip games.", 0
-mdesc_ingame_game_manual          .byt "Show the game manual in the in-game menu (Manual tab). Needs a <rom>.man file in /sd2snes/info (same place as the game-info assets).", 0
+mdesc_ingame_game_manual          .byt "Show the game manual in the in-game menu. Needs a <rom>.man file in /sd2snes/info.", 0
 mdesc_ingame_holdoff              .byt "Wait 10 seconds before enabling hook (helps some games boot with hook enabled)", 0
 mdesc_ingame_savestate            .byt "Enable in-game savestates and choose controller. Default: Save - Start+R / Load - Start+L", 0
 mdesc_savestate_slots             .byt "Enable savestate slots. Select+Dpad: Each direction is a slot to choose", 0

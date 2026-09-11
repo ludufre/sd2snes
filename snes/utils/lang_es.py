@@ -131,6 +131,7 @@ TRANSLATIONS = {
     'mtext_scic_buscompat': 'Compat. de bus',
     'mtext_browser_sort': 'Ordenar directorios',
     'mtext_browser_hide_ext': 'Ocultar extensiones',
+    'mtext_browser_msu_folders': 'Abrir carpetas MSU-1 como juego',
     'mtext_browser_screensaver': 'Protector de pantalla',
     'mtext_browser_screensaver_timeout': 'Atenuar pantalla tras',
     'mtext_browser_ledbright': 'Brillo de los LEDs',
@@ -184,6 +185,7 @@ TRANSLATIONS = {
     'mdesc_scic_buscompat': 'Timing de bus estrecho para consolas donde algunos juegos se cuelgan o fallan. Actívalo solo si ves bloqueos en esta consola.',
     'mdesc_browser_sort': 'Ordenar listas de archivos',
     'mdesc_browser_hide_ext': 'Ocultar extensiones de archivos',
+    'mdesc_browser_msu_folders': 'A en una carpeta con una sola ROM MSU-1 abre el juego',
     'mdesc_browser_screensaver': 'Oscurecer la pantalla tras un tiempo',
     'mdesc_browser_screensaver_timeout': 'Tiempo para oscurecer la pantalla',
     'mdesc_browser_ledbright': 'Cambiar brillo de los LEDs',
@@ -192,7 +194,7 @@ TRANSLATIONS = {
     'mdesc_ingame_enable': 'Necesario para botones en juego y cheats 7E/7F',
     'mdesc_ingame_buttons': 'Botones en juego (reset, activar/desactivar cheats{127}{128}). Requiere el hook activado.',
     'mdesc_ingame_cheat_overlay': 'Menú dentro del juego (manten L+R+Y+Izq): cheats, savestates, saves y guías. Requiere hook. No disponible en algunos chips especiales.',
-    'mdesc_ingame_game_manual': 'Muestra el manual del juego en el menú en juego (pestaña Manual). Requiere un archivo <rom>.man en /sd2snes/info (mismo lugar que los datos de game-info).',
+    'mdesc_ingame_game_manual': 'Muestra el manual del juego en el menú en juego. Requiere <rom>.man en /sd2snes/info.',
     'mdesc_ingame_holdoff': 'Espera 10 segundos antes de activar el hook (ayuda a algunos juegos a arrancar con el hook activado)',
     'mdesc_ingame_savestate': 'Activar savestates en juego y elegir mando. Predet.: Guardar - Start+R / Cargar - Start+L',
     'mdesc_savestate_slots': 'Activar ranuras de savestate. Select+Dpad: cada dirección es una ranura',
@@ -348,7 +350,7 @@ TRANSLATIONS = {
     #     "U501: " chip prefix and followed by the LINE NUMBER, so each must end
     #     exactly where that number goes.
     'mtext_mm_memtest': 'Prueba de memoria',
-    'mdesc_mm_memtest': 'Comprueba las líneas de dirección y datos entre FPGA y RAM en busca de cortes (10 s). La prueba completa verifica cada celda (30 s). Reinicia la consola.',
+    'mdesc_mm_memtest': 'Comprueba el cableado FPGA-RAM (10 s). La prueba completa verifica cada celda (30 s). Reinicia la consola.',
     'text_mtl_prompt': 'A: Probar líneas  X: Todo  B: Cerrar',
     'text_mtl_prompt2': 'Ambos reinician la consola. X: 30s.',
     'text_mtl_run': 'Probando la memoria, espera{127}{128}',

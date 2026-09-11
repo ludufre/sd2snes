@@ -83,6 +83,7 @@
 #define CFG_TEXT_OUTLINE                 ("TextOutline")
 #define CFG_TEXT_ANTIALIAS               ("TextAntiAlias")
 #define CFG_ASK_CLOCK_ON_BOOT            ("AskClockOnBoot")
+#define CFG_OPEN_MSU_FOLDERS             ("OpenMsuFolders")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -195,6 +196,10 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      RTC invalid until the user really sets it, so without this the prompt comes back on EVERY boot.
      Gated entirely menu-side (snes/main.a65); the RTC itself is untouched, and the "Set clock" menu
      entry keeps working. Default 1. */
+  uint8_t  open_msu_folders;        /* CFG @ $1CF: entering (A) a folder whose only ROM has a
+     matching <stem>.msu acts like pressing A on that ROM -- the game info screen or the boot, as
+     ShowGameInfo decides. scan_dir detects it (one f_stat, only in a folder that holds a .msu) and
+     the READDIR reply carries it to the menu in MCU_PARAM+4..7. Default 1. */
 } cfg_t;
 
 int cfg_save(void);

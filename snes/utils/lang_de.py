@@ -133,6 +133,7 @@ TRANSLATIONS = {
     'mtext_scic_buscompat': 'Bus-Timing-Kompat.',
     'mtext_browser_sort': 'Ordner sortieren',
     'mtext_browser_hide_ext': 'Endungen ausblenden',
+    'mtext_browser_msu_folders': 'MSU-1-Ordner als Spiel öffnen',
     'mtext_browser_screensaver': 'Bildschirmschoner',
     'mtext_browser_screensaver_timeout': 'Abdunkeln nach',
     'mtext_browser_ledbright': 'LED-Helligkeit',
@@ -186,6 +187,7 @@ TRANSLATIONS = {
     'mdesc_scic_buscompat': 'Engeres Bus-Timing für Konsolen, auf denen manche Spiele hängen oder Grafikfehler zeigen. Nur aktivieren, wenn Abstürze auftreten.',
     'mdesc_browser_sort': 'Dateilisten sortieren',
     'mdesc_browser_hide_ext': 'Dateiendungen ausblenden',
+    'mdesc_browser_msu_folders': 'A auf einem Ordner mit nur einer MSU-1-ROM öffnet das Spiel',
     'mdesc_browser_screensaver': 'Bild nach einer Zeit abdunkeln',
     'mdesc_browser_screensaver_timeout': 'Zeit bis zum Abdunkeln',
     'mdesc_browser_ledbright': 'LED-Helligkeit aendern',
@@ -194,7 +196,7 @@ TRANSLATIONS = {
     'mdesc_ingame_enable': 'Noetig fuer Im-Spiel Tasten und 7E/7F Cheats',
     'mdesc_ingame_buttons': 'Im-Spiel Tasten (Reset, Cheats{127}{128}). Benoetigt Hook.',
     'mdesc_ingame_cheat_overlay': 'Menue im Spiel (L+R+Y+Links halten): Cheats, Savestates, Saves, Guides. Benoetigt Hook. Bei einigen Spezialchips nicht verfuegbar.',
-    'mdesc_ingame_game_manual': 'Zeigt das Spielhandbuch im Ingame-Menue (Reiter Handbuch). Benoetigt eine <rom>.man Datei in /sd2snes/info (gleicher Ort wie die Game-Info-Daten).',
+    'mdesc_ingame_game_manual': 'Zeigt das Spielhandbuch im Ingame-Menue. Benoetigt <rom>.man in /sd2snes/info.',
     'mdesc_ingame_holdoff': '10 Sekunden warten, bevor der Hook aktiviert wird',
     'mdesc_ingame_savestate': 'Savestates im Spiel aktivieren',
     'mdesc_savestate_slots': 'Savestate-Slots aktivieren. Select+Dpad waehlt Slot',
@@ -348,7 +350,7 @@ TRANSLATIONS = {
     #     "U501: " chip prefix and followed by the LINE NUMBER, so each must end
     #     exactly where that number goes.
     'mtext_mm_memtest': 'Speichertest',
-    'mdesc_mm_memtest': 'Prüft die Adress- und Datenleitungen zwischen FPGA und RAM-Chips auf Unterbrechungen und Kurzschlüsse (10 s). Der Komplettest prüft jede Zelle (30 s). Neustart.',
+    'mdesc_mm_memtest': 'Prüft die Verbindungen FPGA-RAM (10 s). Der Komplettest prüft jede Zelle (30 s). Neustart.',
     'text_mtl_prompt': 'A: Leitungen  X: Komplett  B: Zurück',
     'text_mtl_prompt2': 'Beide starten neu. X dauert 30s.',
     'text_mtl_run': 'Teste Speicher, bitte warten{127}{128}',

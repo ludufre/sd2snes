@@ -4,6 +4,7 @@
 #include "config.h"
 #include "uart.h"
 #include "memory.h"
+#include "filetypes.h"
 #include "sort.h"
 
 /*
@@ -35,35 +36,68 @@ int sort_cmp_idx(uint32_t base, unsigned int index1, unsigned int index2) {
   return sort_cmp_elem((void*)&elem1, (void*)&elem2);
 }
 
+/* Case-insensitive compare in which a run of digits compares by numeric value, so an
+   MSU-1 folder lists track -2 before track -10. Runs of equal value (-01 vs -1) fall
+   back to a plain compare to keep the order total. No <ctype.h>: this only has to know
+   ASCII digits and letters, and the table would cost flash. */
+static int sort_natcasecmp(const char *s1, const char *s2) {
+  const unsigned char *a = (const unsigned char*)s1, *b = (const unsigned char*)s2;
+  for(;;) {
+    unsigned ca = *a, cb = *b;
+    if(ca - '0' < 10u && cb - '0' < 10u) {
+      while(*a == '0') a++;
+      while(*b == '0') b++;
+      const unsigned char *da = a, *db = b;
+      while(*a - '0' < 10u) a++;
+      while(*b - '0' < 10u) b++;
+      if(a - da != b - db) return a - da < b - db ? -1 : 1;
+      int r = memcmp(da, db, a - da);
+      if(r) return r;
+      continue;
+    }
+    if(ca - 'A' < 26u) ca += 'a' - 'A';
+    if(cb - 'A' < 26u) cb += 'a' - 'A';
+    if(ca != cb) return ca < cb ? -1 : 1;
+    if(!ca) return strcasecmp(s1, s2);
+    a++;
+    b++;
+  }
+}
+
 int sort_cmp_elem(const void* elem1, const void* elem2) {
   uint32_t el1 = *(uint32_t*)elem1;
   uint32_t el2 = *(uint32_t*)elem2;
-  sort_getstring_for_dirent(sort_str1, el1);
-  sort_getstring_for_dirent(sort_str2, el2);
-/*printf("i1=%d i2=%d elem1=%lx elem2=%lx ; compare %s   ---   %s\n", index1, index2, elem1, elem2, sort_str1, sort_str2); */
+  /* Order by type before reading any name: each name is a 256-byte PSRAM read over SPI,
+     wasted on every pair the type alone already decides. */
   /* parent dir is always the first entry */
   if (el1 & 0x80000000) return -1;
   if (el2 & 0x80000000) return 1;
 
-  if ((el1 & 0x40000000) && !(el2 & 0x40000000)) {
-    return -1;
-  }
+  int dir1 = (el1 & 0x40000000) != 0;
+  int dir2 = (el2 & 0x40000000) != 0;
+  if (dir1 != dir2) return dir1 ? -1 : 1;
 
-  if (!(el1 & 0x40000000) && (el2 & 0x40000000)) {
-    return 1;
-  }
+  /* MSU-1 audio tracks go after every other file, so a game folder shows its ROM first
+     instead of burying it among dozens of <stem>-N.pcm entries. */
+  int pcm1 = (el1 >> 24) == TYPE_PCM;
+  int pcm2 = (el2 >> 24) == TYPE_PCM;
+  if (pcm1 != pcm2) return pcm1 ? 1 : -1;
+
+  sort_getstring_for_dirent(sort_str1, el1);
+  sort_getstring_for_dirent(sort_str2, el2);
 
   if (*sort_str1 == '.') return -1;
   if (*sort_str2 == '.') return 1;
 
   /* Do not compare trailing slashes of directory names */
-  if ((el1 & 0x40000000) && (el2 & 0x40000000)) {
+  if (dir1) {
     char *str1_slash = strrchr(sort_str1, '/');
     char *str2_slash = strrchr(sort_str2, '/');
     if(str1_slash != NULL) *str1_slash = 0;
     if(str2_slash != NULL) *str2_slash = 0;
   }
 
+  if (pcm1) return sort_natcasecmp(sort_str1, sort_str2);
   return strcasecmp(sort_str1, sort_str2);
 }
 

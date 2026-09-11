@@ -105,9 +105,56 @@ trunc:
   return 0;
 }
 
+/* A folder shows the cover of the MSU-1 game inside it: the first .msu found names the stem,
+   and <folder>/<stem>.cov loads like any ROM cover. The directory read is bounded, so a big
+   folder with no .msu costs a fixed handful of sector reads per highlight (and the menu only
+   asks once the cursor has rested). file_lfn doubles as the LFN buffer: the folder path it
+   carried in was copied to cover_path first, and nothing reads it after cover_from. */
+#define COVER_DIR_PEEK_MAX (256)
+
+static int load_cover_dir(const uint8_t *dir_path, uint32_t sram_addr) {
+  DIR dir;
+  FILINFO fno;
+  size_t len = strlen((const char*)dir_path) - 1;   /* without the trailing '/' */
+  int found = 0;
+
+  if(!len || len >= sizeof(cover_path)) return 0;
+  memcpy(cover_path, dir_path, len);
+  cover_path[len] = 0;
+  if(f_opendir(&dir, (TCHAR*)cover_path) != FR_OK) return 0;
+  fno.lfsize = 255;
+  fno.lfname = (TCHAR*)file_lfn;
+  for(int n = 0; n < COVER_DIR_PEEK_MAX; n++) {
+    menu_sfx_pump();
+    if(f_readdir(&dir, &fno) != FR_OK || !fno.fname[0]) break;
+    if(fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
+    const char *ext = strrchr(fno.fname, '.');
+    if(!ext || strcasecmp(ext + 1, "MSU")) continue;
+    const char *leaf = *fno.lfname ? fno.lfname : fno.fname;
+    const char *dot = strrchr(leaf, '.');
+    if(dot && len + 1 + (size_t)(dot - leaf) + 5 <= sizeof(cover_path)) {
+      cover_path[len] = '/';
+      memcpy(cover_path + len + 1, leaf, dot - leaf);
+      strcpy((char*)cover_path + len + 1 + (dot - leaf), ".cov");
+      found = 1;
+    }
+    break;
+  }
+  f_closedir(&dir);
+  if(!found) {
+    printf("cover: no .msu in %s\n", cover_path);
+    return 0;
+  }
+  return load_cover_path((char*)cover_path, sram_addr);
+}
+
 int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
   /* fail-safe default: mark "no cover" up front; only OK after a clean load */
   cover_set_status(sram_addr, COVER_STATUS_NONE, 0, 0, 0, 0, 0);
+
+  /* the browser hands folders over with their trailing '/' */
+  size_t plen = strlen((const char*)rom_path);
+  if(plen && rom_path[plen-1] == '/') return load_cover_dir(rom_path, sram_addr);
 
   /* build "<rom>.cov": copy the full path (bounded) and rewrite the extension */
   size_t len = 0;

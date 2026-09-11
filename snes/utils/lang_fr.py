@@ -129,6 +129,7 @@ TRANSLATIONS = {
     'mtext_scic_buscompat': 'Compat. timing bus',
     'mtext_browser_sort': 'Trier les dossiers',
     'mtext_browser_hide_ext': 'Masquer les extensions',
+    'mtext_browser_msu_folders': 'Ouvrir dossiers MSU-1 comme jeu',
     'mtext_browser_screensaver': 'Écran de veille',
     'mtext_browser_screensaver_timeout': 'Assombrir l\'écran après',
     'mtext_browser_ledbright': 'Luminosité des LED',
@@ -182,6 +183,7 @@ TRANSLATIONS = {
     'mdesc_scic_buscompat': 'Timing de bus étroit pour consoles où des jeux plantent ou ont des glitchs. Activez seulement si vous voyez des blocages.',
     'mdesc_browser_sort': 'Choisir de trier ou non les listes de fichiers',
     'mdesc_browser_hide_ext': 'Choisir de masquer ou non les extensions de fichiers',
+    'mdesc_browser_msu_folders': 'A sur un dossier avec une seule ROM MSU-1 ouvre le jeu',
     'mdesc_browser_screensaver': 'Assombrir l\'écran après un certain temps',
     'mdesc_browser_screensaver_timeout': 'Définir le délai avant d\'assombrir l\'écran',
     'mdesc_browser_ledbright': 'Modifier la luminosité des LED',
@@ -190,7 +192,7 @@ TRANSLATIONS = {
     'mdesc_ingame_enable': 'Requis pour les touches en jeu et les cheats 7E/7F',
     'mdesc_ingame_buttons': 'Activer les touches en jeu (reset, active/désactive les cheats{127}{128}). Nécessite le hook en jeu.',
     'mdesc_ingame_cheat_overlay': 'Menu en jeu (maintenir L+R+Y+Gauche) : cheats, savestates, saves et guides. Nécessite le hook. Indisponible sur quelques puces spéciales.',
-    'mdesc_ingame_game_manual': 'Affiche le manuel du jeu dans le menu en jeu (onglet Manuel). Necessite un fichier <rom>.man dans /sd2snes/info (meme endroit que les donnees game-info).',
+    'mdesc_ingame_game_manual': 'Affiche le manuel du jeu dans le menu en jeu. Necessite <rom>.man dans /sd2snes/info.',
     'mdesc_ingame_holdoff': 'Attendre 10 secondes avant d\'activer le hook (aide certains jeux à démarrer)',
     'mdesc_ingame_savestate': 'Activer les savestates en jeu et choisir la manette. Par défaut : Sauvegarder - Start+R / Charger - Start+L',
     'mdesc_savestate_slots': 'Activer les emplacements de savestate. Select+Dpad : chaque direction est un emplacement',
@@ -346,7 +348,7 @@ TRANSLATIONS = {
     #     "U501: " chip prefix and followed by the LINE NUMBER, so each must end
     #     exactly where that number goes.
     'mtext_mm_memtest': 'Test mémoire',
-    'mdesc_mm_memtest': "Vérifie les lignes d'adresse et de données FPGA-RAM (coupures, courts-circuits, 10 s). Le test complet vérifie chaque cellule (30 s). Redémarre.",
+    'mdesc_mm_memtest': 'Vérifie les liaisons FPGA-RAM (10 s). Le test complet vérifie chaque cellule (30 s). Redémarre.',
     'text_mtl_prompt': 'A: Lignes  X: Complet  B: Fermer',
     'text_mtl_prompt2': 'Les deux redémarrent. X prend 30s.',
     'text_mtl_run': 'Test de la mémoire, patientez{127}{128}',

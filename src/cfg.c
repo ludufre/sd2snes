@@ -84,6 +84,7 @@ _Static_assert(offsetof(cfg_t, menu_music_folder) == 0x14c, "cfg_t.menu_music_fo
 _Static_assert(offsetof(cfg_t, text_outline_mode) == 0x1cc, "cfg_t.text_outline_mode must stay at CFG_ADDR+$1CC");
 _Static_assert(offsetof(cfg_t, text_antialias_mode) == 0x1cd, "cfg_t.text_antialias_mode must stay at CFG_ADDR+$1CD");
 _Static_assert(offsetof(cfg_t, ask_clock_on_boot) == 0x1ce, "cfg_t.ask_clock_on_boot must stay at CFG_ADDR+$1CE");
+_Static_assert(offsetof(cfg_t, open_msu_folders) == 0x1cf, "cfg_t.open_msu_folders must stay at CFG_ADDR+$1CF");
 
 const cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -150,7 +151,8 @@ const cfg_t CFG_DEFAULT = {
   .menu_music_folder = "/sd2snes/music",
   .text_outline_mode = 0,    /* follow the theme */
   .text_antialias_mode = 0,
-  .ask_clock_on_boot = 1
+  .ask_clock_on_boot = 1,
+  .open_msu_folders = 1
 };
 
 cfg_t CFG;
@@ -313,7 +315,8 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_MENU_MUSIC_FOLDER,           menu_music_folder,          CK_STR,     0),
   CFGI(CFG_TEXT_OUTLINE,                text_outline_mode,          CK_NUM,     0x20),
   CFGI(CFG_TEXT_ANTIALIAS,              text_antialias_mode,        CK_NUM,     0x20),
-  CFGI(CFG_ASK_CLOCK_ON_BOOT,           ask_clock_on_boot,          CK_BOOL,    0)
+  CFGI(CFG_ASK_CLOCK_ON_BOOT,           ask_clock_on_boot,          CK_BOOL,    0),
+  CFGI(CFG_OPEN_MSU_FOLDERS,            open_msu_folders,           CK_BOOL,    0)
 };
 #undef CFGI
 

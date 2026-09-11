@@ -129,6 +129,7 @@ TRANSLATIONS = {
     'mtext_scic_buscompat': 'Compat. de barramento',
     'mtext_browser_sort': 'Ordenar diretórios',
     'mtext_browser_hide_ext': 'Ocultar extensões',
+    'mtext_browser_msu_folders': 'Abrir pastas MSU-1 como jogo',
     'mtext_browser_screensaver': 'Protetor de tela',
     'mtext_browser_screensaver_timeout': 'Escurecer tela após',
     'mtext_browser_ledbright': 'Brilho dos LEDs',
@@ -182,6 +183,7 @@ TRANSLATIONS = {
     'mdesc_scic_buscompat': 'Timing de barramento estreito para consoles onde alguns jogos travam ou dão glitch. Ative só se você vê travamentos neste console.',
     'mdesc_browser_sort': 'Ordenar listas de arquivos',
     'mdesc_browser_hide_ext': 'Ocultar extensões de arquivos',
+    'mdesc_browser_msu_folders': 'A numa pasta com uma só ROM MSU-1 abre o jogo',
     'mdesc_browser_screensaver': 'Escurecer a tela após um tempo',
     'mdesc_browser_screensaver_timeout': 'Tempo para escurecer a tela',
     'mdesc_browser_ledbright': 'Alterar brilho dos LEDs',
@@ -190,7 +192,7 @@ TRANSLATIONS = {
     'mdesc_ingame_enable': 'Necessário para botões e cheats 7E/7F',
     'mdesc_ingame_buttons': 'Botões no jogo (reset, cheats{127}{128}). Requer hook ativo.',
     'mdesc_ingame_cheat_overlay': 'Menu dentro do jogo (segure L+R+Y+Esq): cheats, savestates, saves e guias. Requer hook. Indisponível em alguns chips especiais.',
-    'mdesc_ingame_game_manual': 'Mostra o manual do jogo no menu no jogo (aba Manual). Requer um arquivo <rom>.man em /sd2snes/info (mesmo lugar dos dados de game-info).',
+    'mdesc_ingame_game_manual': 'Mostra o manual do jogo no menu no jogo. Requer <rom>.man em /sd2snes/info.',
     'mdesc_ingame_holdoff': 'Espera 10s antes de ativar o hook',
     'mdesc_ingame_savestate': 'Savestates no jogo. Padrão: Salvar Start+R, Carregar Start+L',
     'mdesc_savestate_slots': 'Slots de savestate. Select+Dpad escolhe o slot',
@@ -344,7 +346,7 @@ TRANSLATIONS = {
     #     "U501: " chip prefix and followed by the LINE NUMBER, so each must end
     #     exactly where that number goes.
     'mtext_mm_memtest': 'Teste de memória',
-    'mdesc_mm_memtest': 'Verifica as linhas de endereço e dados entre FPGA e RAM em busca de rupturas e curtos (10 s). O teste completo verifica cada célula (30 s). Reinicia o console.',
+    'mdesc_mm_memtest': 'Verifica a fiação FPGA-RAM (10 s). O teste completo verifica cada célula (30 s). Reinicia o console.',
     'text_mtl_prompt': 'A: Testar linhas  X: Completo  B: Sair',
     'text_mtl_prompt2': 'Ambos reiniciam o console. X leva 30s.',
     'text_mtl_run': 'Testando a memória, aguarde{127}{128}',

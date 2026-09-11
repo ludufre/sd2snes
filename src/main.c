@@ -75,7 +75,8 @@ void menu_cmd_readdir(void) {
 printf("path=%s tgt=%06lx types=", path, tgt_addr);
 uart_puts_hex((char*)filetypes);
 uart_putc('\n');
-  uint16_t n = scan_dir(path, tgt_addr, filetypes);
+  uint16_t msu_rom;
+  uint16_t n = scan_dir(path, tgt_addr, filetypes, &msu_rom);
   /* Historical note: the file-STRING table used to grow through $C3..$C7 -- straight through
      BOTH manual staging regions -- which is why every READDIR invalidates the "page already
      resident" memo (a stale memo made the viewer DMA filenames into VRAM as tiles). The dir
@@ -89,6 +90,13 @@ uart_putc('\n');
      table at SRAM_DIR_ADDR itself, which can read a stale/partial buffer in the short
      window right after this write -> bogus short dirend -> broken pagination. */
   snescmd_writeshort(n, SNESCMD_MCU_PARAM);
+  /* A folder that opens as its MSU-1 ROM: +4..5 = that ROM's index in the sorted table and
+     +7 = 'M'. The menu zeroes +7 before sending the command, so a firmware without this leaves
+     the answer at "no". +4..6 (the target address) were consumed before the scan. */
+  if(msu_rom != DIR_NO_MSU_ROM) {
+    snescmd_writeshort(msu_rom, SNESCMD_MCU_PARAM + 4);
+    snescmd_writebyte('M', SNESCMD_MCU_PARAM + 7);
+  }
 }
 
 int main(void) {

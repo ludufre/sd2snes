@@ -1,0 +1,48 @@
+; Folders that open as their MSU-1 game.
+;
+; An MSU-1 game ships as a folder: the ROM, its .msu and dozens of <stem>-N.pcm tracks. When
+; the ONLY ROM in a folder has a matching .msu, pressing A on the folder acts like pressing
+; A on that ROM (the game info screen or the boot, as ShowGameInfo decides). A folder with
+; two or more ROMs opens as a plain folder.
+;
+; The firmware decides (scan_dir, gated by CFG_OPEN_MSU_FOLDERS) and answers in the READDIR
+; reply: MCU_PARAM+7 = 'M' and MCU_PARAM+4..5 = the ROM's index in the sorted listing.
+; filesel_request_filelist zeroes +7 before every READDIR, so an older firmware answers "no".
+;
+; Such a folder IS the game as far as browsing goes, so the user never ends up inside it:
+; - select_dir (the user's A on a folder) asks, and sel_is_dir opens the ROM straight away
+;   through the very same gameinfo_select_file an A press on a ROM uses -- BEFORE the browser
+;   loop repaints. Running it after the repaint (the first version) flashed the folder's
+;   listing for a frame ahead of the info screen.
+; - If that returns (B on the info screen, the patch dialog cancelled, a refused load),
+;   msu_folder_leave (filesel.a65) undoes the select_dir: the parent listing comes back with
+;   the folder highlighted where it was.
+; - The reset-to-menu / browser restore walk (filesel_nav_last) asks after entering the LAST
+;   folder of the path, and backs out the same way, landing on the folder in its parent
+;   instead of on the ROM inside it.
+; B to a parent, the refresh after a delete and the manual viewer's rebuild never look.
+
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+; '.link page' wins and they emit no bytes) so every byte of this object lands in $C1.
+.link page $c1
+
+; ---------------------------------------------------------------------------
+; msu_folder_arm: end of select_dir, right after its READDIR.
+; Out: carry SET = this folder opens as a game, A (16-bit) = the ROM's entry index.
+;      Carry CLEAR = plain folder. Returns .al/.xl on both paths.
+msu_folder_arm:
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @MCU_PARAM+7
+  cmp #$4d                  ; 'M'
+  bne mfa_plain
+  rep #$20 : .al
+  lda @MCU_PARAM+4
+  sec
+  rtl
+mfa_plain:
+  rep #$20 : .al
+  clc
+  rtl

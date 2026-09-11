@@ -346,7 +346,7 @@ cover_fire_send:
   rts
 
 ; -- cover_maybe_fire: when dirty + debounced + nothing in flight, fire
-;    CMD_LOAD_COVER for ROM/NES/SPC entries (or hide the cover otherwise).
+;    CMD_LOAD_COVER for ROM/NES/SPC/folder entries (or hide the cover otherwise).
 cover_maybe_fire:
   jsr cover_fire_gate
   bcs cmf_out
@@ -357,7 +357,9 @@ cover_maybe_fire:
   beq cmf_dofire            ; box art like any other ROM -- without this it never asked
   cmp #TYPE_SPC
   beq cmf_dofire
-  ; not a ROM/SPC: stop asking, hide any cover
+  cmp #TYPE_SUBDIR          ; a folder shows the cover of the MSU-1 game inside it; the MCU
+  beq cmf_dofire            ; answers "no cover" for any other folder (load_cover_dir)
+  ; not a ROM/SPC/folder: stop asking, hide any cover
   stz cover_dirty
   lda cover_loaded
   beq cmf_out

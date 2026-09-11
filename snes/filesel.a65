@@ -608,6 +608,13 @@ sel_is_parent
 sel_is_dir
   jsr select_dir        ; readdir first (synchronous, ~2 ticks): firing the blip
   jsr snd_fx_confirm    ; before it gets clobbered in MCU_CMD by the readdir
+                        ; (php/plp inside, so select_dir's carry survives it)
+  bcc select_item_cont
+  jsr gameinfo_select_file ; fork: the folder opens as its MSU-1 ROM -- exactly A on that
+                        ; ROM, and BEFORE the browser loop repaints, so the folder's own
+                        ; listing never flashes on screen ahead of the info screen/boot
+  jsr msu_folder_leave  ; back here = nothing booted (B, patch dialog cancelled, refused
+                        ; load): return to the parent listing, folder highlighted as before
   bra select_item_cont
 sel_is_spc
   jsr snd_fx_confirm
@@ -888,37 +895,30 @@ copy_new_path_loop:
   sta @direntry_xscroll_state
   lda #$01
   sta @filesel_dirty
+; fork: a folder whose only ROM is MSU-1 opens as that game. msu_folder_arm ($C1) reads the
+; firmware's READDIR answer; when it says so, park the cursor on the ROM and return carry SET,
+; and sel_is_dir opens it at once -- before the loop repaints. Only this path asks: restores,
+; B and refreshes never do, so a return from the game lands inside the folder.
+  jsl @msu_folder_arm
+  rep #$20 : .al
+  bcc +
+  jsr fnl_place_cursor
+  sec                   ; fnl_place_cursor's compare/subtract clobbered it
++ sep #$20 : .as
   rts
 
 select_parent:
 ; truncate last subdirectory
   sep #$20 : .as
-  ldx #$0000
-- lda @FILESEL_CWD, x
-  beq parent_end_found
-  inx
-  bra -
-parent_end_found:
-  cpx #$0001
-  beq cwd_is_root
-- lda @FILESEL_CWD, x
-  cmp #$2f
-  beq +
-  dex
-  bra -
-+ cpx #$0000
-  bne +
-  inx
-+ lda #$00
-  sta @FILESEL_CWD, x
-  bra parent_do_chdir
-cwd_is_root:
+  jsr parent_truncate_cwd ; C set = already at the root, nothing touched
+  bcc parent_do_chdir
   jsr snd_fx_error      ; nothing above the root
   rts
 parent_do_chdir
   jsr filesel_request_filelist
   jsr snd_fx_back       ; after the readdir (sync): a blip fired before it gets
                         ; clobbered in MCU_CMD by the readdir command itself
+parent_pop_dirlog:      ; fork: msu_folder_leave joins here (A 8-bit)
   lda @dirlog_idx
   sec
   sbc #$0008
@@ -948,6 +948,49 @@ parent_do_chdir
   lda #$01
   sta @filesel_dirty
   rts
+
+; fork: cut the last component off FILESEL_CWD. Carry SET, and nothing touched, when it is
+; already the root. Shared by select_parent and msu_folder_leave.
+parent_truncate_cwd:
+  sep #$20 : .as
+  ldx #$0000
+ptc_find_end:
+  lda @FILESEL_CWD, x
+  beq ptc_end
+  inx
+  bra ptc_find_end
+ptc_end:
+  cpx #$0001
+  bne ptc_find_slash
+  sec
+  rts
+ptc_find_slash:
+  lda @FILESEL_CWD, x
+  cmp #$2f
+  beq ptc_slash
+  dex
+  bra ptc_find_slash
+ptc_slash:
+  cpx #$0000
+  bne ptc_cut
+  inx
+ptc_cut:
+  lda #$00
+  sta @FILESEL_CWD, x
+  clc
+  rts
+
+; fork: undo the select_dir of a folder that opened as its MSU-1 game (snes/msufolder.a65).
+; Reached when that open came back without booting -- B on the info screen, the patch dialog
+; cancelled, a refused load -- and from the reset-to-menu walk that just entered such a folder.
+; Same as select_parent minus its blip (the info screen already played one): the parent
+; listing is read back and the dirlog record select_dir pushed puts the cursor where it was.
+msu_folder_leave:
+  rep #$10 : .xl
+  jsr parent_truncate_cwd ; never the root: a folder component was just appended
+  jsr filesel_request_filelist
+  sep #$20 : .as
+  jmp parent_pop_dirlog
 
 select_spc:
   dey
@@ -3438,6 +3481,8 @@ filesel_request_filelist:
   sta @MCU_PARAM+14       ; .pcm (trilha MSU-1) -> tocador de PCM do menu
   lda #$00
   sta @MCU_PARAM+15       ; terminador; menu_cmd_readdir le 16 slots a partir de +8
+  sta @MCU_PARAM+7        ; "opens as an MSU-1 game" answer: stays 0 unless the firmware
+                          ; writes one back (see msu_folder_arm)
   sta @SNES_CMD
   lda #CMD_READDIR
   sta @MCU_CMD
@@ -3566,6 +3611,19 @@ fnl_got_comp_slash:
 fnl_got_comp_eos:
   stx testvar+2           ; fnl_comp_end = x (at null)
   jsr fnl_enter_subdir    ; navigate into last path component
+  bcc fnl_find_file       ; not found: nothing new was read, carry on as before
+  ; fork: the game's folder opens as the game itself (snes/msufolder.a65), so land on that
+  ; folder in its parent -- where the user pressed A -- instead of on the ROM inside it.
+  jsl @msu_folder_arm
+  rep #$20 : .al
+  bcc fnl_find_file
+  jsr msu_folder_leave    ; parent listing back; fnl_enter_subdir's record pins the folder
+  rep #$20 : .al          ; to the top row, so put the cursor on it the normal way instead
+  lda @dirptr_addr        ; = the folder's entry offset
+  lsr
+  lsr
+  jsr fnl_place_cursor
+  bra fnl_out
   ; fall through to file scan
 fnl_find_file:
   ; Only pre-select ROM when mode is Rom or above (>= 3); Folder (2) skips this.
@@ -3812,15 +3870,35 @@ fnl_sf_check:
   lda testvar+4
   lsr
   lsr                     ; A = entry index
+  jsr fnl_place_cursor
+  bra fnl_sf_done
+fnl_sf_next:
+  rep #$20 : .al
+  lda testvar+4
+  clc
+  adc #$0004
+  sta testvar+4
+  bra fnl_sf_loop
+fnl_sf_done:
+  rts
+
+; =========================================================
+; fnl_place_cursor:
+;   Put the browser cursor on entry A (16-bit index) of the
+;   current listing, scrolling it into view. Shared by the
+;   restore above and the MSU-1 folder open in select_dir.
+; =========================================================
+fnl_place_cursor:
+  .al
   cmp listdisp
-  bcs fnl_sf_scroll
+  bcs fnl_pc_scroll
   ; index < listdisp: show from top, cursor at index
   sta @filesel_sel
   lda #$0000
   sta @dirptr_addr
   sta @dirstart_addr
-  bra fnl_sf_done
-fnl_sf_scroll:
+  rts
+fnl_pc_scroll:
   ; index >= listdisp: scroll so entry appears last on screen
   sec
   sbc listdisp
@@ -3836,15 +3914,6 @@ fnl_sf_scroll:
   lda listdisp
   dec
   sta @filesel_sel
-  bra fnl_sf_done
-fnl_sf_next:
-  rep #$20 : .al
-  lda testvar+4
-  clc
-  adc #$0004
-  sta testvar+4
-  bra fnl_sf_loop
-fnl_sf_done:
   rts
 
 ; =========================================================

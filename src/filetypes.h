@@ -54,7 +54,10 @@ typedef enum {
 
 
 SNES_FTYPE determine_filetype(FILINFO fno);
-uint16_t scan_dir(const uint8_t *path, uint32_t base_addr, const SNES_FTYPE *filetypes);
+/* *msu_rom: index, in the sorted table, of the ROM this folder opens as (CFG.open_msu_folders),
+   or DIR_NO_MSU_ROM */
+#define DIR_NO_MSU_ROM (0xffff)
+uint16_t scan_dir(const uint8_t *path, uint32_t base_addr, const SNES_FTYPE *filetypes, uint16_t *msu_rom);
 int get_num_dirent(uint32_t addr);
 void sort_all_dir(uint32_t endaddr);
 void make_filesize_string(char *buf, uint32_t size);

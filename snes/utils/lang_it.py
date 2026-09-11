@@ -132,6 +132,7 @@ TRANSLATIONS = {
     'mtext_scic_buscompat': 'Compat. timing bus',
     'mtext_browser_sort': 'Ordina cartelle',
     'mtext_browser_hide_ext': 'Nascondi estensioni',
+    'mtext_browser_msu_folders': 'Apri cartelle MSU-1 come gioco',
     'mtext_browser_screensaver': 'Salvaschermo',
     'mtext_browser_screensaver_timeout': 'Oscura schermo dopo',
     'mtext_browser_ledbright': 'Luminosità LED',
@@ -185,6 +186,7 @@ TRANSLATIONS = {
     'mdesc_scic_buscompat': 'Timing del bus cartuccia più stretto per console dove alcuni giochi si bloccano o hanno glitch. Attiva solo se vedi blocchi su questa console.',
     'mdesc_browser_sort': 'Scegli se ordinare le liste di file',
     'mdesc_browser_hide_ext': 'Scegli se nascondere le estensioni dei file',
+    'mdesc_browser_msu_folders': 'A su una cartella con una sola ROM MSU-1 apre il gioco',
     'mdesc_browser_screensaver': "Oscura lo schermo dopo un po' di tempo",
     'mdesc_browser_screensaver_timeout': 'Imposta dopo quanto tempo oscurare lo schermo',
     'mdesc_browser_ledbright': 'Cambia la luminosità dei LED',
@@ -193,7 +195,7 @@ TRANSLATIONS = {
     'mdesc_ingame_enable': 'Necessario per i tasti in gioco e i cheat 7E/7F',
     'mdesc_ingame_buttons': "Attiva i tasti in gioco (reset, attiva/disattiva cheat{127}{128}). Richiede l'hook in gioco attivo.",
     'mdesc_ingame_cheat_overlay': "Menu in gioco (tieni L+R+Y+Sin): cheat, savestate, salvataggi e guide. Richiede l'hook. Non disponibile su alcuni giochi con chip speciali.",
-    'mdesc_ingame_game_manual': 'Mostra il manuale del gioco nel menu in gioco (scheda Guide). Richiede un file <rom>.man in /sd2snes/info (stessa cartella dei dati game-info).',
+    'mdesc_ingame_game_manual': 'Mostra il manuale del gioco nel menu in gioco. Richiede <rom>.man in /sd2snes/info.',
     'mdesc_ingame_holdoff': "Attende 10 secondi prima di attivare l'hook (aiuta alcuni giochi ad avviarsi con l'hook attivo)",
     'mdesc_ingame_savestate': 'Attiva i savestate in gioco e scegli il controller. Predef.: Salva - Start+R / Carica - Start+L',
     'mdesc_savestate_slots': 'Attiva gli slot savestate. Select+D-Pad: ogni direzione è uno slot da scegliere',
@@ -349,7 +351,7 @@ TRANSLATIONS = {
     #     "U501: " chip prefix and followed by the LINE NUMBER, so each must end
     #     exactly where that number goes.
     'mtext_mm_memtest': 'Test memoria',
-    'mdesc_mm_memtest': 'Controlla le linee di indirizzo e dati tra FPGA e RAM per interruzioni e cortocircuiti (10 s). Il test completo verifica ogni cella (30 s). Riavvia la console.',
+    'mdesc_mm_memtest': 'Controlla i collegamenti FPGA-RAM (10 s). Il test completo verifica ogni cella (30 s). Riavvia la console.',
     'text_mtl_prompt': 'A: Linee  X: Completo  B: Chiudi',
     'text_mtl_prompt2': 'Entrambi riavviano. X dura 30s.',
     'text_mtl_run': 'Test della memoria, attendere{127}{128}',

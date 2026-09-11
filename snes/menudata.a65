@@ -350,6 +350,20 @@ menu_enttab_browser:
  .byt  0,0,0
 
  .byt  MTYPE_VALUE
+ .word !mtext_browser_msu_folders
+ .byt  ^mtext_browser_msu_folders
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_OPEN_MSU_FOLDERS
+ .byt  ^CFG_OPEN_MSU_FOLDERS
+ .word !mdesc_browser_msu_folders
+ .byt  ^mdesc_browser_msu_folders
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_VALUE
  .word !mtext_browser_screensaver
  .byt  ^mtext_browser_screensaver
  .word !kv_onoff
