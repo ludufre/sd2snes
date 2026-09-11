@@ -4,18 +4,19 @@
 #include "dma.i65"
 #include "stack.i65"
 
-; Date separator per menu language, indexed by cur_lang (EN, BR, ES, DE, FR,
-; IT, RU). '-' keeps ISO year-month-day; '/' and '.' write day-month-year, the
-; order the other languages use. A new language needs its byte here.
+; Date format per menu language, indexed by cur_lang (EN, BR, ES, DE, FR, IT,
+; RU). Low 7 bits = the separator; bit 7 set = day-month-year, clear =
+; month-day-year (the US order English uses). A new language needs its byte
+; here.
 time_date_sep
-  .byt $2d, $2f, $2f, $2e, $2f, $2f, $2e
+  .byt $2f, $af, $af, $ae, $af, $af, $ae
 
 timebox_data
 ; string offset, selection width, bcdtime offset
-; ISO: YYYY-MM-DD HH:MM:SS
-  .byt  0, 4, 9
-  .byt  5, 2, 8
-  .byt  8, 2, 6
+; month-day-year: MM/DD/YYYY HH:MM:SS
+  .byt  0, 2, 8
+  .byt  3, 2, 6
+  .byt  6, 4, 9
   .byt 11, 2, 4
   .byt 14, 2, 2
   .byt 17, 2, 0
@@ -100,7 +101,7 @@ time_update
     sta print_y
     stz print_pal
     jsr hiprint
-    jsr time_date_order     ; C=1: day-month-year, whose boxes follow the ISO six
+    jsr time_date_order     ; C=1: day-month-year, whose boxes follow the month-day-year six
     lda #$00
     bcc +
     lda #18
@@ -626,7 +627,7 @@ gettime:
   rts
 
 ; time_date_order: A = the date separator of the menu language, C=1 when that
-; language writes day-month-year (C=0: ISO year-month-day). Clobbers X (.xl).
+; language writes day-month-year (C=0: month-day-year). Clobbers X (.xl).
 time_date_order
   rep #$20 : .al
   lda @cur_lang
@@ -634,7 +635,8 @@ time_date_order
   tax
   sep #$20 : .as
   lda @time_date_sep, x
-  cmp #$2e
+  cmp #$80                  ; C = bit 7 = day first
+  and #$7f                  ; the separator (AND leaves C alone)
   rts
 
 rendertime
@@ -650,16 +652,15 @@ rendertime
   sta w_rt_sep
   ldx #!stringbuf
   bcs rt_dmy
-  jsr rt_year
-  jsr rt_sep
   jsr rt_mon
   jsr rt_sep
   jsr rt_day
-  bra rt_clock
+  bra rt_year_last
 rt_dmy
   jsr rt_day
   jsr rt_sep
   jsr rt_mon
+rt_year_last
   jsr rt_sep
   jsr rt_year
 rt_clock
