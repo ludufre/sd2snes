@@ -360,6 +360,7 @@ mtext_scic_buscompat              .byt "Bus timing compat", 0
 mtext_browser_sort                .byt "Sort directories", 0
 mtext_browser_hide_ext            .byt "Hide file extensions", 0
 mtext_browser_msu_folders         .byt "Open MSU-1 folders as games", 0
+mtext_browser_sd2snes_dir         .byt "Show sd2snes folder", 0
 mtext_browser_screensaver         .byt "Screensaver", 0
 mtext_browser_screensaver_timeout .byt "Fade screen after", 0
 mtext_browser_ledbright           .byt "LED brightness", 0
@@ -434,6 +435,7 @@ mdesc_scic_buscompat              .byt "Narrow cart bus timing for consoles wher
 mdesc_browser_sort                .byt "Choose whether to sort file lists", 0
 mdesc_browser_hide_ext            .byt "Choose whether to hide file extensions", 0
 mdesc_browser_msu_folders         .byt "A on a folder whose only ROM is MSU-1 opens that game", 0
+mdesc_browser_sd2snes_dir         .byt "Show /sd2snes in the file list", 0
 mdesc_browser_screensaver         .byt "Fade-out the screen after some time", 0
 mdesc_browser_screensaver_timeout .byt "Set time after which to fade the screen", 0
 mdesc_browser_ledbright           .byt "Change brightness of LEDs", 0
@@ -757,7 +759,7 @@ text_patch_export_ok .byt "Patched ROM created", 0
 text_patch_export_part .byt "ROM ok, assets incomplete", 0
 text_patch_export_exists .byt "Patched ROM already exists", 0
 mtext_patch_header_mode .byt "Header mode", 0
-mdesc_patch_header_mode .byt "How this IPS patch's offsets are read: Auto detects a 512-byte copier header, Header forces the shift, Raw applies them literally.", 0
+mdesc_patch_header_mode .byt "How the IPS offsets are read: Auto, Header (512-byte shift) or Raw.", 0
 mtext_patch_create_rom .byt "Create patched ROM", 0
 mdesc_patch_create_rom .byt "Write the patched ROM next to the original, named after the patch file, with the cover, saves, cheats and guides copied across. Takes minutes.", 0
 ; kv values for the "Header mode" entry (distinct from the padded row markers above)

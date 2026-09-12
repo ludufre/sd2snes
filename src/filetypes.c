@@ -124,13 +124,18 @@ printf("start\n");
             /* omit entries with hidden or system attribute -- but NEVER the
                parent "..": dirs created/copied on other OSes (e.g. macOS) can
                mark their "." and ".." entries hidden, and we still need ".."
-               for navigation back up. */
-            if(type != TYPE_PARENT && (fno.fattrib & (AM_HID | AM_SYS))) continue;
+               for navigation back up.  The sd2snes directory is exempt while
+               CFG.show_sd2snes_folder lists it: it is hidden by NAME below and
+               usually carries the system attribute on top of that, so lifting
+               only one of the two would leave it invisible on most cards. No
+               other hidden/system entry is affected. */
+            if(type != TYPE_PARENT && (fno.fattrib & (AM_HID | AM_SYS))
+               && !(CFG.show_sd2snes_folder && type == TYPE_SUBDIR && strstr(fn, "sd2snes"))) continue;
             if(fno.fattrib & AM_DIR) {
               /* omit dot directories except '..' */
               if(fn[0]=='.' && fn[1]!='.') continue;
-              /* omit sd2snes directory specifically */
-              if(strstr(fn, "sd2snes")) continue;
+              /* omit sd2snes directory specifically, unless the user asked for it */
+              if(!CFG.show_sd2snes_folder && strstr(fn, "sd2snes")) continue;
               snprintf(buf, sizeof(buf), " <dir>");
             } else {
               if(fn[0]=='.') continue; /* omit dot files */

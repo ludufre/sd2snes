@@ -1249,8 +1249,22 @@ bcal_resume:
 filesel_key_x:
   jsr snd_fx_confirm    ; opening the main menu
   jsr cover_menu_off    ; hide the box-art cover behind the menu (reloads on close)
+; "Show sd2snes folder" changes what the firmware LISTS, not how the browser draws
+; it, so a repaint is not enough: without a fresh CMD_READDIR the folder would only
+; appear (or vanish) on the next navigation, which looks like the toggle did nothing
+; while standing in the root -- the one place it matters.  A is 8 bits here
+; (filesel_updates runs .as end to end), so this pushes and pulls a single byte.
+  lda @CFG_SHOW_SD2SNES_FOLDER
+  pha
   jsr mainmenu
   sep #$20 : .as
+  pla
+  cmp @CFG_SHOW_SD2SNES_FOLDER
+  beq filesel_key_x_drawn
+  jsr filesel_request_filelist       ; re-read the folder, keep the cursor near where
+  jsr filesel_fix_pos_after_delete   ; it was (the list just grew or shrank by one)
+  sep #$20 : .as
+filesel_key_x_drawn:
   lda #$01              ; the menu may have switched language -> redraw browser
   sta filesel_dirty     ; chrome (statusbar) so it follows the new language too
   rts

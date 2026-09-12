@@ -84,6 +84,7 @@
 #define CFG_TEXT_ANTIALIAS               ("TextAntiAlias")
 #define CFG_ASK_CLOCK_ON_BOOT            ("AskClockOnBoot")
 #define CFG_OPEN_MSU_FOLDERS             ("OpenMsuFolders")
+#define CFG_SHOW_SD2SNES_FOLDER          ("ShowSd2snesFolder")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -200,6 +201,12 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      matching <stem>.msu acts like pressing A on that ROM -- the game info screen or the boot, as
      ShowGameInfo decides. scan_dir detects it (one f_stat, only in a folder that holds a .msu) and
      the READDIR reply carries it to the menu in MCU_PARAM+4..7. Default 1. */
+  uint8_t  show_sd2snes_folder;     /* CFG @ $1D0: list the sd2snes directory in the browser.
+     scan_dir hides it twice over -- by NAME (any directory whose name contains "sd2snes",
+     upstream's own rule) and, on most cards, by the hidden/system attributes it carries -- and
+     this lifts both, for that directory only: every other hidden/system entry stays hidden.
+     Nothing else changes, so a theme/.spc/.pcm inside it is picked like any other file. The
+     menu re-reads the current folder when the value changes (filesel_key_x). Default 0. */
 } cfg_t;
 
 int cfg_save(void);
