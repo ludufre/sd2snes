@@ -291,6 +291,10 @@ dirent_is_file
 +
   cmp #TYPE_SPC ; SPC -> palette 2
   beq dirent_type_pal2
+  cmp #TYPE_FILE ; card file inside /sd2snes (system file / user data) -> palette 2:
+  beq dirent_type_pal2 ; it is listed for inspection, never loadable
+  cmp #TYPE_DATA
+  beq dirent_type_pal2
   cmp #TYPE_PCM ; .pcm (MSU-1 track) -> palette 2, same as an .spc
   bne +
 dirent_type_pal2
@@ -1317,7 +1321,11 @@ open_context_menu:
   cmp #TYPE_PARENT
   beq ctx_is_parent
   cmp #TYPE_SKIN
-  beq ctx_is_skin
+  beq ctx_is_delonly
+  cmp #TYPE_DATA        ; card data the user owns (saves, states, sidecars, .msu):
+  beq ctx_is_delonly    ; same Delete-only menu as a theme -- the MCU's delete path
+  cmp #TYPE_PCM         ; only unlinks the file (sidecar sweep is gated on ROM/NES)
+  beq ctx_is_delonly
 open_context_menu_cont
   rts
 ctx_is_file
@@ -1364,7 +1372,7 @@ ctx_is_spc
   sta @MCU_PARAM+3
   jsr filesel_contextmenu_spc
   bra open_context_menu_cont
-ctx_is_skin
+ctx_is_delonly
 ; set up MCU_PARAM with the .thm file path (same layout as ctx_is_file) so
 ; delete_selected_file/get_selected_name resolve the theme. Themes have no
 ; save -> the context menu offers Delete only (no Delete save).
@@ -1384,7 +1392,7 @@ ctx_is_skin
   sta @MCU_PARAM+2
   lda #$00
   sta @MCU_PARAM+3
-  jsr filesel_contextmenu_skin
+  jsr filesel_contextmenu_delonly
   bra open_context_menu_cont
 
 delete_selected_file:

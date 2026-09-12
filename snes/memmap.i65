@@ -855,6 +855,8 @@
 #define TYPE_SKIN                   $06
 #define TYPE_NES                    $07 /* .nes (core NES mk3-only); lockstep com filetypes.h */
 #define TYPE_PCM                    $08 /* .pcm (MSU-1 audio track, menu PCM player); lockstep com filetypes.h */
+#define TYPE_FILE                   $09 /* arquivo de SISTEMA dentro de /sd2snes (scan_dir): firmware.im3, m3nu.bin, fpga_*.bi3, menu.spc. Mostrado com tamanho mas NAO acionavel e SEM excluir -- nao ha case para ele em select_item nem em open_context_menu, entao A da o blip de erro e o Y nao abre nada. E isso que impede um Y perdido de levar os arquivos de boot do cartao. Lockstep com filetypes.h */
+#define TYPE_DATA                   $0A /* arquivo de DADOS do usuario (is_card_data_ext): saves (.srm/.slot/.mpk/.rtc), savestates (.state), sidecars (.yml/.cov/.gcv/.gss/.fmv/.man), .cfg das listas e .msu. Listado como o TYPE_FILE mas o menu de contexto (Y) oferece Excluir, reusando ctx_is_delonly. Lockstep com filetypes.h */
 #define TYPE_SUBDIR                 $40
 #define TYPE_PARENT                 $80
 

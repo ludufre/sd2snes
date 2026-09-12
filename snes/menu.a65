@@ -116,7 +116,7 @@ filesel_contextmenu_spc:
   jsr pop_window
   rts
 
-filesel_contextmenu_skin:
+filesel_contextmenu_delonly:
   sep #$20 : .as
   rep #$10 : .xl
   lda #$02
@@ -134,10 +134,10 @@ filesel_contextmenu_skin:
   lda #$0b
   sta window_y
   phb
-    lda #^menu_enttab_filesel_context_skin
+    lda #^menu_enttab_filesel_context_delonly
     pha
     plb
-    ldx #!menu_enttab_filesel_context_skin
+    ldx #!menu_enttab_filesel_context_delonly
     jsr show_menu
   plb
   jsr pop_window

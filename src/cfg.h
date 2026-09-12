@@ -205,8 +205,10 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      scan_dir hides it twice over -- by NAME (any directory whose name contains "sd2snes",
      upstream's own rule) and, on most cards, by the hidden/system attributes it carries -- and
      this lifts both, for that directory only: every other hidden/system entry stays hidden.
-     Nothing else changes, so a theme/.spc/.pcm inside it is picked like any other file. The
-     menu re-reads the current folder when the value changes (filesel_key_x). Default 0. */
+     A theme/.spc/.pcm inside it is picked like any other file, and INSIDE that tree scan_dir
+     also lists the files with no known extension (saves, savestates, sidecars) as TYPE_FILE,
+     so saves/ and info/ do not look empty. The menu re-reads the current folder when the
+     value changes (filesel_key_x). Default 0. */
 } cfg_t;
 
 int cfg_save(void);

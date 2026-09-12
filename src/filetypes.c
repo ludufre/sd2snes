@@ -80,6 +80,40 @@ static uint16_t scan_dir_msu_rom(const uint8_t *path, uint32_t base_addr, uint16
   return DIR_NO_MSU_ROM;
 }
 
+/* Is this directory the card's own /sd2snes tree (or anything under it)?  Matches the first
+   path component only, so a user folder named "sd2snes-backup" is NOT it -- unlike the
+   name filter above, which deliberately uses upstream's loose strstr() rule to hide those
+   too.  Reached only with CFG.show_sd2snes_folder on: that toggle is the sole way in. */
+/* The extensions the browser may DELETE (Y -> Delete, TYPE_DATA).  Everything else listed
+   inside /sd2snes -- firmware.im3, m3nu.bin, the fpga_*.bi3/.bit cores, menu.spc -- stays
+   TYPE_FILE: visible for inspection with no Delete entry, so a stray Y cannot take the
+   card's boot files with it.  .pcm is absent on purpose: it is TYPE_PCM (the menu plays it)
+   and gets Delete through that type instead. */
+static uint8_t is_card_data_ext(const char *name) {
+  static const char *const exts[] = {
+    "srm", "slot", "mpk", "rtc",        /* battery saves + their sidecars */
+    "state",                            /* savestates */
+    "yml",                              /* cheats / game info / patch meta / config */
+    "cfg",                              /* lastgame.cfg, favorites.cfg */
+    "cov", "gcv", "gss", "fmv", "man",  /* box art, info screen, clip, manual */
+    "msu",                              /* MSU-1 marker (its tracks are TYPE_PCM) */
+  };
+  const char *ext = strrchr(name, '.');
+  if(!ext) return 0;
+  for(uint8_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
+    if(!strcasecmp(ext + 1, exts[i])) return 1;
+  }
+  return 0;
+}
+
+static uint8_t path_is_sysdir(const uint8_t *path) {
+  const char *p = (const char*)path;
+  size_t n = strlen(SYS_DIR_NAME);
+  if(*p == '/') p++;
+  if(strncasecmp(p, SYS_DIR_NAME, n)) return 0;
+  return p[n] == 0 || p[n] == '/';
+}
+
 uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYPE *filetypes, uint16_t *msu_rom) {
   DIR dir;
   FRESULT res;
@@ -91,6 +125,7 @@ uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYP
   size_t fnlen;
   uint16_t rom_seen = 0;
   uint8_t msu_seen = 0;
+  const uint8_t in_sysdir = path_is_sysdir(path);
 
   fno.lfsize = 255;
   fno.lfname = (TCHAR*)file_lfn;
@@ -112,13 +147,37 @@ printf("start\n");
         const char *ext = strrchr(fno.fname, '.');
         if(ext && !strcasecmp(ext+1, "MSU")) msu_seen = 1;
       }
-      if(is_requested_filetype(type, filetypes)) {
+      /* Inside the card's own directory, list the files that have no known extension too:
+         the saves (.srm), the savestates (.state) and every sidecar (.yml/.cov/.slot/...).
+         Without this, saves/, states/, info/ and cheats/ look EMPTY to the only person who
+         can get in there -- someone who turned CFG.show_sd2snes_folder on to inspect the
+         card.  Outside /sd2snes nothing changes, so a legacy card carrying <rom>.srm next
+         to the ROM keeps a clean browser.  Deliberately NOT added to the type list the menu
+         asks for: that list already runs from MCU_PARAM+8 past the end of the 12-byte param
+         region into BRAM_ROUTINE ($2A10), and one more entry would push it further in.
+         Split in two: what the user owns (is_card_data_ext) becomes TYPE_DATA and the Y menu
+         offers Delete; everything else there stays TYPE_FILE, visible but undeletable, which
+         is what keeps firmware.im3/m3nu.bin/fpga_*.bi3 safe from a stray Y.
+         .msu is the ONE extension also classified outside /sd2snes: it sits next to the .pcm
+         tracks the browser already lists, and deleting those without it would leave a folder
+         still opening as a silent MSU-1 game.  Must stay AFTER the msu_seen probe above,
+         which keys off TYPE_UNKNOWN. */
+      if(type == TYPE_UNKNOWN && !(fno.fattrib & AM_DIR)) {
+        if(in_sysdir) type = is_card_data_ext(fn) ? TYPE_DATA : TYPE_FILE;
+        else {
+          const char *e = strrchr(fn, '.');
+          if(e && !strcasecmp(e + 1, "msu")) type = TYPE_DATA;
+        }
+      }
+      if(is_requested_filetype(type, filetypes) || type == TYPE_FILE || type == TYPE_DATA) {
         switch(type) {
           case TYPE_ROM:
           case TYPE_SPC:
           case TYPE_PCM:    /* .pcm (MSU-1 track) -- listed like a .spc, played by the menu PCM player */
           case TYPE_SKIN:   /* theme files (.thm/.skin) are listed like ROMs */
           case TYPE_NES:    /* .nes (core NES, mk3-only) -- listado como ROM */
+          case TYPE_FILE:   /* system file inside /sd2snes -- shown with its size, inert */
+          case TYPE_DATA:   /* user's card data -- same, plus Delete in the Y context menu */
           case TYPE_SUBDIR:
           case TYPE_PARENT:
             /* omit entries with hidden or system attribute -- but NEVER the
@@ -140,7 +199,10 @@ printf("start\n");
             } else {
               if(fn[0]=='.') continue; /* omit dot files */
               make_filesize_string(buf, fno.fsize);
-              if(CFG.hide_extensions) {
+              /* never for a card file: inside /sd2snes the extension IS the distinction
+                 (one bucket holds <stem>.srm next to <stem>.slot, states/ holds 01.state
+                 next to 02.state), so hiding it would show the same name twice over. */
+              if(CFG.hide_extensions && type != TYPE_FILE && type != TYPE_DATA) {
                 char *dot = strrchr(fn, '.');
                 if(dot) *dot = 1;
               }

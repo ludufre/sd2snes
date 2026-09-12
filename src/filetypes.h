@@ -48,6 +48,13 @@ typedef enum {
   TYPE_SKIN    =   6,
   TYPE_NES     =   7,   /* .nes (iNES) -- core NES mk3-only; lockstep com TYPE_NES em snes/memmap.i65 */
   TYPE_PCM     =   8,   /* .pcm (MSU-1 audio track) -- played by the menu PCM player; lockstep com TYPE_PCM em snes/memmap.i65 */
+  TYPE_FILE    =   9,   /* any other file INSIDE /sd2snes (see scan_dir): listed with its size for
+                           inspection, NOT actionable and NOT deletable -- this is what keeps
+                           firmware.im3 / m3nu.bin / fpga_*.bi3 out of reach of the context menu.
+                           Lockstep com TYPE_FILE em snes/memmap.i65 */
+  TYPE_DATA    =  10,   /* a card-data file the user owns (see is_card_data_ext): saves, savestates,
+                           sidecars, .msu. Listed like TYPE_FILE but the Y context menu offers
+                           Delete. Lockstep com TYPE_DATA em snes/memmap.i65 */
   TYPE_SUBDIR  =  64,
   TYPE_PARENT  = 128
 } SNES_FTYPE;
