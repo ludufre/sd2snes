@@ -305,6 +305,31 @@ static const struct {
   uint8_t prg_max;
   uint8_t chr_max;
 } nes_size_limits[] = {
+  /* Mapper28 family (0=NROM, 2=UNROM, 3=CNROM, 7=AxROM, 28=homebrew multi-
+     discrete): todos os cinco compartilham o MESMO modulo Verilog (mmu.v,
+     module Mapper28), e o seletor de PRG la' (`a53prg`) e' mascarado com
+     `& 7'b0011111` ANTES de virar prg_aout -- os dois bits de cima do
+     registrador `outer` (6 bits) somem incondicionalmente, nao importa o
+     tamanho declarado. Isso trava o endereco fisico em 32 bancos de 16KB =
+     512KB pros CINCO mappers, sem excecao (inclusive o 28, cujo proprio
+     limite oficial de hardware -- NESdev INES_Mapper_028 -- ja' e' 512KB,
+     entao o cap bate certo com o board real, nao e' so' uma limitacao desta
+     porta). Faltava aqui: sem entrada nesta tabela, esses cinco caiam no
+     check generico (ate' 1MB) e uma ROM/header entre 528KB-1MB aliasava em
+     silencio nos primeiros 512KB -- a mesma classe de bug que este arquivo
+     previne em toda outra familia.
+     CHR: `a53chr` (2 bits) so' e' escrito quando `selreg==0`, e SO' o mapper 3
+     zera `selreg` no reset (`selreg <= 0`) -- os outros quatro ficam presos
+     no valor de reset 1 (escritas viram o registrador `inner`, nunca o de
+     CHR), entao a52chr nunca sai de 0 pra eles: CHR fica fixo no banco 0 pra
+     sempre. 0/2/7 usam placas reais sem bankswitch de CHR (NROM/UNROM/AxROM
+     -- CHR-RAM ou, no NROM, exatamente 8KB fixos de CHR-ROM); soh o 3 (CNROM)
+     de fato troca de banco, com os 2 bits completos = 4x8KB = 32KB. */
+  {  0, 32,  1},  /* NROM: CHR-ROM fixo de 8KB permitido (banco 0 preso); CHR-RAM tambem ok */
+  {  2, 32,  0},  /* UNROM: sem CHR-ROM (a53chr nunca escrito) -- CHR-RAM obrigatoria */
+  {  3, 32,  4},  /* CNROM: unico dos cinco com bankswitch de CHR de verdade */
+  {  7, 32,  0},  /* AxROM: mesma razao do UNROM -- CHR-RAM obrigatoria */
+  { 28, 32,  0},  /* homebrew "mapper 28": a53chr seleciona janela de CHR-RAM, nao CHR-ROM */
   /* Color Dreams: PRG 32K = d[1:0] -> 4x32KB = 128KB; CHR 8K = d[7:4] -> 16x8KB = 128KB */
   { 11,  8, 16},
   /* NINA-001: PRG 32K = d[1:0] -> 128KB; CHR 2x4K = d[3:0] -> 16x4KB = 64KB.
