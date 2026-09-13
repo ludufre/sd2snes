@@ -548,4 +548,14 @@ pcm_seen_pos    .byt 0     ; PCM_POS (low byte) likewise: the clock ticks once a
 pcm_nosup       .byt 0     ; 1 = this firmware has no PCM handler (the magic never came
                            ;   back). The screen still opens, to say so.
 
+;----------MSU-1 folders opened as their game (snes/msufolder.a65) ----------
+; Raised by msu_folder_arm when the listing just read is such a folder (the browser then sits
+; INSIDE it, cursor on the ROM), dropped by msu_folder_leave. Read by the info screen's Up/Down,
+; whose neighbours then live in the parent listing, and by gameinfo_select_file on its way back
+; out. Zeroed in coldboot ($55 fill); survives the warm reset of a launch like everything above
+; $7E2000.
+msu_inside      .byt 0     ; 1 = the current listing is a folder opened as its MSU-1 game
+gi_nav_mcu      .byt 0     ; != 0 = an info-screen Up/Down step talked to the MCU (READDIR or
+                           ;   CMD_MSU_PROBE) -- long enough to trip the FMV idle watchdog
+
 _END            .byt 0

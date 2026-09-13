@@ -113,6 +113,9 @@ coldboot:       ; Regular, cold-start init
   ; covers the browser's Y route. Left at $55 it would turn the (unreachable
   ; today) STATUS_NONE arm into "error blip + cancel" instead of play.
   sta @gi_ctx_pending
+  ; fork: msu_inside is read by the info screen's Up/Down and on every return from it;
+  ; left at $55 the first one would back out of a folder the browser never entered.
+  sta @msu_inside
   ; fork: settings-menu scrolling viewport gates. menu_scroll_active is read by
   ; menu_select_noinit; left at $55 (clear_wram fills the $7E data segment with $55,
   ; not 0) a Recents/Favorites list opened before any show_menu would take the

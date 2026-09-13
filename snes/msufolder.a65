@@ -15,8 +15,13 @@
 ;   loop repaints. Running it after the repaint (the first version) flashed the folder's
 ;   listing for a frame ahead of the info screen.
 ; - If that returns (B on the info screen, the patch dialog cancelled, a refused load),
-;   msu_folder_leave (filesel.a65) undoes the select_dir: the parent listing comes back with
-;   the folder highlighted where it was.
+;   gameinfo_select_file calls msu_folder_leave (filesel.a65), which undoes the select_dir:
+;   the parent listing comes back with the folder highlighted where it was. msu_inside says
+;   whether there is anything to undo, because the next item can move the browser in or out.
+; - Up/Down on the info screen step between the games of a listing, and such a folder is one
+;   of them (gameinfo.a65, gnav_core): from its ROM the step backs out to the parent first,
+;   and a folder it lands on is asked about (CMD_MSU_PROBE, a cheap walk that stops at the
+;   second ROM) and, on a yes, entered like the A above -- so the panel shows its game.
 ; - The reset-to-menu / browser restore walk (filesel_nav_last) asks after entering the LAST
 ;   folder of the path, and backs out the same way, landing on the folder in its parent
 ;   instead of on the ROM inside it.
@@ -38,6 +43,8 @@ msu_folder_arm:
   lda @MCU_PARAM+7
   cmp #$4d                  ; 'M'
   bne mfa_plain
+  lda #$01                  ; inside it now; msu_folder_leave drops this
+  sta @msu_inside
   rep #$20 : .al
   lda @MCU_PARAM+4
   sec

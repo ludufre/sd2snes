@@ -252,6 +252,37 @@ printf("%d entries, time: %d\n", numentries, getticks()-ticks);
   return numentries;
 }
 
+/* Might this folder open as its MSU-1 game?  The info screen's Up/Down asks
+   (SNES_CMD_MSU_PROBE) before entering a folder it steps onto, so a plain folder costs a bare
+   walk that stops at its second ROM instead of a listing, a sort and a READDIR back out.
+   Counts the way scan_dir does -- a ROM only when scan_dir would list it (no hidden/system
+   attribute, no dot file: macOS leaves a ._<rom> next to every ROM), a .msu on the 8.3 name
+   like its msu_seen probe -- and skips the stem f_stat: a "yes" is followed by that READDIR,
+   where scan_dir_msu_rom has the last word.  path has no trailing '/'. */
+uint8_t dir_may_open_as_msu(const uint8_t *path) {
+  DIR dir;
+  FILINFO fno;
+  uint8_t roms = 0, msu = 0;
+
+  fno.lfsize = 255;
+  fno.lfname = (TCHAR*)file_lfn;
+  if(f_opendir(&dir, (TCHAR*)path) != FR_OK) return 0;
+  while(roms < 2) {
+    menu_sfx_pump();
+    if(f_readdir(&dir, &fno) != FR_OK || !fno.fname[0]) break;
+    if(fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
+    SNES_FTYPE type = determine_filetype(fno);
+    if(type == TYPE_ROM) {
+      if((*fno.lfname ? fno.lfname : fno.fname)[0] != '.') roms++;
+    } else if(type == TYPE_UNKNOWN) {
+      const char *ext = strrchr(fno.fname, '.');
+      if(ext && !strcasecmp(ext + 1, "MSU")) msu = 1;
+    }
+  }
+  f_closedir(&dir);
+  return roms == 1 && msu;
+}
+
 SNES_FTYPE determine_filetype(FILINFO fno) {
   if(fno.fattrib & AM_DIR) {
     if(!strcmp(fno.fname, "..")) {

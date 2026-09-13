@@ -452,6 +452,19 @@ static NO_INLINE void query_ips_patches(void) {
   }
 }
 
+/* The info screen's Up/Down stepped onto a folder (snes/gameinfo.a65, gnav_msu_dir): answer
+   MCU_PARAM+7 = 'M' when it may open as its MSU-1 game.  MCU_PARAM is set like LOADROM, so
+   get_selected_name yields "<cwd>/<folder>/"; the menu zeroed +7, and every other outcome
+   leaves it at "no". */
+static NO_INLINE void msu_probe(void) {
+  uint8_t path[256];
+  get_selected_name(path);
+  size_t n = strlen((char*)path);
+  if(n > 1 && path[n-1] == '/') path[n-1] = 0;
+  if(CFG.open_msu_folders && dir_may_open_as_msu(path))
+    snescmd_writebyte('M', SNESCMD_MCU_PARAM + 7);
+}
+
 /* Commands issued FROM the pre-boot info screen, i.e. the ones that must NOT stop a running FMV.
    Everything else means the SNES left that screen (see the call site in the menu loop).
      - FMV_NEXT                        : the pump itself
@@ -460,7 +473,9 @@ static NO_INLINE void query_ips_patches(void) {
                                          Stopping here killed the video AND its audio for good
                                          (nothing ever re-opens the .fmv) -- that was the bug.
      - MANUAL_S1PAGE / MANUAL_ZPAGE    : the manual viewer opened from the info screen; the same
-                                         reasoning applies on the way back out of it. */
+                                         reasoning applies on the way back out of it.
+   MSU_PROBE / READDIR are NOT here although Up/Down on the screen sends them while stepping
+   across folders: they stop the clip, and the step reloads the panel whenever it sent one. */
 static int cmd_keeps_fmv(uint8_t cmd) {
   return cmd == SNES_CMD_FMV_NEXT
       || cmd == SNES_CMD_GAME_INFO
@@ -809,6 +824,9 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       *menu_reload = 1;
       return cmd;
     }
+    case SNES_CMD_MSU_PROBE:
+      msu_probe();
+      return 0;
     case SNES_CMD_PLAY_PCM:
       /* A .pcm was picked in the browser: play it on the cartridge DAC.  MCU_PARAM was
          set up like a ROM launch (cwd + selected entry), so get_selected_name yields the

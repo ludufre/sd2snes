@@ -69,6 +69,7 @@ SNES_FTYPE filetype_by_ext(const char *name);
    or DIR_NO_MSU_ROM */
 #define DIR_NO_MSU_ROM (0xffff)
 uint16_t scan_dir(const uint8_t *path, uint32_t base_addr, const SNES_FTYPE *filetypes, uint16_t *msu_rom);
+uint8_t dir_may_open_as_msu(const uint8_t *path);
 int get_num_dirent(uint32_t addr);
 void sort_all_dir(uint32_t endaddr);
 void make_filesize_string(char *buf, uint32_t size);

@@ -126,8 +126,7 @@ gameinfo_select_file:
 ; into the patch selector / boot; carry set = back -- is shared with the A-press path.
 gameinfo_show_forced:
   jsr gameinfo_maybe_show
-  bcc gisf_to_ips
-  rts
+  bcs gisf_back
 gisf_to_ips:
   rep #$20 : .al
   lda filesel_sel
@@ -139,7 +138,16 @@ gisf_to_ips:
   iny
   iny
   iny
-  jmp ips_select_file
+  jsr ips_select_file
+; Back here = nothing booted (B, the patch dialog cancelled, a refused load). If the browser
+; is inside a folder that opened as its MSU-1 game -- the A was on that folder, or Up/Down
+; stepped into one -- return to its parent with the folder highlighted (snes/msufolder.a65).
+gisf_back:
+  sep #$20 : .as
+  lda @msu_inside
+  beq +
+  jmp msu_folder_leave
++ rts
 
 ; gameinfo_maybe_show[_recent/_favorite]: query + show the pre-boot screen. The browser
 ; entry fills MCU_PARAM from the current selection; the Recent/Favorite entries expect the
@@ -354,10 +362,14 @@ gsr_joy:
 ; the moved selection reloads any game. Only wired for the browser (gi_query_fill==1).
 ; ===========================================================================
 
-; -- gi_nav_next / gi_nav_prev: move the browser selection to the next / previous bootable
-;    entry (TYPE_ROM or TYPE_NES), skipping dirs/parent/spc/theme, CLAMPED at the list ends
-;    (no wrap). Returns carry CLEAR if it landed on a new ROM (caller reloads), carry SET if
-;    there was no further ROM that way (selection restored, unchanged).
+; -- gi_nav_next / gi_nav_prev: move the browser selection to the next / previous game --
+;    a TYPE_ROM / TYPE_NES entry, or a folder that opens as its MSU-1 game -- skipping other
+;    dirs/parent/spc/theme, CLAMPED at the list ends (no wrap). Returns carry CLEAR if it
+;    landed on a new game (caller reloads), carry SET if there was none that way (selection
+;    restored, unchanged).
+;    An MSU-1 folder's game is its ROM, shown from INSIDE the folder (msu_inside), while its
+;    neighbours live in the parent listing: a step that starts there backs out first, and one
+;    that lands on such a folder walks in (gnav_msu_dir). Both READDIR while the panel stays up.
 ;    Mirrors the filesel window/scroll
 ;    math but WITHOUT scroll_direntry_clean (it repaints the browser list -> would corrupt
 ;    our VRAM). One cursor blip per press. .as/.xl in/out.
@@ -370,7 +382,12 @@ gi_nav_prev:
   lda #$01 : sta gi_nav_dir
 gnav_core:
   jsr snd_fx_cursor          ; one blip per Up/Down press (whether it moves or hits a wall)
-  rep #$20 : .al             ; snapshot the start position to restore if no ROM is found
+  lda @msu_inside            ; on an MSU-1 folder's ROM? Then the step starts from the folder
+  sta @gi_nav_mcu            ; in its parent -- a READDIR, which counts as MCU traffic -- and
+  pha                        ; a clamp has to walk back in (popped by gnav_hit / gnav_clamp)
+  beq +
+  jsr msu_folder_leave       ; parent listing, cursor on the folder (drops msu_inside)
++ rep #$20 : .al             ; snapshot the start position to restore if no game is found
   lda filesel_sel  : sta gi_nav_save_sel
   lda dirptr_addr  : sta gi_nav_save_ptr
   lda dirptr_bank  : sta gi_nav_save_bank
@@ -398,17 +415,73 @@ gnav_moved:
   cmp #TYPE_NES              ; .nes is a bootable entry too (filesel.a65 pairs the two
                              ; everywhere); without this an all-.nes folder never matches,
                              ; every press falls through to gnav_clamp and Up/Down look dead
-  bne gnav_loop              ; skip non-ROM (dir / parent / spc / theme)
+  beq gnav_hit
+  cmp #TYPE_SUBDIR           ; a folder is a game when it opens as its MSU-1 ROM
+  bne gnav_loop              ; skip the rest (parent / spc / theme / pcm)
+  jsr gnav_msu_dir           ; carry SET = it does, and the browser is inside it on the ROM
+  bcc gnav_loop
 gnav_hit:
-  clc                        ; landed on a ROM
+  pla                        ; (where the step started: not needed any more)
+  clc                        ; landed on a game
   rts
 gnav_clamp:
-  rep #$20 : .al             ; no further ROM that way: restore the start position untouched
+  rep #$20 : .al             ; no further game that way: restore the start position untouched
   lda gi_nav_save_sel  : sta filesel_sel
   lda gi_nav_save_ptr  : sta dirptr_addr
   lda gi_nav_save_bank : sta dirptr_bank
   sep #$20 : .as
-  sec
+  pla                        ; started on an MSU-1 folder's ROM: walk back into that folder
+  beq +
+  jsr gnav_msu_enter
++ lda @gi_nav_mcu            ; the step READDIRed / probed: the panel is intact, but any
+  beq +                      ; command it does not send itself stops its clip
+  lda @GI_FLAGS              ; (menucmd_fmv_gate) -- reload the same game (carry CLEAR)
+  and #GI_FLAG_FMV
+  beq +
+  clc
+  rts
++ sec
+  rts
+
+; -- gnav_msu_dir: the step landed on a folder. Carry SET = it opens as its MSU-1 game and the
+;    browser is now INSIDE it, cursor on the ROM (msu_inside raised by msu_folder_arm); carry
+;    CLEAR = it does not, and the listing and position are the ones the step was on. The
+;    firmware screens the folder first (CMD_MSU_PROBE: a walk that stops at its second ROM),
+;    so a plain folder costs no READDIR in and back out. .as/.xl in and out.
+gnav_msu_dir:
+  .as : .xl
+  lda @CFG_OPEN_MSU_FOLDERS  ; off = no folder opens as a game: nothing to ask
+  beq gmd_no
+  sta @gi_nav_mcu            ; (non-zero) the probe below is MCU traffic
+  jsr waitblank              ; let the MCU settle into its command poll after the last
+                             ; READDIR's $55 before a new command goes out (cover_sync idiom)
+  jsr cover_fill_param_for_current_sel ; cwd + entry like LOADROM, +7 = 0 = the "no" answer
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_MSU_PROBE
+  sta @MCU_CMD
+  jsl @WRAM_WAIT_MCU
+  lda @MCU_PARAM+7
+  cmp #$4d                   ; 'M'
+  bne gmd_no
+; gnav_msu_enter: open the selected folder the way select_item's A does -- READDIR into it
+; and let msu_folder_arm decide (the firmware's full check: one ROM whose stem has a .msu).
+; Also the clamp's way back into the folder a step started from. Carry as gnav_msu_dir.
+gnav_msu_enter:
+  rep #$20 : .al
+  lda filesel_sel
+  and #$00ff
+  asl
+  asl
+  ora #$0003                 ; Y -> the entry's type byte, as select_item hands it over
+  tay
+  sep #$20 : .as
+  jsr select_dir             ; carry SET = it opened as the game, cursor on the ROM
+  bcs gmd_yes
+  jsr msu_folder_leave       ; the probe was optimistic: back out, position as it was
+gmd_no:
+  clc
+gmd_yes:
   rts
 
 ; -- gnav_down / gnav_up: advance the selection by ONE entry, mirroring filesel_key_down/up

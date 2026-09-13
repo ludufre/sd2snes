@@ -41,6 +41,7 @@
 #define SNES_CMD_LOAD_CHT            (0x0c)
 #define SNES_CMD_SAVE_CHT            (0x0d)
 #define SNES_CMD_SAVE_CFG            (0x0e)
+#define SNES_CMD_MSU_PROBE           (0x10) /* info screen Up/Down stepping onto a folder: MCU_PARAM carries cwd+direntry like LOADROM; answers MCU_PARAM+7 = 'M' when the folder may open as its MSU-1 game (dir_may_open_as_msu), so only such a folder costs a READDIR. The menu zeroes +7 first, so a firmware without the handler answers "no". Non-booting. Lockstep with CMD_MSU_PROBE in snes/memmap.i65 */
 #define SNES_CMD_LED_BRIGHTNESS      (0x12)
 #define SNES_CMD_ADD_FAVORITE_ROM    (0x13)
 #define SNES_CMD_ADD_FAVORITE_RECENT (0x14)

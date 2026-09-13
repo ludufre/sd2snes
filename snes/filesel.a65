@@ -616,9 +616,9 @@ sel_is_dir
   bcc select_item_cont
   jsr gameinfo_select_file ; fork: the folder opens as its MSU-1 ROM -- exactly A on that
                         ; ROM, and BEFORE the browser loop repaints, so the folder's own
-                        ; listing never flashes on screen ahead of the info screen/boot
-  jsr msu_folder_leave  ; back here = nothing booted (B, patch dialog cancelled, refused
-                        ; load): return to the parent listing, folder highlighted as before
+                        ; listing never flashes on screen ahead of the info screen/boot.
+                        ; Back here = nothing booted, and gameinfo_select_file has already
+                        ; left the folder (msu_inside) -- or the one Up/Down moved it into
   bra select_item_cont
 sel_is_spc
   jsr snd_fx_confirm
@@ -994,6 +994,8 @@ msu_folder_leave:
   jsr parent_truncate_cwd ; never the root: a folder component was just appended
   jsr filesel_request_filelist
   sep #$20 : .as
+  lda #$00
+  sta @msu_inside
   jmp parent_pop_dirlog
 
 select_spc:
