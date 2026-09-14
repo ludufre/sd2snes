@@ -374,7 +374,7 @@ static void load_stream(const load_ctx_t *c) {
     file_open(filename, FA_READ);
     ff_sd_offload=1;
     sd_offload_tgt=0;
-    f_lseek(&file_handle, romprops.offset);
+    f_lseek(&file_handle, c->file_offset + romprops.offset);
     uint32_t total_bytes_read = 0;
     for(;;) {
       ff_sd_offload=1;
@@ -884,6 +884,11 @@ static void load_setup_masks(load_ctx_t *c) {
        the autosave and the .srm writer key off. */
     rammask = (romprops.ramsize_bytes > SUFAMI_SLOTA_SCRATCH_SIZE
                ? romprops.ramsize_bytes : SUFAMI_SLOTA_SCRATCH_SIZE) - 1;
+  } else if(romprops.mapper_id == 4 && !romprops.fpga_conf) {
+    /* Gamars Puzzle. Its header SRAM size is deliberately non-standard ($20), so
+       header.ramsize cannot decide whether a RAM window exists; smc_id() forces
+       ramsize_bytes to $200 for this ROM. */
+    rammask = romprops.ramsize_bytes - 1;
   } else if(romprops.header.ramsize == 0) {
     rammask = 0;
   } else {
@@ -1036,6 +1041,77 @@ static uint32_t load_reopen_player(uint8_t *filename, uint8_t flags, const char 
   return 1;
 }
 
+/* SFROM logical ROM extractor.
+   Returns 1 when filename is an SFROM and fills rom_offset/rom_size.
+   Returns 0 for a normal ROM or an invalid SFROM. */
+
+static uint32_t rd32le(const uint8_t *p) {
+  return (uint32_t)p[0]
+       | ((uint32_t)p[1] << 8)
+       | ((uint32_t)p[2] << 16)
+       | ((uint32_t)p[3] << 24);
+}
+
+static uint8_t load_sfrom_info(uint32_t *rom_offset,
+                               uint32_t *rom_size,
+                               uint32_t physical_size) {
+  uint8_t hdr[0x50];
+  UINT br;
+
+  if(file_res) return 0;
+
+  if(f_lseek(&file_handle, 0) != FR_OK)
+    return 0;
+
+  if(f_read(&file_handle, hdr, sizeof(hdr), &br) != FR_OK || br < 0x30)
+    return 0;
+
+  /* SFROM magic */
+  if(rd32le(hdr + 0x00) != 0x00000100)
+    return 0;
+
+  uint32_t declared_size = rd32le(hdr + 0x04);
+  uint32_t offset        = rd32le(hdr + 0x08);
+  uint32_t footer        = rd32le(hdr + 0x14);
+
+  if(offset >= physical_size)
+    return 0;
+
+  if(declared_size && declared_size > physical_size)
+    return 0;
+
+  uint32_t size = 0;
+
+  /* Standard Nintendo 0x30-header layout:
+     ROM size lives in the footer at footer+1. */
+  if(footer && footer < physical_size && footer + 5 <= physical_size) {
+    uint8_t foot[5];
+
+    if(f_lseek(&file_handle, footer) != FR_OK)
+      return 0;
+
+    if(f_read(&file_handle, foot, sizeof(foot), &br) != FR_OK || br != sizeof(foot))
+      return 0;
+
+    size = rd32le(foot + 1);
+  }
+
+  /* Common 0x50 conversion layout:
+     ROM size stored inline at 0x31. */
+  if(!size && br >= 0x35)
+    size = rd32le(hdr + 0x31);
+
+  if(!size)
+    return 0;
+
+  if(offset + size > physical_size)
+    return 0;
+
+  *rom_offset = offset;
+  *rom_size   = size;
+  return 1;
+}
+
 /* Open the picked file and take its size + combo slot.  0 = aborted (NACKed). */
 static uint32_t load_open(load_ctx_t *c) {
   uint8_t *filename = c->filename;
@@ -1054,6 +1130,20 @@ static uint32_t load_open(load_ctx_t *c) {
     return load_abort_missing(flags, MENU_ERR_FS, path_leaf((const char*)filename));
   }
   c->filesize = file_handle.fsize; // won't be correct for combo roms
+
+  /* SFROM container: the SNES image sits inside the file, at an offset and with a
+     size of its own */
+  const char *dot = strrchr((const char*)filename, '.');
+  if(dot && !strcasecmp(dot + 1, "sfrom")) {
+    uint32_t rom_off, rom_size;
+    if(!load_sfrom_info(&rom_off, &rom_size, file_handle.fsize)) {
+      file_close();
+      return load_abort_missing(flags, MENU_ERR_FS, path_leaf((const char*)filename));
+    }
+    c->file_offset = rom_off;
+    c->filesize    = rom_size;
+    printf("SFROM: rom offset=%lx size=%lx\n", rom_off, rom_size);
+  }
 
   if(flags & LOADROM_WITH_COMBO) {
     printf("Combo Header Check...");
@@ -1180,7 +1270,8 @@ static uint32_t load_stage_consoles(load_ctx_t *c) {
    correct what the header of its player faked.  0 = aborted (NACKed). */
 static uint32_t load_identify(load_ctx_t *c) {
   uint8_t flags = c->flags;
-  c->filesize = file_handle.fsize;
+
+  smc_set_file_span(c->filesize);
   smc_id(&romprops, c->file_offset);
   /* the player is a plain LoROM; force the SMS core + drop any chip the header faked */
   if (sms_active) {

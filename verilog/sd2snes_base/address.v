@@ -100,6 +100,7 @@ wire [23:0] SAVERAM_ADDR = {4'hE,1'b0,SAVERAM_BASE,11'h0};
       001      LoROM
       010      ExHiROM (48-64Mbit)
       011      BS-X
+      100      Gamars Puzzle / Gamars Super DISK
       101      Sufami Turbo (Bandai BANDAI-PT-923)
       110      brainfuck interleaved 96MBit Star Ocean =)
       111      menu (ROM in upper SRAM)
@@ -148,6 +149,15 @@ assign IS_SAVERAM_pre = (~map_unlock & SAVERAM_MASK[0])
                          & (~SNES_ROMSEL)
                          & (~SNES_ADDR_early[15] | ~ROM_MASK[21])
                         )
+
+/*  Gamars Puzzle:
+ *  special writable RAM at $31:6000-$61ff and $41:6000-$61ff.
+ *  Both windows alias the same backing SaveRAM. */
+                      :(MAPPER_DEC[3'b100])
+                      ? ((SNES_ADDR_early[23:16] == 8'h31)
+                        && (SNES_ADDR_early[15:9] == 7'b0110000)
+                        )
+
 /*  BS-X: SRAM @ Bank 0x10-0x17 Offset 5000-5fff */
                       :(MAPPER_DEC[3'b011])
                       ? ((SNES_ADDR_early[23:19] == 5'b00010)
@@ -244,6 +254,25 @@ assign SRAM_SNES_ADDR = IS_PATCH
                             : BSLOROM_HI
                             ? (BSLOROM_ADDR & ROM_MASK)
                             : ({1'b0, ~SNES_ADDR[23], SNES_ADDR[22:16], SNES_ADDR[14:0]}
+                               & ROM_MASK))
+
+                            /* Gamars Puzzle.
+                            *
+                            * ROM mapping is otherwise ordinary LoROM.
+                            *
+                            * $31:6000-$61ff
+                            * $41:6000-$61ff
+                            *
+                            * both map to the same SaveRAM offsets $000-$1ff.
+                            */
+                          :(MAPPER_DEC[3'b100])
+                          ?(IS_SAVERAM
+                            ? SAVERAM_ADDR
+                               + ({15'b0, SNES_ADDR[8:0]} & SAVERAM_MASK)
+                            : ({1'b0,
+                                ~SNES_ADDR[23],
+                                SNES_ADDR[22:16],
+                                SNES_ADDR[14:0]}
                                & ROM_MASK))
 
                           :(MAPPER_DEC[3'b010])

@@ -313,7 +313,9 @@ SNES_FTYPE determine_filetype(FILINFO fno) {
     }
     return TYPE_SUBDIR;
   }
-  return filetype_by_ext(fno.fname);
+  /* the long name when there is one: an 8.3 alias carries only 3 characters of
+     extension, so "Game.sfrom" cannot be told from fno.fname */
+  return filetype_by_ext(*fno.lfname ? fno.lfname : fno.fname);
 }
 
 /* Extension-only classification, for a leaf OR a full path -- the one place that knows which
@@ -330,6 +332,7 @@ SNES_FTYPE filetype_by_ext(const char *name) {
     return TYPE_UNKNOWN;
   if(  (!strcasecmp(ext+1, "SMC"))
      ||(!strcasecmp(ext+1, "SFC"))
+     ||(!strcasecmp(ext+1, "SFROM"))
      ||(!strcasecmp(ext+1, "FIG"))
      ||(!strcasecmp(ext+1, "SWC"))
      ||(!strcasecmp(ext+1, "BS"))

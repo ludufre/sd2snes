@@ -58,7 +58,18 @@ uint32_t smc_src_size = 0;
    smc_src_size still carries the full logical target size for the fsize-based
    branches).  Header slots that do not fit within smc_src_valid are rejected. */
 uint32_t smc_src_valid = 0;
-#define SMC_FSIZE() (smc_src_active ? smc_src_size : file_handle.fsize)
+
+/* Logical size of the currently opened ROM image.
+   Normally this equals file_handle.fsize.
+   SFROM overrides it with the embedded SNES ROM size. */
+static uint32_t smc_file_span = 0;
+
+void smc_set_file_span(uint32_t rom_size) {
+  smc_file_span = rom_size;
+}
+
+#define SMC_FSIZE() \
+  (smc_src_active ? smc_src_size : (smc_file_span ? smc_file_span : file_handle.fsize))
 static UINT smc_readblock(void* buf, uint32_t addr, uint16_t size, uint32_t file_offset) {
   if(smc_src_active) { sram_readblock(buf, smc_src_base + addr, size); return size; }
   return file_readblock(buf, addr + file_offset, size);
@@ -124,6 +135,7 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   props->has_spc7110_rtc = 0;
   props->has_cx4 = 0;
   props->has_obc1 = 0;
+  props->has_col20 = 0;
   props->has_gsu = 0;
   props->has_fx3 = 0;
   props->has_sa1 = 0;
@@ -168,6 +180,39 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
       props->sramsize_bytes = props->ramsize_bytes = (uint32_t)st_hdr[0x37] * 2048;
       props->region = 0;                         /* Japan only -> 60 Hz */
       DBG_SUFAMI printf("Sufami Turbo: ROM=%ldKB SRAM=%ldKB\n", sz >> 10, props->sramsize_bytes >> 10);
+      return;
+    }
+  }
+
+  /* Korean "Super 20 in 1" LoROM pirate multicart: 32 banks of 32KB, no valid
+     header on bank 0 (menu/launcher code). Detected by the embedded LoROM
+     header MAME's sns_rom_20col_device documents on bank 6 (Spartan X),
+     byte-identical across the known dump. Needs its own FPGA core
+     (sd2snes_col20) because the bank-select register at $808000 is live,
+     write-triggered state the base LoROM decode has no room for -- see
+     verilog/sd2snes_col20/col20.v. */
+  {
+    static const uint8_t col20_bank6_hdr[32] = {
+      0x53, 0x70, 0x61, 0x72, 0x74, 0x61, 0x6e, 0x20,   /* "Spartan " */
+      0x58, 0x20, 0x53, 0x66, 0x63, 0x20, 0x20, 0x20,   /* "X Sfc   " */
+      0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x08,
+      0x00, 0x0d, 0x01, 0x01, 0xff, 0xff, 0x00, 0x00
+    };
+    uint8_t col20_hdr[32];
+    smc_readblock(col20_hdr, 0x37fc0, sizeof(col20_hdr), file_offset);
+    if(!memcmp(col20_hdr, col20_bank6_hdr, sizeof(col20_hdr))) {
+      memset(header, 0, sizeof(snes_header_t));
+      props->mapper_id        = 1;             /* LoROM -- MAPPER input to the core is still 3'b001 */
+      props->offset           = 0;
+      props->header_address   = 0;
+      props->has_col20        = 1;
+      props->fpga_conf        = FPGA_COL20;
+      props->fpga_features    = 0;             /* this core doesn't consume featurebits */
+      props->romsize_bytes    = 0x100000;      /* fixed -- this cart is always exactly 1MB */
+      props->ramsize_bytes    = 0;
+      props->expramsize_bytes = 0;
+      props->sramsize_bytes   = 0;
+      props->srambase         = 0;
       return;
     }
   }
@@ -481,6 +526,41 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
     props->fpga_features |= FEAT_COMBO;
   }
 
+  /*
+   * Gamars Puzzle / Gamars Super DISK.
+   *
+   * The ROM itself is a normal 1 MiB LoROM image, but the original
+   * Gamars hardware provides a non-standard writable memory window.
+   *
+   * Software explicitly uses $31:6000-$31:61ff and also accesses the
+   * same storage through $41:6000-$41:61ff.
+   *
+   * Use mapper 4 in the BASE core.  Mapper 4 is otherwise unused by
+   * sd2snes_base (S-DD1 uses mapper_id 4 with its own FPGA core).
+   *
+   * Match the actual internal header rather than the bogus SRAM-size
+   * byte alone.  The original header contains:
+   *
+   *   name       "(C)GAMARS PUZZLE"
+   *   map        $20
+   *   carttype   $00
+   *   romsize    $0a (1 MiB)
+   *   ramsize    $20 (non-standard / invalid as Nintendo SRAM size)
+   *   checksum   $9e4d
+   *   complement $61b2
+   */
+  if(!props->fpga_conf
+     && SMC_FSIZE() == 0x100000
+     && !memcmp(header->name, "(C)GAMARS PUZZLE", 16)
+     && header->map == 0x20
+     && header->carttype == 0x00
+     && header->romsize == 0x0a
+     && header->ramsize == 0x20
+     && header->chk == 0x9e4d
+     && header->cchk == 0x61b2) {
+    props->mapper_id = 4;
+  }
+
   /* $80-$9F boot remap for the listed LoROM slot carts (see smc_needs_bslorom).
      The pack window itself is auto-detected at load in memory.c. */
   if(props->mapper_id == 1 && !props->fpga_conf && smc_needs_bslorom(header->name)) {
@@ -508,6 +588,16 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
   if(props->ramsize_bytes < 2048) {
     props->ramsize_bytes = 0;
   }
+
+  /*
+   * Gamars Puzzle's header SRAM byte ($20) is not a Nintendo SRAM-size
+   * value.  The executable code demonstrably requires at least $200
+   * bytes at its special $31/$41:$6000 window.
+   */
+  if(props->mapper_id == 4 && !props->fpga_conf) {
+    props->ramsize_bytes = 0x200;
+  }
+
   props->region = (header->destcode <= 1 || header->destcode >= 13) ? 0 : 1;
 
   // adjust sram size for special cart types
