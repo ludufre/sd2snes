@@ -1394,20 +1394,25 @@ always @(posedge CLK2) begin
       STATE <= ST_IDLE;
       
       if(free_slot | SNES_DEADr) begin
-`ifndef MK2
-        // ctx (context/PPU-mirror) write -- top priority (mk3 snapshot).  The
-        // trailing `end else` folds cleanly into the SA1 `if` below: on mk3 it
-        // chains as `... end else if(SA1...)`, on mk2 the block vanishes.
-        if (CTX_WR_PENDr) begin
-          STATE <= ST_CTX_WR_ADDR;
-          ST_MEM_DELAYr <= ROM_CYCLE_LEN;
-        end else
-`endif
         // early notify from SA1 to save a clock
         if (SA1_ROM_RD_PENDr | SA1_ROM_RRQ) begin
           STATE <= ST_SA1_ROM_RD_ADDR;
           ST_MEM_DELAYr <= ROM_CYCLE_LEN;
         end
+`ifndef MK2
+        // ctx (register-shadow mirror) write -- BELOW the SA-1 ROM fetch, above the
+        // MCU.  It was top priority (the base core's order, where nothing else
+        // shares the PSRAM); on this core a top-priority ctx stream starved the SA-1
+        // of ROM fetches and Super Mario RPG's level-up text came out as garbage
+        // (issue #49, hardware-bisected: demoting the ctx alone fixed it).  The
+        // ctx requests are fire-and-forget (ctx.v drops a request while one is
+        // pending), so a lost shadow write under saturation is the documented
+        // best-effort behaviour, not a hang.
+        else if (CTX_WR_PENDr) begin
+          STATE <= ST_CTX_WR_ADDR;
+          ST_MEM_DELAYr <= ROM_CYCLE_LEN;
+        end
+`endif
         // early notify from MCU to save a clock
         else if(MCU_RD_PENDr | (MCU_RRQ && MCU_ADDR[23:19] != 5'b11100)) begin
           STATE <= ST_MCU_RD_ADDR;
