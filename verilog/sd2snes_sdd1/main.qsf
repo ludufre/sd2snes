@@ -529,3 +529,10 @@ set_global_assignment -name QIP_FILE ip/mk3/dac_buf.qip
 set_global_assignment -name QIP_FILE ip/mk3/msu_databuf.qip
 set_global_assignment -name QIP_FILE ip/mk3/snescmd_buf.qip
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
+# Fitter seed pinned: the S-DD1 decompressor has an unconstrained asynchronous
+# path that some placements violate (random mid-DMA desync of the decoded stream,
+# ~30% of game loads on the default-seed fit of this netlist; seeds 3/7/11/23 all
+# clean over repeated loads). SEED 7 is the hardware-validated fit. Re-validate on
+# hardware (Star Ocean title + name entry, several loads) after ANY change to this
+# core or to the Quartus version, and re-pin if it stops closing.
+set_global_assignment -name SEED 7
