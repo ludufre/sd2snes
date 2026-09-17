@@ -558,26 +558,32 @@ static uint8_t load_apply_patch(const load_ctx_t *c) {
   return patch_ok;
 }
 
-/* The FPGA core, mapper and masks were all selected from the PRE-patch
+/* The FPGA core, chip mode, mapper and masks were all selected from the PRE-patch
    header (smc_id ran on the unpatched file before fpga_pgm).  If the patch
    changed the cartridge type (e.g. an SA-1 / Super FX conversion hack), the
-   wrong core is currently loaded and the game would boot broken.
-   Re-derive the cartridge from the now-patched image in SDRAM; if it needs a
-   different core, reload+repatch once under the correct core.  Reconfiguring
-   the FPGA wipes SDRAM, so a full reload (re-stream + re-patch) is required
-   rather than a bare fpga_pgm.  Guarded so the normal path (no patch, or a
-   patch that keeps the same core) is completely unaffected.
+   game would boot broken.
+   Re-derive the cartridge from the now-patched image; if it needs a different
+   core, or a different chip mode on the same core, load_rom reloads once with
+   the patched cartridge.  With RECORE_PSRAM_KEEP the patched image survives the
+   fpga_pgm and the reload only re-checks it (recore_rom_fingerprint); without
+   it, or when that check fails, the reload re-streams and re-patches.  A patch
+   that keeps both the core and the chip mode never reloads.
 
-   Returns 1 when the caller must reload under the new core (the recore state is armed
-   on the way out); 0 when the core stands. */
+   Returns 1 when the caller must reload (the recore state is armed on the way
+   out); 0 when the core stands. */
 static uint8_t load_patch_needs_recore(const load_ctx_t *c, uint8_t saved_ips_idx) {
   smc_id_sdram(&ips_recore_props, SRAM_ROM_ADDR + romprops.load_address,
                romprops.romsize_bytes);
   const uint8_t* core_now = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
   const uint8_t* core_new = ips_recore_props.fpga_conf ? ips_recore_props.fpga_conf
                                                        : FPGA_BASE;
-  if(core_new != core_now) {
-    printf("IPS: patch changed cartridge type -> reloading under correct core\n");
+  /* The chip mode can change without the core file: on the Mk.III a Super FX 3 cart
+     runs on fpga_gsu like a classic GSU, and only fpga_dspfeat bit 1 (written by
+     load_set_features from the pre-patch header) turns FX3 on.  has_fx3 also keeps
+     the in-game hooks off (cheat.c).  The Mk.II moves FX3 to fpga_gsu3, so there
+     the core comparison already catches it. */
+  if(core_new != core_now || ips_recore_props.has_fx3 != romprops.has_fx3) {
+    printf("IPS: patch changed cartridge type -> reloading\n");
     ips_recore_active = 1;
 #if RECORE_PSRAM_KEEP
     /* copier-swap: patch already applied under base -> pass 2 skips stream+patch
@@ -596,11 +602,12 @@ static uint8_t load_patch_needs_recore(const load_ctx_t *c, uint8_t saved_ips_id
      most commonly a HiROM -> ExHiROM promotion when an expansion grows the
      ROM past 4 MB (e.g. Bahamut Lagoon English: 3 MB HiROM -> 8 MB ExHiROM,
      Tales of Phantasia-style).  set_mapper() ran before the patch with the
-     PRE-patch mapper, and the core-change branch above only fires on a core
-     swap, so a same-core mapper change would otherwise leave an 8 MB ExHiROM
-     image addressed as 4 MB HiROM -> the SNES reads garbage and black-
-     screens.  The core is already correct and the ROM mask was expanded
-     above, so just re-program the FPGA mapper register here (no reload). */
+     PRE-patch mapper, and the reload condition of load_patch_needs_recore
+     only looks at the core and the chip mode, so a same-core mapper change
+     would otherwise leave an 8 MB ExHiROM image addressed as 4 MB HiROM ->
+     the SNES reads garbage and black-screens.  The core is already correct
+     and load_apply_patch expanded the ROM mask, so just re-program the FPGA
+     mapper register here (no reload). */
   if(ips_recore_props.mapper_id != romprops.mapper_id) {
     printf("IPS: patch changed mapper %d -> %d (same core) -> reprogramming FPGA mapper\n",
            romprops.mapper_id, ips_recore_props.mapper_id);
