@@ -162,8 +162,12 @@ trh_two:
 	rts
 
 // ---- tr_dec_lo/hi (u32) -> decimal into OVL_RB at column Y, no leading zeros, at least
-//      one digit.  Y advances.  Repeated subtraction of the power-of-ten table, same reason
-//      as tr_put_hex.  Bounded: six fixed powers, each inner loop runs at most nine times. ----
+//      one digit -- unless tr_padx asks for a fixed width: every power from table index
+//      tr_padx/2 on is emitted even when zero (the value field, whose decimal digits the
+//      editor's cursor walks, so each one needs a fixed column).  tr_padx is ONE-SHOT: it
+//      is reset to $ffff (= no padding) on the way out.  Y advances.  Repeated subtraction
+//      of the power-of-ten table, same reason as tr_put_hex.  Bounded: six fixed powers,
+//      each inner loop runs at most nine times. ----
 tr_put_dec:
 	php
 	rep #$30 : .al : .xl
@@ -172,7 +176,9 @@ tr_put_dec:
 	ldx #$0000                                 // X = power index * 2
 trd_pow:
 	cpx #(5*2)
-	beq trd_units
+	bne trd_pow_go                             // (the exit jumps the whole loop: past a
+	jmp trd_units                              //   short branch's reach)
+trd_pow_go:
 	lda #$0000
 	sta @tr_tmp                                // this power's digit
 trd_sub:
@@ -197,7 +203,10 @@ trd_next:
 	lda @tr_tmp
 	bne trd_emit
 	lda @tr_scr
-	beq trd_skip                               // still inside the leading-zero run
+	bne trd_emit
+	txa                                        // still inside the leading-zero run: skip it,
+	cmp @tr_padx                               //   unless the field is padded from here on
+	bcc trd_skip
 trd_emit:
 	lda #$0001 : sta @tr_scr
 	lda @tr_tmp
@@ -216,6 +225,7 @@ trd_units:
 	sta OVL_RB, y
 	rep #$30 : .al : .xl
 	iny
+	lda #$ffff : sta @tr_padx                  // one-shot
 	plp
 	rts
 
@@ -713,11 +723,14 @@ trfg_done:
 
 // ---- recount the candidates from the bitmap and publish TR_COUNT.  A separate pass on
 //      purpose: a running total would have to be kept correct across every filter path,
-//      and one popcount sweep of 16 KiB costs about a fifth of a second. ----
+//      and one popcount sweep of 16 KiB costs about a fifth of a second.  Every recount
+//      ORs the pins in first, which is the one place that keeps a pinned address in the
+//      results whatever the search or the filters decided. ----
 tr_count:
 	php
 	phb
 	rep #$30 : .al : .xl
+	jsr tr_pins_merge
 	lda #$fafa : pha : plb : plb
 	lda #$0000
 	sta tr_a_cnt_lo
@@ -906,9 +919,10 @@ tr_popcnt:
 #define TR_MAGIC_W0     $5254                      // 'T','R'
 #define TR_MAGIC_W1     $524e                      // 'N','R'
 
-// ---- validate the session, or start a fresh one.  The freeze bookkeeping (TR_FZ_*) is
-//      deliberately NOT reset here: those are cheat records the MCU owns, they outlive a
-//      dropped search, and src/trainer.c is what clears them on a game load. ----
+// ---- validate the session, or start a fresh one.  The pins (TR_PINS) are deliberately
+//      NOT reset here: they are the user's, they outlive a dropped search, and
+//      src/trainer.c is what empties them on a load.  A fresh session starts with a bitmap
+//      holding the pins only, so the RESULTS can still list them. ----
 tr_session_check:
 	php
 	rep #$30 : .al : .xl
@@ -916,17 +930,9 @@ tr_session_check:
 	sep #$20 : .as
 	lda @TR_NOTICE                             // read OUTSIDE the magic guard: by the time a
 	beq trsc_no_notice                         //   drop is recorded the magic is already gone
-	cmp #$01
-	bne trsc_notice_rst
-	rep #$30 : .al : .xl
-	lda #IGM_TR_DROPPED_SS : sta @tr_notice
-	sep #$20 : .as
-	jmp trsc_notice_clr
-trsc_notice_rst:
-	rep #$30 : .al : .xl
+	rep #$30 : .al : .xl                       // (a reset is the only reason left)
 	lda #IGM_TR_DROPPED_RST : sta @tr_notice
 	sep #$20 : .as
-trsc_notice_clr:
 	lda #$00 : sta @TR_NOTICE
 trsc_no_notice:
 	rep #$30 : .al : .xl
@@ -938,7 +944,7 @@ trsc_no_notice:
 	bne trsc_init
 	sep #$20 : .as
 	lda @TR_VERSION
-	cmp #$01
+	cmp #$02
 	bne trsc_init8
 	rep #$30 : .al : .xl
 	plp
@@ -947,7 +953,7 @@ trsc_init8:
 	rep #$30 : .al : .xl
 trsc_init:
 	sep #$20 : .as
-	lda #$01 : sta @TR_VERSION
+	lda #$02 : sta @TR_VERSION
 	lda #$00
 	sta @TR_ACTIVE
 	sta @TR_HAVE_SNAP
@@ -967,6 +973,8 @@ trsc_init:
 	sta @TR_SEL_OFF+2
 	lda #TR_MAGIC_W0 : sta @TR_MAGIC
 	lda #TR_MAGIC_W1 : sta @TR_MAGIC+2
+	jsr tr_bitmap_clear                        // stale from an earlier session: pins only
+	jsr tr_count
 	plp
 	rts
 
@@ -1055,6 +1063,16 @@ tr_row_value:
 	php
 	rep #$30 : .al : .xl
 	phx
+	jsr tr_row_value_build
+	plx
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- the same row, built into OVL_RB only (no VRAM): A = value.  DBR = $F4. ----
+tr_row_value_build:
+	php
+	rep #$30 : .al : .xl
 	pha
 	jsr ovl_row_clear
 	lda @tr_scr
@@ -1078,8 +1096,135 @@ tr_row_value:
 	sep #$20 : .as
 	lda #$29 : sta OVL_RB, y                   // ')'
 	rep #$30 : .al : .xl
-	plx
-	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- the Value FIELD: label, digit counts of the data width -- 2 hex + 3 decimal in 8-bit,
+//      4 + 5 in 16-bit, the decimal zero-padded so every digit the editor's cursor can sit
+//      on has a fixed column.  Leaves tr_scr/tr_hexn/tr_padx set for tr_row_value(_build);
+//      the caller loads A = TR_VALUE. ----
+tr_field_prep:
+	php
+	rep #$30 : .al : .xl
+	lda #IGM_TR_VALUE : sta @tr_scr
+	jsr tr_hexn_set
+	lda @tr_hexn
+	cmp #$0004
+	beq trfp_wide
+	lda #(3*2) : sta @tr_padx                  // pad from 100 on: 3 digits
+	plp
+	rts
+trfp_wide:
+	rep #$30 : .al : .xl
+	lda #(1*2) : sta @tr_padx                  // pad from 10000 on: 5 digits
+	plp
+	rts
+
+// ---- stage the INTERIOR cells of row X as tilemap words in TR_ROWBUF (BG2 = even columns
+//      at +0, BG1 = odd columns at +64) and mark them for tr_row_dma, which DMAs them at the
+//      top of the NEXT vblank.  Why both halves of that:
+//        - interior only: the frame's two side cells are never rewritten, so a per-keypress
+//          repaint cannot erase them (the old full-row flush had to re-draw them with
+//          tr_side_repair afterwards);
+//        - staged + DMA: writing the cells from the input handler raced the end of vblank.
+//          With a 16-bit value the row (5-digit decimal) is built first, and the tail of
+//          the writes landed in active display -- first the frame's side cells, then half
+//          of the odd (BG1) columns, leaving the field a mix of the new value and the old.
+//      Interior = cols x+1..x+w-2 (x odd, w even): the same entry range (x+1)/2.. on both
+//      tilemaps, (w-2)/2 cells each.  DBR = $F4 (reads OVL_RB). ----
+tr_stage_interior:
+	php
+	rep #$30 : .al : .xl
+	txa
+	asl : asl : asl : asl : asl                // row * 32 tilemap entries
+	sta @tr_rowdst
+	lda @ig_win_x : and #$00ff
+	inc : lsr
+	sta @tr_col                                // first interior entry
+	clc : adc @tr_rowdst
+	sta @tr_rowdst                             // VRAM word offset, same on both tilemaps
+	lda @ig_win_w : and #$00ff
+	dec : dec : lsr
+	sta @tr_tmp                                // interior cells per tilemap
+	asl
+	sta @tr_rowlen                             // DMA bytes per tilemap
+	lda @tr_tmp : sta @tr_scr                  // BG2: even columns
+	lda @tr_col : asl : tay                    // Y = OVL_RB index (abs,Y), X = buffer (long,X)
+	ldx #$0000
+trsi_ev:
+	lda OVL_RB, y
+	and #$00ff
+	asl
+	ora @ovl_pal
+	sta @TR_ROWBUF, x
+	iny : iny
+	inx : inx
+	lda @tr_scr : dec : sta @tr_scr
+	bne trsi_ev
+	lda @tr_tmp : sta @tr_scr                  // BG1: odd columns
+	lda @tr_col : asl : inc : tay
+	ldx #$0000
+trsi_od:
+	lda OVL_RB, y
+	and #$00ff
+	asl
+	ora @ovl_pal
+	sta @TR_ROWBUF+64, x
+	iny : iny
+	inx : inx
+	lda @tr_scr : dec : sta @tr_scr
+	bne trsi_od
+	lda #$0001 : sta @tr_rowpend               // written LAST: it is tr_row_dma's gate
+	plp
+	rts
+
+// ---- igmenu_loop, top of vblank (next to ovl_dma_list): DMA the row tr_stage_interior
+//      staged, if any -- two ~52-byte GP-DMAs on ch0, well inside one scanline.  Every tab
+//      runs through here, so tr_rowpend is zeroed on open (igmenu_main), on leaving this tab
+//      and by every full redraw. ----
+tr_row_dma:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_rowpend
+	bne trrd_go
+	plp
+	rts
+trrd_go:
+	rep #$30 : .al : .xl
+	sep #$20 : .as
+	lda #$80 : sta @$002115                    // VRAM +1 word after the high byte
+	rep #$20 : .al
+	lda @tr_rowdst
+	clc : adc #OVL_BG2_MAP
+	sta @$002116
+	sep #$20 : .as
+	lda #$01 : sta @$004300                    // ch0: 2 regs ($2118/9), A->B, A inc
+	lda #$18 : sta @$004301
+	rep #$20 : .al
+	lda #TR_ROWBUF_LO : sta @$004302
+	sep #$20 : .as
+	lda #TR_ROWBUF_BANK : sta @$004304
+	rep #$20 : .al
+	lda @tr_rowlen : sta @$004305
+	sep #$20 : .as
+	lda #$01 : sta @$00420b                    // BG2
+	rep #$20 : .al
+	lda @tr_rowdst
+	clc : adc #OVL_BG1_MAP
+	sta @$002116
+	sep #$20 : .as
+	lda #$01 : sta @$004300
+	lda #$18 : sta @$004301
+	rep #$20 : .al
+	lda #(TR_ROWBUF_LO+64) : sta @$004302
+	sep #$20 : .as
+	lda #TR_ROWBUF_BANK : sta @$004304
+	rep #$20 : .al
+	lda @tr_rowlen : sta @$004305
+	sep #$20 : .as
+	lda #$01 : sta @$00420b                    // BG1
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_rowpend
 	plp
 	rts
 
@@ -1104,6 +1249,7 @@ tr_row_dec:
 #define TR_SU_ROW_WIDTH  8
 #define TR_SU_ROW_VALUE  10
 #define TR_SU_ROW_GO     12
+#define TR_SU_ROW_RES    14
 #define TR_SU_ROW_NOTICE 17
 
 tr_draw_setup:
@@ -1153,8 +1299,7 @@ trds_w_draw:
 	and #$00ff
 	cmp #TR_MODE_UNKNOWN
 	beq trds_novalue
-	jsr tr_hexn_set
-	lda #IGM_TR_VALUE : sta @tr_scr
+	jsr tr_field_prep
 	lda @TR_VALUE
 	ldx #TR_SU_ROW_VALUE
 	jsr tr_row_value
@@ -1169,6 +1314,18 @@ trds_novalue:
 	lda #TR_K_NEW : sta @tr_kind
 	ldx #TR_SU_ROW_GO
 	jsr tr_addrow
+	// no search running, but pinned addresses (frozen / set values) are still results
+	lda @TR_COUNT
+	ora @TR_COUNT_HI
+	beq trds_nores
+	lda #IGM_TR_RESULTS
+	ldx #TR_SU_ROW_RES
+	jsr tr_draw_centered
+	lda #TR_K_RESULTS : sta @tr_kind
+	ldx #TR_SU_ROW_RES
+	jsr tr_addrow
+trds_nores:
+	rep #$30 : .al : .xl
 	// why the previous session went away, shown once
 	lda @tr_notice
 	cmp #$ffff
@@ -1230,8 +1387,7 @@ trda_w_draw:
 	// the relative compares take no operand, so their Value row is not drawn at all
 	jsr tr_mode_needs_value
 	bcc trda_novalue
-	jsr tr_hexn_set
-	lda #IGM_TR_VALUE : sta @tr_scr
+	jsr tr_field_prep
 	lda @TR_VALUE
 	ldx #TR_AC_ROW_VALUE
 	jsr tr_row_value
@@ -1290,13 +1446,20 @@ trdr_have:
 	lda #$0004 : sta @tr_hexn
 	lda @tr_off_lo
 	jsr tr_put_hex                             // Y already sits after the bank digits
-	// current value, two columns further right
+	// current value, two columns further right, in the search width (2 or 4 digits)
 	jsr tr_read_wram
 	sta @tr_tmp
-	lda #$0002 : sta @tr_hexn
+	jsr tr_hexn_set
 	lda @tr_tmp
 	ldy #(TR_VAL_COL+2)
 	jsr tr_put_hex
+	jsr tr_pin_frozen_sel                      // a frozen pin says so on its row
+	bcc trdr_flush
+	lda #IGM_TR_FROZEN
+	ldy #(TR_VAL_COL+7)
+	jsr tr_copy
+trdr_flush:
+	rep #$30 : .al : .xl
 	plx
 	jsr ovl_flush_abs
 	plp
@@ -1425,6 +1588,7 @@ trcv_done:
 #define TR_DT_ROW_SET    13
 #define TR_DT_ROW_FREEZE 14
 #define TR_DT_ROW_ADD    15
+#define TR_DT_ROW_UNPIN  16
 
 tr_draw_detail:
 	php
@@ -1456,14 +1620,12 @@ tr_draw_detail:
 	ldx #TR_DT_ROW_CUR
 	jsr tr_row_value
 	// FROZEN marker
-	jsr tr_find_slot
-	lda @tr_slot
-	cmp #$ffff
-	beq trdd_nofrz
+	jsr tr_pin_frozen_sel                      // carry SET = the selection is a frozen pin
+	bcc trdd_nofrz
 	lda #IGM_TR_FROZEN
 	ldx #TR_DT_ROW_FRZ
 	jsr tr_draw_centered
-	// A freeze is an ordinary cheat record, so the master switch gates it (branch_wram =
+	// A freeze rides the WRAM cheat patches, so the master switch gates it (branch_wram =
 	// cheat_enable & wram_present, cheat.v). Silently doing nothing is the one outcome the
 	// user cannot diagnose, so say it out loud.
 	sep #$20 : .as
@@ -1475,8 +1637,8 @@ tr_draw_detail:
 	ldx #(TR_DT_ROW_FRZ+1)
 	jsr tr_draw_centered
 trdd_nofrz:
-	jsr tr_hexn_set
-	lda #IGM_TR_VALUE : sta @tr_scr
+	rep #$30 : .al : .xl
+	jsr tr_field_prep
 	lda @TR_VALUE
 	ldx #TR_DT_ROW_VALUE
 	jsr tr_row_value
@@ -1489,12 +1651,12 @@ trdd_nofrz:
 	lda #TR_K_SET : sta @tr_kind
 	ldx #TR_DT_ROW_SET
 	jsr tr_addrow
-	lda @tr_slot
-	cmp #$ffff
-	beq trdd_frz_lbl
+	jsr tr_pin_frozen_sel
+	bcc trdd_frz_lbl
 	lda #IGM_TR_UNFREEZE
 	jmp trdd_frz_draw
 trdd_frz_lbl:
+	rep #$30 : .al : .xl
 	lda #IGM_TR_FREEZE
 trdd_frz_draw:
 	ldx #TR_DT_ROW_FREEZE
@@ -1502,12 +1664,26 @@ trdd_frz_draw:
 	lda #TR_K_FREEZE : sta @tr_kind
 	ldx #TR_DT_ROW_FREEZE
 	jsr tr_addrow
-	lda #IGM_TR_ADDCHEAT
+	lda #IGM_TR_SAVECHEAT
 	ldx #TR_DT_ROW_ADD
 	jsr tr_draw_centered
 	lda #TR_K_ADD : sta @tr_kind
 	ldx #TR_DT_ROW_ADD
 	jsr tr_addrow
+	// a pinned address (set or frozen) can be taken off the list -- the only way out of
+	// it besides the oldest-unfrozen eviction and reloading the game
+	jsr tr_pin_find
+	lda @tr_pin
+	cmp #$ffff
+	beq trdd_nopin
+	lda #IGM_TR_UNPIN
+	ldx #TR_DT_ROW_UNPIN
+	jsr tr_draw_centered
+	lda #TR_K_UNPIN : sta @tr_kind
+	ldx #TR_DT_ROW_UNPIN
+	jsr tr_addrow
+trdd_nopin:
+	rep #$30 : .al : .xl
 	lda #IGM_TR_HINT_LIST
 	ldx #TR_ROW_HINT
 	jsr tr_draw_centered
@@ -1541,38 +1717,221 @@ trmn_yes:
 	sec
 	rts
 
-// ---- which freeze slot (if any) already holds the selected offset -> tr_slot ----
-tr_find_slot:
+// ========================================================================================
+//  PIN table (TR_PINS): the addresses the user froze or set a value on.  Insertion order,
+//  empty entries ($FFFF in the high word) at the end.  X/tr_pin carry a BYTE offset into
+//  the table (entry * TR_PIN_SIZE), never an index.
+// ========================================================================================
+
+// ---- tr_pin = byte offset of the pin at (tr_off_lo, tr_off_bank), $ffff = none ----
+tr_pin_find:
 	php
 	rep #$30 : .al : .xl
-	lda #$ffff : sta @tr_slot
-	lda #$0000 : sta @tr_tmp                   // slot number
-trfs_l:
-	lda @tr_tmp
-	asl
-	tax
-	lda @TR_FZ_IDX, x
-	cmp #$ffff
-	beq trfs_next
-	lda @tr_tmp
-	asl : asl
-	tax
-	lda @TR_FZ_OFF, x
-	cmp @tr_off_lo
-	bne trfs_next
-	lda @TR_FZ_OFF+2, x
+	lda #$ffff : sta @tr_pin
+	ldx #$0000
+trpf_l:
+	lda @TR_PINS+2, x                          // high word: the bank (0/1), $ffff = empty
 	cmp @tr_off_bank
-	bne trfs_next
-	lda @tr_tmp
-	sta @tr_slot
-	jmp trfs_done
-trfs_next:
-	lda @tr_tmp : inc : sta @tr_tmp
-	cmp #TR_FREEZE_MAX
-	bne trfs_l
-trfs_done:
+	bne trpf_next
+	lda @TR_PINS, x
+	cmp @tr_off_lo
+	bne trpf_next
+	txa
+	sta @tr_pin
+	jmp trpf_done
+trpf_next:
+	txa : clc : adc #TR_PIN_SIZE : tax
+	cpx #(TR_PIN_MAX*TR_PIN_SIZE)
+	bne trpf_l
+trpf_done:
 	plp
 	rts
+
+// ---- carry SET when the selection is pinned AND frozen (tr_pin left pointing at it) ----
+tr_pin_frozen_sel:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_pin_find
+	lda @tr_pin
+	cmp #$ffff
+	beq trpfs_no
+	tax
+	sep #$20 : .as
+	lda @TR_PINS+TR_PIN_FLAGS, x
+	rep #$30 : .al : .xl
+	and #TR_PINF_FROZEN
+	beq trpfs_no
+	plp
+	sec
+	rts
+trpfs_no:
+	rep #$30 : .al : .xl
+	plp
+	clc
+	rts
+
+// ---- tr_pin = the selection's pin, taking a new entry when it has none: the first empty
+//      one, or -- all eight in use -- the last one, after the oldest UNFROZEN pin left and
+//      everything behind it moved down.  At most TR_FREEZE_MAX are frozen, so one always
+//      can leave.  A new entry comes back with the selection's offset already stored. ----
+tr_pin_get:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_pin_find
+	lda @tr_pin
+	cmp #$ffff
+	beq trpg_new
+	plp
+	rts
+trpg_new:
+	rep #$30 : .al : .xl
+	ldx #$0000
+trpg_empty:
+	lda @TR_PINS+2, x
+	cmp #$ffff
+	beq trpg_have
+	txa : clc : adc #TR_PIN_SIZE : tax
+	cpx #(TR_PIN_MAX*TR_PIN_SIZE)
+	bne trpg_empty
+	ldx #$0000                                 // full: find the oldest unfrozen one
+trpg_old:
+	sep #$20 : .as
+	lda @TR_PINS+TR_PIN_FLAGS, x
+	rep #$30 : .al : .xl
+	and #TR_PINF_FROZEN
+	beq trpg_shift
+	txa : clc : adc #TR_PIN_SIZE : tax
+	cpx #(TR_PIN_MAX*TR_PIN_SIZE)
+	bne trpg_old
+	ldx #((TR_PIN_MAX-1)*TR_PIN_SIZE)         // unreachable (<= 4 frozen): reuse the last
+	jmp trpg_have
+trpg_shift:
+	rep #$30 : .al : .xl
+	cpx #((TR_PIN_MAX-1)*TR_PIN_SIZE)
+	beq trpg_have                              // X = the last entry, free now
+	lda @TR_PINS+TR_PIN_SIZE, x   : sta @TR_PINS, x
+	lda @TR_PINS+TR_PIN_SIZE+2, x : sta @TR_PINS+2, x
+	lda @TR_PINS+TR_PIN_SIZE+4, x : sta @TR_PINS+4, x
+	lda @TR_PINS+TR_PIN_SIZE+6, x : sta @TR_PINS+6, x
+	txa : clc : adc #TR_PIN_SIZE : tax
+	jmp trpg_shift
+trpg_have:
+	rep #$30 : .al : .xl
+	txa
+	sta @tr_pin
+	lda @tr_off_lo   : sta @TR_PINS, x
+	lda @tr_off_bank : sta @TR_PINS+2, x
+	lda #$0000       : sta @TR_PINS+TR_PIN_FLAGS, x   // flags + rsvd
+	plp
+	rts
+
+// ---- store TR_VALUE and the flags in A(16) (TR_PINF_FROZEN or 0) into the pin at tr_pin;
+//      TR_PINF_WIDE follows the search width, which is what the value was typed in. ----
+tr_pin_store:
+	php
+	rep #$30 : .al : .xl
+	sta @tr_scr
+	sep #$20 : .as
+	lda @TR_WIDTH
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #$0002
+	bne trps_narrow
+	lda @tr_scr
+	ora #TR_PINF_WIDE
+	sta @tr_scr
+trps_narrow:
+	rep #$30 : .al : .xl
+	lda @tr_pin : tax
+	lda @TR_VALUE : sta @TR_PINS+TR_PIN_VAL, x
+	lda @tr_scr   : sta @TR_PINS+TR_PIN_FLAGS, x   // flags + rsvd (0)
+	plp
+	rts
+
+// ---- A = how many pins are frozen ----
+tr_pins_frozen:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_tmp
+	ldx #$0000
+trpz_l:
+	lda @TR_PINS+2, x
+	cmp #$ffff
+	beq trpz_next
+	sep #$20 : .as
+	lda @TR_PINS+TR_PIN_FLAGS, x
+	rep #$30 : .al : .xl
+	and #TR_PINF_FROZEN
+	beq trpz_next
+	lda @tr_tmp : inc : sta @tr_tmp
+trpz_next:
+	rep #$30 : .al : .xl
+	txa : clc : adc #TR_PIN_SIZE : tax
+	cpx #(TR_PIN_MAX*TR_PIN_SIZE)
+	bne trpz_l
+	lda @tr_tmp
+	plp
+	rts
+
+// ---- OR every pin into the candidate bitmap: a pin is always a result, whatever the
+//      search or the filters decided.  Called by tr_count, i.e. before every recount. ----
+tr_pins_merge:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_pi
+trpm_l:
+	rep #$30 : .al : .xl
+	jsr tr_pin_merge_one
+	lda @tr_pi
+	clc : adc #TR_PIN_SIZE
+	sta @tr_pi
+	cmp #(TR_PIN_MAX*TR_PIN_SIZE)
+	bne trpm_l
+	plp
+	rts
+
+// ---- set the bitmap bit of the pin at tr_pi; an empty entry sets nothing.  byte =
+//      (bank << 13) | (offset >> 3), bit = offset & 7.  (An 8-bit pin at $1FFFF carried
+//      into a 16-bit search lists a candidate whose high byte is past WRAM: display only,
+//      the filters read it the same harmless way.) ----
+tr_pin_merge_one:
+	php
+	rep #$30 : .al : .xl
+	lda @tr_pi : tax
+	lda @TR_PINS+2, x                          // bank 0/1; $ffff = empty
+	cmp #$0002
+	bcs trpmo_out
+	sta @tr_tmp
+	lda @TR_PINS, x
+	sta @tr_col
+	and #$0007
+	tax
+	sep #$20 : .as
+	lda @tr_bitval, x
+	sta @tr_mask
+	rep #$30 : .al : .xl
+	lda @tr_col
+	lsr : lsr : lsr
+	sta @tr_col
+	lda @tr_tmp
+	beq trpmo_lo
+	lda @tr_col
+	ora #$2000                                 // bank $7F starts at bitmap byte $2000
+	sta @tr_col
+trpmo_lo:
+	rep #$30 : .al : .xl
+	lda @tr_col : tax
+	sep #$20 : .as
+	lda @TRAINER_BITMAP, x
+	ora @tr_mask
+	sta @TRAINER_BITMAP, x
+trpmo_out:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+tr_bitval:
+	.byt $01, $02, $04, $08, $10, $20, $40, $80
 
 // ---- redraw the whole body for the current TR_UI.
 //      tr_draw_body assumes the caller already owns the blank; tr_draw_screen takes it.
@@ -1586,6 +1945,7 @@ tr_draw_body:
 	sep #$20 : .as
 	lda #$f4 : pha : plb
 	rep #$30 : .al : .xl
+	lda #$0000 : sta @tr_rowpend               // a full redraw supersedes a staged row
 	jsr tr_wipe_body                           // the four screens use different rows; without
 	                                           //   this the leftovers of the previous one stay
 	lda #IGM_TR_TITLE
@@ -1612,6 +1972,15 @@ trdsc_results:
 trdsc_detail:
 	jsr tr_draw_detail
 trdsc_done:
+	rep #$30 : .al : .xl
+	lda @tr_msg                                // one-shot result (SAVE CHEAT) over the hint
+	cmp #$ffff
+	beq trdsc_nomsg
+	ldx #TR_ROW_HINT
+	jsr tr_draw_centered
+	lda #$ffff : sta @tr_msg
+trdsc_nomsg:
+	rep #$30 : .al : .xl
 	jsr tr_bar_update
 	plb
 	plp
@@ -1684,26 +2053,14 @@ tr_row_refresh:
 	sep #$20 : .as
 	lda #$f4 : pha : plb
 	rep #$30 : .al : .xl
-	sep #$20 : .as
-	lda @TR_UI
-	rep #$30 : .al : .xl
-	and #$00ff
-	cmp #TR_UI_DETAIL
-	beq trrr_detail
-	// SETUP / ACTIVE: the only refreshable row is the value field
-	lda #IGM_TR_VALUE : sta @tr_scr
-	lda #$0002 : sta @tr_hexn
+	// the only refreshable row, on every screen, is the value field.  Built here, written
+	// by tr_row_dma at the top of the next vblank, interior cells only (see
+	// tr_stage_interior).
+	jsr tr_field_prep
 	lda @TR_VALUE
-	jsr tr_row_value
-	jmp trrr_done
-trrr_detail:
-	lda #IGM_TR_VALUE : sta @tr_scr
-	lda #$0002 : sta @tr_hexn
-	lda @TR_VALUE
-	jsr tr_row_value
-trrr_done:
+	jsr tr_row_value_build
 	jsr tr_value_row_x
-	jsr tr_side_repair
+	jsr tr_stage_interior                      // VRAM write deferred to tr_row_dma
 	plb
 	plp
 	rts
@@ -1844,33 +2201,40 @@ tr_act_results:
 tr_act_reset:
 	php
 	rep #$30 : .al : .xl
-	jsr tr_bitmap_clear
+	jsr tr_bitmap_clear                        // the pins come back in through tr_count below
 	sep #$20 : .as
 	lda #$00 : sta @TR_ACTIVE
 	lda #$00 : sta @TR_HAVE_SNAP
 	lda #TR_MODE_EXACT : sta @TR_MODE
 	lda #TR_UI_SETUP : sta @TR_UI
 	rep #$30 : .al : .xl
+	jsr tr_count
 	lda #$0000
-	sta @TR_COUNT
-	sta @TR_COUNT_HI
 	sta @TR_CURSOR
 	sta @TR_TOP
 	sta @tr_sel
+	sta @tr_walk_idx
+	sta @tr_walk_off
+	sta @tr_walk_bank
 	lda #$ffff : sta @tr_notice
 	jsr tr_draw_screen
 	plp
 	rts
 
-// ---- SET VALUE: one write, right now, and nothing else.  This is the ONLY place besides
-//      the freeze path where the trainer touches the game's WRAM. ----
+// ---- SET VALUE: one write, right now.  This is the ONLY place besides the freeze path
+//      where the trainer touches the game's WRAM.  The address becomes a pin (or its pin
+//      takes the new value) so it stays in the RESULTS whatever the next filter says; a
+//      FROZEN pin keeps the value it holds -- the freeze wins on the next frame anyway. ----
 tr_act_setvalue:
 	php
 	rep #$30 : .al : .xl
 	lda @tr_off_lo
 	tax
-	lda @TR_VALUE
 	sep #$20 : .as
+	lda @TR_WIDTH
+	cmp #$02
+	beq trsv_wide
+	lda @TR_VALUE                              // 8-bit: one byte
 	pha
 	lda @tr_off_bank
 	bne trsv_hi
@@ -1878,35 +2242,67 @@ tr_act_setvalue:
 	sta @$7e0000, x
 	jmp trsv_done
 trsv_hi:
+	.as
 	pla
 	sta @$7f0000, x
+	jmp trsv_done
+trsv_wide:
+	rep #$30 : .al : .xl                       // 16-bit: both bytes, LE (a value at $7EFFFF
+	lda @tr_off_bank                           //   spills into $7F0000, like the freeze)
+	bne trsv_hi16
+	lda @TR_VALUE
+	sta @$7e0000, x
+	jmp trsv_done
+trsv_hi16:
+	rep #$30 : .al : .xl
+	lda @TR_VALUE
+	sta @$7f0000, x
 trsv_done:
+	rep #$30 : .al : .xl
+	jsr tr_pin_frozen_sel
+	bcs trsv_redraw
+	jsr tr_pin_get                             // DETAIL only shows a current result, so its
+	lda #$0000                                 //   bit is set already: no recount needed
+	jsr tr_pin_store
+trsv_redraw:
 	rep #$30 : .al : .xl
 	jsr tr_draw_screen                         // CURRENT changed
 	plp
 	rts
 
-// ---- FREEZE / ADD TO CHEATS / UNFREEZE.  A(16) holds the TR_REQ opcode.  The request is
-//      written into the meta block (the tab owns it, and $FA is writable under IS_PATCH)
-//      because MCU_PARAM is 12 bytes and this needs nine; CMD_TRAINER_CHEAT then carries
-//      nothing.  The MCU turns it into an ordinary cheat record, which is what makes the
-//      frozen value obey the master switch and survive a reprogram. ----
+// ---- send TR_REQ_* in A(16) to the MCU and wait for the ACK.  The request travels in
+//      the meta block (the tab owns it, and $FA is writable under IS_PATCH) because
+//      MCU_PARAM is 12 bytes; CMD_TRAINER_CHEAT carries nothing.  CE_RESULT is pre-zeroed
+//      for a SAVE: still 0 after the ACK = a firmware that could not serve it.  The wait is
+//      the cheat editor's, sized for a .yml rewrite; it returns as soon as the MCU ACKs. ----
 tr_send_req:
+	php
+	rep #$30 : .al : .xl
+	sta @tr_scr
+	lda @tr_off_lo   : sta @TR_REQ_OFF
+	lda @tr_off_bank : sta @TR_REQ_OFF+2
+	lda @TR_VALUE    : sta @TR_REQ_VAL
+	sep #$20 : .as
+	lda #CE_RES_PENDING : sta @CE_RESULT
+	lda @tr_scr
+	sta @TR_REQ                                // written LAST: TR_REQ is the MCU's gate
+	lda #CMD_TRAINER_CHEAT
+	sta @MCU_CMD
+	jsr ce_wait_ack                            // bounded spin; never hangs the SNES
+	plp
+	rts
+
+// ---- FREEZE the selection at TR_VALUE: pin it (or reuse its pin) and redeploy.  At most
+//      TR_FREEZE_MAX frozen at once -- past that, say so on the hint row and change
+//      nothing.  Runs from the input handler, inside the vblank, so one row fits. ----
+tr_freeze:
 	php
 	phb
 	rep #$30 : .al : .xl
-	sta @tr_scr                                // requested opcode
-	// pick a slot: the one already holding this offset, else the first free one
-	jsr tr_find_slot
-	lda @tr_slot
-	cmp #$ffff
-	bne trsr_haveslot
-	jsr tr_free_slot
-trsr_haveslot:
-	lda @tr_slot
-	cmp #$ffff
-	bne trsr_ok
-	sep #$20 : .as                             // all four taken: say so, change nothing
+	jsr tr_pins_frozen
+	cmp #TR_FREEZE_MAX
+	bcc trfz_room
+	sep #$20 : .as
 	lda #$f4 : pha : plb
 	rep #$30 : .al : .xl
 	lda #IGM_TR_NOFREEZE
@@ -1917,43 +2313,169 @@ trsr_haveslot:
 	plb
 	plp
 	rts
-trsr_ok:
-	lda @tr_off_lo   : sta @TR_REQ_OFF
-	lda @tr_off_bank : sta @TR_REQ_OFF+2
-	lda @TR_VALUE    : sta @TR_REQ_VAL
-	lda @tr_slot
-	sep #$20 : .as
-	sta @TR_REQ_SLOT
-	lda @tr_scr
-	sta @TR_REQ                                // written LAST: TR_REQ is the MCU's gate
-	lda #CMD_TRAINER_CHEAT
-	sta @MCU_CMD
-	jsr saves_wait_ack                         // bounded spin; never hangs the SNES
+trfz_room:
 	rep #$30 : .al : .xl
+	jsr tr_pin_get                             // (a current result: no recount needed)
+	lda #TR_PINF_FROZEN
+	jsr tr_pin_store
+	lda #TR_REQ_APPLY
+	jsr tr_send_req
 	jsr tr_draw_screen
 	plb
 	plp
 	rts
 
-// ---- first freeze slot with no record -> tr_slot ($ffff when all four are taken) ----
-tr_free_slot:
+// ---- UNFREEZE: the pin stays (still a result, still listed), only the freeze goes ----
+tr_unfreeze:
 	php
 	rep #$30 : .al : .xl
-	lda #$ffff : sta @tr_slot
-	ldx #$0000
-trfr_l:
-	lda @TR_FZ_IDX, x
+	jsr tr_pin_frozen_sel                      // leaves tr_pin on the selection's pin
+	bcc trufz_out
+	lda @tr_pin : tax
+	sep #$20 : .as
+	lda @TR_PINS+TR_PIN_FLAGS, x
+	and #$fe                                   // ~TR_PINF_FROZEN
+	sta @TR_PINS+TR_PIN_FLAGS, x
+	rep #$30 : .al : .xl
+	lda #TR_REQ_APPLY
+	jsr tr_send_req
+	jsr tr_draw_screen
+trufz_out:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- SAVE CHEAT: the only way an address reaches the cheat list.  The MCU runs the cheat
+//      editor's own ADD (top of the list, enabled, written to the .yml) and, when it took,
+//      unfreezes the pin at that address -- the cheat holds the value from now on.  The
+//      .yml write takes the SNES out of the vblank, so the result goes through tr_msg and a
+//      blanked redraw instead of a one-row write. ----
+tr_save:
+	php
+	rep #$30 : .al : .xl
+	lda #TR_REQ_SAVE
+	jsr tr_send_req
+	sep #$20 : .as
+	lda @CE_RESULT
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp #CE_RES_OK
+	beq trsave_ok
+	lda #IGM_TR_SAVEFAIL
+	jmp trsave_msg
+trsave_ok:
+	rep #$30 : .al : .xl
+	lda @NUM_CHEATS                            // the CHEATS tab reads its list size only when
+	cmp #CHEAT_LIST_MAX                        //   the overlay opens or the editor closes:
+	bcc trsave_cnt                             //   publish the new one and land its cursor on
+	lda #CHEAT_LIST_MAX                        //   the new cheat, index 0 (ce_close_to_list)
+trsave_cnt:
+	sta @ovl_count
+	cmp #OVL_ROWS
+	bcc trsave_vis
+	lda #OVL_ROWS
+trsave_vis:
+	sta @ovl_visible
+	lda #$0000
+	sta @ovl_top
+	sta @ovl_selrow
+	lda #IGM_TR_SAVED
+trsave_msg:
+	sta @tr_msg
+	jsr tr_draw_screen
+	plp
+	rts
+
+// ---- REMOVE FROM LIST: drop the selection's pin.  The table closes the gap (insertion
+//      order, empties at the end), the address leaves the candidate bitmap -- the user
+//      asked it OFF the list, so even a genuine candidate goes -- and a frozen pin stops
+//      being held (APPLY).  Lands on the RESULTS, or on SETUP when no search runs and
+//      nothing is left to list. ----
+tr_unpin:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_pin_find
+	lda @tr_pin
 	cmp #$ffff
-	bne trfr_next
-	txa
-	lsr
-	sta @tr_slot
-	jmp trfr_done
-trfr_next:
-	inx : inx
-	cpx #(TR_FREEZE_MAX*2)
-	bne trfr_l
-trfr_done:
+	bne trup_have
+	plp
+	rts
+trup_have:
+	rep #$30 : .al : .xl
+	tax
+	sep #$20 : .as
+	lda @TR_PINS+TR_PIN_FLAGS, x
+	rep #$30 : .al : .xl
+	and #TR_PINF_FROZEN
+	pha                                        // was it frozen? (redeploy below)
+trup_shift:
+	rep #$30 : .al : .xl
+	cpx #((TR_PIN_MAX-1)*TR_PIN_SIZE)
+	beq trup_last
+	lda @TR_PINS+TR_PIN_SIZE, x   : sta @TR_PINS, x
+	lda @TR_PINS+TR_PIN_SIZE+2, x : sta @TR_PINS+2, x
+	lda @TR_PINS+TR_PIN_SIZE+4, x : sta @TR_PINS+4, x
+	lda @TR_PINS+TR_PIN_SIZE+6, x : sta @TR_PINS+6, x
+	txa : clc : adc #TR_PIN_SIZE : tax
+	jmp trup_shift
+trup_last:
+	rep #$30 : .al : .xl
+	lda #$ffff
+	sta @TR_PINS, x
+	sta @TR_PINS+2, x                          // high word $ffff = empty
+	lda #$0000
+	sta @TR_PINS+4, x
+	sta @TR_PINS+6, x
+	// the address's candidate bit: byte (bank << 13) | (offset >> 3), bit offset & 7
+	lda @tr_off_lo
+	and #$0007
+	tax
+	sep #$20 : .as
+	lda @tr_bitval, x
+	eor #$ff
+	sta @tr_mask
+	rep #$30 : .al : .xl
+	lda @tr_off_lo
+	lsr : lsr : lsr
+	sta @tr_col
+	lda @tr_off_bank
+	beq trup_lo
+	lda @tr_col
+	ora #$2000
+	sta @tr_col
+trup_lo:
+	rep #$30 : .al : .xl
+	lda @tr_col : tax
+	sep #$20 : .as
+	lda @TRAINER_BITMAP, x
+	and @tr_mask
+	sta @TRAINER_BITMAP, x
+	rep #$30 : .al : .xl
+	jsr tr_count                               // the other pins stay in through the merge
+	pla
+	beq trup_nofrz
+	lda #TR_REQ_APPLY                          // it was frozen: redeploy without it
+	jsr tr_send_req
+trup_nofrz:
+	rep #$30 : .al : .xl
+	lda #$0000                                 // the bitmap changed under the walk cache
+	sta @tr_sel
+	sta @tr_walk_idx
+	sta @tr_walk_off
+	sta @tr_walk_bank
+	sep #$20 : .as
+	lda #TR_UI_RESULTS : sta @TR_UI
+	lda @TR_ACTIVE
+	bne trup_draw
+	rep #$30 : .al : .xl
+	lda @TR_COUNT
+	ora @TR_COUNT_HI
+	bne trup_draw
+	sep #$20 : .as
+	lda #TR_UI_SETUP : sta @TR_UI              // nothing left to list without a search
+trup_draw:
+	rep #$30 : .al : .xl
+	jsr tr_draw_screen
 	plp
 	rts
 
@@ -2084,6 +2606,66 @@ tred_nomask:
 	plp
 	rts
 
+// ---- Up/Down in the value editor, A(16) = +1 / $ffff.  On a hex digit the nibble wraps
+//      (tr_edit_delta); on a decimal digit the value moves by that digit's power of ten,
+//      SATURATING at 0 and at the width's maximum (255 / 65535): nobody typing a number
+//      expects 250 plus a hundred to come out as 094. ----
+tr_edit_step:
+	php
+	rep #$30 : .al : .xl
+	pha
+	sep #$20 : .as
+	lda @TR_EDIT_DIGIT
+	rep #$30 : .al : .xl
+	and #$00ff
+	cmp @tr_digits
+	bcs trst_dec
+	pla
+	jsr tr_edit_delta
+	plp
+	rts
+trst_dec:
+	rep #$30 : .al : .xl
+	sec : sbc @tr_digits                       // decimal position j (0 = most significant)
+	clc : adc #$0005
+	sec : sbc @tr_decdig                       // index into the 10000..1 table
+	asl
+	tax
+	lda @tr_dec_step, x
+	sta @tr_col                                // the step
+	lda #$00ff                                 // the width's maximum
+	sta @tr_tmp
+	lda @tr_digits
+	cmp #$0004
+	bne trst_max_ok
+	lda #$ffff
+	sta @tr_tmp
+trst_max_ok:
+	rep #$30 : .al : .xl
+	pla
+	bmi trst_down
+	lda @TR_VALUE
+	clc : adc @tr_col
+	bcs trst_max                               // past 65535
+	cmp @tr_tmp
+	bcc trst_st
+	beq trst_st
+trst_max:
+	lda @tr_tmp
+	jmp trst_st
+trst_down:
+	lda @TR_VALUE
+	sec : sbc @tr_col
+	bcs trst_st                                // no borrow: still >= 0
+	lda #$0000
+trst_st:
+	sta @TR_VALUE
+	plp
+	rts
+
+tr_dec_step:
+	.word 10000, 1000, 100, 10, 1
+
 // ---- the editor owns the D-pad while tr_editing is set; A leaves it. ----
 tr_input_edit:
 	php
@@ -2100,47 +2682,54 @@ trie_dirs:
 	cmp #$0001
 	bne trie_dn
 	lda #$0001
-	jsr tr_edit_delta
+	jsr tr_edit_step
 	jmp trie_refresh
 trie_dn:
 	cmp #$0002
 	bne trie_lf_pre
 	lda #$ffff
-	jsr tr_edit_delta
+	jsr tr_edit_step
 	jmp trie_refresh
 trie_lf_pre:
-	lda @ovl_edge
-trie_lf:
-	bit #$0200                                 // Left -> previous digit
-	beq trie_rt
-	sep #$20 : .as
-	lda @TR_EDIT_DIGIT
-	beq trie_lf_wrap
-	dec
-	jmp trie_lf_st
-trie_lf_wrap:
+	// the cursor walks the hex digits and then the decimal ones (tr_digits + tr_decdig
+	// positions), wrapping at both ends.  Moving it repaints nothing: the BAR follows
+	// TR_EDIT_DIGIT by itself (igb_trainer_target).
 	lda @tr_digits
-	dec
-trie_lf_st:
-	sta @TR_EDIT_DIGIT
-	rep #$30 : .al : .xl
-	jmp trie_refresh
-trie_rt:
-	bit #$0100                                 // Right -> next digit
-	beq trie_out
+	clc : adc @tr_decdig
+	sta @tr_tmp
 	sep #$20 : .as
 	lda @TR_EDIT_DIGIT
+	rep #$30 : .al : .xl
+	and #$00ff
+	tax                                        // X = current position
+	lda @ovl_edge
+	bit #$0200                                 // Left -> previous position
+	beq trie_rt
+	txa
+	bne trie_lf_dec
+	lda @tr_tmp                                // wrap to the last decimal digit
+trie_lf_dec:
+	rep #$30 : .al : .xl
+	dec
+	jmp trie_pos_st
+trie_rt:
+	rep #$30 : .al : .xl
+	bit #$0100                                 // Right -> next position
+	beq trie_out
+	txa
 	inc
-	cmp @tr_digits                             // low byte of the word = 2 or 4
-	bcc trie_rt_st
-	lda #$00
-trie_rt_st:
+	cmp @tr_tmp
+	bcc trie_pos_st
+	lda #$0000                                 // wrap to the first hex digit
+trie_pos_st:
+	rep #$30 : .al : .xl
+	sep #$20 : .as
 	sta @TR_EDIT_DIGIT
 	rep #$30 : .al : .xl
+	jmp trie_out
 trie_refresh:
 	jsr tr_value_row_x                         // X = the value row for this screen
-	jsr tr_row_refresh
-	jsr tr_edit_mark
+	jsr tr_row_refresh                         // (the BAR follows TR_EDIT_DIGIT by itself)
 trie_out:
 	plp
 	rts
@@ -2169,37 +2758,45 @@ trvr_detail:
 	plp
 	rts
 
-// ---- tint the digit under the edit cursor, so the D-pad has something to point at.
-//      ig_recolor re-reads OVL_RB, which still holds the row tr_row_refresh just flushed. ----
-tr_edit_mark:
-	php
-	phb
+// ---- ig_bar_sync target for the TRAINER tab (igb_t_trainer jumps here): the selected
+//      row, or -- while the value editor owns the D-pad -- the ONE hex digit under its
+//      cursor, the same one-cell BAR the cheat editor's keyboard uses.  ig_bar_sync runs
+//      every frame, so the BAR follows Left/Right with no redraw.  .al/.xl, ends in
+//      igb_place. ----
+igb_trainer_target:
 	rep #$30 : .al : .xl
 	lda @tr_editing
-	beq trem_done
-	sep #$20 : .as                             // ig_recolor reads the glyph back with `lda
-	lda #$f4 : pha : plb                       //   OVL_RB, x` -- ABSOLUTE, so it inherits the
-	rep #$30 : .al : .xl                       //   caller's DBR.  Both call sites here run with
-	                                           //   the GAME's DBR, which made it read a stray
-	                                           //   bank and stamp garbage into the cell instead
-	                                           //   of tinting the digit.
+	bne igbt_digit
+	lda @tr_bar_row                            // 0 = none: the busy/message screens
+	bne igbt_row
+	jmp igb_place
+igbt_row:
+	rep #$30 : .al : .xl
+	sta @ig_bar_row
+	lda @ig_win_x : and #$00ff : inc : sta @ig_bar_xl     // the frame's interior span
+	lda @ig_win_w : and #$00ff : dec : dec : sta @ig_bar_wl
+	jmp igb_place
+igbt_digit:
+	rep #$30 : .al : .xl
 	jsr tr_value_row_x
 	txa
-	sta @ig_rc_row
+	sta @ig_bar_row
 	sep #$20 : .as
 	lda @TR_EDIT_DIGIT
 	rep #$30 : .al : .xl
 	and #$00ff
+	cmp @tr_digits
+	bcs igbt_dec
 	clc : adc #TR_VAL_HEX_COL
-	sta @ig_rc_col
-	inc
-	sta @ig_rc_end
-	lda #$2800 : sta @ig_rc_pal                // green: the digit being edited
-	jsr ig_recolor
-trem_done:
-	plb
-	plp
-	rts
+	jmp igbt_col
+igbt_dec:
+	rep #$30 : .al : .xl                       // a decimal digit: past the '(' of the field
+	sec : sbc @tr_digits
+	clc : adc #(TR_VAL_DEC_COL+1)
+igbt_col:
+	sta @ig_bar_xl
+	lda #$0001 : sta @ig_bar_wl
+	jmp igb_place
 
 // ========================================================================================
 //  Tab entry points (tab_enter_tbl / tab_input_tbl / tab_leave_tbl index 4)
@@ -2209,8 +2806,10 @@ trainer_enter:
 	php
 	rep #$30 : .al : .xl
 	jsr tr_lang_get
+	lda #$ffff : sta @tr_padx                  // tr_put_dec: no padding unless asked
 	jsr tr_session_check
 	lda #$0000 : sta @tr_editing
+	lda #$ffff : sta @tr_msg
 	lda @TR_UI_ROW : and #$00ff : sta @tr_sel
 	jsr tr_draw_body                           // ig_switch_to owns the blank here
 	plp
@@ -2224,6 +2823,7 @@ trainer_leave:
 	sta @TR_UI_ROW                             // remember the row across a tab switch
 	rep #$30 : .al : .xl
 	lda #$0000 : sta @tr_editing
+	lda #$0000 : sta @tr_rowpend               // tr_row_dma runs on every tab
 	lda #$0000 : sta @tr_bar_row               // no BAR target while another tab is up
 	plp
 	rts
@@ -2259,7 +2859,12 @@ trb_to_results:
 	jmp trb_redraw
 trb_to_active:
 	sep #$20 : .as
-	lda #TR_UI_ACTIVE : sta @TR_UI
+	lda @TR_ACTIVE                             // RESULTS is also reachable from SETUP (pins)
+	beq trb_act_st
+	lda #TR_UI_ACTIVE
+trb_act_st:
+	.as
+	sta @TR_UI                                 // (TR_UI_SETUP = 0 = the A left by beq)
 	rep #$30 : .al : .xl
 	lda #$0000 : sta @tr_sel
 trb_redraw:
@@ -2372,6 +2977,8 @@ tr_activate:
 	beq tra_freeze
 	cmp #TR_K_ADD
 	beq tra_add
+	cmp #TR_K_UNPIN
+	beq tra_unpin
 tra_out:
 	plp
 	rts
@@ -2400,22 +3007,21 @@ tra_set:
 	plp
 	rts
 tra_add:
-	lda #TR_REQ_ADD
-	jsr tr_send_req
+	jsr tr_save
+	plp
+	rts
+tra_unpin:
+	jsr tr_unpin
 	plp
 	rts
 tra_freeze:
-	jsr tr_find_slot
-	lda @tr_slot
-	cmp #$ffff
-	beq tra_do_freeze
-	lda #TR_REQ_UNFREEZE
-	jsr tr_send_req
+	jsr tr_pin_frozen_sel
+	bcs tra_unfreeze
+	jsr tr_freeze
 	plp
 	rts
-tra_do_freeze:
-	lda #TR_REQ_FREEZE
-	jsr tr_send_req
+tra_unfreeze:
+	jsr tr_unfreeze
 	plp
 	rts
 tra_pick:
@@ -2547,7 +3153,14 @@ tr_enter_editor:
 	phb
 	rep #$30 : .al : .xl
 	jsr tr_hexn_set
-	lda @tr_hexn : sta @tr_digits
+	lda @tr_hexn : sta @tr_digits              // hex digits: 2 / 4
+	lda #$0003 : sta @tr_decdig                // decimal digits: 3 / 5 (the padded field)
+	lda @tr_hexn
+	cmp #$0004
+	bne tree_narrow
+	lda #$0005 : sta @tr_decdig
+tree_narrow:
+	rep #$30 : .al : .xl
 	lda #$0001 : sta @tr_editing
 	sep #$20 : .as
 	lda #$00 : sta @TR_EDIT_DIGIT
@@ -2559,11 +3172,5 @@ tr_enter_editor:
 	ldx #TR_ROW_HINT
 	jsr tr_side_repair
 	plb
-	// Repaint the value row BEFORE tinting the digit: ig_recolor re-reads the glyph out of
-	// OVL_RB, and the last thing flushed through it was the hint line above -- tinting
-	// against that buffer would stamp a character from the hint into the value field.
-	jsr tr_value_row_x
-	jsr tr_row_refresh
-	jsr tr_edit_mark
 	plp
 	rts

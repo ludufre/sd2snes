@@ -332,6 +332,7 @@ igmenu_main:
 	sta @igmenu_flags                       ; (active_tab is NOT cleared here: it persists across
 	sta @igmenu_prevtab                     ;  close/reopen -- the session gate below inits it once)
 	sta @ce_mode                            ; cheat editor closed: a START-close mid-edit reopens on the list
+	sta @tr_rowpend                         ; TRAINER: nothing staged for tr_row_dma yet
 	sta @man_list_cursor                    ; GUIDES tab-level cursor (host scratch; the viewer
 	                                        ;   never reads it, so it is NOT in man_state_reset)
 	jsr man_state_reset                     ; MANUAL viewer scratch + $ffff sentinels -- ONE
@@ -548,6 +549,7 @@ igm_pad2_id:
 	jsr ovl_dma_list
 	lda #$00 : sta @ovl_dma_pending
 ig_no_dma:
+	jsr tr_row_dma                          ; TRAINER: the value row staged by the last keypress
 	; --- reposition the selection BAR for the CURRENT state, still inside the vblank window:
 	;     the ch5 HDMA re-reads its table pointer at V=0, so rewriting the two count bytes and
 	;     the window regs here is atomic from the PPU's point of view. Unconditional (the
@@ -3399,16 +3401,8 @@ igb_content:
 	jmp igb_place                                ; tab 5 (HELP) is static -> keep the capsule
 
 igb_t_trainer:
-	; the TRAINER tab publishes its own selectable row (tr_bar_row, 0 = none: the RESULTS
-	; browser and the busy/message screens have no per-row cursor of their own).
-	lda @tr_bar_row
-	bne igb_tr_row
-	jmp igb_place
-igb_tr_row:
-	sta @ig_bar_row
-	lda @ig_win_x : and #$00ff : inc : sta @ig_bar_xl     ; the frame's interior span, the
-	lda @ig_win_w : and #$00ff : dec : dec : sta @ig_bar_wl ; same shape GUIDES uses
-	jmp igb_place
+	jmp igb_trainer_target                       ; body in trainer.i65 (the selected row, or the
+	                                             ;   hex digit under the value editor's cursor)
 
 igb_t_cheats:
 	jmp igb_cheats_target                        ; body in cheatedit.i65 (list row, or the cheat

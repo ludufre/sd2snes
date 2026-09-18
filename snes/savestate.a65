@@ -1390,6 +1390,7 @@ load_state
 
 	jsr ss_stage_slot                  ; carry set = abort (empty slot / MCU timeout)
 	bcs load_state_jump_exit
+	jsl @ss_trainer_rebase             ; a live trainer search re-baselines on this state
 
 ; S-DD1 in-game-menu CLOSE enters here (cheatoverlay.a65): the shadow image is
 ; resident by construction (the open captured it), so no staging and no slot

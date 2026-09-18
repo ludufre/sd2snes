@@ -8,7 +8,6 @@
 #include "memory.h"
 #include "cheat.h"
 #include "cheatcode.h"
-#include "trainer.h"
 #include "cheatedit.h"
 
 #define PSRAM_SIZE (0x1000000UL)
@@ -114,8 +113,6 @@ static uint32_t patch(int idx, int c) { uint32_t v; memcpy(&v, psram + REC(idx) 
 static const char *desc(int idx) { return (const char *)psram + REC(idx) + 1; }
 static const char *blk_codestr(int c) { return (const char *)psram + BLK + CHEAT_EDIT_OFS_CODES + 10 * c; }
 
-static trainer_blk_t tr_read(void) { trainer_blk_t b; sram_readblock(&b, SRAM_TRAINER_META_ADDR, sizeof(b)); return b; }
-static void tr_write(const trainer_blk_t *b) { trainer_blk_t t = *b; sram_writeblock(&t, SRAM_TRAINER_META_ADDR, sizeof(t)); }
 
 int main(void) {
   psram = malloc(PSRAM_SIZE);
@@ -134,23 +131,22 @@ int main(void) {
   CHECK(cheat_str2bin((char*)"DD62-3B1F") == cheat_gg2raw(0xDD623B1F), "GG decode path drifted");
   CHECK(cheat_raw2gg(cheat_gg2raw(0x12345678)) == 0x12345678, "GG round trip");
 
-  /* ---- a list of three cheats, one of them a trainer freeze ---- */
+  /* ---- a list of three cheats, the last one with blank code-string slots ---- */
   const char *c0[] = { "7E0DBF63", "DD62-3B1F" };
   const char *c1[] = { "C2BF6C00" };
   sram_writeshort(3, SRAM_NUM_CHEATS);
   sram_writeshort(0, SRAM_CHEAT_WIN_BASE_ADDR);
   seed(0, "Infinite Lives", 0x80, c0, 2);
   seed(1, "Moon Jump", 0x00, c1, 1);
-  memset(psram + REC(2), 0, 512); memset(psram + STR(2), 0, 512);   /* trainer record: no strings */
-  psram[REC(2)] = CHEAT_FLAG_ENABLE | CHEAT_FLAG_RUNTIME;
+  memset(psram + REC(2), 0, 512); memset(psram + STR(2), 0, 512);   /* no code strings */
+  psram[REC(2)] = CHEAT_FLAG_ENABLE;
   strcpy((char *)psram + REC(2) + 1, "Trainer $7E0791 = 92");
   psram[REC(2) + 255] = 1;
   { uint32_t w = 0x7E079192; memcpy(psram + REC(2) + 256, &w, 4); }
   psram[SRAM_CHEAT_FLAGS_ADDR + 2] = 0x80;
-  trainer_blk_t tb; memset(&tb, 0, sizeof(tb));
-  for(int i = 0; i < TRAINER_FREEZE_MAX; i++) tb.fz_idx[i] = 0xFFFF;
-  tb.fz_idx[1] = 2; tb.fz_off[1] = 0x0791;
-  tr_write(&tb);
+  /* the editor must never touch the trainer's block or pin table (freezes are not records) */
+  memset(psram + SRAM_TRAINER_META_ADDR, 0x5A, 64);
+  memset(psram + SRAM_TRAINER_PINS_ADDR, 0x5A, 64);
 
   /* ---- FETCH: strings come back as typed, a string-less record is synthesised ---- */
   blk_reset();
@@ -180,7 +176,7 @@ int main(void) {
   CHECK(serve(CHEAT_EDIT_OP_ADD, 0, 0, 0, 1) == 0 && result() == CHEAT_EDIT_RES_BADREQ, "ADD with 0 codes accepted");
   CHECK(serve(CHEAT_EDIT_OP_NONE, 0, 0, 0, 1) == 0 && result() == CHEAT_EDIT_RES_BADREQ, "op NONE left result %d", result());
 
-  /* ---- ADD in-game: index 0, everything shifts up, trainer slot follows ---- */
+  /* ---- ADD in-game: index 0, everything shifts up ---- */
   blk_reset(); blk_name("99 Coins"); blk_code(0, "DD62-3B1F"); blk_code(1, "7E0DBE63");
   program_calls = window_calls = 0;
   CHECK(serve(CHEAT_EDIT_OP_ADD, 0, 2, 0, 1) == 1, "ADD did not report a change");
@@ -201,30 +197,27 @@ int main(void) {
   CHECK(!memcmp(snaps, psram + STR(1), sizeof(snaps)), "code strings did not shift up");
   CHECK(!memcmp(snapf, psram + SRAM_CHEAT_FLAGS_ADDR + 1, 3), "flag mirror did not shift up");
   CHECK(!strcmp(desc(1), "Infinite Lives") && !strcmp(desc(3), "Trainer $7E0791 = 92"), "shifted names");
-  tb = tr_read();
-  CHECK(tb.fz_idx[1] == 3 && tb.fz_idx[0] == 0xFFFF, "trainer freeze index not re-based (got %u)", tb.fz_idx[1]);
   CHECK(program_calls == 1 && window_calls == 1 && last_window_base == 0, "in-game ADD must redeploy + restage the window");
 
-  /* ---- ADD in the menu: trainer block is stale there -> untouched ---- */
+  /* ---- ADD in the menu ---- */
   blk_reset(); blk_name(""); blk_code(0, "7E0DC2FF");
   program_calls = 0;
   serve(CHEAT_EDIT_OP_ADD, 0, 1, 0, 0);
   CHECK(result() == CHEAT_EDIT_RES_OK && sram_readshort(SRAM_NUM_CHEATS) == 5, "menu ADD");
   CHECK(desc(0)[0] == 0, "empty name must stay empty (the UIs draw the placeholder)");
-  CHECK(tr_read().fz_idx[1] == 3, "menu-mode ADD touched the trainer block");
   CHECK(program_calls == 0, "menu-mode ADD redeployed (nothing is running)");
   /* list is now: [0] "", [1] 99 Coins, [2] Infinite Lives, [3] Moon Jump, [4] Trainer */
 
-  /* ---- REPLACE without the name flag keeps a long description; RUNTIME is cleared ---- */
+  /* ---- REPLACE without the name flag keeps a long description and the enable state ---- */
   char longname[200]; memset(longname, 'x', 199); longname[199] = 0;
   strcpy((char *)psram + REC(3) + 1, longname);
-  psram[REC(3)] = CHEAT_FLAG_RUNTIME;                 /* pretend it was a trainer record, disabled */
+  psram[REC(3)] = 0;                                  /* disabled */
   psram[SRAM_CHEAT_FLAGS_ADDR + 3] = 0;
   blk_reset(); blk_name("short"); blk_code(0, "C2BF6C01");
   CHECK(serve(CHEAT_EDIT_OP_REPLACE, 3, 1, 0, 0) == 1 && result() == CHEAT_EDIT_RES_OK, "REPLACE");
   CHECK(!strcmp(desc(3), longname), "REPLACE without bit0 rewrote the description");
   CHECK(patch(3, 0) == 0xC2BF6C01 && psram[REC(3) + 255] == 1, "REPLACE codes");
-  CHECK(psram[REC(3)] == 0, "REPLACE must clear RUNTIME and keep the enable state (flag %02x)", psram[REC(3)]);
+  CHECK(psram[REC(3)] == 0, "REPLACE must keep the enable state (flag %02x)", psram[REC(3)]);
   /* REPLACE with the name flag, shrinking 2 codes -> 1 zeroes the leftovers */
   blk_reset(); blk_name("Lives"); blk_code(0, "7E0DBF09");
   psram[SRAM_CHEAT_FLAGS_ADDR + 2] = 0x80;
@@ -249,9 +242,8 @@ int main(void) {
   CHECK(psram[REC(3)] == 0x80, "REPLACE in PSRAM-patch mode lost the enable bit");
   psram_mode = 0;
 
-  /* ---- DELETE the middle one in-game: shift down, trainer indices follow ---- */
-  /* list: [0] "", [1] 99 Coins, [2] Lives, [3] xxx.., [4] Trainer (fz slot 1 -> 4) */
-  tb = tr_read(); tb.fz_idx[1] = 4; tb.fz_idx[2] = 1; tb.fz_off[2] = 0x10; tb.fz_idx[3] = 3; tr_write(&tb);
+  /* ---- DELETE the middle one in-game: shift down ---- */
+  /* list: [0] "", [1] 99 Coins, [2] Lives, [3] xxx.., [4] Trainer */
   memcpy(snap, psram + REC(4), 512);
   blk_reset();
   CHECK(serve(CHEAT_EDIT_OP_DELETE, 3, 0, 0, 1) == 1 && result() == CHEAT_EDIT_RES_OK, "DELETE");
@@ -259,16 +251,10 @@ int main(void) {
   CHECK(!memcmp(snap, psram + REC(3), 512), "record above the hole did not move down");
   CHECK(!strcmp(desc(2), "Lives") && !strcmp(desc(3), "Trainer $7E0791 = 92"), "names after DELETE");
   CHECK(psram[SRAM_CHEAT_FLAGS_ADDR + 4] == 0, "stale mirror byte past the new count");
-  tb = tr_read();
-  CHECK(tb.fz_idx[1] == 3, "freeze above the hole not moved down (got %u)", tb.fz_idx[1]);
-  CHECK(tb.fz_idx[2] == 1, "freeze below the hole moved");
-  CHECK(tb.fz_idx[3] == 0xFFFF && tb.fz_off[3] == 0, "freeze OF the deleted record not released");
-  /* DELETE the first one from the menu (no trainer touch) */
-  tb = tr_read(); tr_write(&tb);
+  /* DELETE the first one from the menu */
   blk_reset();
   serve(CHEAT_EDIT_OP_DELETE, 0, 0, 0, 0);
   CHECK(result() == CHEAT_EDIT_RES_OK && sram_readshort(SRAM_NUM_CHEATS) == 3 && !strcmp(desc(0), "99 Coins"), "menu DELETE of index 0");
-  CHECK(tr_read().fz_idx[1] == 3, "menu-mode DELETE touched the trainer block");
   blk_reset();
   serve(CHEAT_EDIT_OP_DELETE, 3, 0, 0, 0);
   CHECK(result() == CHEAT_EDIT_RES_BADREQ && sram_readshort(SRAM_NUM_CHEATS) == 3, "DELETE past the end");
@@ -286,6 +272,11 @@ int main(void) {
   CHECK(serve(CHEAT_EDIT_OP_ADD, 0, 1, 0, 1) == 1 && result() == CHEAT_EDIT_RES_OK, "ADD into empty");
   CHECK(sram_readshort(SRAM_NUM_CHEATS) == 1 && !strcmp(desc(0), "First"), "empty-list ADD");
   CHECK(window_calls == 1 && last_window_base == 0, "window not restaged at base 0");
+
+  for(int i = 0; i < 64; i++)
+    if(psram[SRAM_TRAINER_META_ADDR + i] != 0x5A || psram[SRAM_TRAINER_PINS_ADDR + i] != 0x5A) {
+      CHECK(0, "the editor wrote into the trainer block/pins (+%d)", i); break;
+    }
 
   free(psram);
   if(fails) { printf("cheatedit_cli: %d FAILED\n", fails); return 1; }

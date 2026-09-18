@@ -477,3 +477,66 @@ ss_wb_ack:
 	lda #$02                           ; post-save/load cooldown: ss_start_skip
 	sta @CS_STATE                      ; drains 2..15,0
 	rtl
+
+; ======================================================================
+; ss_trainer_rebase -- NON-CX4, lives here for space like ss_hot_mask_build.
+;   A savestate LOAD keeps the in-game TRAINER's search alive.  The relative
+; filters compare WRAM against the snapshot at $FB/$FC (bank-identity with
+; $7E/$7F), and the load is about to rewind WRAM to the image at $F00000
+; ($7E) / $F10000 ($7F).  So that image becomes the new baseline: "decreased"
+; after a load means "since the load", which is how a hunt with savestates
+; goes (load, lose a life, filter, load again...).  Done HERE, on the SNES,
+; because a resident slot is replayed without the MCU ever hearing of it.
+;   Only with a live session (magic "TRNR", version 2, a search running).
+; Called from load_state once the slot is resident (A 8-bit, X/Y 16-bit);
+; preserves A/X/Y/DB/P.  ~0.35 s of MVN, so NMI/IRQ and HDMA go off and the
+; screen is blanked first: the game's HDMA would otherwise fetch its tables
+; through the IS_PATCH window for that long (the restore turns all three off
+; right after anyway, and re-establishes them from the snapshot).
+; ======================================================================
+ss_trainer_rebase:
+	php
+	rep #$30 : .al : .xl
+	pha
+	phx
+	phy
+	phb
+	lda @TR_MAGIC
+	cmp #$5254                         ; 'T','R'
+	bne sstr_out
+	lda @TR_MAGIC+2
+	cmp #$524e                         ; 'N','R'
+	bne sstr_out
+	sep #$20 : .as
+	lda @TR_VERSION
+	cmp #$02
+	bne sstr_out
+	lda @TR_ACTIVE
+	beq sstr_out
+	lda @$F90700                       ; live shadow of $4200: keep auto-joypad only
+	and #$01
+	sta @$004200
+	lda #$00
+	sta @$00420c
+	lda #$80
+	sta @$002100
+	rep #$30 : .al : .xl
+	lda #$ffff                         ; 64 KiB per MVN
+	ldx #$0000
+	ldy #$0000
+	mvn $fb, $f0                       ; $F00000 -> $FB0000 ($7E image)
+	lda #$ffff
+	ldx #$0000
+	ldy #$0000
+	mvn $fc, $f1                       ; $F10000 -> $FC0000 ($7F image)
+	sep #$20 : .as
+	lda #$01
+	sta @TR_HAVE_SNAP
+sstr_out:
+	rep #$30 : .al : .xl
+	plb
+	ply
+	plx
+	pla
+	plp
+	rtl

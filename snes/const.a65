@@ -330,18 +330,20 @@ text_igm_tr_current              .byt "CURRENT", 0
 text_igm_tr_setvalue             .byt "SET VALUE", 0
 text_igm_tr_freeze               .byt "FREEZE", 0
 text_igm_tr_unfreeze             .byt "UNFREEZE", 0
-text_igm_tr_addcheat             .byt "ADD TO CHEATS", 0
+text_igm_tr_savecheat            .byt "SAVE CHEAT", 0
 text_igm_tr_frozen               .byt "FROZEN", 0
 text_igm_tr_searching            .byt "Searching...", 0
 text_igm_tr_noresults            .byt "No results left", 0
 text_igm_tr_toomany              .byt "Too many results - filter again", 0
-text_igm_tr_dropped_ss           .byt "Search reset - savestate loaded", 0
 text_igm_tr_dropped_rst          .byt "Search reset - console reset", 0
-text_igm_tr_nofreeze             .byt "No free cheat slot", 0
+text_igm_tr_nofreeze             .byt "4 frozen values at most", 0
 text_igm_tr_hint_setup           .byt "A: select   D-Pad: change", 0
 text_igm_tr_hint_edit            .byt "D-Pad: edit   A: OK   B: cancel", 0
 text_igm_tr_hint_list            .byt "A: inspect   B: back", 0
 text_igm_tr_master_off           .byt "Cheats master is OFF", 0
+text_igm_tr_saved                .byt "Cheat saved", 0
+text_igm_tr_savefail             .byt "Could not save the cheat", 0
+text_igm_tr_unpin                .byt "REMOVE FROM LIST", 0
 mtext_cfg_time                    .byt "Set Clock", 0
 mtext_cfg_ask_clock               .byt "Ask for clock on boot", 0
 mtext_cfg_bsx                     .byt "BS-X Settings", 0
