@@ -10,6 +10,7 @@
 #include "yamlw.h"
 #include "cfg.h"
 #include "sgb.h"
+#include "trainer.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -98,6 +99,9 @@ void cheat_program() {
   printf("cheat_program: %d cheats present\n", cheat_count);
   /* get list of activated cheats from menu */
   cheat_init(); /* reset counters and state */
+  /* the in-game trainer's frozen values go FIRST: they are the user's most recent,
+     explicit request, at most 8 of the 20 WRAM patch slots (TRAINER_FREEZE_MAX) */
+  trainer_program_freezes();
   for(cheat_index = 0; cheat_index < cheat_count; cheat_index++) {
     sram_readblock(&cheat, cheat_record_addr, sizeof(cheat_record_t));
     if(cheat.flags & CHEAT_FLAG_ENABLE) {
@@ -585,9 +589,6 @@ static int __attribute__((noinline)) cheat_yaml_write(const char *path) {
   if(yaml_open_write((char*)path)) return -1;
   for(int cheat_idx = 0; cheat_idx < numcheats; cheat_idx++) {
     cheat_save_from_menu(cheat_idx, &cheat);
-    /* Runtime-only records (trainer freezes) never came from the file and must not
-       enter it as a side effect of the editor rewriting the list. */
-    if(cheat.flags & CHEAT_FLAG_RUNTIME) continue;
     /* Emit the Name with HTML entity re-encoding so descriptions
        containing '"' or '&' survive the round trip. The previous code
        used f_printf with "%s" which would emit a literal quote into a

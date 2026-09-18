@@ -1548,9 +1548,12 @@ void init(uint8_t *filename) {
   /* Stage the in-game TAB menu bin (igmenu.bin) into PSRAM $C2 for real game loads
      only (not a menu reload -- the $C2 dir buffer is the menu's own scratch there).
      Bounded + fail-safe: a missing/bad bin just leaves IGMENU_GATE 0 (single-tab). */
+  /* Drop any RAM-trainer session and its pins on EVERY load, the menu included: the
+     cheat_program() below emits frozen pins into the NMI hook, and a stale one from the
+     previous game must never reach the menu or the next ROM. */
+  trainer_stage();
   if (filename != (uint8_t *)MENU_FILENAME) {
     igmenu_stage();
-    trainer_stage();   /* drop any RAM-trainer session so it cannot leak into this ROM */
     /* Stage the SAVES-tab status block for the in-game menu (game load only). */
     saveinfo_stage(filename);
     /* Stage the in-game MANUAL-tab meta (<rom>.man header/index -> MANUAL_META $FF0760).

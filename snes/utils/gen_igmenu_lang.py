@@ -223,18 +223,20 @@ TRAINER_LABELS = [
     "text_igm_tr_setvalue",     # 24 action
     "text_igm_tr_freeze",       # 25 action
     "text_igm_tr_unfreeze",     # 26 action
-    "text_igm_tr_addcheat",     # 27 action
+    "text_igm_tr_savecheat",    # 27 action
     "text_igm_tr_frozen",       # 28 status token
     "text_igm_tr_searching",    # 29 message (centered)
     "text_igm_tr_noresults",    # 30 message (centered)
     "text_igm_tr_toomany",      # 31 message (centered)
-    "text_igm_tr_dropped_ss",   # 32 message (centered)
-    "text_igm_tr_dropped_rst",  # 33 message (centered)
-    "text_igm_tr_nofreeze",     # 34 message (centered)
-    "text_igm_tr_hint_setup",   # 35 footer hint (centered)
-    "text_igm_tr_hint_edit",    # 36 footer hint (centered)
-    "text_igm_tr_hint_list",    # 37 footer hint (centered)
-    "text_igm_tr_master_off",  # 38 warning: a freeze exists but the master switch is off
+    "text_igm_tr_dropped_rst",  # 32 message (centered)
+    "text_igm_tr_nofreeze",     # 33 message (centered)
+    "text_igm_tr_hint_setup",   # 34 footer hint (centered)
+    "text_igm_tr_hint_edit",    # 35 footer hint (centered)
+    "text_igm_tr_hint_list",    # 36 footer hint (centered)
+    "text_igm_tr_master_off",   # 37 warning: a freeze exists but the master switch is off
+    "text_igm_tr_saved",        # 38 SAVE CHEAT result (centered)
+    "text_igm_tr_savefail",     # 39 SAVE CHEAT result (centered)
+    "text_igm_tr_unpin",        # 40 action: take a set/frozen address off the results
 ]
 
 # The TRAINER body is a 36-column window (ig_frame_geom x=13 w=38 -> interior cols 14..49):
@@ -250,7 +252,7 @@ TRAINER_LABEL_MAX = {
     "text_igm_tr_gt": 14, "text_igm_tr_lt": 14,
     "text_igm_tr_newsearch": 22, "text_igm_tr_filter": 22, "text_igm_tr_results": 22,
     "text_igm_tr_reset": 22, "text_igm_tr_setvalue": 22, "text_igm_tr_freeze": 22,
-    "text_igm_tr_unfreeze": 22, "text_igm_tr_addcheat": 22,
+    "text_igm_tr_unfreeze": 22, "text_igm_tr_savecheat": 22, "text_igm_tr_unpin": 22,
     "text_igm_tr_address": 14, "text_igm_tr_current": 14, "text_igm_tr_frozen": 14,
 }
 TRAINER_MSG_MAX = 36   # centered lines inside the 36-column interior

@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include "cheatcode.h"
 #define CHEAT_FLAG_ENABLE          (0x80)
-#define CHEAT_FLAG_RUNTIME         (0x40)
 #define CHEAT_NUM_CODES_PER_CHEAT  (40)
 #define CHEAT_WRAM_MAX             (20)
 #define CHEAT_RECORD_MAX           (512)

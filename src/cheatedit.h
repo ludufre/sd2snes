@@ -13,12 +13,13 @@
              SNES cannot read $D0/$D4, so this is how the editor opens a record.
      ADD     block -> a NEW record at index 0 (= the top of the .yml, which
              cheat_yaml_write emits in index order).  Every existing record, its
-             code strings, its flag-mirror byte and the trainer's freeze indices are
-             shifted up by one.  The new cheat starts ENABLED.
+             code strings and its flag-mirror byte are shifted up by one.  The new
+             cheat starts ENABLED.  The in-game trainer's SAVE CHEAT is this same op
+             (trainer_serve_request stages the block).
      REPLACE block -> record idx.  The description is rewritten only when
              CHEAT_EDIT_FLAG_NAME is set (a name longer than the 63-char field the
              editor shows survives an edit of the codes alone).  The enable flag is
-             untouched; a trainer (runtime-only) record becomes a persistent cheat.
+             untouched.
      DELETE  record idx removed, everything above it shifted down.
 
    After ADD/REPLACE/DELETE the caller persists the list with
@@ -66,10 +67,9 @@
 #define CHEAT_EDIT_RES_SAVEFAIL  (6)    /* records changed in PSRAM but the .yml could not be written */
 
 /* Serve the request in the block. in_game != 0 selects the in-game rules: the live
-   $FF0500 toggles are folded into the records first, the trainer freeze indices
-   are re-based on ADD/DELETE, and the cheats are re-deployed (cheat_program +
-   cheat_rom_psram_apply) before returning.  Returns 1 when the record set changed
-   (the caller must persist it), 0 otherwise.  Always writes the result byte and
+   $FF0500 toggles are folded into the records first, and the cheats are re-deployed
+   (cheat_program + cheat_rom_psram_apply) before returning.  Returns 1 when the record
+   set changed (the caller must persist it), 0 otherwise.  Always writes the result byte and
    clears the op.  Bounded; no SD access. */
 int cheat_edit_serve(int in_game);
 

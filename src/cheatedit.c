@@ -5,7 +5,6 @@
 #include "memory.h"
 #include "cheat.h"
 #include "cheatcode.h"
-#include "trainer.h"
 #include "cheatedit.h"
 
 #include <string.h>
@@ -51,29 +50,6 @@ static void ce_move(int dst, int src) {
   ce_copy_slot(CE_STR(dst), CE_STR(src));
   sram_writebyte(sram_readbyte(SRAM_CHEAT_FLAGS_ADDR + (uint32_t)src),
                  SRAM_CHEAT_FLAGS_ADDR + (uint32_t)dst);
-}
-
-/* The trainer's freeze slots hold ABSOLUTE record indices (TR_FZ_IDX). Free the
-   slot that pointed at `freed` (-1 = none) and shift every index >= `from` by
-   `delta`.  Not gated on the block magic on purpose: trainer_invalidate() drops the
-   session but keeps fz_idx meaningful (the freezes are ordinary cheats). */
-static void NO_INLINE ce_trainer_rebase(int freed, int from, int delta) {
-  trainer_blk_t blk;
-  int dirty = 0;
-  sram_readblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
-  for(int i = 0; i < TRAINER_FREEZE_MAX; i++) {
-    uint16_t v = blk.fz_idx[i];
-    if(v == 0xFFFF) continue;
-    if((int)v == freed) {
-      blk.fz_idx[i] = 0xFFFF;
-      blk.fz_off[i] = 0;
-      dirty = 1;
-    } else if((int)v >= from) {
-      blk.fz_idx[i] = (uint16_t)((int)v + delta);
-      dirty = 1;
-    }
-  }
-  if(dirty) sram_writeblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
 }
 
 /* PSRAM-patch ROM mode only (Mk.II SA-1/GSU/CX4): a record's ROM codes may be
@@ -149,7 +125,7 @@ static void NO_INLINE ce_fetch(int idx) {
   if(n > CHEAT_NUM_CODES_PER_CHEAT) n = CHEAT_NUM_CODES_PER_CHEAT;
   for(int c = 0; c < n; c++) {
     if(cheat_read_code_string(idx, c, s) == 0) {
-      /* never populated (a trainer record): show the raw form, like the writer */
+      /* blank slot: show the raw form, like cheat_yaml_write does */
       uint32_t code;
       sram_readblock(&code, CE_REC(idx) + CE_REC_PATCH_OFS + 4u * (uint32_t)c, 4);
       for(int d = 0; d < 8; d++) s[d] = ce_hex[(code >> (28 - 4 * d)) & 0xf];
@@ -191,7 +167,6 @@ int cheat_edit_serve(int in_game) {
       if(count >= CHEAT_RECORD_MAX) { res = CHEAT_EDIT_RES_FULL; break; }
       /* top of the file == index 0: everything else moves up one slot, top down */
       for(int i = count - 1; i >= 0; i--) ce_move(i + 1, i);
-      if(in_game) ce_trainer_rebase(-1, 0, +1);
       sram_writebyte(CHEAT_FLAG_ENABLE, CE_REC(0));
       ce_write_name(0);
       ce_write_codes(0, n);
@@ -205,7 +180,7 @@ int cheat_edit_serve(int in_game) {
       uint8_t f;
       if(idx < 0 || idx >= count || n < 1 || n > CHEAT_EDIT_MAX_CODES) break;
       if(!ce_codes_valid(n)) { res = CHEAT_EDIT_RES_BADCODE; break; }
-      f = ce_unapply(idx) & (uint8_t)~CHEAT_FLAG_RUNTIME;   /* edited by the user: it is theirs now */
+      f = ce_unapply(idx);
       if(flags & CHEAT_EDIT_FLAG_NAME) ce_write_name(idx);
       ce_write_codes(idx, n);
       sram_writebyte(f, CE_REC(idx));
@@ -219,7 +194,6 @@ int cheat_edit_serve(int in_game) {
       ce_unapply(idx);
       for(int i = idx + 1; i < count; i++) ce_move(i - 1, i);
       sram_writebyte(0, SRAM_CHEAT_FLAGS_ADDR + (uint32_t)(count - 1));
-      if(in_game) ce_trainer_rebase(idx, idx + 1, -1);
       sram_writeshort((uint16_t)(count - 1), SRAM_NUM_CHEATS);
       res = CHEAT_EDIT_RES_OK;
       changed = 1;

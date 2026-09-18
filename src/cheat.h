@@ -27,14 +27,6 @@
 #define CHEAT_BASEDIR   ("/sd2snes/cheats/")
 
 #define CHEAT_FLAG_ENABLE (0x80)
-/* Record created at runtime by the in-game TRAINER (freeze / add to cheats), NOT
-   read from the .yml.  cheat_yaml_write skips these, so an add/edit/delete served
-   in-game (which rewrites the whole file from the records) cannot leak
-   "Trainer $7E1694 = 87" entries into the user's cheat file.  Editing such a
-   record through the cheat editor (REPLACE) clears the bit: the user now owns it.
-   Only bit 7 is mirrored to $FF0500 and only bit 7 is toggled by the UIs, so the
-   bit survives every toggle path. */
-#define CHEAT_FLAG_RUNTIME (0x40)
 #define CHEAT_NUM_CODES_PER_CHEAT (40)
 /* WRAM cheats are emitted as a 6-byte LDA/STA/RTS chain starting at
    SNESCMD_WRAM_CHEATS; the chain must stay below the next snescmd vector
@@ -139,8 +131,9 @@ void cheat_reprogram_from_mirror(void);
 
 /* per-code display string slots at SRAM_CHEAT_CODE_STRINGS_ADDR (12 B each,
    cheat_idx*512 + code_idx*12: 9 visible chars space-padded + 3 NULs).  read
-   trims and NUL-terminates into a 12-byte buffer; returns 0 for a slot that was
-   never populated (a runtime record), so callers fall back to the raw hex form. */
+   trims and NUL-terminates into a 12-byte buffer; returns 0 for a blank slot, so
+   callers fall back to the raw hex form.  The array is NOT cleared between loads:
+   whoever creates a record (yaml load, cheat editor, trainer) writes its strings. */
 void cheat_write_code_string(int cheat_idx, int code_idx, const char *s);
 int  cheat_read_code_string(int cheat_idx, int code_idx, char *out);
 

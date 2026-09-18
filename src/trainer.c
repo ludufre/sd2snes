@@ -6,6 +6,7 @@
 #include "cheat.h"
 #include "snes.h"
 #include "trainer.h"
+#include "cheatedit.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -24,24 +25,18 @@ _Static_assert(offsetof(trainer_blk_t, cursor)   == 0x10, "TR_CURSOR");
 _Static_assert(offsetof(trainer_blk_t, top)      == 0x14, "TR_TOP");
 _Static_assert(offsetof(trainer_blk_t, sel_off)  == 0x18, "TR_SEL_OFF");
 _Static_assert(offsetof(trainer_blk_t, ui)       == 0x1C, "TR_UI");
-_Static_assert(offsetof(trainer_blk_t, fz_idx)   == 0x20, "TR_FZ_IDX");
-_Static_assert(offsetof(trainer_blk_t, fz_off)   == 0x28, "TR_FZ_OFF");
 _Static_assert(offsetof(trainer_blk_t, req)      == 0x38, "TR_REQ");
-_Static_assert(offsetof(trainer_blk_t, req_slot) == 0x39, "TR_REQ_SLOT");
 _Static_assert(offsetof(trainer_blk_t, req_off)  == 0x3A, "TR_REQ_OFF");
 _Static_assert(offsetof(trainer_blk_t, req_val)  == 0x3E, "TR_REQ_VAL");
+_Static_assert(sizeof(trainer_pin_t) == 8,               "trainer_pin_t must be 8 bytes (TR_PIN_SIZE)");
+_Static_assert(offsetof(trainer_pin_t, val)   == 4,      "TR_PIN_VAL");
+_Static_assert(offsetof(trainer_pin_t, flags) == 6,      "TR_PIN_FLAGS");
+_Static_assert(sizeof(trainer_pin_t) * TRAINER_PIN_MAX == TRAINER_PINS_BYTES, "TRAINER_PINS_BYTES");
 
 /* WRAM offsets the tab may hand us; anything else is a stale/corrupt block. */
 #define TRAINER_WRAM_BYTES  (0x20000UL)
 
-/* Record slot geometry, from cheat.h/cheat.c: the struct is 416 B but the PSRAM slot
-   stride is 512, and the 96-byte tail carries the PSRAM-patch bookkeeping. */
-#define TR_REC_STRIDE       (512)
-#define TR_REC_DESC_OFS     (1)
-#define TR_REC_DESC_LEN     (254)
-#define TR_REC_NPATCH_OFS   (255)
-#define TR_REC_PATCH_OFS    (256)
-#define TR_REC_PATCH_LEN    (CHEAT_NUM_CODES_PER_CHEAT * 4)
+#define TR_CE(ofs)          (SRAM_CHEAT_EDIT_ADDR + (uint32_t)(ofs))
 
 static const char tr_hex[] = "0123456789ABCDEF";   /* NUL included: sizing it [16] trips -Wunterminated-string-initialization on newer GCC */
 
@@ -50,8 +45,8 @@ static char *tr_put_hex(char *p, uint32_t v, int digits) {
   return p;
 }
 
-/* "Trainer $7E1694 = 87" / "= 04D2" for 16-bit. Fits well inside the 254-byte
-   description field and inside the 63 visible bytes of the in-game name window. */
+/* "Trainer $7E1694 = 87" / "= 04D2" for 16-bit. Fits well inside the 63 visible bytes
+   of the cheat editor's name field (CHEAT_EDIT_NAME_LEN). */
 static int tr_make_desc(char *out, uint32_t addr, uint16_t val, uint8_t width) {
   char *p = out;
   memcpy(p, "Trainer $", 9); p += 9;
@@ -62,59 +57,24 @@ static int tr_make_desc(char *out, uint32_t addr, uint16_t val, uint8_t width) {
   return (int)(p - out);
 }
 
-/* Write ONE runtime cheat record straight into its PSRAM slot.
-   noinline + piecewise on purpose: a cheat_record_t on the stack is 416 bytes, and the
-   MCU has only a few KB of stack+heap headroom (the .bss/stack gotcha), so we never
-   materialise one -- and never hold it across the cheat_program() call either. */
-static void __attribute__((noinline))
-tr_write_record(int idx, uint32_t addr, uint16_t val, uint8_t width, uint8_t enable) {
-  uint32_t base = SRAM_CHEAT_ADDR + (uint32_t)TR_REC_STRIDE * (uint32_t)idx;
-  char desc[40];
-  uint8_t patch[8];
-  int len = tr_make_desc(desc, addr, val, width);
-  uint32_t a1 = addr + 1;                 /* may cross $7EFFFF -> $7F0000 */
+/* A pin the MCU may act on: in use, and inside WRAM (a 16-bit one needs room for both
+   bytes). Anything else is a stale or corrupt entry and is ignored. */
+static int tr_pin_valid(const trainer_pin_t *p) {
+  if(p->off >= TRAINER_WRAM_BYTES) return 0;          /* also rejects TRAINER_PIN_EMPTY */
+  if((p->flags & TRAINER_PIN_WIDE) && p->off + 1 >= TRAINER_WRAM_BYTES) return 0;
+  return 1;
+}
 
-  /* RUNTIME marks the record as one the trainer made up: cheat_yaml_write skips it,
-     so the cheat editor rewriting the game's .yml in-game cannot leak freezes into
-     the user's file. Only bit 7 is ever mirrored/toggled, so the mark sticks. */
-  sram_writebyte((enable ? CHEAT_FLAG_ENABLE : 0) | CHEAT_FLAG_RUNTIME, base);
-
-  /* description: the generated text, then zero-fill the rest of the field so a slot
-     recycled from a previous YAML load cannot show through. */
-  sram_writeblock(desc, base + TR_REC_DESC_OFS, (uint16_t)(len + 1));
-  sram_memset(base + TR_REC_DESC_OFS + len + 1, TR_REC_DESC_LEN - len - 1, 0);
-
-  sram_writebyte(width == 2 ? 2 : 1, base + TR_REC_NPATCH_OFS);
-
-  /* cheat_patch_record_t is packed {value, addr16 LE, bank} = the raw/PAR word
-     bank<<24 | addr<<8 | value. A 16-bit freeze is two byte patches. */
-  patch[0] = (uint8_t)(val & 0xff);
-  patch[1] = (uint8_t)(addr & 0xff);
-  patch[2] = (uint8_t)((addr >> 8) & 0xff);
-  patch[3] = (uint8_t)((addr >> 16) & 0xff);
-  patch[4] = (uint8_t)((val >> 8) & 0xff);
-  patch[5] = (uint8_t)(a1 & 0xff);
-  patch[6] = (uint8_t)((a1 >> 8) & 0xff);
-  patch[7] = (uint8_t)((a1 >> 16) & 0xff);
-  sram_writeblock(patch, base + TR_REC_PATCH_OFS, width == 2 ? 8 : 4);
-  sram_memset(base + TR_REC_PATCH_OFS + (width == 2 ? 8 : 4),
-              TR_REC_PATCH_LEN - (width == 2 ? 8 : 4), 0);
-
-  /* spare tail: the ROM-code original-byte/applied flags. Zero so cheat_rom_psram_apply
-     can never think this WRAM record has an image byte stashed. */
-  sram_memset(base + TR_REC_PATCH_OFS + TR_REC_PATCH_LEN,
-              TR_REC_STRIDE - (TR_REC_PATCH_OFS + TR_REC_PATCH_LEN), 0);
-
-  /* the BSRAM flag mirror the in-game CHEATS tab reads and writes */
-  sram_writebyte(enable ? CHEAT_FLAG_ENABLE : 0, SRAM_CHEAT_FLAGS_ADDR + idx);
+static int tr_session_version_ok(void) {
+  return sram_readbyte(SRAM_TRAINER_META_ADDR + offsetof(trainer_blk_t, version)) == TRAINER_VERSION;
 }
 
 void trainer_stage(void) {
   trainer_blk_t blk;
   memset(&blk, 0, sizeof(blk));
-  for(int i = 0; i < TRAINER_FREEZE_MAX; i++) blk.fz_idx[i] = 0xFFFF;
   blk.version = TRAINER_VERSION;
   sram_writeblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
+  sram_memset(SRAM_TRAINER_PINS_ADDR, TRAINER_PINS_BYTES, 0xFF);   /* every off = TRAINER_PIN_EMPTY */
 }
 
 void trainer_invalidate(uint8_t reason) {
@@ -129,68 +89,84 @@ void trainer_invalidate(uint8_t reason) {
   sram_writeblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
 }
 
-void trainer_serve_request(void) {
+/* Not gated on the magic on purpose: trainer_invalidate() drops the search but the
+   pins are the user's and stay in effect. The version is what proves the table was
+   written by a tab that speaks this layout (trainer_stage() stamps it every load). */
+void __attribute__((noinline)) trainer_program_freezes(void) {
+  trainer_pin_t pins[TRAINER_PIN_MAX];
+  int frozen = 0;
+  if(!tr_session_version_ok()) return;
+  sram_readblock(pins, SRAM_TRAINER_PINS_ADDR, sizeof(pins));
+  for(int i = 0; i < TRAINER_PIN_MAX && frozen < TRAINER_FREEZE_MAX; i++) {
+    cheat_patch_record_t patch;
+    uint32_t addr;
+    if(!(pins[i].flags & TRAINER_PIN_FROZEN) || !tr_pin_valid(&pins[i])) continue;
+    frozen++;
+    addr = 0x7E0000UL + pins[i].off;              /* the +1 below may cross into $7F */
+    patch.code = (addr << 8) | (pins[i].val & 0xff);
+    cheat_program_single(&patch);
+    if(pins[i].flags & TRAINER_PIN_WIDE) {
+      patch.code = ((addr + 1) << 8) | ((pins[i].val >> 8) & 0xff);
+      cheat_program_single(&patch);
+    }
+  }
+}
+
+/* SAVE: hand the address to the cheat editor as an ADD, exactly as if the user had
+   typed it: name "Trainer $7E0DBF = 63", raw code(s) "7E0DBF63". Going through
+   cheat_edit_serve is what gives the new cheat its display strings, its place at the
+   top of the list and the .yml write -- none of it duplicated here. */
+static void tr_stage_save(uint32_t off, uint16_t val, uint8_t width) {
+  char buf[CHEAT_EDIT_NAME_LEN];
+  uint32_t addr = 0x7E0000UL + off;
+  memset(buf, 0, sizeof(buf));
+  tr_make_desc(buf, addr, val, width);
+  sram_writeblock(buf, TR_CE(CHEAT_EDIT_OFS_NAME), sizeof(buf));
+  memset(buf, 0, CHEAT_EDIT_CODE_LEN);
+  tr_put_hex(buf, (addr << 8) | (val & 0xff), 8);
+  sram_writeblock(buf, TR_CE(CHEAT_EDIT_OFS_CODES), CHEAT_EDIT_CODE_LEN);
+  if(width == 2) {
+    tr_put_hex(buf, ((addr + 1) << 8) | ((val >> 8) & 0xff), 8);
+    sram_writeblock(buf, TR_CE(CHEAT_EDIT_OFS_CODES + CHEAT_EDIT_CODE_LEN), CHEAT_EDIT_CODE_LEN);
+  }
+  sram_writeshort(0, TR_CE(CHEAT_EDIT_OFS_IDX));
+  sram_writebyte(0, TR_CE(CHEAT_EDIT_OFS_FLAGS));
+  sram_writebyte(width, TR_CE(CHEAT_EDIT_OFS_NUMCODES));
+  sram_writebyte(CHEAT_EDIT_OP_ADD, TR_CE(CHEAT_EDIT_OFS_OP));
+}
+
+int trainer_serve_request(void) {
   trainer_blk_t blk;
-  uint32_t addr;
-  int idx;
-  int count;
-  uint8_t slot, req, width;
+  uint8_t req, width;
 
   sram_readblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
-  if(memcmp(blk.magic, "TRNR", 4) || blk.version != TRAINER_VERSION) return;
+  if(memcmp(blk.magic, "TRNR", 4) || blk.version != TRAINER_VERSION) return 0;
 
-  req  = blk.req;
-  slot = blk.req_slot;
+  req = blk.req;
   width = (blk.width == 2) ? 2 : 1;
-  if(req > TRAINER_REQ_ADD || req == TRAINER_REQ_NONE || slot >= TRAINER_FREEZE_MAX) return;
+  if(req == TRAINER_REQ_NONE) return 0;
+  sram_writebyte(TRAINER_REQ_NONE, SRAM_TRAINER_META_ADDR + offsetof(trainer_blk_t, req));
 
-  blk.req = TRAINER_REQ_NONE;                /* consumed, whatever happens below */
-
-  if(req == TRAINER_REQ_UNFREEZE) {
-    idx = (int)blk.fz_idx[slot];
-    if(idx >= 0 && idx < CHEAT_RECORD_MAX) {
-      /* disabled but still the trainer's: keep the RUNTIME mark so it stays out of the .yml */
-      sram_writebyte(CHEAT_FLAG_RUNTIME, SRAM_CHEAT_ADDR + (uint32_t)TR_REC_STRIDE * (uint32_t)idx);
-      sram_writebyte(0, SRAM_CHEAT_FLAGS_ADDR + idx);
-    }
-    blk.fz_idx[slot] = 0xFFFF;
-    blk.fz_off[slot] = 0;
-    sram_writeblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
+  if(req == TRAINER_REQ_APPLY) {
     cheat_program();
-    return;
+    return 0;
   }
+  if(req != TRAINER_REQ_SAVE) return 0;
+  if(blk.req_off >= TRAINER_WRAM_BYTES) return 0;          /* stale/corrupt block */
+  if(width == 2 && blk.req_off + 1 >= TRAINER_WRAM_BYTES) return 0;
+  tr_stage_save(blk.req_off, blk.req_val, width);
+  return 1;
+}
 
-  if(blk.req_off >= TRAINER_WRAM_BYTES) return;      /* stale/corrupt block */
-  if(width == 2 && blk.req_off + 1 >= TRAINER_WRAM_BYTES) return;
-  addr = 0x7E0000UL + blk.req_off;
-
-  /* Reuse the record this slot already owns; otherwise append one past the .yml cheats.
-     Reusing is what keeps NUM_CHEATS from growing every time the user re-freezes. */
-  idx = (int)blk.fz_idx[slot];
-  count = (int)sram_readshort(SRAM_NUM_CHEATS);
-  if(count < 0 || count > CHEAT_RECORD_MAX) count = 0;
-  if(idx < 0 || idx >= count) {
-    if(count >= CHEAT_RECORD_MAX) {
-      /* Every record slot is taken by the game's own cheats: refuse loudly (the tab
-         sees fz_idx still empty and reports it) instead of overwriting one of them. */
-      sram_writeblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
-      printf("trainer: no free cheat record (%d used)\n", count);
-      return;
-    }
-    idx = count;
-    sram_writeshort((uint16_t)(count + 1), SRAM_NUM_CHEATS);
+void trainer_save_done(void) {
+  trainer_pin_t pin;
+  uint32_t off = 0;
+  sram_readblock(&off, SRAM_TRAINER_META_ADDR + offsetof(trainer_blk_t, req_off), 4);
+  for(int i = 0; i < TRAINER_PIN_MAX; i++) {
+    uint32_t a = SRAM_TRAINER_PINS_ADDR + (uint32_t)sizeof(pin) * (uint32_t)i;
+    sram_readblock(&pin, a, sizeof(pin));
+    if(pin.off != off || !(pin.flags & TRAINER_PIN_FROZEN)) continue;
+    sram_writebyte(pin.flags & (uint8_t)~TRAINER_PIN_FROZEN, a + offsetof(trainer_pin_t, flags));
   }
-
-  /* ADD TO CHEATS is the same record with its enable bit clear: the address is listed in
-     the CHEATS tab where the user can arm it later, without freezing anything now. */
-  tr_write_record(idx, addr, blk.req_val, width, req == TRAINER_REQ_FREEZE);
-
-  blk.fz_idx[slot] = (uint16_t)idx;
-  blk.fz_off[slot] = blk.req_off;
-  sram_writeblock(&blk, SRAM_TRAINER_META_ADDR, sizeof(blk));
-
-  /* Refresh the resident 64-name window so the new entry is readable from the CHEATS
-     tab (in-game the $D00000 records ARE the game's ROM), then redeploy. */
-  cheat_stage_names_window((int)sram_readshort(SRAM_CHEAT_WIN_BASE_ADDR));
   cheat_program();
 }

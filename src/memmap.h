@@ -190,8 +190,10 @@
    the block is gated by its own magic, which trainer_stage() zeroes every load. */
 #define SRAM_TRAINER_BITMAP_ADDR     (0xFA0000L) /* candidate bitmap: 131072 bits = 16 KiB, bit n = "WRAM offset n is still a candidate" (byte n>>3, bit n&7, LSB = lowest offset). */
 #define TRAINER_BITMAP_BYTES         (16384)
-#define SRAM_TRAINER_META_ADDR       (0xFA4000L) /* trainer_blk_t (src/trainer.h): magic "TRNR" + search state + the freeze slot table. 64 B in a bank with 47 KiB to spare. */
+#define SRAM_TRAINER_META_ADDR       (0xFA4000L) /* trainer_blk_t (src/trainer.h): magic "TRNR" + search state + the request fields (the pins live at SRAM_TRAINER_PINS_ADDR). 64 B in a bank with 47 KiB to spare. */
 #define TRAINER_META_BYTES           (64)
+#define SRAM_TRAINER_PINS_ADDR       (0xFA4100L) /* trainer_pin_t[TRAINER_PIN_MAX] (src/trainer.h): the addresses the user froze or set, 8 x 8 B. Past the tab's own scratch ($FA4040..$FA4095, snes/trainer_defs.i65). The SNES owns it; cheat_program() reads the FROZEN ones through trainer_program_freezes(). Emptied by trainer_stage() on every load. Lockstep with TR_PINS in snes/memmap.i65. */
+#define TRAINER_PINS_BYTES           (64)
 #define SRAM_TRAINER_SNAP_LO_ADDR    (0xFB0000L) /* previous-value snapshot of WRAM $7E0000-$7EFFFF. Bank-identity with $7E so the scan is `lda @$7E0000,x` / `cmp @$FB0000,x` with no address arithmetic. */
 #define SRAM_TRAINER_SNAP_HI_ADDR    (0xFC0000L) /* previous-value snapshot of WRAM $7F0000-$7FFFFF (bank-identity with $7F). */
 
@@ -353,6 +355,9 @@ _Static_assert(SRAM_TRAINER_BITMAP_ADDR + TRAINER_BITMAP_BYTES <= SRAM_TRAINER_M
                "the trainer bitmap (16 KiB) must stay below the trainer meta block");
 _Static_assert(SRAM_TRAINER_META_ADDR + TRAINER_META_BYTES <= SRAM_TRAINER_SNAP_LO_ADDR,
                "the trainer meta block must stay below the WRAM snapshot");
+_Static_assert(SRAM_TRAINER_PINS_ADDR >= SRAM_TRAINER_META_ADDR + 0x100L
+               && SRAM_TRAINER_PINS_ADDR + TRAINER_PINS_BYTES <= SRAM_FONT_ORIG_ADDR,
+               "the trainer pin table must sit past the tab scratch and below the font copy");
 _Static_assert(SRAM_TRAINER_SNAP_LO_ADDR + 0x10000L == SRAM_TRAINER_SNAP_HI_ADDR,
                "the two trainer snapshot banks must be adjacent and bank-aligned");
 _Static_assert(SRAM_FONT_ORIG_ADDR >= SRAM_TRAINER_META_ADDR + TRAINER_META_BYTES

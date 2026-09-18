@@ -73,18 +73,20 @@
 #define IGM_TR_SETVALUE     24
 #define IGM_TR_FREEZE       25
 #define IGM_TR_UNFREEZE     26
-#define IGM_TR_ADDCHEAT     27
+#define IGM_TR_SAVECHEAT    27
 #define IGM_TR_FROZEN       28
 #define IGM_TR_SEARCHING    29
 #define IGM_TR_NORESULTS    30
 #define IGM_TR_TOOMANY      31
-#define IGM_TR_DROPPED_SS   32
-#define IGM_TR_DROPPED_RST  33
-#define IGM_TR_NOFREEZE     34
-#define IGM_TR_HINT_SETUP   35
-#define IGM_TR_HINT_EDIT    36
-#define IGM_TR_HINT_LIST    37
-#define IGM_TR_MASTER_OFF   38
+#define IGM_TR_DROPPED_RST  32
+#define IGM_TR_NOFREEZE     33
+#define IGM_TR_HINT_SETUP   34
+#define IGM_TR_HINT_EDIT    35
+#define IGM_TR_HINT_LIST    36
+#define IGM_TR_MASTER_OFF   37
+#define IGM_TR_SAVED        38
+#define IGM_TR_SAVEFAIL     39
+#define IGM_TR_UNPIN        40
 
 // ---- scratch (PSRAM $FA4040.., i.e. inside the trainer's OWN bank) ----------------------
 // Deliberately not in the $F4 shell scratch: $F48000-$F4FFFF doubles as the SA-1/GSU
@@ -112,7 +114,7 @@
 #define tr_col          $FA4066    // u16 column scratch
 #define tr_off_lo       $FA4068    // u16 selected offset, low word
 #define tr_off_bank     $FA406A    // u16 selected offset, bank (0 = $7E, 1 = $7F)
-#define tr_slot         $FA406C    // u16 freeze slot matching the selection ($ffff = none)
+#define tr_pin          $FA406C    // u16 BYTE offset into TR_PINS of the selection's pin ($ffff = none)
 #define tr_notice       $FA406E    // u16 pending drop-notice string index ($ffff = none)
 #define tr_rowmap       $FA4070    // u8[TR_MAXROWS] tile row of each selectable row
 #define tr_cur          $FA407C    // u16 staged current value for the generic filter step
@@ -122,6 +124,18 @@
 #define tr_kind         $FA4084    // u16 kind of the row tr_addrow is about to record
 #define tr_rowkind      $FA4086    // u8[TR_MAXROWS] what each selectable row DOES
 #define tr_digits       $FA4092    // u16 hex digits the editor is showing (2 or 4)
+#define tr_pi           $FA4094    // u16 pin-walk cursor (byte offset into TR_PINS)
+#define tr_msg          $FA4096    // u16 one-shot message for the hint row ($ffff = none)
+#define tr_decdig       $FA4098    // u16 decimal digits the editor walks after the hex ones (3 or 5)
+#define tr_padx         $FA409A    // u16 tr_put_dec one-shot zero padding (power index*2, $ffff = none)
+#define tr_rowpend      $FA409C    // u16 1 = TR_ROWBUF holds a row for tr_row_dma (0 = none)
+#define tr_rowdst       $FA409E    // u16 VRAM word offset of that row's first interior cell
+#define tr_rowlen       $FA40A0    // u16 DMA bytes per tilemap
+// staged tilemap words for tr_row_dma: BG2 at +0, BG1 at +64 (<= 32 cells each).  SNES-only,
+// in the trainer's own bank between the pin table ($FA4100-$FA413F) and the MCU's font copy.
+#define TR_ROWBUF       $FA4200
+#define TR_ROWBUF_LO    $4200
+#define TR_ROWBUF_BANK  $fa
 
 // Row kinds.  Rows come and go between screens (the Value field disappears for a relative
 // compare, for instance), so both A and Left/Right dispatch on what a row IS rather than on
@@ -139,6 +153,7 @@
 #define TR_K_WIDTH      10
 #define TR_K_CMP        11
 #define TR_K_RESULT     12
+#define TR_K_UNPIN      13
 
 // bank-$FA absolute aliases -- valid ONLY while DBR = $FA
 #define tr_a_needle     $404A

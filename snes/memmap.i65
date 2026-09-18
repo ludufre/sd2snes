@@ -375,7 +375,7 @@
 #define MAN_Z_HALF_BYTES            1024    /* bytes per BG half of one tile row (32 tiles x 32B) */
 #define CMD_MANUAL_ZPAGE            $45     /* SNES_CMD_MANUAL_ZPAGE: stage one whole 2x zoom page into MANUAL_ZTILES_A/B + ZTMAP + ZPAL. MCU_PARAM[0] = compacted guide (0..7), [1..2] = index u16 LE, [3] = mode: 0 = index is a 1x BLOCK (resolved via the block map; entry Y published in MAN_META_ZENTRYY), 1 = index is a ZOOM PAGE directly (page turns). Re-staging an already-resident page is skipped. Publishes MAN_META_F_ZREADY + ZNROWS/ZPIXH/ZPAGE/ZENTRYY/ZFIRSTBLK. Lockstep with src/snes.h. */
 #define CMD_CHEAT_EDIT             $48     /* SNES_CMD_CHEAT_EDIT: serve the cheat-editor request the SNES left in the CHEAT_EDIT block ($FF0800; CE_* below) -- FETCH a record into the block, ADD a new record at index 0 (= the top of the .yml), REPLACE or DELETE one -- redeploy the cheats (in-game) and rewrite the game's cheat .yml. Served by BOTH the menu dispatcher and game_cmd_serve. No MCU_PARAM payload: the block is the payload and the editor's working buffer. The SNES pre-zeroes CE_RESULT: still 0 after the ACK = an old firmware that ACKs unknown commands. ACK = MCU_CMD cleared (in-game) / SNES_CMD = $55 (menu). Lockstep with src/snes.h. */
-#define CMD_TRAINER_CHEAT          $43     /* SNES_CMD_TRAINER_CHEAT: consume the freeze request the TRAINER tab wrote into the meta block (TR_REQ/TR_REQ_SLOT/TR_REQ_OFF/TR_REQ_VAL) and turn it into a RUNTIME cheat record, then redeploy. No MCU_PARAM payload -- the block IS the payload (9 bytes would not fit the 12-byte param anyway, and the tab already owns the block). ACK = MCU_CMD cleared. Lockstep with src/snes.h. */
+#define CMD_TRAINER_CHEAT          $43     /* SNES_CMD_TRAINER_CHEAT: consume the request the TRAINER tab wrote into the meta block (TR_REQ/TR_REQ_OFF/TR_REQ_VAL): APPLY = redeploy the frozen pins of TR_PINS, SAVE = add the address to the cheat list + .yml (result in CE_RESULT). No MCU_PARAM payload -- the block IS the payload (9 bytes would not fit the 12-byte param anyway, and the tab already owns the block). ACK = MCU_CMD cleared. Lockstep with src/snes.h. */
 #define CMD_SET_SRM_SLOT           $44     /* SNES_CMD_SET_SRM_SLOT: persist the selected SRAM slot (MCU_PARAM low byte 0..3) to the <stem>.slot sidecar; refreshes SAVEINFO+42 / SRM_SLOT_STATUS. Applies on next game load (never changes the live slot). Lockstep with src/snes.h. */
 #define CFG_ENABLE_GAME_MANUAL      CFG_ADDR+$0145 /* EnableGameManual toggle (default ON); next free after CFG_BUS_COMPAT $0144. Lockstep with src/cfg.h. */
 #define IGMENU_ABI_VERSION          $04     /* igmenu.bin ABI version. Checked by BOTH the MCU (igmenu_stage: magic+version+crc) AND the overlay ($C80004 vs this). Bump on ANY layout/ABI change so a mismatched bin degrades to the fail-safe. v4 moved the shell from bank $C2 to $C8 (the menu image grew to 3 banks; $C2 is now menu-resident in-game), so a stale bin never gets jsl-ed at the old bank. Lockstep with IGMENU_ABI_VERSION in src/igmenu.h. */
@@ -489,7 +489,7 @@
 #define TR_COUNT_HI                 $FA400A /* high word of TR_COUNT, addressed on its own (the 65816 has no 32-bit load). */
 #define TR_VALUE                    $FA400C /* u16 LE last value the user entered. */
 #define TR_HAVE_SNAP                $FA400E /* u8 1 = TRAINER_SNAP_* holds the values as of the last scan (required by the relative filters). */
-#define TR_NOTICE                   $FA400F /* u8 why the session was dropped, so the tab can say so once: 0 none, 1 savestate load, 2 reset. Read OUTSIDE the magic guard (the magic is already gone by then) and cleared by the tab after it draws. */
+#define TR_NOTICE                   $FA400F /* u8 why the session was dropped, so the tab can say so once: 0 none, 2 reset (1 was "savestate load", which no longer drops it). Read OUTSIDE the magic guard (the magic is already gone by then) and cleared by the tab after it draws. */
 #define TR_CURSOR                   $FA4010 /* u32 LE selected result index. */
 #define TR_TOP                      $FA4014 /* u32 LE first result index shown in the browser. */
 #define TR_SEL_OFF                  $FA4018 /* u32 LE WRAM offset of the selected result (0..131071). */
@@ -497,26 +497,36 @@
 #define TR_UI_ROW                   $FA401D /* u8 selected row inside the current screen. */
 #define TR_EDIT_DIGIT               $FA401E /* u8 digit cursor inside the numeric editor. */
 #define TR_RSVD                     $FA401F /* u8 reserved (published 0). */
-#define TR_FZ_IDX                   $FA4020 /* u16 LE x TR_FREEZE_MAX: cheat-record index the MCU created for that freeze slot, $FFFF = slot empty. */
-#define TR_FZ_OFF                   $FA4028 /* u32 LE x TR_FREEZE_MAX: WRAM offset frozen in that slot. */
-/* Freeze request, written by the SNES and consumed by the MCU on CMD_TRAINER_CHEAT.
-   The block is the payload: MCU_PARAM is only 12 bytes and this needs 9, so the tab
+/* $FA4020..$FA4037: the retired v1 freeze-slot table, reserved. */
+/* Request, written by the SNES and consumed by the MCU on CMD_TRAINER_CHEAT.
+   The block is the payload: MCU_PARAM is only 12 bytes and this needs 7, so the tab
    fills these fields (it owns the block, and $FA is writable under IS_PATCH) and the
    command carries nothing. The MCU clears TR_REQ after serving. */
-#define TR_REQ                      $FA4038 /* u8 0 = none, 1 = create/replace a freeze, 2 = remove one. */
-#define TR_REQ_SLOT                 $FA4039 /* u8 target freeze slot, 0..TR_FREEZE_MAX-1. */
-#define TR_REQ_OFF                  $FA403A /* u32 LE WRAM offset to freeze (address = $7E0000 + off). */
-#define TR_REQ_VAL                  $FA403E /* u16 LE value to hold. Width comes from TR_WIDTH. */
+#define TR_REQ                      $FA4038 /* u8 TR_REQ_* below. */
+#define TR_REQ_OFF                  $FA403A /* u32 LE WRAM offset to save (address = $7E0000 + off). */
+#define TR_REQ_VAL                  $FA403E /* u16 LE value to save. Width comes from TR_WIDTH. */
 
-/* TR_REQ opcodes -- lockstep with TRAINER_REQ_* in src/trainer.h. FREEZE and ADD build the
-   same runtime cheat record; the only difference is whether its enable bit starts set, so
-   "add to cheats" is genuinely "freeze it later from the CHEATS tab". */
+/* TR_REQ opcodes -- lockstep with TRAINER_REQ_* in src/trainer.h. */
 #define TR_REQ_NONE                 0
-#define TR_REQ_FREEZE               1       /* create/replace the record, ENABLED */
-#define TR_REQ_UNFREEZE             2       /* clear the record's enable bit (it stays listed) */
-#define TR_REQ_ADD                  3       /* create/replace the record, DISABLED */
+#define TR_REQ_APPLY                1       /* TR_PINS changed (freeze/unfreeze): redeploy */
+#define TR_REQ_SAVE                 3       /* add TR_REQ_OFF/TR_REQ_VAL to the cheat list + .yml */
 
-#define TR_FREEZE_MAX               4       /* freeze slots. Each costs 1 WRAM cheat patch (2 when 16-bit) out of the CHEAT_WRAM_MAX=20 shared with the .yml cheats. */
+/* PIN table: the addresses the user froze or set a value on (trainer_pin_t in
+   src/trainer.h; SRAM_TRAINER_PINS_ADDR). Owned by this tab, kept in insertion order with
+   the empty entries at the end; full -> the oldest UNFROZEN pin leaves. A pin always shows
+   in the RESULTS (tr_pins_merge ORs it into the bitmap before every recount), survives a
+   new search, a reset of the search and a savestate load, and is emptied by the MCU on the
+   next load. The MCU emits the FROZEN ones as WRAM patches (trainer_program_freezes). */
+#define TR_PINS                     $FA4100 /* TR_PIN_MAX x 8 B */
+#define TR_PIN_MAX                  8
+#define TR_PIN_SIZE                 8
+#define TR_PIN_OFF                  0       /* u32 LE WRAM offset; high word $FFFF = empty */
+#define TR_PIN_VAL                  4       /* u16 LE value set/held */
+#define TR_PIN_FLAGS                6       /* u8 TR_PINF_* */
+#define TR_PINF_FROZEN              $01
+#define TR_PINF_WIDE                $02     /* 16-bit value */
+
+#define TR_FREEZE_MAX               4       /* frozen pins at once. Each costs 1 WRAM cheat patch (2 when 16-bit) out of the CHEAT_WRAM_MAX=20 shared with the .yml cheats (the freezes go first). */
 #define TR_WRAM_BYTES               $20000  /* $7E0000..$7FFFFF = 131072 candidate positions. */
 
 /* TR_MODE values. EXACT/UNKNOWN start a search; the rest only filter one. */

@@ -508,13 +508,10 @@ uint8_t game_cmd_serve(uint8_t cmd) {
       msu_dac_hold();
       load_backup_state();
       msu_dac_release();
-      /* A state load rewinds WRAM to an earlier instant, so the trainer's captured
-         snapshot would make "increased/decreased" report the opposite of what the
-         player just saw. Dropping the session (with a reason the tab shows once) is
-         the honest outcome; the freeze records are NOT touched -- they are ordinary
-         cheats and stay in effect. The trainer's own storage is outside $F0-$F4, so
-         nothing here corrupts it. */
-      trainer_invalidate(TRAINER_NOTICE_LOADSTATE);
+      /* The trainer's search is NOT dropped here: this command only fires when the
+         wanted slot is not resident yet (a resident one is replayed without the MCU),
+         so the savestate handler re-baselines the snapshot itself on every real load
+         (ss_trainer_rebase). The trainer's storage is outside $F0-$F4. */
       break;
     case SNES_CMD_CHEAT_REPROGRAM:
       cheat_reprogram_from_mirror();
@@ -540,10 +537,18 @@ uint8_t game_cmd_serve(uint8_t cmd) {
       cheat_stage_names_window((int)(snes_get_mcu_param() & 0xffff));
       break;
     case SNES_CMD_TRAINER_CHEAT:
-      /* in-game TRAINER tab: turn the request the tab left in the meta block into a
-         runtime cheat record and redeploy. There is no second freeze engine -- see
-         src/trainer.h. Bounded, no SD. */
-      trainer_serve_request();
+      /* in-game TRAINER tab: APPLY redeploys the freezes from the pin table; SAVE
+         turns the requested address into a real cheat through the editor's own ADD
+         and rewrites the .yml (the same frozen-SNES SD write as SNES_CMD_CHEAT_EDIT).
+         Sibling calls, not nested: the stack peaks at the deepest one. See
+         src/trainer.h. */
+      msu_dac_hold();
+      if(trainer_serve_request() && cheat_edit_serve(1)) {
+        trainer_save_done();
+        if(cheat_yaml_save_current())
+          sram_writebyte(CHEAT_EDIT_RES_SAVEFAIL, SRAM_CHEAT_EDIT_ADDR + CHEAT_EDIT_OFS_RESULT);
+      }
+      msu_dac_release();
       break;
     case SNES_CMD_SET_SRM_SLOT:
       /* in-game SAVES tab: persist the selected SRAM slot to the sidecar (consumed on
