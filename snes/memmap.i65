@@ -374,6 +374,7 @@
 #define MAN_Z_TMAP_STRIDE           128     /* bytes per prebuilt tilemap row (64 entries) */
 #define MAN_Z_HALF_BYTES            1024    /* bytes per BG half of one tile row (32 tiles x 32B) */
 #define CMD_MANUAL_ZPAGE            $45     /* SNES_CMD_MANUAL_ZPAGE: stage one whole 2x zoom page into MANUAL_ZTILES_A/B + ZTMAP + ZPAL. MCU_PARAM[0] = compacted guide (0..7), [1..2] = index u16 LE, [3] = mode: 0 = index is a 1x BLOCK (resolved via the block map; entry Y published in MAN_META_ZENTRYY), 1 = index is a ZOOM PAGE directly (page turns). Re-staging an already-resident page is skipped. Publishes MAN_META_F_ZREADY + ZNROWS/ZPIXH/ZPAGE/ZENTRYY/ZFIRSTBLK. Lockstep with src/snes.h. */
+#define CMD_CHEAT_EDIT             $48     /* SNES_CMD_CHEAT_EDIT: serve the cheat-editor request the SNES left in the CHEAT_EDIT block ($FF0800; CE_* below) -- FETCH a record into the block, ADD a new record at index 0 (= the top of the .yml), REPLACE or DELETE one -- redeploy the cheats (in-game) and rewrite the game's cheat .yml. Served by BOTH the menu dispatcher and game_cmd_serve. No MCU_PARAM payload: the block is the payload and the editor's working buffer. The SNES pre-zeroes CE_RESULT: still 0 after the ACK = an old firmware that ACKs unknown commands. ACK = MCU_CMD cleared (in-game) / SNES_CMD = $55 (menu). Lockstep with src/snes.h. */
 #define CMD_TRAINER_CHEAT          $43     /* SNES_CMD_TRAINER_CHEAT: consume the freeze request the TRAINER tab wrote into the meta block (TR_REQ/TR_REQ_SLOT/TR_REQ_OFF/TR_REQ_VAL) and turn it into a RUNTIME cheat record, then redeploy. No MCU_PARAM payload -- the block IS the payload (9 bytes would not fit the 12-byte param anyway, and the tab already owns the block). ACK = MCU_CMD cleared. Lockstep with src/snes.h. */
 #define CMD_SET_SRM_SLOT           $44     /* SNES_CMD_SET_SRM_SLOT: persist the selected SRAM slot (MCU_PARAM low byte 0..3) to the <stem>.slot sidecar; refreshes SAVEINFO+42 / SRM_SLOT_STATUS. Applies on next game load (never changes the live slot). Lockstep with src/snes.h. */
 #define CFG_ENABLE_GAME_MANUAL      CFG_ADDR+$0145 /* EnableGameManual toggle (default ON); next free after CFG_BUS_COMPAT $0144. Lockstep with src/cfg.h. */
@@ -432,6 +433,36 @@
 #define CHEAT_TITLE                 $D80000 /* 64 bytes: source for the cheat window title, in the cheat region past any plausible cheat count. v2 layout = byte0 $02 (marker, lockstep with SRAM_CHEAT_TITLE_MARKER in src/memmap.h) followed by the ROM basename WITHOUT its extension, NUL-terminated. NO "Cheats for " prefix and NO clipping: cm_compose_title (snes/sysinfo_render.a65) prepends the localized text_cheat and clips to the window width, so neither the language nor the geometry is baked into the firmware. The marker is non-printable on purpose -- an older firmware wrote a ready-made printable title here, and byte0 alone tells the two layouts apart. */
 #define CHEAT_FLAGS                 $FF0500 /* 512 bytes BSRAM mirror of cheat flag byte 0 (cheats 0..511). SNES reads/writes here for instant visual toggle, MCU also keeps it in sync. */
 #define CHEAT_NAMES                 $FF8000 /* in-game cheat overlay: first CHEAT_OVL_MAX names, CHEAT_NAME_LEN bytes each, staged by firmware at game load ($D00000 records are game ROM in-game). 64*64=4KB fills $FF8000..$FF8FFF. Lockstep with SRAM_CHEAT_NAMES_ADDR in src/memmap.h. */
+/* ---- cheat EDITOR request/reply block (snes/cheatedit.a65 in the menu, snes/cheatedit.i65
+   in-game; MCU side src/cheatedit.c) -- lockstep with SRAM_CHEAT_EDIT_ADDR + the
+   CHEAT_EDIT_* constants in src/cheatedit.h.  512 B at $FF0800, the free range below the
+   savestate diagnostics ($FF0C00).  Writable by the SNES in BOTH modes (menu: $F0-$FF is
+   saveram under mapper 7; in-game: IS_PATCH), so it doubles as the editor's WORKING
+   BUFFER: the UIs type straight into CE_NAME/CE_CODES and hiprint/ovl_* read them back
+   from here.  Only the MCU can touch the records ($D0 is read-only to the menu and is
+   the game's ROM in-game), hence the round trip. */
+#define CHEAT_EDIT                  $FF0800
+#define CE_OP                       $FF0800 /* u8: CE_OP_* -- written LAST by the SNES, cleared by the MCU */
+#define CE_RESULT                   $FF0801 /* u8: CE_RES_*, written by the MCU BEFORE the ACK. The SNES writes 0 before the command; 0 after the ACK = firmware without the editor (it ACKs unknown commands). */
+#define CE_IDX                      $FF0802 /* u16 LE: record index for FETCH / REPLACE / DELETE */
+#define CE_FLAGS                    $FF0804 /* u8: bit0 = the name field is authoritative (REPLACE rewrites the description only then, so a >63-char name survives an edit of the codes alone) */
+#define CE_NUMCODES                 $FF0805 /* u8: 1..CE_MAX_CODES */
+#define CE_NAME                     $FF0808 /* 64 B: NUL-terminated, 63 visible max (== CHEAT_NAME_LEN) */
+#define CE_CODES                    $FF0848 /* CE_MAX_CODES x CE_CODE_LEN: 9 chars + NUL each, "AAAAAADD" (PAR/raw) or "XXXX-YYYY" (Game Genie, hex alphabet) */
+#define CE_CODE_LEN                 10
+#define CE_NAME_MAX                 63
+#define CE_MAX_CODES                40      /* == CHEAT_NUM_CODES_PER_CHEAT */
+#define CE_OP_NONE                  0
+#define CE_OP_FETCH                 1       /* record CE_IDX -> block */
+#define CE_OP_ADD                   2       /* block -> NEW record at index 0 (top of the .yml), ENABLED; everything else shifts up */
+#define CE_OP_REPLACE               3       /* block -> record CE_IDX (enable flag untouched) */
+#define CE_OP_DELETE                4       /* remove record CE_IDX; everything above shifts down */
+#define CE_RES_PENDING              0
+#define CE_RES_OK                   1
+#define CE_RES_BADCODE              2       /* a code failed the strict parse; nothing changed */
+#define CE_RES_FULL                 3       /* 512 records already; nothing changed */
+#define CE_RES_BADREQ               4       /* bad op / index / count; nothing changed */
+#define CE_RES_SAVEFAIL             6       /* records changed in RAM, the .yml could not be written */
 #define CHEAT_OVL_MAX               64      /* size of the RESIDENT in-game name window: CHEAT_NAMES holds 64 names for [CHEAT_WIN_BASE, +64). The list slides the window (CMD_CHEAT_NAMES_WINDOW) to cover all cheats up to CHEAT_LIST_MAX. */
 #define CHEAT_LIST_MAX              512     /* hard cap on listed cheats (= CHEAT_RECORD_MAX in src/cheat.h); the TRUE count comes from NUM_CHEATS. */
 #define CHEAT_NAME_LEN              64      /* bytes per staged in-game name (power of 2 -> (idx-base)*LEN is a shift) */

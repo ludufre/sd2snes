@@ -18,6 +18,7 @@
 #include "patch.h"
 #include "patchmeta.h"
 #include "cheat.h"
+#include "cheatedit.h"
 #include "theme.h"
 #include "manual.h"
 #include "memtest.h"
@@ -1038,6 +1039,15 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
          Lets menu.bin be updated over USB without a physical power-cycle. */
       *menu_reload = 1;
       return cmd;
+    case SNES_CMD_CHEAT_EDIT:
+      /* Cheat editor (menu cheat list): serve the request in the CHEAT_EDIT block,
+         then rewrite the .yml the list was loaded from.  SIBLING calls on purpose:
+         the yml writer carries the deep frame (cheat_record_t + path), and nesting
+         it under the editor would add the two.  The record set is already updated
+         when the save fails, so only the result byte says so. */
+      if(cheat_edit_serve(0) && cheat_yaml_save_current())
+        sram_writebyte(CHEAT_EDIT_RES_SAVEFAIL, SRAM_CHEAT_EDIT_ADDR + CHEAT_EDIT_OFS_RESULT);
+      return 0;
     default:
       printf("unknown cmd: %d\n", cmd);
       break;

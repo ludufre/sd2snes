@@ -35,7 +35,7 @@ static uint8_t cheat_is_wram_cheat(uint32_t code) {
    then 3 trailing nulls. The SNES editor menu prints the first 9
    chars; the trailing nulls let save logic tell empty slots
    (buf[0]==0) apart from real ones. */
-static void cheat_write_code_string(int cheat_idx, int code_idx, const char *s) {
+void cheat_write_code_string(int cheat_idx, int code_idx, const char *s) {
   if(cheat_idx < 0 || cheat_idx >= 512) return;
   if(code_idx < 0 || code_idx >= CHEAT_NUM_CODES_PER_CHEAT) return;
 
@@ -61,7 +61,7 @@ static void cheat_write_code_string(int cheat_idx, int code_idx, const char *s) 
 /* Read a code's display string into the supplied 12-byte buffer.
    Trims trailing spaces and null-terminates. Returns the trimmed
    length; 0 means the slot is empty (never populated). */
-static int cheat_read_code_string(int cheat_idx, int code_idx, char *out) {
+int cheat_read_code_string(int cheat_idx, int code_idx, char *out) {
   uint32_t slot = SRAM_CHEAT_CODE_STRINGS_ADDR
                 + 512u * (uint32_t)cheat_idx
                 + 12u  * (uint32_t)code_idx;
@@ -395,6 +395,11 @@ static void cheat_yaml_title_and_open(uint8_t* romfilename) {
      the card with hundreds of empty directories. */
   path_asset(line, sizeof(line), CHEAT_BASEDIR, (const char*)romfilename, ".yml");
   printf("Cheat YAML file: %s\n", line);
+  /* Remember the path for the cheat editor: an add/edit/delete rewrites THIS file,
+     whether it is served from the menu list or in-game.  path_asset leaves `line`
+     empty on failure, and that empty string is what tells cheat_yaml_save_current
+     to refuse. */
+  sram_writeblock(line, SRAM_CHEAT_YML_PATH_ADDR, (uint16_t)(strlen(line) + 1));
   yaml_file_open(line, FA_READ);
 }
 
@@ -513,17 +518,21 @@ void cheat_toggle_flag(int index) {
    512*i, byte 0) and re-runs cheat_program() so the FPGA ROM-cheat enable
    mask and the injected WRAM-cheat block reflect the new state without a
    reboot. Bounded by the cheat count, so it can never hang. */
-void cheat_reprogram_from_mirror(void) {
+void cheat_sync_flags_from_mirror(void) {
   int count = sram_readshort(SRAM_NUM_CHEATS);
   if(count < 0) count = 0;
-  if(count > 512) count = 512;
+  if(count > CHEAT_RECORD_MAX) count = CHEAT_RECORD_MAX;
   for(int i = 0; i < count; i++) {
     uint8_t mirror = sram_readbyte(SRAM_CHEAT_FLAGS_ADDR + i);
     uint32_t rec = SRAM_CHEAT_ADDR + 512u * (uint32_t)i;
     uint8_t flag = sram_readbyte(rec);
-    flag = (flag & ~CHEAT_FLAG_ENABLE) | (mirror & CHEAT_FLAG_ENABLE);
-    sram_writebyte(flag, rec);
+    uint8_t want = (flag & ~CHEAT_FLAG_ENABLE) | (mirror & CHEAT_FLAG_ENABLE);
+    if(want != flag) sram_writebyte(want, rec);
   }
+}
+
+void cheat_reprogram_from_mirror(void) {
+  cheat_sync_flags_from_mirror();
   cheat_program();
   cheat_rom_psram_apply(); /* PSRAM-patch mode: apply/restore toggled ROM codes */
 }
@@ -558,21 +567,27 @@ void cheat_stage_names_window(int base) {
    yaml_decode_entities and is shared with the patch metadata writer, so both emit
    exactly the escapes the loader understands. */
 
-/* save cheats to YAML file from ROM/menu */
-void cheat_yaml_save(uint8_t *romfilename) {
+/* Write every record to the .yml at `path`.  Split from the path resolution so the
+   editor's cheat_yaml_save_current can reuse it: its frame (cheat_record_t + the
+   code-string scratch, ~430 B) is the deep one, and the two callers each hold only
+   their own 256-byte path buffer above it -- the same depth cheat_yaml_save always
+   had, not more.  Returns 0 when the file was written, non-zero otherwise. */
+static int __attribute__((noinline)) cheat_yaml_write(const char *path) {
   cheat_record_t cheat;
-  char line[256];
   int numcheats = sram_readshort(SRAM_NUM_CHEATS);
+  if(numcheats < 0 || numcheats > CHEAT_RECORD_MAX) numcheats = CHEAT_RECORD_MAX;   /* never walk past the record region */
 
-  if(path_asset(line, sizeof(line), CHEAT_BASEDIR, (const char*)romfilename, ".yml") < 0) return;
-  printf("Cheat YAML file: %s\n", line);
+  printf("Cheat YAML file: %s\n", path);
 
   /* Shared with patchmeta_save: chip-select release, bucket mkdir, attribute clear +
      unlink, open (with the truncate fallback) and the document header.  A non-zero
      return means nothing is open -- do not write. */
-  if(yaml_open_write(line)) return;
+  if(yaml_open_write((char*)path)) return -1;
   for(int cheat_idx = 0; cheat_idx < numcheats; cheat_idx++) {
     cheat_save_from_menu(cheat_idx, &cheat);
+    /* Runtime-only records (trainer freezes) never came from the file and must not
+       enter it as a side effect of the editor rewriting the list. */
+    if(cheat.flags & CHEAT_FLAG_RUNTIME) continue;
     /* Emit the Name with HTML entity re-encoding so descriptions
        containing '"' or '&' survive the round trip. The previous code
        used f_printf with "%s" which would emit a literal quote into a
@@ -602,77 +617,20 @@ void cheat_yaml_save(uint8_t *romfilename) {
     }
   }
   file_close();
+  return 0;
 }
 
-uint32_t cheat_str2bin(char *string) {
-  char code[9];
-  uint32_t patch;
-  if(strlen(string) >= 9 && string[4] == '-') {
-    /* GG code */
-    printf("GG code: %s\n", string);
-    memcpy(code, string, 4);
-    strncpy(code+4, string+5, 4);
-    code[8] = 0;
-    patch = (uint32_t)strtoul(code, NULL, 16);
-    patch = cheat_gg2raw(patch);
-  } else {
-    /* PAR/RAW code */
-    patch = (uint32_t)strtoul(string, NULL, 16);
-    printf("PAR code: %08lX\n", patch);
-  }
-  return patch;
+/* save cheats to YAML file from ROM/menu */
+void cheat_yaml_save(uint8_t *romfilename) {
+  char line[256];
+  if(path_asset(line, sizeof(line), CHEAT_BASEDIR, (const char*)romfilename, ".yml") < 0) return;
+  cheat_yaml_write(line);
 }
 
-uint32_t cheat_gg2raw(uint32_t patch) {
-  uint8_t gg2raw_tab[16] = {
-    0x4, 0x6, 0xd, 0xe,
-    0x2, 0x7, 0x8, 0x3,
-    0xb, 0x5, 0xc, 0x9,
-    0xa, 0x0, 0xf, 0x1
-  };
-  uint32_t decrypt = 0;
-  /* translate nibbles */
-  for(int i=0; i<8; i++) {
-    decrypt = ((decrypt >> 4) & 0x0fffffff)
-            | ((uint32_t)(gg2raw_tab[patch & 0xf]) << 28);
-    patch >>= 4;
-  }
-  /* remap bits: VVVVVVVVAAAABBBBCCDDDDEEEEFFFFGG
-              => DDDDFFFFAAAAGGCCBBBBEEEEVVVVVVVV */
-  decrypt = ((decrypt & 0xff000000) >> 24)
-          |  (decrypt & 0x00f00000)
-          | ((decrypt & 0x000f0000) >> 4)
-          | ((decrypt & 0x0000c000) << 2)
-          | ((decrypt & 0x00003c00) << 18)
-          | ((decrypt & 0x000003c0) << 2)
-          | ((decrypt & 0x0000003c) << 22)
-          | ((decrypt & 0x00000003) << 18);
-  return decrypt;
-}
-
-uint32_t cheat_raw2gg(uint32_t patch) {
-  uint8_t raw2gg_tab[16] = {
-    0xd, 0xf, 0x4, 0x7,
-    0x0, 0x9, 0x1, 0x5,
-    0x6, 0xb, 0xc, 0x8,
-    0xa, 0x2, 0x3, 0xe
-  };
-  uint32_t encrypt = 0;
-  /* remap bits: AAAABBBBCCCCDDEEFFFFGGGGVVVVVVVV
-              => VVVVVVVVCCCCFFFFEEAAAAGGGGBBBBDD */
-  patch = ((patch & 0xf0000000) >> 18)
-        | ((patch & 0x0f000000) >> 22)
-        |  (patch & 0x00f00000)
-        | ((patch & 0x000c0000) >> 18)
-        | ((patch & 0x00030000) >> 2)
-        | ((patch & 0x0000f000) << 4)
-        | ((patch & 0x00000f00) >> 2)
-        | ((patch & 0x000000ff) << 24);
-  /* translate nibbles */
-  for(int i=0; i<8; i++) {
-    encrypt = ((encrypt >> 4) & 0x0fffffff)
-            | ((uint32_t)(raw2gg_tab[patch & 0xf]) << 28);
-    patch >>= 4;
-  }
-  return encrypt;
+int __attribute__((noinline)) cheat_yaml_save_current(void) {
+  char line[256];
+  sram_readstrn(line, SRAM_CHEAT_YML_PATH_ADDR, sizeof(line));
+  line[sizeof(line) - 1] = 0;
+  if(!line[0]) return -1;   /* no list was ever loaded, or its name did not fit */
+  return cheat_yaml_write(line);
 }

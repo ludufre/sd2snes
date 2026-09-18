@@ -97,6 +97,21 @@ ui_call_pad:
   jsr read_pad
   rtl
 
+; ui_call_confirm: the cheat editor (snes/cheatedit.a65, bank $C1) asks "delete this
+; cheat?" through the browser's confirm_delete, which is rts-near here.  The caller
+; fills confirm_prompt_*/confirm_name_* first; carry comes back as confirm_delete leaves it.
+ui_call_confirm:
+  jsr confirm_delete
+  rtl
+
+; ui_call_greyout: the cheat editor (bank $C1) dims the window behind a sub-dialog (the
+; keyboard / confirm over the editor or list), the same way the browser's submenus grey
+; their parent.  window_greyout recolors the CURRENT window_x/y/w/h to the dimmed palette
+; and manages its own DP (AllocStack), so it is safe from DP=0.
+ui_call_greyout:
+  jsr window_greyout
+  rtl
+
 ; Drain an in-flight cover request BEFORE the memtest command goes out: its $55 ACK
 ; would otherwise read as the answer to ours (the same hazard patch_create_rom guards).
 ui_call_coversync:

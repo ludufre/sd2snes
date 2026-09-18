@@ -74,7 +74,10 @@ tr_write_record(int idx, uint32_t addr, uint16_t val, uint8_t width, uint8_t ena
   int len = tr_make_desc(desc, addr, val, width);
   uint32_t a1 = addr + 1;                 /* may cross $7EFFFF -> $7F0000 */
 
-  sram_writebyte(enable ? CHEAT_FLAG_ENABLE : 0, base);
+  /* RUNTIME marks the record as one the trainer made up: cheat_yaml_write skips it,
+     so the cheat editor rewriting the game's .yml in-game cannot leak freezes into
+     the user's file. Only bit 7 is ever mirrored/toggled, so the mark sticks. */
+  sram_writebyte((enable ? CHEAT_FLAG_ENABLE : 0) | CHEAT_FLAG_RUNTIME, base);
 
   /* description: the generated text, then zero-fill the rest of the field so a slot
      recycled from a previous YAML load cannot show through. */
@@ -146,7 +149,8 @@ void trainer_serve_request(void) {
   if(req == TRAINER_REQ_UNFREEZE) {
     idx = (int)blk.fz_idx[slot];
     if(idx >= 0 && idx < CHEAT_RECORD_MAX) {
-      sram_writebyte(0, SRAM_CHEAT_ADDR + (uint32_t)TR_REC_STRIDE * (uint32_t)idx);
+      /* disabled but still the trainer's: keep the RUNTIME mark so it stays out of the .yml */
+      sram_writebyte(CHEAT_FLAG_RUNTIME, SRAM_CHEAT_ADDR + (uint32_t)TR_REC_STRIDE * (uint32_t)idx);
       sram_writebyte(0, SRAM_CHEAT_FLAGS_ADDR + idx);
     }
     blk.fz_idx[slot] = 0xFFFF;

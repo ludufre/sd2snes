@@ -164,7 +164,30 @@ SHELL_LABELS = [
     "text_igm_ft_generic",    # 2 footer, any other content focus
     "text_igm_master_on",     # 3 master cheat switch, enabled
     "text_igm_master_off",    # 4 master cheat switch, disabled
+    "text_igm_ft_ce_edit",    # 5 footer, cheat editor (item list / confirm)
+    "text_igm_ft_ce_kbd",     # 6 footer, cheat editor keyboard
 ]
+
+# The cheat EDITOR (CHEATS tab: add / edit / delete a cheat), IN INDEX ORDER. Lockstep with
+# the IGM_CE_* indices in snes/cheatedit_defs.i65 (SAME count + order) and with the EN base
+# labels in const.a65.
+CHEATEDIT_LABELS = [
+    "text_igm_ce_title_new",    # 0 title while adding (centered in the 52-col interior)
+    "text_igm_ce_title_edit",   # 1 title while editing
+    "text_igm_ce_name",         # 2 "Name:" label at col 8 -- the value starts at col 16
+    "text_igm_ce_save",         # 3 SAVE item
+    "text_igm_ce_delete",       # 4 DELETE item
+    "text_igm_ce_confirm",      # 5 "Delete this cheat?" (centered)
+    "text_igm_ce_confirm_keys", # 6 "A: yes  B: no" (centered)
+    "text_igm_ce_nosup",        # 7 old firmware (centered)
+    "text_igm_ce_full",         # 8 512 records already (centered)
+    "text_igm_ce_badcode",      # 9 a code the firmware refused (centered)
+]
+
+# Editor geometry (cheatedit_defs.i65): interior 52 columns; the Name label runs from col 8
+# and its value from col 16, so the label may not exceed 7 encoded columns.
+CHEATEDIT_LABEL_MAX = {lbl: 52 for lbl in CHEATEDIT_LABELS}
+CHEATEDIT_LABEL_MAX["text_igm_ce_name"] = 7
 
 # All five are centered on a 64-column row by sh_draw_centered, so the only real
 # limit is the row itself; keep a margin so a long translation cannot touch the edges.
@@ -247,6 +270,8 @@ def cap_for(label):
         return CHEATS_LABEL_MAX[label]
     if label in SHELL_LABEL_MAX:
         return SHELL_LABEL_MAX[label]
+    if label in CHEATEDIT_LABEL_MAX:
+        return CHEATEDIT_LABEL_MAX[label]
     if label in TRAINER_LABEL_MAX:
         return TRAINER_LABEL_MAX[label]
     if label in TRAINER_LABELS:
@@ -291,7 +316,7 @@ def main():
         for lbl in sorted(dl - const_labels):
             problems.append(f"{lbl}: in lang_{name}.py but not in {base.name}")
     for lbl in (HELP_LABELS + STATES_LABELS + SAVES_LABELS + TAB_LABELS + MANUAL_LABELS
-                + CHEATS_LABELS + TRAINER_LABELS):
+                + CHEATS_LABELS + SHELL_LABELS + TRAINER_LABELS + CHEATEDIT_LABELS):
         if lbl not in en_args:
             problems.append(f"{lbl}: listed in a *_LABELS table but not in {base.name}")
     if problems:
@@ -313,7 +338,7 @@ def main():
     # --- width guard (overlay width, plus tighter per-label caps for column layout) ---
     wide = []
     for lbl in (HELP_LABELS + STATES_LABELS + SAVES_LABELS + TAB_LABELS + MANUAL_LABELS
-                + CHEATS_LABELS):
+                + CHEATS_LABELS + SHELL_LABELS + TRAINER_LABELS + CHEATEDIT_LABELS):
         cap = cap_for(lbl)
         for lang in lang_order:
             n = encoded_len(args_for(lbl, lang))
@@ -376,6 +401,7 @@ def main():
         f"#define IGM_MANUAL_NLINES {len(MANUAL_LABELS)}",
         f"#define IGM_CHEATS_NLINES {len(CHEATS_LABELS)}",
         f"#define IGM_TRAINER_NLINES {len(TRAINER_LABELS)}",
+        f"#define IGM_CHEATEDIT_NLINES {len(CHEATEDIT_LABELS)}",
         f"#define IGM_LANG_COUNT {nlang}",
         f"#define IGM_LANG_STRIDE {IGM_LANG_STRIDE}",
         f"#define IGM_LANG_SHIFT {IGM_LANG_SHIFT}",
@@ -389,6 +415,7 @@ def main():
     out += emit_table("igm_cheats_tbl", "igm_ch", CHEATS_LABELS)
     out += emit_table("igm_shell_tbl", "igm_sh", SHELL_LABELS)
     out += emit_table("igm_trainer_tbl", "igm_tr", TRAINER_LABELS)
+    out += emit_table("igm_cheatedit_tbl", "igm_ce", CHEATEDIT_LABELS)
 
     out_path.write_text("\n".join(out) + "\n")
     print(f"generated {out_path}: HELP {len(HELP_LABELS)} + STATES {len(STATES_LABELS)} "
