@@ -104,6 +104,7 @@ cheat_menu_run:
 ; in r15).  cm_total / cm_top / cm_sel / cm_visible / cm_tmp
 ; are .word storage so cheat indices 0..511 are tracked correctly.
 ; Clamp the count at 512.
+cheatmenu_recount:
   rep #$20 : .al
   lda @NUM_CHEATS
   cmp #$0200
@@ -119,7 +120,8 @@ cheatmenu_count_ok:
   bne cheatmenu_have_data16
 
   sep #$20 : .as
-  jsr cheatmenu_show_empty_popup
+  jsr cheatmenu_show_empty_popup    ; carry set = Select added the first cheat: open the list
+  bcs cheatmenu_recount
   jmp cheatmenu_done
 
 cheatmenu_have_data16:
@@ -779,11 +781,34 @@ cheatmenu_disp_left_skip:
   beq cheatmenu_disp_right_skip
   jmp cheatmenu_in_right
 cheatmenu_disp_right_skip:
+  lda pad_y
+  beq cheatmenu_disp_y_skip
+  jmp cheatmenu_in_y
+cheatmenu_disp_y_skip:
+  lda pad_select
+  beq cheatmenu_disp_select_skip
+  jmp cheatmenu_in_select
+cheatmenu_disp_select_skip:
   bra -
 
 cheatmenu_in_b:
   jsr snd_fx_back            ; leaving the cheat list
   rts
+
+; Y = edit the cheat under the cursor, Select = add a new one (snes/cheatedit.a65,
+; bank $C1).  Both come back with cm_total/cm_visible/cm_top/cm_sel/bar_yl already
+; recomputed and carry SET when the list is empty now -- then leave through the B
+; path (the save is harmless, the pop puts the browser back).
+cheatmenu_in_y:
+  jsl @cheat_edit_existing
+  bra cheatmenu_edit_done
+cheatmenu_in_select:
+  jsl @cheat_edit_new
+cheatmenu_edit_done:
+  bcs cheatmenu_in_b
+  jsr cheatmenu_scroll_reset
+  jsr cheatmenu_redraw_all
+  jmp cheatmenu_input_loop
 
 cheatmenu_in_a:
 ; A = Enable/Disable: XOR the BSRAM flag mirror so the row's Yes/No
@@ -1084,14 +1109,17 @@ cheatmenu_show_empty_popup:
   sta bar_xl
   sta bar_yl
   sta bar_wl
-; closed-border box: 40 wide, centered (x=12), y=13, 3 tall
+; closed-border box: 40 wide, centered (x=12), y=13, 5 tall: the message, a blank
+; row, then the "Select: Add" hint (a cheat list that is empty can only be started
+; from here).  cm_tmp low byte = "a cheat was added" for the carry we return.
+  stz cm_tmp
   lda #12
   sta window_x
   lda #13
   sta window_y
   lda #40
   sta window_w
-  lda #$03
+  lda #$05
   sta window_h
   lda #^zero                 ; empty title -> closed top border
   sta window_tbank
@@ -1125,10 +1153,35 @@ cheatmenu_show_empty_popup:
   adc window_x               ; print_x = window_x + (window_w-length)/2
   sta print_x
   lda window_y
-  inc                        ; body row (window_y+1, for h=3)
+  inc                        ; body row (window_y+1)
   sta print_y
   stz print_pal
   lda #56
+  sta print_count
+  jsr hiprint
+; "Select:" (neutral, lives with the editor in $C1) + the translated "Add" on window_y+3
+  lda window_y
+  clc
+  adc #$03
+  sta print_y
+  lda #24
+  sta print_x
+  lda #^ce_sel_hint
+  sta print_bank
+  ldx #!ce_sel_hint
+  stx print_src
+  lda #$08
+  sta print_count
+  jsr hiprint
+  lda print_x
+  clc
+  adc print_done
+  sta print_x
+  lda #^text_add
+  sta print_bank
+  ldx #!text_add
+  stx print_src
+  lda #$10
   sta print_count
   jsr hiprint
   jsr enable_screen_update
@@ -1138,11 +1191,22 @@ cheatmenu_show_empty_popup:
   stz isr_done
   jsr printtime
   jsr read_pad
+  lda pad_select
+  beq cheatmenu_empty_nosel
+  jsl @cheat_edit_new        ; carry set = still empty (cancelled / refused)
+  bcs -
+  lda #$01
+  sta cm_tmp
+  bra cheatmenu_empty_close
+cheatmenu_empty_nosel:
   lda pad_a
   ora pad_b
   ora pad_y
   ora pad_start
   beq -
+cheatmenu_empty_close:
+  lda #$05
+  sta window_h               ; the editor's dialogs leave their own behind; pop counts with it
   jsr pop_window
   pla
   sta bar_wl
@@ -1151,5 +1215,7 @@ cheatmenu_show_empty_popup:
   pla
   sta bar_xl
   plp
+  lda cm_tmp
+  lsr                        ; carry = a cheat was added
   rts
 

@@ -1,0 +1,89 @@
+// cheatedit_defs.i65 -- layout, i18n indices and scratch map of the in-game cheat EDITOR
+// (CHEATS tab: add / edit / delete a cheat, codes typed on an on-screen keyboard).
+// SPLIT from cheatedit.i65 (the code) for the same reason trainer_defs.i65 is: cpp is
+// textual and igmenu.a65 reads ce_mode from ig_bar_sync, cheats_input, cheats_tick and the
+// footer -- all hundreds of lines before the code include -- so these have to be in scope
+// early or those references silently become undefined labels at link time.
+//
+// PROTOCOL: the same CHEAT_EDIT block ($FF0800, CE_* in memmap.i65) and CMD_CHEAT_EDIT the
+// menu editor (snes/cheatedit.a65) uses; the block is the working buffer here too (it is
+// writable in-game through the IS_PATCH window, and $D0/$D4 -- the records -- ARE the game's
+// ROM from where we stand, so FETCH is how a record is read at all).
+//
+// snescom preprocessing: // comments only, never `;` inside an included file.
+
+// ---- geometry: the TRAINER-shaped frame, two rows taller (x ODD, w EVEN -- see
+//      ig_frame_geom).  rows 4..23, interior rows 5..22, cols 6..57 (52 wide). ----
+#define CE_WIN_X        5
+#define CE_WIN_Y        4
+#define CE_WIN_W        54
+#define CE_WIN_H        20
+#define CE_INT_COL      6
+#define CE_INT_W        52
+#define CE_ROW_TITLE    5
+#define CE_ROW0         7          // first item row
+#define CE_ROWS         14         // items visible: rows 7..20
+#define CE_ROW_MSG      22         // bottom interior row: result messages (editor/keyboard)
+#define CE_LIST_MSG_ROW 24         // result messages while the LIST is up (Cheats has no frame;
+                                   //   ig_clear_body wipes rows 3..24 on the next repaint)
+#define CE_COL_LABEL    8
+#define CE_COL_CODE     12
+#define CE_COL_NAME     16         // the "Name:" label may run to col 14 (7 encoded cols)
+#define CE_NAME_W       42         // cols 16..57
+#define CE_CODE_W       9
+// keyboard (same frame)
+#define CEK_FIELD_ROW   6
+#define CEK_FIELD_COL   8
+#define CEK_FIELD_W     48         // viewport: the '_' cursor lands on col 56 at most
+#define CEK_KEY_COL     8          // keys every 2 columns from here (17 hex keys -> cols 8..40)
+#define CEK_HEX_ROW     9
+#define CEK_ALN_ROW0    9          // six rows 9..14
+#define CEK_ALN_ROWS    6
+#define CEK_HEX_ROWS    2       // hex keyboard is two rows: 0-9 then A-F -
+#define CEK_ALN_BASE    32         // alnum rows start 32 bytes into ce_kbd_keys
+// confirm-delete prompt (drawn over the editor rows)
+#define CEC_ROW_ASK     12
+#define CEC_ROW_KEYS    14
+
+// ---- i18n indices: lockstep with CHEATEDIT_LABELS in utils/gen_igmenu_lang.py ---------
+#define IGM_CE_TITLE_NEW    0
+#define IGM_CE_TITLE_EDIT   1
+#define IGM_CE_NAME         2
+#define IGM_CE_SAVE         3
+#define IGM_CE_DELETE       4
+#define IGM_CE_CONFIRM      5
+#define IGM_CE_CONFIRM_KEYS 6
+#define IGM_CE_NOSUP        7
+#define IGM_CE_FULL         8
+#define IGM_CE_BADCODE      9
+
+// ---- modes (ce_mode) ----
+#define CE_MODE_LIST    0
+#define CE_MODE_EDITOR  1
+#define CE_MODE_KBD     2
+#define CE_MODE_CONFIRM 3
+
+// ---- scratch (PSRAM $F4, the free gap above OVL_NONAME_BUF $F483C0-DF and below OVL_TMBUF
+//      $F49000).  All words, accessed @long.  ce_mode is zeroed by igmenu_main and by
+//      cheats_leave; the rest is written before it is read. ----
+#define ce_mode         $F483E0    // CE_MODE_*: != 0 means the editor owns the CHEATS tab input
+#define ce_isnew        $F483E2    // 1 = adding, 0 = editing record ce_idx
+#define ce_idx          $F483E4    // absolute record index being edited
+#define ce_n            $F483E6    // codes in the block
+#define ce_sel          $F483E8    // selected item: 0 Name, 1..n code n, n+1 Save, n+2 Delete
+#define ce_top          $F483EA    // first visible item
+#define ce_kmode        $F483EC    // keyboard: 0 = hex (codes), 1 = alnum (name)
+#define ce_krow         $F483EE    // key cursor
+#define ce_kcol         $F483F0
+#define ce_klen         $F483F2    // field length
+#define ce_kmax         $F483F4    // field cap: 9 for a code, CE_NAME_MAX for the name
+#define ce_kfield       $F483F6    // field offset inside bank $FF
+#define ce_tmp          $F483F8
+#define ce_tmp2         $F483FA
+#define ce_kitem        $F483FC    // item the keyboard edits (0 = name, i = code i)
+#define ce_kadd         $F483FE    // 1 = that code was just appended (a cancel drops it again)
+#define ce_lang         $F48400    // CFG.language clamped
+#define ce_changed      $F48402    // 1 = a Save/Delete went through -> recount the list
+#define ce_row          $F48404    // draw loop counter
+#define ce_item         $F48406    // item on the row being drawn
+#define ce_tmp3         $F48408

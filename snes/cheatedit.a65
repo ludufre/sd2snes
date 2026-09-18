@@ -1,0 +1,1624 @@
+; Cheat editor for the menu cheat list (snes/cheatmenu.a65): add a cheat, edit one
+; (name + codes) or delete one, with the codes typed on an on-screen keyboard.
+;
+; HOW IT TALKS TO THE FIRMWARE.  The SNES can only READ the cheat records ($D00000 is
+; read-only under the menu mapper), so every change goes through the CHEAT_EDIT block
+; at $FF0800 (CE_* in memmap.i65) and CMD_CHEAT_EDIT: FETCH pulls one record's name and
+; code strings INTO the block, the editor types straight into the block (it is the
+; working buffer -- hiprint reads the name and the codes from there, bank $FF), and
+; ADD/REPLACE/DELETE hand it back.  The MCU rewrites the game's cheat .yml on every one
+; of those, a new cheat going to index 0 = the top of the file.  The result byte is
+; pre-zeroed here: a 0 after the ACK means the firmware ACKed a command it does not
+; have, which is what the "update the firmware" popup reports.
+;
+; SCREENS (all windows pushed over the list, popped on the way out):
+;   editor    same geometry as the list.  Items: [Name] [#01..#NN code] [Save] [Delete]
+;             (Delete only when editing).  A = act on the item, Select = append a code
+;             and type it, Y = remove the code under the cursor, B = back, no save.
+;   keyboard  a 44x12 box: the field with a '_' cursor, then the key grid.  Hex keys
+;             (0-9 A-F -) for a code, six rows of letters/digits/punctuation for the
+;             name.  A types, Y deletes, Select = space (name only), X = OK, B = cancel.
+;             START is not the OK on purpose: in the in-game shell START closes the
+;             whole menu before any tab sees the pad, and the two keyboards share one
+;             button map.  A code is accepted only as "AAAAAADD" (8 hex) or "XXXX-YYYY"
+;             (Game Genie, hex alphabet), the two forms cheat_str2bin understands.
+;   confirm   the browser's confirm_delete, prompt "Delete" + the cheat's name.
+;
+; WHY $C1: this is a couple of KB and $C0 is nearly full.  Only `jsr X : rtl`
+; trampolines are used from $C0 (ui_call_wopen/wclose/pad/resolve, gi_call_hiprint and
+; the new ui_call_confirm).  Vblank wait = isr_done; sound = a store to SFX_MAILBOX.
+;
+; ENTRY POINTS (both jsl, both self-contained: DP=0 and DB=$7E are forced, see
+; show_memtest for the unwind-order gotcha):
+;   cheat_edit_new       Select on the list / on the empty popup: add a cheat
+;   cheat_edit_existing  Y on the list: edit the cheat under the cursor (cm_top+cm_sel)
+; Both return with CARRY SET when the list is EMPTY afterwards (the caller leaves the
+; list), CARRY CLEAR otherwise -- and then cm_total/cm_visible/cm_top/cm_sel/bar_yl are
+; already recomputed for the new count, so the caller only redraws.
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+; '.link page' wins and they emit no bytes).  Same pattern as memtest.a65.
+.link page $c1
+
+#define CE_LIST_ROWS    10      /* == CHEATS_PER_SCREEN in cheatmenu.a65 */
+#define CE_ROWS         12      /* editor items visible: window_y+2 .. window_y+13 */
+#define CE_COL_LABEL    8       /* window_x + 2 */
+#define CE_COL_CODE     12
+#define CE_COL_NAME     15
+#define CE_NAME_W       41      /* cols 15..55 inside the 52-wide window */
+#define CE_BLANK_W      50      /* interior width: window_w - 2 */
+/* keyboard box */
+#define CEK_X           10
+#define CEK_Y           12
+#define CEK_W           44
+#define CEK_H           12
+#define CEK_FIELD_ROW   13      /* CEK_Y + 1 */
+#define CEK_FIELD_COL   12
+#define CEK_FIELD_W     39      /* name field viewport: '_' lands on col 51 at most */
+#define CEK_KEY_COL     12
+#define CEK_HEX_ROW     16      /* CEK_Y + 4 */
+#define CEK_ALN_ROW0    15      /* CEK_Y + 3 .. +8 */
+#define CEK_ALN_ROWS    6
+#define CEK_HEX_ROWS    2       /* hex keyboard is now two rows: 0-9 then A-F - */
+#define CEK_ALN_BASE    32      /* alnum rows start 32 bytes into ce_kbd_keys */
+#define CEK_STRIDE      16      /* bytes per alnum key row in the table */
+#define CEK_BLANK_W     42
+/* "update the firmware" popup */
+#define CEP_X           12
+#define CEP_Y           13
+#define CEP_W           40
+#define CEP_H           3
+
+; ======================================================================
+;  Entry points
+; ======================================================================
+cheat_edit_new:
+  php
+  phb
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld                         ; DP = 0
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb                         ; DB = $7E
+  lda #$01
+  sta ce_isnew
+  jsr ce_main
+  pld
+  plb
+  plp
+  .as : .xl
+  lda @ce_ret
+  lsr                         ; bit0 -> carry: 1 = the list is empty now
+  rtl
+
+cheat_edit_existing:
+  php
+  phb
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb
+  stz ce_isnew
+  jsr ce_main
+  pld
+  plb
+  plp
+  .as : .xl
+  lda @ce_ret
+  lsr
+  rtl
+
+; ======================================================================
+;  ce_main -- the session.  .as/.xl, DP=0, DB=$7E.
+; ======================================================================
+ce_main:
+  ; the caller's window geometry and cursor bar come back exactly as found: the list
+  ; re-derives its rows from window_y and pop_window counts with window_h, and the
+  ; empty popup pops its OWN window after we return
+  lda window_x
+  pha
+  lda window_y
+  pha
+  lda window_w
+  pha
+  lda window_h
+  pha
+  lda bar_xl
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  rep #$20 : .al
+  lda longptr
+  pha
+  sep #$20 : .as
+  lda longptr+2
+  pha
+
+  stz ce_changed
+  stz ce_ret
+  rep #$20 : .al
+  lda cm_top
+  clc
+  adc cm_sel
+  sta ce_idx                  ; the record under the list cursor (ignored when adding)
+  sep #$20 : .as
+
+  lda ce_isnew
+  bne ce_main_new
+  ; --- edit: pull the record into the block ---
+  lda #CE_OP_FETCH
+  jsr ce_send
+  cmp #CE_RES_OK
+  beq ce_main_fetched
+  jsr ce_report_result        ; 0 = old firmware popup, else the error blip
+  jmp ce_main_out
+ce_main_new:
+  ; --- add: empty block, one empty code, and the hex keyboard right away.  A cancel
+  ;     here means nothing to add. ---
+  jsr ce_block_clear
+  lda #$01
+  sta ce_n
+  ldx #$0000
+  jsr ce_kbd_code
+  bcc ce_main_out
+  bra ce_main_edit
+ce_main_fetched:
+  lda @CE_NUMCODES
+  cmp #CE_MAX_CODES
+  bcc +
+  lda #CE_MAX_CODES
++ sta ce_n
+ce_main_edit:
+  stz ce_sel
+  stz ce_top
+  jsr ce_editor               ; until B, a successful Save, or a Delete
+ce_main_out:
+  pla
+  sta longptr+2
+  rep #$20 : .al
+  pla
+  sta longptr
+  sep #$20 : .as
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  pla
+  sta window_h
+  pla
+  sta window_w
+  pla
+  sta window_y
+  pla
+  sta window_x
+  jsr ce_after
+  rts
+
+; ----------------------------------------------------------------------
+;  ce_after -- the list changed: recount, re-clamp, put the bar back on the
+;  cursor and blank list rows that no longer exist.  Sets ce_ret = 1 when the
+;  list is empty.  Only when ce_changed.
+; ----------------------------------------------------------------------
+ce_after:
+  lda ce_changed
+  bne +
+  rts
++ rep #$20 : .al
+  lda @NUM_CHEATS
+  cmp #CHEAT_LIST_MAX
+  bcc +
+  lda #CHEAT_LIST_MAX
++ sta cm_total
+  cmp #$0000
+  bne ce_after_nonempty
+  sep #$20 : .as
+  lda #$01
+  sta ce_ret
+  rts
+ce_after_nonempty:
+  .al
+  cmp #CE_LIST_ROWS
+  bcc +
+  lda #CE_LIST_ROWS
++ sta cm_visible
+  sep #$20 : .as
+  lda ce_isnew
+  beq ce_after_clamp
+  ; a new cheat sits at index 0: put the cursor on it
+  rep #$20 : .al
+  stz cm_top
+  stz cm_sel
+  bra ce_after_bar
+ce_after_clamp:
+  rep #$20 : .al
+  lda cm_total
+  sec
+  sbc cm_visible              ; largest first-visible index
+  cmp cm_top
+  bcs +
+  sta cm_top
++ lda cm_visible
+  dec
+  cmp cm_sel
+  bcs ce_after_bar
+  sta cm_sel
+ce_after_bar:
+  .al
+  sep #$20 : .as
+  lda window_y
+  clc
+  adc #$03
+  clc
+  adc cm_sel
+  sta bar_yl
+  ; after a DELETE, rows cm_visible..CE_LIST_ROWS-1 held cheats that are gone: blank
+  ; them (the caller's redraw only paints the rows that still exist).  Never after an
+  ; ADD: the list only grew -- and from the empty popup the list window is not even
+  ; open yet, so those rows would be the browser's, outside the popup.
+  lda ce_isnew
+  bne ce_after_done
+  lda cm_visible
+  sta ce_row
+ce_after_blank:
+  lda ce_row
+  cmp #CE_LIST_ROWS
+  bcs ce_after_done
+  lda window_y
+  clc
+  adc #$04
+  clc
+  adc ce_row
+  sta print_y
+  jsr ce_blank_list_row
+  inc ce_row
+  bra ce_after_blank
+ce_after_done:
+  rts
+
+; blank the interior of the row in print_y (window_x+1, CE_BLANK_W columns)
+ce_blank_list_row:
+  lda window_x
+  inc
+  sta print_x
+  lda #^space64
+  sta print_bank
+  ldx #!space64
+  stx print_src
+  stz print_pal
+  lda #CE_BLANK_W
+  sta print_count
+  jsl @gi_call_hiprint
+  rts
+
+; ======================================================================
+;  MCU round trip.  A = CE_OP_*; returns A = CE_RESULT (0 = unsupported firmware).
+;  Same handshake shape as cheatmenu_toggle_selected.
+; ======================================================================
+ce_send:
+  pha
+  rep #$20 : .al
+  lda ce_idx
+  sta @CE_IDX
+  sep #$20 : .as
+  lda ce_n
+  sta @CE_NUMCODES
+  lda #CE_RES_PENDING
+  sta @CE_RESULT
+  pla
+  sta @CE_OP                  ; the op is the MCU's gate: written last
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_CHEAT_EDIT
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #$55
+  bne -
+  lda #$55
+  sta @MCU_CMD
+  ; one frame so the MCU's PSRAM writes have settled before they are read back
+  stz isr_done
+- lda isr_done
+  beq -
+  lda @CE_RESULT
+  rts
+
+; A = a result that is not OK.  0 -> "update the firmware" popup (an old dispatcher
+; ACKs what it does not know); SAVEFAIL -> the records DID change; else error blip.
+ce_report_result:
+  cmp #CE_RES_PENDING
+  bne +
+  jsr ce_popup_nosup
+  rts
++ cmp #CE_RES_SAVEFAIL
+  bne +
+  pha
+  lda #$01
+  sta ce_changed
+  pla
++ lda #$04                    ; snd_fx_error
+  sta @SFX_MAILBOX
+  rts
+
+; zero the block's name and code strings + flags (a fresh cheat)
+ce_block_clear:
+  rep #$20 : .al
+  lda #$0000
+  ldx #$0000
+- sta @CE_NAME, x
+  inx
+  inx
+  cpx #$01d0                  ; 64 (name) + 400 (codes) bytes
+  bne -
+  sep #$20 : .as
+  lda #$00
+  sta @CE_FLAGS
+  rts
+
+; ======================================================================
+;  Editor screen
+; ======================================================================
+ce_editor_geom:
+  lda @cheat_win_x
+  sta window_x
+  lda @cheat_win_y
+  sta window_y
+  lda @cheat_win_w
+  sta window_w
+  lda @cheat_win_h
+  sta window_h
+  rts
+
+ce_editor:
+  jsr ce_editor_geom
+  lda #^text_cheat_none_title
+  sta window_tbank
+  ldx #!text_cheat_none_title
+  stx window_taddr
+  jsl @ui_call_wopen
+  jsr ce_draw_ed_hint
+  jsr ce_draw_all
+ce_ed_loop:
+  lda isr_done
+  beq ce_ed_loop
+  stz isr_done
+  jsl @ui_call_pad
+  lda pad_b
+  beq +
+  lda #$03                    ; snd_fx_back
+  sta @SFX_MAILBOX
+  jmp ce_ed_close
++ lda pad_up
+  beq +
+  jsr ce_ed_up
+  jmp ce_ed_loop
++ lda pad_down
+  beq +
+  jsr ce_ed_down
+  jmp ce_ed_loop
++ lda pad_a
+  beq +
+  jsr ce_ed_act
+  bcc ce_ed_loop_a            ; saved / deleted -> leave the editor
+  jmp ce_ed_close
+ce_ed_loop_a:
+  jmp ce_ed_loop
++ lda pad_select
+  beq +
+  jsr ce_ed_addcode
+  jmp ce_ed_loop
++ lda pad_y
+  beq +
+  jsr ce_ed_removecode
+  jmp ce_ed_loop
++ jmp ce_ed_loop
+ce_ed_close:
+  jsr ce_editor_geom          ; window_h is what pop_window counts rows with, and a
+  jsl @ui_call_wclose         ;   nested dialog may have left its own behind
+  rts
+
+; A = number of items = codes + Name + Save (+ Delete when editing)
+ce_items:
+  lda ce_n
+  clc
+  adc #$02
+  pha
+  lda ce_isnew
+  bne +
+  pla
+  inc
+  rts
++ pla
+  rts
+
+; A = largest first-visible item index for the current item count
+ce_maxtop:
+  jsr ce_items
+  cmp #CE_ROWS
+  bcs +
+  lda #$00
+  rts
++ sec
+  sbc #CE_ROWS
+  rts
+
+ce_clamp_top:
+  jsr ce_maxtop
+  cmp ce_top
+  bcs +
+  sta ce_top
++ rts
+
+; bar = the cursor's row (bar_yl is the row above the text row)
+ce_set_bar:
+  lda window_x
+  inc
+  sta bar_xl
+  lda window_w
+  sec
+  sbc #$02
+  sta bar_wl
+  lda ce_sel
+  sec
+  sbc ce_top
+  clc
+  adc window_y
+  inc
+  sta bar_yl
+  rts
+
+ce_draw_all:
+  stz ce_row
+- lda ce_row
+  cmp #CE_ROWS
+  bcs +
+  jsr ce_draw_row
+  inc ce_row
+  bra -
++ jsr ce_set_bar
+  rts
+
+; one editor row: ce_row = 0..CE_ROWS-1
+ce_draw_row:
+  lda window_y
+  clc
+  adc #$02
+  clc
+  adc ce_row
+  sta print_y
+  jsr ce_blank_list_row
+  lda ce_top
+  clc
+  adc ce_row
+  sta ce_item                 ; the item on this row
+  jsr ce_items
+  cmp ce_item
+  bcs +
+  rts                         ; past the end: stays blank
++ bne +
+  rts                         ; == items -> past the end too
++ lda ce_item
+  bne ce_dr_notname
+  ; --- Name ---
+  lda #^text_ce_name
+  sta print_bank
+  ldx #!text_ce_name
+  stx print_src
+  lda #CE_COL_LABEL
+  sta print_x
+  lda #$06
+  sta print_count
+  jsl @gi_call_hiprint
+  lda #CE_COL_NAME
+  sta print_x
+  lda #CE_NAME_W
+  sta print_count
+  lda @CE_NAME
+  beq ce_dr_noname
+  lda #$ff
+  sta print_bank
+  ldx #!CE_NAME
+  stx print_src
+  jsl @gi_call_hiprint
+  rts
+ce_dr_noname:
+  lda #^text_cheat_noname
+  sta print_bank
+  ldx #!text_cheat_noname
+  stx print_src
+  lda #$01                    ; grey, like the list draws it
+  sta print_pal
+  jsl @gi_call_hiprint
+  stz print_pal
+ce_dr_blank:
+  rts
+ce_dr_notname:
+  ; item 1..n = code (item-1); n+1 = Save; n+2 = Delete
+  cmp ce_n
+  bcc ce_dr_code
+  beq ce_dr_code
+  sec
+  sbc ce_n                    ; 1 = Save, 2 = Delete
+  cmp #$01
+  bne ce_dr_delete
+  lda #^text_save
+  sta print_bank
+  ldx #!text_save
+  stx print_src
+  bra ce_dr_action
+ce_dr_delete:
+  lda #^text_filesel_context_delete_file
+  sta print_bank
+  ldx #!text_filesel_context_delete_file
+  stx print_src
+ce_dr_action:
+  lda #CE_COL_LABEL
+  sta print_x
+  lda #$14
+  sta print_count
+  jsl @gi_call_hiprint
+  rts
+ce_dr_code:
+  ; "#NN" then the code string out of the block
+  lda ce_item                 ; 1..n == the human number
+  jsr ce_fmt_num
+  lda #$7e
+  sta print_bank
+  ldx #!ce_numbuf
+  stx print_src
+  lda #CE_COL_LABEL
+  sta print_x
+  lda #$03
+  sta print_count
+  jsl @gi_call_hiprint
+  lda ce_item
+  dec                         ; code index
+  jsr ce_code_addr            ; -> X = 16-bit offset of the slot in bank $FF
+  stx print_src
+  lda #$ff
+  sta print_bank
+  lda #CE_COL_CODE
+  sta print_x
+  lda #$09
+  sta print_count
+  jsl @gi_call_hiprint
+  rts
+
+; A = code index (0..39) -> X = !CE_CODES + A*10 (bank $FF).  Preserves A.
+ce_code_addr:
+  pha
+  rep #$20 : .al
+  and #$00ff
+  sta ce_tmp
+  asl
+  asl
+  asl                         ; *8
+  clc
+  adc ce_tmp
+  adc ce_tmp                  ; *10
+  clc
+  adc #!CE_CODES
+  tax
+  sep #$20 : .as
+  pla
+  rts
+
+; A = 1..40 -> ce_numbuf = "#NN", 0
+ce_fmt_num:
+  ldx #$0000
+- cmp #$0a
+  bcc +
+  sbc #$0a                    ; carry is set here
+  inx
+  bra -
++ ora #$30
+  sta ce_numbuf+2
+  txa
+  ora #$30
+  sta ce_numbuf+1
+  lda #$23                    ; '#'
+  sta ce_numbuf
+  stz ce_numbuf+3
+  rts
+
+ce_ed_up:
+  lda ce_sel
+  bne +
+  rts
++ dec ce_sel
+  lda #$01                    ; snd_fx_cursor
+  sta @SFX_MAILBOX
+  lda ce_sel
+  cmp ce_top
+  bcs +
+  sta ce_top                  ; scrolled: repaint
+  jsr ce_draw_all
+  rts
++ jsr ce_set_bar
+  rts
+
+ce_ed_down:
+  jsr ce_items
+  dec
+  cmp ce_sel
+  bne +
+  rts                         ; already on the last item
++ inc ce_sel
+  lda #$01
+  sta @SFX_MAILBOX
+  lda ce_sel
+  sec
+  sbc ce_top
+  cmp #CE_ROWS
+  bcc +
+  lda ce_sel
+  sec
+  sbc #CE_ROWS
+  inc
+  sta ce_top
+  jsr ce_draw_all
+  rts
++ jsr ce_set_bar
+  rts
+
+; A on an item.  Carry set = the editor is done (saved or deleted).
+ce_ed_act:
+  lda ce_sel
+  bne +
+  ; --- Name -> alnum keyboard; an OK marks the name as authoritative ---
+  jsr ce_kbd_name
+  bcc ce_act_repaint
+  lda @CE_FLAGS
+  ora #$01
+  sta @CE_FLAGS
+  bra ce_act_repaint
++ cmp ce_n
+  bcc ce_act_code
+  beq ce_act_code
+  sec
+  sbc ce_n
+  cmp #$01
+  beq ce_do_save
+  jmp ce_do_delete
+ce_act_code:
+  dec                         ; code index (ce_kbd_code reads only the low byte of X)
+  tax
+  jsr ce_kbd_code
+ce_act_repaint:
+  jsr ce_editor_geom
+  jsr ce_draw_all
+  clc
+  rts
+
+ce_do_save:
+  lda ce_n
+  bne +
+  lda #$04                    ; a cheat needs at least one code
+  sta @SFX_MAILBOX
+  clc
+  rts
++ lda ce_isnew
+  beq ce_ds_replace
+  lda #CE_OP_ADD
+  bra ce_ds_send
+ce_ds_replace:
+  lda #CE_OP_REPLACE
+ce_ds_send:
+  jsr ce_send
+  cmp #CE_RES_OK
+  beq ce_saved
+  cmp #CE_RES_SAVEFAIL
+  beq ce_saved_nosd
+  jsr ce_report_result
+  clc
+  rts
+ce_saved_nosd:
+  lda #$04                    ; the records took it, the SD did not
+  sta @SFX_MAILBOX
+  bra +
+ce_saved:
+  lda #$02                    ; snd_fx_confirm
+  sta @SFX_MAILBOX
++ lda #$01
+  sta ce_changed
+  sec
+  rts
+
+ce_do_delete:
+  lda #^text_filesel_context_delete_file
+  sta confirm_prompt_bank
+  ldx #!text_filesel_context_delete_file
+  stx confirm_prompt_addr
+  stz confirm_name_bank       ; bank 0 = no name line
+  lda @CE_NAME
+  beq +
+  lda #$ff
+  sta confirm_name_bank
+  ldx #!CE_NAME
+  stx confirm_name_addr
++ jsl @ui_call_confirm
+  bcs +
+  jsr ce_editor_geom
+  jsr ce_set_bar
+  clc
+  rts
++ lda #CE_OP_DELETE
+  jsr ce_send
+  cmp #CE_RES_OK
+  beq ce_saved
+  cmp #CE_RES_SAVEFAIL
+  beq ce_saved_nosd
+  jsr ce_report_result
+  jsr ce_editor_geom
+  jsr ce_set_bar
+  clc
+  rts
+
+; Select: append an empty code and type it.  Cancelling the keyboard drops it again.
+ce_ed_addcode:
+  lda ce_n
+  cmp #CE_MAX_CODES
+  bcc +
+  lda #$04
+  sta @SFX_MAILBOX
+  rts
++ jsr ce_code_addr           ; X = the new slot (A = ce_n)
+  lda #$00
+  ldy #$000a
+- sta @$ff0000, x
+  inx
+  dey
+  bne -
+  inc ce_n
+  lda ce_n
+  sta ce_sel                  ; item index of code n-1 is n
+  jsr ce_ensure_visible
+  jsr ce_draw_all
+  lda ce_n
+  dec
+  tax
+  jsr ce_kbd_code
+  bcc ce_ac_cancel
+  jmp ce_act_repaint
+ce_ac_cancel:
+  ; cancelled: take the empty slot back
+  dec ce_n
+  lda ce_n
+  sta ce_sel                  ; the previous last code (or the Name when none is left)
+  jsr ce_clamp_top
+  jmp ce_act_repaint
+
+; scroll so ce_sel is on screen
+ce_ensure_visible:
+  lda ce_sel
+  cmp ce_top
+  bcs +
+  sta ce_top
+  rts
++ sec
+  sbc ce_top
+  cmp #CE_ROWS
+  bcc +
+  lda ce_sel
+  sec
+  sbc #CE_ROWS
+  inc
+  sta ce_top
++ rts
+
+; Y on a code: remove it (never the last one -- delete the cheat instead)
+ce_ed_removecode:
+  lda ce_sel
+  beq ce_rc_no
+  cmp ce_n
+  bcc +
+  bne ce_rc_no
++ lda ce_n
+  cmp #$02
+  bcs ce_rc_go
+ce_rc_no:
+  lda #$04
+  sta @SFX_MAILBOX
+  rts
+ce_rc_go:
+  ; codes sel..n-1 slide down over code sel-1 (ce_code_addr clobbers ce_tmp, so the
+  ; two slot addresses are resolved before the byte count is)
+  lda ce_sel
+  dec
+  jsr ce_code_addr
+  stx ce_tmp2                 ; destination slot
+  lda ce_sel
+  jsr ce_code_addr
+  stx ce_tmp3                 ; source slot
+  lda ce_n
+  sec
+  sbc ce_sel
+  jsr ce_mul10                ; ce_tmp = bytes to move
+  ; the 65816 has long,X but no long,Y: the store goes through longptr = $FF0000
+  ; (saved/restored by ce_main)
+  lda #$00
+  sta longptr
+  sta longptr+1
+  lda #$ff
+  sta longptr+2
+  ldx ce_tmp3
+  ldy ce_tmp2
+- rep #$20 : .al
+  lda ce_tmp
+  beq +
+  dec
+  sta ce_tmp
+  sep #$20 : .as
+  lda @$ff0000, x
+  sta [longptr], y
+  inx
+  iny
+  bra -
++ sep #$20 : .as
+  ; zero the freed last slot
+  lda ce_n
+  dec
+  jsr ce_code_addr
+  lda #$00
+  ldy #$000a
+- sta @$ff0000, x
+  inx
+  dey
+  bne -
+  dec ce_n
+  lda ce_sel
+  cmp ce_n
+  bcc +
+  beq +
+  lda ce_n
+  sta ce_sel
++ jsr ce_clamp_top
+  lda #$03                    ; snd_fx_back
+  sta @SFX_MAILBOX
+  jsr ce_draw_all
+  rts
+
+; A(8) * 10 -> ce_tmp (16-bit)
+ce_mul10:
+  rep #$20 : .al
+  and #$00ff
+  sta ce_tmp
+  asl
+  asl
+  asl
+  clc
+  adc ce_tmp
+  adc ce_tmp
+  sta ce_tmp
+  sep #$20 : .as
+  rts
+
+; hint on the editor's bottom border
+ce_draw_ed_hint:
+  lda window_y
+  clc
+  adc window_h
+  dec
+  sta print_y
+  lda #^ce_ed_hint
+  sta print_bank
+  ldx #!ce_ed_hint
+  stx print_src
+  jsr ce_print_centered
+  rts
+
+; ----------------------------------------------------------------------
+;  ce_print_centered: print_bank/print_src/print_y set -> language-resolve,
+;  measure, center inside window_x..window_x+window_w, print in palette 0.
+; ----------------------------------------------------------------------
+ce_print_centered:
+  jsl @ui_call_resolve
+  jsr ce_strlen
+  sta ce_tmp
+  lda window_w
+  sec
+  sbc ce_tmp
+  bcs +
+  lda #$02                    ; wider than the box: small left margin, hiprint clips
++ lsr
+  clc
+  adc window_x
+  sta print_x
+  lda ce_tmp
+  sta print_count
+  stz print_pal
+  jsl @gi_call_hiprint
+  rts
+
+; A = strlen of [print_bank:print_src] (0 and 1 both end a string), capped at 200
+ce_strlen:
+  ldx print_src
+  stx longptr
+  lda print_bank
+  sta longptr+2
+  ldy #$0000
+- lda [longptr], y
+  cmp #$02
+  bcc +
+  iny
+  cpy #$00c8
+  bne -
++ tya
+  rts
+
+; ----------------------------------------------------------------------
+;  "*** Please update the firmware ***" -- an old firmware ACKed the command
+;  without knowing it.  Modal: A/B/Y/Start closes.
+; ----------------------------------------------------------------------
+ce_popup_nosup:
+  lda bar_xl
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #$ff                    ; park the selection bar (push_window cannot hide it)
+  sta bar_xl
+  sta bar_yl
+  sta bar_wl
+  lda #CEP_X
+  sta window_x
+  lda #CEP_Y
+  sta window_y
+  lda #CEP_W
+  sta window_w
+  lda #CEP_H
+  sta window_h
+  lda #^zero
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsl @ui_call_wopen
+  lda #CEP_Y
+  inc
+  sta print_y
+  lda #^text_pcm_nosup
+  sta print_bank
+  ldx #!text_pcm_nosup
+  stx print_src
+  jsr ce_print_centered
+- lda isr_done
+  beq -
+  stz isr_done
+  jsl @ui_call_pad
+  lda pad_a
+  ora pad_b
+  ora pad_y
+  ora pad_start
+  beq -
+  lda #$03
+  sta @SFX_MAILBOX
+  lda #CEP_H
+  sta window_h
+  jsl @ui_call_wclose
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  jsr ce_editor_geom
+  rts
+
+; ======================================================================
+;  Keyboard
+; ======================================================================
+; open the alnum keyboard on the name.  Carry set = OK.
+ce_kbd_name:
+  lda #$01
+  sta ce_kmode
+  lda #CE_NAME_MAX
+  sta ce_kmax
+  ldx #!CE_NAME
+  stx ce_kfield
+  jmp ce_kbd_run
+
+; open the hex keyboard on code X (low byte = index).  Carry set = OK (valid code).
+ce_kbd_code:
+  stz ce_kmode
+  lda #$09
+  sta ce_kmax
+  txa                         ; low byte = index (<= 39)
+  jsr ce_code_addr
+  stx ce_kfield
+  jmp ce_kbd_run
+
+ce_kbd_run:
+  lda bar_xl
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  stz ce_kok
+  stz ce_krow
+  stz ce_kcol
+  jsr ce_field_len
+  ; dim the window behind the keyboard -- the editor when typing a code, or the cheat
+  ; list when typing the first code of a new cheat.  Both occupy cheat_win_*, so grey
+  ; that rectangle (like the browser's submenus grey their parent) before pushing the
+  ; keyboard on top.  It is repainted bright when the keyboard closes.
+  jsr ce_editor_geom          ; window_* = cheat_win_*
+  jsl @ui_call_greyout
+  lda #CEK_X
+  sta window_x
+  lda #CEK_Y
+  sta window_y
+  lda #CEK_W
+  sta window_w
+  lda #CEK_H
+  sta window_h
+  lda #^zero                  ; closed top border
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsl @ui_call_wopen
+  jsr ce_kbd_draw_keys
+  jsr ce_kbd_draw_fmt
+  jsr ce_kbd_draw_hint
+  jsr ce_kbd_draw_field
+  jsr ce_kbd_bar
+ce_kbd_loop:
+  lda isr_done
+  beq ce_kbd_loop
+  stz isr_done
+  jsl @ui_call_pad
+  lda pad_b
+  beq +
+  lda #$03                    ; snd_fx_back
+  sta @SFX_MAILBOX
+  jmp ce_kbd_out
++ lda pad_x
+  beq +
+  jsr ce_kbd_ok
+  bcc ce_kbd_loop
+  lda #$02                    ; snd_fx_confirm
+  sta @SFX_MAILBOX
+  lda #$01
+  sta ce_kok
+  jmp ce_kbd_out
++ lda pad_a
+  beq +
+  jsr ce_kbd_type
+  jmp ce_kbd_loop
++ lda pad_y
+  beq +
+  jsr ce_kbd_backspace
+  jmp ce_kbd_loop
++ lda pad_select
+  beq +
+  jsr ce_kbd_space
+  jmp ce_kbd_loop
++ lda pad_left
+  beq +
+  jsr ce_kbd_left
+  jmp ce_kbd_moved
++ lda pad_right
+  beq +
+  jsr ce_kbd_right
+  jmp ce_kbd_moved
++ lda pad_up
+  beq +
+  jsr ce_kbd_up
+  jmp ce_kbd_moved
++ lda pad_down
+  beq +
+  jsr ce_kbd_down
+  jmp ce_kbd_moved
++ jmp ce_kbd_loop
+ce_kbd_moved:
+  lda #$01                    ; snd_fx_cursor
+  sta @SFX_MAILBOX
+  jsr ce_kbd_bar
+  jmp ce_kbd_loop
+ce_kbd_out:
+  lda #CEK_H
+  sta window_h
+  jsl @ui_call_wclose
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  lda ce_kok
+  lsr                         ; -> carry
+  rts
+
+; ce_klen = strlen(field), capped at ce_kmax (the block is NUL-terminated, but never
+; trust a stale byte past the cap)
+ce_field_len:
+  stz ce_klen
+  ldx ce_kfield
+- lda @$ff0000, x
+  beq +
+  inc ce_klen
+  lda ce_klen
+  cmp ce_kmax
+  bcs +
+  inx
+  bra -
++ rts
+
+; X = offset of the current key row inside ce_kbd_keys
+; A(8) = number of key rows for the current mode
+ce_kbd_nrows:
+  sep #$20 : .as
+  lda ce_kmode
+  bne +
+  lda #CEK_HEX_ROWS
+  rts
++ lda #CEK_ALN_ROWS
+  rts
+
+; A(8) = tile row of key-grid row 0 for the current mode
+ce_kbd_toprow:
+  sep #$20 : .as
+  lda ce_kmode
+  bne +
+  lda #CEK_HEX_ROW
+  rts
++ lda #CEK_ALN_ROW0
+  rts
+
+; X(16) = table byte offset of the current row (hex base 0, alnum base CEK_ALN_BASE)
+ce_kbd_rowbase:
+  php
+  rep #$30 : .al : .xl
+  lda ce_krow
+  and #$00ff
+  asl : asl : asl : asl        ; krow * CEK_STRIDE (16)
+  sta ce_tmp
+  sep #$20 : .as
+  lda ce_kmode
+  beq ckrb_hex
+  rep #$20 : .al
+  lda ce_tmp
+  clc : adc #CEK_ALN_BASE
+  sta ce_tmp
+  sep #$20 : .as
+ckrb_hex:
+  rep #$30 : .al : .xl
+  ldx ce_tmp
+  plp
+  rts
+
+; A = number of keys on the current row
+ce_kbd_rowlen:
+  php
+  rep #$30 : .al : .xl
+  lda ce_krow
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda ce_kmode
+  bne ckrl_aln
+  lda @ce_kbd_hex_len, x
+  plp
+  rts
+ckrl_aln:
+  lda @ce_kbd_aln_len, x
+  plp
+  rts
+
+; A = the glyph under the cursor
+ce_kbd_char:
+  jsr ce_kbd_rowbase
+  rep #$20 : .al
+  txa
+  sta ce_tmp
+  lda ce_kcol
+  and #$00ff
+  clc
+  adc ce_tmp
+  tax
+  sep #$20 : .as
+  lda @ce_kbd_keys, x
+  rts
+
+ce_kbd_left:
+  lda ce_kcol
+  bne +
+  jsr ce_kbd_rowlen
+  sta ce_kcol
++ dec ce_kcol
+  rts
+
+ce_kbd_right:
+  inc ce_kcol
+  jsr ce_kbd_rowlen
+  cmp ce_kcol
+  bne +
+  stz ce_kcol
++ rts
+
+ce_kbd_up:
+  lda ce_krow
+  bne +
+  jsr ce_kbd_nrows
+  sta ce_krow
++ dec ce_krow
+  jmp ce_kbd_clampcol
+
+ce_kbd_down:
+  inc ce_krow
+  jsr ce_kbd_nrows
+  cmp ce_krow
+  bne ce_kbd_clampcol
+  stz ce_krow
+ce_kbd_clampcol:
+  jsr ce_kbd_rowlen
+  dec
+  cmp ce_kcol
+  bcs +
+  sta ce_kcol
++ rts
+
+; store A at field[ce_klen], advance, re-terminate, repaint the field
+ce_kbd_put:
+  pha
+  lda ce_klen
+  cmp ce_kmax
+  bcc +
+  pla
+  lda #$04                    ; full
+  sta @SFX_MAILBOX
+  rts
++ rep #$20 : .al
+  and #$00ff
+  clc
+  adc ce_kfield
+  tax
+  sep #$20 : .as
+  pla
+  sta @$ff0000, x
+  inx
+  lda #$00
+  sta @$ff0000, x
+  inc ce_klen
+  lda #$01
+  sta @SFX_MAILBOX
+  jsr ce_kbd_draw_field
+  rts
+
+ce_kbd_type:
+  jsr ce_kbd_char
+  jmp ce_kbd_put
+
+ce_kbd_space:
+  lda ce_kmode
+  bne +
+  rts                         ; no spaces in a code
++ lda #$20
+  jmp ce_kbd_put
+
+; Y: drop the last character.  A name may hold multi-byte UTF-8 from the .yml, so
+; keep dropping continuation bytes ($80-$BF) until a lead byte or an ASCII char went.
+ce_kbd_backspace:
+  lda ce_klen
+  bne +
+  rts
++ dec ce_klen
+  lda ce_kmode
+  beq ce_bs_done
+- lda ce_klen
+  beq ce_bs_done
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc ce_kfield
+  tax
+  sep #$20 : .as
+  lda @$ff0000, x
+  and #$c0
+  cmp #$80
+  bne ce_bs_done
+  dec ce_klen
+  bra -
+ce_bs_done:
+  lda ce_klen
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc ce_kfield
+  tax
+  sep #$20 : .as
+  lda #$00
+  sta @$ff0000, x
+  lda #$01
+  sta @SFX_MAILBOX
+  jsr ce_kbd_draw_field
+  rts
+
+; X: accept.  Names always; a code only when it is 8 hex digits, or 9 with '-' at [4].
+ce_kbd_ok:
+  lda ce_kmode
+  beq +
+  sec
+  rts
++ lda ce_klen
+  cmp #$08
+  beq ce_ok_scan
+  cmp #$09
+  bne ce_ok_bad
+  ldx ce_kfield
+  lda @$ff0004, x             ; field[4]
+  cmp #$2d                    ; '-'
+  bne ce_ok_bad
+ce_ok_scan:
+  ldx ce_kfield
+  stz ce_tmp
+- lda ce_tmp
+  cmp ce_klen
+  bcs ce_ok_good
+  cmp #$04
+  bne +
+  lda ce_klen
+  cmp #$09
+  bne +
+  inx                         ; the dash of a GG code
+  inc ce_tmp
+  bra -
++ lda @$ff0000, x
+  cmp #$30                    ; '0'
+  bcc ce_ok_bad
+  cmp #$3a                    ; '9'+1
+  bcc ce_ok_next
+  cmp #$41                    ; 'A'
+  bcc ce_ok_bad
+  cmp #$47                    ; 'F'+1
+  bcs ce_ok_bad
+ce_ok_next:
+  inx
+  inc ce_tmp
+  bra -
+ce_ok_good:
+  sec
+  rts
+ce_ok_bad:
+  lda #$04
+  sta @SFX_MAILBOX
+  clc
+  rts
+
+; the field row: blank, then the tail of the text that fits, then the '_' cursor
+ce_kbd_draw_field:
+  lda #CEK_FIELD_ROW
+  sta print_y
+  lda #CEK_X
+  inc
+  sta print_x
+  lda #^space64
+  sta print_bank
+  ldx #!space64
+  stx print_src
+  stz print_pal
+  lda #CEK_BLANK_W
+  sta print_count
+  jsl @gi_call_hiprint
+  ; shown = min(klen, viewport); source = field + (klen - shown)
+  lda ce_klen
+  cmp #CEK_FIELD_W
+  bcc +
+  lda #CEK_FIELD_W
++ sta ce_tmp                  ; shown
+  lda ce_klen
+  sec
+  sbc ce_tmp                  ; offset
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc ce_kfield
+  sta print_src
+  sep #$20 : .as
+  lda #$ff
+  sta print_bank
+  lda #CEK_FIELD_COL
+  sta print_x
+  lda ce_tmp
+  beq +
+  sta print_count
+  jsl @gi_call_hiprint
++ lda #CEK_FIELD_COL
+  clc
+  adc ce_tmp
+  sta print_x
+  lda #^ce_cursor_str
+  sta print_bank
+  ldx #!ce_cursor_str
+  stx print_src
+  lda #$01
+  sta print_count
+  jsl @gi_call_hiprint
+  rts
+
+; the key grid: one row (hex) or six (alnum), each glyph followed by a space
+ce_kbd_draw_keys:
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda ce_krow
+  pha                         ; save the cursor row (we scan ce_krow to draw each row)
+  stz ce_row
+ce_kdk_l:
+  jsr ce_kbd_nrows            ; A = nrows
+  cmp ce_row
+  beq ce_kdk_done
+  lda ce_row
+  sta ce_krow
+  jsr ce_kbd_rowlen           ; A = len (uses ce_krow)
+  pha
+  jsr ce_kbd_rowbase          ; X = table offset (uses ce_krow)
+  pla
+  jsr ce_kbd_build_row        ; X = offset, A = len
+  jsr ce_kbd_toprow           ; A = tile row of row 0
+  clc
+  adc ce_row
+  sta print_y
+  jsr ce_kbd_print_row
+  inc ce_row
+  bra ce_kdk_l
+ce_kdk_done:
+  pla
+  sta ce_krow                 ; restore the cursor row
+  rts
+
+; X = row offset inside ce_kbd_keys, A = key count -> ce_linebuf = "k k k ", 0 and
+; ce_tmp2 = 2*count (the print width)
+ce_kbd_build_row:
+  sta ce_tmp
+  ldy #$0000
+- lda ce_tmp
+  beq +
+  dec ce_tmp
+  lda @ce_kbd_keys, x
+  sta ce_linebuf, y
+  iny
+  lda #$20
+  sta ce_linebuf, y
+  iny
+  inx
+  bra -
++ lda #$00
+  sta ce_linebuf, y
+  sty ce_tmp2
+  rts
+
+; print ce_linebuf at (CEK_KEY_COL, print_y), ce_tmp2 chars
+ce_kbd_print_row:
+  lda #CEK_KEY_COL
+  sta print_x
+  lda #$7e
+  sta print_bank
+  ldx #!ce_linebuf
+  stx print_src
+  lda ce_tmp2
+  sta print_count
+  stz print_pal
+  jsl @gi_call_hiprint
+  rts
+
+; the bar marks the key under the cursor: one cell, two columns apart
+ce_kbd_bar:
+  lda ce_kcol
+  asl
+  clc
+  adc #CEK_KEY_COL
+  sta bar_xl
+  lda #$01
+  sta bar_wl
+  jsr ce_kbd_toprow           ; A = tile row of key-grid row 0
+  clc
+  adc ce_krow
+  dec                         ; bar_yl is the row above the text row
+  sta bar_yl
+  rts
+
+; hint on the keyboard's bottom border (the two grids differ in Select)
+ce_kbd_draw_hint:
+  lda #CEK_Y
+  clc
+  adc #CEK_H
+  dec
+  sta print_y
+  lda #^ce_kbd_hint_hex
+  sta print_bank
+  ldx #!ce_kbd_hint_hex
+  lda ce_kmode
+  beq +
+  ldx #!ce_kbd_hint_aln
++ stx print_src
+  jsr ce_print_centered
+  rts
+
+; ---- on the CODE keyboard only, show the two accepted formats with example
+;      placeholders (the '-' after the 4th char is what marks a Game Genie code;
+;      8 bare hex is a PAR/raw code). Language-neutral (the tokens are universal),
+;      so it costs no $C2. Two lines below the single hex key row. ----
+ce_kbd_draw_fmt:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda ce_kmode
+  beq +
+  plp                         ; alnum (name) keyboard: no format hint
+  rts
++ lda #^ce_fmt_gg
+  sta print_bank
+  ldx #!ce_fmt_gg
+  stx print_src
+  lda #(CEK_HEX_ROW+3)
+  sta print_y
+  lda #(CEK_X+2)
+  sta print_x
+  stz print_pal
+  lda #40
+  sta print_count
+  jsl @gi_call_hiprint          ; hiprint is $C0 near -> must go through the $C0 trampoline
+  lda #^ce_fmt_par
+  sta print_bank
+  ldx #!ce_fmt_par
+  stx print_src
+  lda #(CEK_HEX_ROW+4)
+  sta print_y
+  lda #(CEK_X+2)
+  sta print_x
+  stz print_pal
+  lda #40
+  sta print_count
+  jsl @gi_call_hiprint
+  plp
+  rts
+
+; ======================================================================
+;  Data (language-neutral; the translated labels come from const.a65)
+; ======================================================================
+; key grid: row 0 = hex (17 keys, padded to CEK_ALN_BASE), then six alnum rows of
+; CEK_STRIDE bytes each.  Every glyph is ASCII = its font code.  No '"' and no '\'
+; (the .yml writer/parser treat them specially) and no ';' (assembler comment).
+ce_kbd_keys:
+  .byt "0123456789", 0,0,0,0,0,0       ; hex row 0 (offset 0)
+  .byt "ABCDEF-", 0,0,0,0,0,0,0,0,0    ; hex row 1 (offset 16 = CEK_STRIDE)
+  .byt "ABCDEFGHIJKLM", 0,0,0          ; alnum row 0 (offset 32 = CEK_ALN_BASE)
+  .byt "NOPQRSTUVWXYZ", 0,0,0
+  .byt "abcdefghijklm", 0,0,0
+  .byt "nopqrstuvwxyz", 0,0,0
+  .byt "0123456789-_.,", 0,0
+  .byt "'!?()/:+=*#<>", 0,0,0
+ce_kbd_hex_len:
+  .byt 10, 7
+ce_kbd_aln_len:
+  .byt 13, 13, 13, 13, 14, 13
+ce_cursor_str:
+  .byt "_", 0
+ce_ed_hint:
+  .byt " A:Edit  Sel:Add code  Y:Remove  B:Back ", 0
+ce_kbd_hint_aln:
+  .byt " A:Type  Y:Del  Sel:Space  X:OK  B:Cancel ", 0
+ce_kbd_hint_hex:
+  .byt " A:Type  Y:Del  X:OK  B:Cancel ", 0
+; code-format hint (code keyboard only). The dash after the 4th char = Game Genie.
+ce_fmt_gg:
+  .byt "Game Genie:  XXXX-YYYY", 0
+ce_fmt_par:
+  .byt "PAR / raw:   AAAAAADD", 0
+; second line of the "no cheats" popup (cheatmenu_show_empty_popup): "Select:" + text_add
+ce_sel_hint:
+  .byt "Select:", 0

@@ -1,0 +1,1658 @@
+// cheatedit.i65 -- in-game cheat EDITOR (CHEATS tab): the code.  Layout / indices / scratch
+// live in cheatedit_defs.i65, which igmenu.a65 includes early.
+//
+// Y on the list edits the cheat under the cursor, Select adds a new one.  Both open the
+// EDITOR: [Name] [#01..#NN code] [Save] [Delete] (Delete only when editing) inside the
+// TRAINER-shaped frame.  A acts on the item (Name -> alnum keyboard, code -> hex keyboard,
+// Save -> CMD_CHEAT_EDIT, Delete -> a two-row confirm), Select appends a code and types it,
+// Y removes the code under the cursor, B goes back a level (the shell offers us B before
+// dropping focus, the same contract trainer_back has).  X is the keyboard's OK -- START
+// cannot be: the shell closes on START before any tab sees the pad.  The two keyboards are
+// the menu editor's (snes/cheatedit.a65) so the button map is one: A types, Y deletes,
+// Select = space (name only), X = OK, B = cancel.
+//
+// Screens repaint in FORCED BLANK (ig_clear_body + ig_draw_window + rows), like the
+// trainer's tr_draw_screen; a keypress refreshes ONE row inside the vblank the loop is in
+// (ovl_row_clear / ovl_flush_abs / tr_side_repair).  The selection BAR follows ce_sel /
+// the key cursor through igb_ce (ig_bar_sync), so a cursor move needs no repaint at all.
+//
+// The MCU is the only side that can touch the records: FETCH pulls one INTO the block,
+// ADD/REPLACE/DELETE hand it back and rewrite the game's cheat .yml (a new cheat lands at
+// index 0 = the top of the file), then redeploy the cheats live.  The result byte is
+// pre-zeroed here; a 0 after the ACK means an old firmware that ACKs what it does not know.
+//
+// snescom preprocessing: // comments only, never `;` inside an included file.
+
+// ========================================================================================
+//  i18n helpers (igm_cheatedit_tbl, ce_lang) -- the tr_copy/tr_strlen shape
+// ========================================================================================
+ce_lang_get:
+	php
+	sep #$20 : .as
+	lda @CFG_LANGUAGE
+	cmp #IGM_LANG_COUNT
+	bcc cel_ok
+	lda #$00
+cel_ok:
+	rep #$30 : .al : .xl
+	and #$00ff
+	sta @ce_lang
+	plp
+	rts
+
+// ---- A(16) = string index -> copy the NUL-terminated $C8 string into OVL_RB at column Y.
+//      Y ends past the last character.  DBR must be $F4. ----
+ce_copy:
+	php
+	rep #$30 : .al : .xl
+	asl : asl : asl                            // line*IGM_LANG_STRIDE
+	clc : adc @ce_lang
+	asl
+	tax
+	lda @igm_cheatedit_tbl, x
+	tax
+	sep #$20 : .as
+cec_l:
+	lda @$c80000, x
+	beq cec_done
+	sta OVL_RB, y
+	inx
+	iny
+	cpy #(CE_INT_COL+CE_INT_W)
+	bne cec_l
+cec_done:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- A(16) = string index -> A(16) = encoded length, capped at the interior width ----
+ce_strlen:
+	php
+	rep #$30 : .al : .xl
+	asl : asl : asl
+	clc : adc @ce_lang
+	asl
+	tax
+	lda @igm_cheatedit_tbl, x
+	tax
+	ldy #$0000
+	sep #$20 : .as
+ces_l:
+	lda @$c80000, x
+	beq ces_done
+	inx
+	iny
+	cpy #CE_INT_W
+	bne ces_l
+ces_done:
+	rep #$30 : .al : .xl
+	tya
+	plp
+	rts
+
+// ---- A(16) = string index, X = absolute tile row: clear the row, centre the string in the
+//      frame interior, flush it, put the side cells back.  DBR = $F4. ----
+ce_draw_centered:
+	php
+	rep #$30 : .al : .xl
+	phx
+	pha
+	jsr ovl_row_clear
+	pla : pha
+	jsr ce_strlen
+	sta @ce_tmp
+	lda #CE_INT_W
+	sec : sbc @ce_tmp
+	lsr
+	clc : adc #CE_INT_COL
+	tay
+	pla
+	jsr ce_copy
+	plx
+	phx
+	jsr ovl_flush_abs
+	plx
+	jsr tr_side_repair
+	plp
+	rts
+
+// ---- one blank interior row (X = row), sides repaired.  DBR = $F4. ----
+ce_blank_row:
+	php
+	rep #$30 : .al : .xl
+	phx
+	jsr ovl_row_clear
+	plx
+	phx
+	jsr ovl_flush_abs
+	plx
+	jsr tr_side_repair
+	plp
+	rts
+
+// ---- result message (A = string index) on the row that suits the mode ----
+ce_show_msg:
+	php
+	phb
+	rep #$30 : .al : .xl
+	pha
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	pla
+	ldx #CE_ROW_MSG
+	jsr ce_draw_centered
+	plb
+	plp
+	rts
+
+// ========================================================================================
+//  MCU round trip
+// ========================================================================================
+// ---- A(8) = CE_OP_*  ->  A(8) = CE_RESULT (0 = the firmware has no editor) ----
+ce_send:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	pha
+	rep #$20 : .al
+	lda @ce_idx : sta @CE_IDX
+	lda @ce_n
+	sep #$20 : .as
+	sta @CE_NUMCODES
+	lda #CE_RES_PENDING : sta @CE_RESULT
+	pla
+	sta @CE_OP                                 // the op is the MCU's gate: written last
+	lda #CMD_CHEAT_EDIT
+	sta @MCU_CMD
+	jsr ce_wait_ack
+	lda @CE_RESULT
+	plp
+	.as                                        // plp restores the caller's widths; every caller
+	rts                                        //   is 8-bit here (they cmp the result as a byte)
+
+// ---- bounded spin until the MCU clears MCU_CMD.  Four times the viewer's bound: an ADD
+//      may move 511 slots of records and the save rewrites the whole .yml.  Never hangs. ----
+ce_wait_ack:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	ldx #$0040
+cewa_outer:
+	ldy #$0000
+cewa_inner:
+	lda @MCU_CMD
+	beq cewa_done
+	dey
+	bne cewa_inner
+	dex
+	bne cewa_outer
+cewa_done:
+	plp
+	rts
+
+// ========================================================================================
+//  Open / close
+// ========================================================================================
+// ---- Select on the list: add a cheat.  Empty block, one empty code, straight into the hex
+//      keyboard; cancelling it means nothing to add. ----
+ce_open_new:
+	php
+	rep #$30 : .al : .xl
+	jsr ce_lang_get
+	lda #$0001 : sta @ce_isnew
+	lda #$0000 : sta @ce_idx
+	sta @ce_changed
+	sta @ce_sel
+	sta @ce_top
+	jsr ce_block_clear
+	lda #$0001 : sta @ce_n
+	sta @ce_kitem                              // code 1 (item 1)
+	sta @ce_kadd
+	jsr ce_enter_mode
+	lda #$0000
+	jsr ce_kbd_open_code                       // A = code index
+	plp
+	rts
+
+// ---- Y on the list: edit the cheat under the cursor ----
+ce_open_edit:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_count
+	bne coe_go
+	plp                                        // nothing to edit
+	rts
+coe_go:
+	jsr ce_lang_get
+	lda #$0000 : sta @ce_isnew
+	sta @ce_changed
+	sta @ce_sel
+	sta @ce_top
+	lda @ovl_top
+	clc : adc @ovl_selrow
+	sta @ce_idx
+	sep #$20 : .as
+	lda #CE_OP_FETCH
+	jsr ce_send
+	cmp #CE_RES_OK
+	beq coe_ok
+	// an old firmware ACKs without answering: say so on the free row under the list
+	rep #$30 : .al : .xl
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	lda #IGM_CE_NOSUP
+	ldx #CE_LIST_MSG_ROW
+	jsr ce_draw_centered
+	plb
+	bra coe_done
+coe_ok:
+	sep #$20 : .as                             // reached by `beq` from 8-bit code, but the NOSUP
+	                                           //   branch above ends .al in SOURCE order -- declare
+	lda @CE_NUMCODES
+	cmp #CE_MAX_CODES
+	bcc coe_n_ok
+	lda #CE_MAX_CODES
+coe_n_ok:
+	rep #$30 : .al : .xl
+	and #$00ff
+	sta @ce_n
+	jsr ce_enter_mode
+	lda #CE_MODE_EDITOR : sta @ce_mode
+	jsr ce_draw_screen
+coe_done:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- entering the editor: the list's DMA pipeline must go quiet (a pending rebuild would
+//      paint the list over the editor next frame) ----
+ce_enter_mode:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @ovl_scroll_dirty
+	sta @ovl_dma_pending
+	sta @ovl_mq_xscroll
+	plp
+	rts
+
+// ---- zero the block's name + codes + flags ----
+ce_block_clear:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	ldx #$0000
+cbc_l:
+	sta @CE_NAME, x
+	inx : inx
+	cpx #$01d0                                 // 64 + 400 bytes
+	bne cbc_l
+	sep #$20 : .as
+	lda #$00 : sta @CE_FLAGS
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- back to the list.  ce_changed = 1 -> recount + re-clamp the list (a new cheat sits at
+//      index 0, so the cursor goes there).  Forced blank repaint of the CHEATS tab body. ----
+ce_close_to_list:
+	php
+	rep #$30 : .al : .xl
+	lda #CE_MODE_LIST : sta @ce_mode
+	lda @ce_changed
+	bne cctl_recount
+	jmp cctl_paint
+cctl_recount:
+	lda @NUM_CHEATS
+	cmp #CHEAT_LIST_MAX
+	bcc cctl_cnt_ok
+	lda #CHEAT_LIST_MAX
+cctl_cnt_ok:
+	sta @ovl_count
+	cmp #OVL_ROWS
+	bcc cctl_vis_ok
+	lda #OVL_ROWS
+cctl_vis_ok:
+	sta @ovl_visible
+	lda @ce_isnew
+	beq cctl_clamp
+	lda #$0000                                 // the new cheat is index 0: land on it
+	sta @ovl_top
+	sta @ovl_selrow
+	bra cctl_pos_done
+cctl_clamp:
+	lda @ovl_visible
+	beq cctl_zero
+	lda @ovl_count
+	sec : sbc @ovl_visible                     // maxscroll
+	cmp @ovl_top
+	bcs cctl_top_ok
+	sta @ovl_top
+cctl_top_ok:
+	lda @ovl_visible
+	dec
+	cmp @ovl_selrow
+	bcs cctl_pos_done
+	sta @ovl_selrow
+	bra cctl_pos_done
+cctl_zero:
+	lda #$0000
+	sta @ovl_top
+	sta @ovl_selrow
+cctl_pos_done:
+	jsr ss_ovl_mq_reset                        // slides the 64-name window + restarts the marquee
+cctl_paint:
+	jsr ce_enter_mode                          // nothing pending from the editor either
+	sep #$20 : .as
+	lda #$80 : sta @$002100
+	rep #$30 : .al : .xl
+	jsr ig_clear_body
+	lda #$2000 : sta @ovl_pal
+	lda #$0000 : sta @ovl_flush_dst
+	jsr ig_master_draw
+	lda @ovl_count
+	beq cctl_empty
+	jsr ss_ovl_draw_rows
+	bra cctl_footer
+cctl_empty:
+	jsr ss_ovl_draw_empty
+cctl_footer:
+	jsr igmenu_draw_footer
+	jsr ig_bar_sync
+	sep #$20 : .as
+	lda #$0f : sta @$002100
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ========================================================================================
+//  Editor screen
+// ========================================================================================
+// A = item count = codes + Name + Save (+ Delete when editing)
+ce_items:
+	lda @ce_n
+	clc : adc #$0002
+	tax
+	lda @ce_isnew
+	bne cei_new
+	inx
+cei_new:
+	txa
+	rts
+
+ce_geom:
+	php
+	sep #$20 : .as
+	lda #CE_WIN_X : sta @ig_win_x
+	lda #CE_WIN_Y : sta @ig_win_y
+	lda #CE_WIN_W : sta @ig_win_w
+	lda #CE_WIN_H : sta @ig_win_h
+	plp
+	rts
+
+// ---- the whole editor, forced blank ----
+ce_draw_screen:
+	php
+	phb
+	sep #$20 : .as
+	lda #$80 : sta @$002100
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr ig_clear_body
+	jsr ce_geom
+	jsr ig_draw_window
+	lda @ce_isnew
+	beq cds_title_edit
+	lda #IGM_CE_TITLE_NEW
+	bra cds_title
+cds_title_edit:
+	lda #IGM_CE_TITLE_EDIT
+cds_title:
+	ldx #CE_ROW_TITLE
+	jsr ce_draw_centered
+	lda #$0000 : sta @ce_row
+cds_rows:
+	lda @ce_row
+	cmp #CE_ROWS
+	bcs cds_rows_done
+	jsr ce_draw_item
+	lda @ce_row : inc : sta @ce_row
+	bra cds_rows
+cds_rows_done:
+	jsr igmenu_draw_footer
+	jsr ig_bar_sync
+	sep #$20 : .as
+	lda #$0f : sta @$002100
+	plb
+	plp
+	rts
+
+// ---- one item row: ce_row = 0..CE_ROWS-1.  DBR = $F4. ----
+ce_draw_item:
+	php
+	rep #$30 : .al : .xl
+	jsr ovl_row_clear
+	lda @ce_top
+	clc : adc @ce_row
+	sta @ce_item
+	jsr ce_items
+	cmp @ce_item
+	bcc cdi_past                               // items < item: past the end (blank)
+	beq cdi_past                               // items == item: past the end
+	lda @ce_item
+	beq cdi_name
+	jmp cdi_notname
+cdi_past:
+	jmp cdi_flush
+cdi_name:
+	// --- Name ---
+	lda #IGM_CE_NAME
+	ldy #CE_COL_LABEL
+	jsr ce_copy
+	ldy #CE_COL_NAME
+	sep #$20 : .as
+	lda @CE_NAME
+	beq cdi_noname
+	ldx #$0000
+cdi_name_l:
+	lda @CE_NAME, x
+	beq cdi_name_d
+	sta OVL_RB, y
+	inx
+	iny
+	cpy #(CE_COL_NAME+CE_NAME_W)
+	bne cdi_name_l
+cdi_name_d:
+	rep #$30 : .al : .xl
+	jmp cdi_flush
+cdi_noname:
+	ldx #$0000
+cdi_nn_l:
+	lda OVL_NONAME_A, x                        // the localized "(no name)" the list uses
+	beq cdi_name_d
+	sta OVL_RB, y
+	inx
+	iny
+	cpx #(OVL_NONAME_MAX-1)
+	bne cdi_nn_l
+	bra cdi_name_d
+cdi_notname:
+	cmp @ce_n
+	bcc cdi_code
+	beq cdi_code
+	sec : sbc @ce_n                            // 1 = Save, 2 = Delete
+	cmp #$0001
+	bne cdi_delete
+	lda #IGM_CE_SAVE
+	ldy #CE_COL_LABEL
+	jsr ce_copy
+	jmp cdi_flush
+cdi_delete:
+	lda #IGM_CE_DELETE
+	ldy #CE_COL_LABEL
+	jsr ce_copy
+	jmp cdi_flush
+cdi_code:
+	// "#NN" then the code string out of the block (code index = item-1)
+	lda @ce_item                               // 1..n = the human number
+	ldx #$0000
+cdi_tens:
+	cmp #$000a
+	bcc cdi_digits
+	sbc #$000a                                 // carry set
+	inx
+	bra cdi_tens
+cdi_digits:
+	sta @ce_tmp                                // ones
+	sep #$20 : .as
+	lda #$23                                   // '#'
+	sta OVL_RB+CE_COL_LABEL
+	txa
+	ora #$30
+	sta OVL_RB+CE_COL_LABEL+1
+	lda @ce_tmp
+	ora #$30
+	sta OVL_RB+CE_COL_LABEL+2
+	rep #$30 : .al : .xl
+	lda @ce_item
+	dec
+	jsr ce_code_off                            // X = offset of the slot inside bank $FF
+	ldy #CE_COL_CODE
+	sep #$20 : .as
+cdi_code_l:
+	lda @$ff0000, x
+	beq cdi_code_d
+	sta OVL_RB, y
+	inx
+	iny
+	cpy #(CE_COL_CODE+CE_CODE_W)
+	bne cdi_code_l
+cdi_code_d:
+	rep #$30 : .al : .xl
+cdi_flush:
+	rep #$30 : .al : .xl
+	lda @ce_row
+	clc : adc #CE_ROW0
+	tax
+	phx
+	jsr ovl_flush_abs
+	plx
+	jsr tr_side_repair
+	plp
+	rts
+
+// ---- A(16) = code index -> X = 16-bit offset of its 10-byte slot in bank $FF ----
+ce_code_off:
+	php
+	rep #$30 : .al : .xl
+	sta @ce_tmp2
+	asl : asl : asl                            // *8
+	clc : adc @ce_tmp2
+	adc @ce_tmp2                               // *10
+	clc : adc #!CE_CODES
+	tax
+	plp
+	rts
+
+// ========================================================================================
+//  Editor input (ce_mode == EDITOR).  ovl_edge/ovl_cur are the shell's pad words.
+// ========================================================================================
+ce_ed_input:
+	php
+	rep #$30 : .al : .xl
+	jsr tr_nav_repeat                          // Up/Down with the trainer's auto-repeat
+	cmp #$0001
+	bne cei_dn
+	lda @ce_sel
+	beq cei_done_nav
+	dec : sta @ce_sel
+	cmp @ce_top
+	bcs cei_done_nav                           // still on screen: the BAR follows by itself
+	sta @ce_top
+	jsr ce_draw_screen
+	bra cei_done_nav
+cei_dn:
+	cmp #$0002
+	bne cei_keys
+	jsr ce_items
+	dec
+	cmp @ce_sel
+	beq cei_done_nav                           // on the last item
+	lda @ce_sel : inc : sta @ce_sel
+	sec : sbc @ce_top
+	cmp #CE_ROWS
+	bcc cei_done_nav
+	lda @ce_sel
+	sec : sbc #CE_ROWS
+	inc
+	sta @ce_top
+	jsr ce_draw_screen
+cei_done_nav:
+	plp
+	rts
+cei_keys:
+	lda @ovl_edge
+	bit #$0080                                 // A -> act on the item
+	beq cei_no_a
+	jsr ce_ed_act
+	plp
+	rts
+cei_no_a:
+	bit #$2000                                 // Select -> append a code
+	beq cei_no_sel
+	jsr ce_ed_addcode
+	plp
+	rts
+cei_no_sel:
+	bit #$4000                                 // Y -> remove the code under the cursor
+	beq cei_out
+	jsr ce_ed_removecode
+cei_out:
+	plp
+	rts
+
+// ---- A on an item ----
+ce_ed_act:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_sel
+	bne cea_notname
+	lda #$0000 : sta @ce_kitem                 // Name -> alnum keyboard
+	sta @ce_kadd
+	jsr ce_kbd_open_name
+	plp
+	rts
+cea_notname:
+	cmp @ce_n
+	bcc cea_code
+	beq cea_code
+	sec : sbc @ce_n
+	cmp #$0001
+	bne cea_delete
+	jsr ce_do_save
+	plp
+	rts
+cea_delete:
+	lda #CE_MODE_CONFIRM : sta @ce_mode
+	jsr ce_draw_confirm
+	plp
+	rts
+cea_code:
+	sta @ce_kitem                              // code item i -> hex keyboard on code i-1
+	lda #$0000 : sta @ce_kadd
+	lda @ce_sel
+	dec
+	jsr ce_kbd_open_code
+	plp
+	rts
+
+// ---- Select: append an empty code and type it ----
+ce_ed_addcode:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_n
+	cmp #CE_MAX_CODES
+	bcs cead_done                              // 40 already
+	jsr ce_code_off                            // X = the new slot (A = n)
+	sep #$20 : .as
+	lda #$00
+	ldy #$000a
+cead_z:
+	sta @$ff0000, x
+	inx
+	dey
+	bne cead_z
+	rep #$30 : .al : .xl
+	lda @ce_n : inc : sta @ce_n
+	sta @ce_sel                                // item index of code n-1 is n
+	sta @ce_kitem
+	lda #$0001 : sta @ce_kadd
+	// keep it on screen (the keyboard replaces the screen anyway; this is for the way back)
+	lda @ce_sel
+	sec : sbc @ce_top
+	cmp #CE_ROWS
+	bcc cead_open
+	lda @ce_sel
+	sec : sbc #CE_ROWS
+	inc
+	sta @ce_top
+cead_open:
+	lda @ce_n
+	dec
+	jsr ce_kbd_open_code
+cead_done:
+	plp
+	rts
+
+// ---- Y: remove the code under the cursor (never the last one) ----
+ce_ed_removecode:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_sel
+	beq cerc_no
+	cmp @ce_n
+	bcc cerc_ok
+	bne cerc_no                                // Save / Delete rows
+cerc_ok:
+	lda @ce_n
+	cmp #$0002
+	bcs cerc_go
+cerc_no:
+	plp                                        // a cheat keeps at least one code
+	rts
+cerc_go:
+	// codes sel..n-1 slide down over code sel-1: dst = slot(sel-1), src = slot(sel)
+	lda @ce_sel
+	dec
+	jsr ce_code_off
+	txa
+	sta @ce_tmp3                               // dst
+	lda @ce_n
+	sec : sbc @ce_sel
+	sta @ce_tmp2
+	asl : asl : asl
+	clc : adc @ce_tmp2
+	adc @ce_tmp2                               // (n - sel) * 10 bytes
+	sta @ce_tmp2
+	lda @ce_sel
+	jsr ce_code_off                            // X = src
+	lda @ce_tmp3
+	tay                                        // Y = dst
+	// the 65816 has long,X but no long,Y: the store goes through DBR = $FF
+	phb
+	sep #$20 : .as
+	lda #$ff : pha : plb
+cerc_mv:
+	rep #$20 : .al
+	lda @ce_tmp2
+	beq cerc_mv_d
+	dec
+	sta @ce_tmp2
+	sep #$20 : .as
+	lda @$ff0000, x
+	sta !$0000, y                              // abs,Y under DBR = $FF
+	inx
+	iny
+	bra cerc_mv
+cerc_mv_d:
+	sep #$20 : .as
+	plb
+	// zero the freed last slot
+	rep #$30 : .al : .xl
+	lda @ce_n
+	dec
+	jsr ce_code_off
+	sep #$20 : .as
+	lda #$00
+	ldy #$000a
+cerc_z:
+	sta @$ff0000, x
+	inx
+	dey
+	bne cerc_z
+	rep #$30 : .al : .xl
+	lda @ce_n : dec : sta @ce_n
+	cmp @ce_sel
+	bcs cerc_sel_ok
+	sta @ce_sel                                // the cursor was on the last code
+cerc_sel_ok:
+	jsr ce_clamp_top
+	jsr ce_draw_screen
+cerc_done:
+	plp
+	rts
+
+// ---- keep ce_top inside the item count ----
+ce_clamp_top:
+	php
+	rep #$30 : .al : .xl
+	jsr ce_items
+	cmp #CE_ROWS
+	bcs cect_calc
+	lda #$0000
+	bra cect_have
+cect_calc:
+	sec : sbc #CE_ROWS
+cect_have:
+	cmp @ce_top
+	bcs cect_done
+	sta @ce_top
+cect_done:
+	plp
+	rts
+
+// ---- Save: ADD or REPLACE.  OK / SAVEFAIL -> the records changed -> back to the list. ----
+ce_do_save:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_n
+	beq ceds_done                              // a cheat needs at least one code
+	lda @ce_isnew
+	sep #$20 : .as
+	bne ceds_add
+	lda #CE_OP_REPLACE
+	bra ceds_op
+ceds_add:
+	lda #CE_OP_ADD
+ceds_op:
+	jsr ce_send
+	jsr ce_result
+ceds_done:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- A(8) = CE_RESULT after a write op: leave on success, report otherwise.  .as entry. ----
+ce_result:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+	cmp #CE_RES_OK
+	beq cer_changed
+	cmp #CE_RES_SAVEFAIL
+	beq cer_changed                            // the records took it; only the SD did not
+	cmp #CE_RES_PENDING
+	bne cer_not_nosup
+	rep #$30 : .al : .xl
+	lda #IGM_CE_NOSUP
+	bra cer_show
+cer_not_nosup:
+	sep #$20 : .as                             // `bne` from 8-bit code; the source above ends .al
+	cmp #CE_RES_FULL
+	bne cer_bad
+	rep #$30 : .al : .xl
+	lda #IGM_CE_FULL
+	bra cer_show
+cer_bad:
+	rep #$30 : .al : .xl
+	lda #IGM_CE_BADCODE
+cer_show:
+	jsr ce_show_msg
+	plp
+	rts
+cer_changed:
+	rep #$30 : .al : .xl
+	lda #$0001 : sta @ce_changed
+	jsr ce_close_to_list
+	plp
+	rts
+
+// ========================================================================================
+//  Confirm delete (ce_mode == CONFIRM): two rows over the editor
+// ========================================================================================
+ce_draw_confirm:
+	php
+	phb
+	sep #$20 : .as
+	lda #$80 : sta @$002100                    // forced blank: TWO row flushes do not fit the
+	                                           //   vblank the input loop runs in (the tail of the
+	                                           //   second row landed in active display = dropped
+	                                           //   VRAM writes = blank cells in the keys line)
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	lda #IGM_CE_CONFIRM
+	ldx #CEC_ROW_ASK
+	jsr ce_draw_centered
+	lda #IGM_CE_CONFIRM_KEYS
+	ldx #CEC_ROW_KEYS
+	jsr ce_draw_centered
+	jsr ig_bar_sync
+	sep #$20 : .as
+	lda #$0f : sta @$002100
+	plb
+	plp
+	rts
+
+ce_cf_input:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_edge
+	bit #$0080                                 // A -> delete
+	beq cecf_done
+	lda #CE_MODE_EDITOR : sta @ce_mode
+	sep #$20 : .as
+	lda #CE_OP_DELETE
+	jsr ce_send
+	cmp #CE_RES_OK
+	beq cecf_res
+	cmp #CE_RES_SAVEFAIL
+	beq cecf_res
+	pha
+	rep #$30 : .al : .xl
+	jsr ce_draw_screen                         // the prompt rows go back to items
+	sep #$20 : .as
+	pla
+cecf_res:
+	jsr ce_result
+cecf_done:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ========================================================================================
+//  Keyboard (ce_mode == KBD)
+// ========================================================================================
+// ---- open the alnum keyboard on the name ----
+ce_kbd_open_name:
+	php
+	rep #$30 : .al : .xl
+	lda #$0001 : sta @ce_kmode
+	lda #CE_NAME_MAX : sta @ce_kmax
+	lda #!CE_NAME : sta @ce_kfield
+	jsr ce_kbd_open
+	plp
+	rts
+
+// ---- open the hex keyboard on code A(16) ----
+ce_kbd_open_code:
+	php
+	rep #$30 : .al : .xl
+	jsr ce_code_off
+	txa
+	sta @ce_kfield
+	lda #$0000 : sta @ce_kmode
+	lda #$0009 : sta @ce_kmax
+	jsr ce_kbd_open
+	plp
+	rts
+
+ce_kbd_open:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @ce_krow
+	sta @ce_kcol
+	jsr ce_field_len
+	lda #CE_MODE_KBD : sta @ce_mode
+	jsr ce_kbd_draw_screen
+	plp
+	rts
+
+// ---- ce_klen = strlen(field), capped at ce_kmax ----
+ce_field_len:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000 : sta @ce_klen
+	lda @ce_kfield
+	tax
+	sep #$20 : .as
+cefl_l:
+	lda @$ff0000, x
+	beq cefl_done
+	rep #$20 : .al
+	lda @ce_klen : inc : sta @ce_klen
+	cmp @ce_kmax
+	sep #$20 : .as
+	bcs cefl_done
+	inx
+	bra cefl_l
+cefl_done:
+	rep #$30 : .al : .xl
+	plp
+	rts
+
+// ---- the whole keyboard screen, forced blank ----
+ce_kbd_draw_screen:
+	php
+	phb
+	sep #$20 : .as
+	lda #$80 : sta @$002100
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr ig_clear_body
+	jsr ce_geom
+	jsr ig_draw_window
+	jsr ce_kbd_draw_field
+	jsr ce_kbd_draw_keys
+	jsr ce_kbd_draw_fmt                         // code keyboard: the two accepted formats
+	jsr igmenu_draw_footer
+	jsr ig_bar_sync
+	sep #$20 : .as
+	lda #$0f : sta @$002100
+	plb
+	plp
+	rts
+
+// ---- the field row: the tail of the text that fits, then the '_' cursor.  DBR = $F4.
+//      One row = safe inside the vblank the input loop runs in. ----
+ce_kbd_draw_field:
+	php
+	rep #$30 : .al : .xl
+	jsr ovl_row_clear
+	lda @ce_klen
+	cmp #CEK_FIELD_W
+	bcc cekf_fits
+	lda #CEK_FIELD_W
+cekf_fits:
+	sta @ce_tmp                                // shown
+	lda @ce_klen
+	sec : sbc @ce_tmp                          // offset of the first shown byte
+	clc : adc @ce_kfield
+	tax
+	ldy #CEK_FIELD_COL
+	lda @ce_tmp
+	beq cekf_cursor
+	sta @ce_tmp2
+	sep #$20 : .as
+cekf_l:
+	lda @$ff0000, x
+	sta OVL_RB, y
+	inx
+	iny
+	rep #$20 : .al
+	lda @ce_tmp2 : dec : sta @ce_tmp2
+	sep #$20 : .as
+	bne cekf_l
+cekf_cursor:
+	sep #$20 : .as
+	lda #$5f                                   // '_'
+	sta OVL_RB, y
+	rep #$30 : .al : .xl
+	ldx #CEK_FIELD_ROW
+	phx
+	jsr ovl_flush_abs
+	plx
+	jsr tr_side_repair
+	plp
+	rts
+
+// ---- on the CODE keyboard, two lines below the key row showing the accepted formats
+//      (the '-' after the 4th char marks a Game Genie code; 8 bare hex = PAR/raw). Neutral
+//      text, drawn straight into OVL_RB.  No-op on the alnum (name) keyboard.  DBR = $F4. ----
+ce_kbd_draw_fmt:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kmode
+	beq cedf_go
+	plp                                        // name keyboard: nothing to show
+	rts
+cedf_go:
+	lda #!ce_fmt_gg
+	ldx #(CEK_HEX_ROW+3)
+	jsr ce_draw_c8row
+	lda #!ce_fmt_par
+	ldx #(CEK_HEX_ROW+4)
+	jsr ce_draw_c8row
+	plp
+	rts
+
+// ---- A(16) = offset of a NUL-terminated $C8 string, X(16) = tile row: clear the row,
+//      copy the string at col CE_COL_LABEL, flush, repair the frame sides.  DBR = $F4. ----
+ce_draw_c8row:
+	php
+	rep #$30 : .al : .xl
+	pha                                        // [src]
+	phx                                        // [src][row]
+	jsr ovl_row_clear                          // clobbers A/X
+	pla
+	sta @ce_tmp2                               // row
+	pla
+	tax                                        // X = src offset
+	ldy #CE_COL_LABEL
+	sep #$20 : .as
+cdc_l:
+	lda @$c80000, x
+	beq cdc_d
+	sta OVL_RB, y
+	inx
+	iny
+	bra cdc_l
+cdc_d:
+	rep #$30 : .al : .xl
+	lda @ce_tmp2
+	tax
+	phx
+	jsr ovl_flush_abs
+	plx
+	jsr tr_side_repair
+	plp
+	rts
+
+// ---- the key grid: one row (hex) or six (alnum), a glyph every second column.  DBR = $F4. ----
+ce_kbd_draw_keys:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_krow
+	pha                                        // save the cursor row (we scan ce_krow)
+	lda #$0000 : sta @ce_row
+cekk_l:
+	jsr ce_kbd_nrows
+	cmp @ce_row
+	beq cekk_done
+	lda @ce_row : sta @ce_krow
+	jsr ce_kbd_rowlen                          // A = len (uses ce_krow)
+	pha
+	jsr ce_kbd_rowbase                         // X = table offset (uses ce_krow)
+	jsr ce_kbd_toprow                          // A = tile row of row 0
+	clc : adc @ce_row
+	tay                                        // Y = tile row
+	pla                                        // A = len
+	jsr ce_kbd_draw_krow                       // A=count, X=offset, Y=row
+	lda @ce_row : inc : sta @ce_row
+	bra cekk_l
+cekk_done:
+	pla
+	sta @ce_krow                               // restore the cursor row
+	plp
+	rts
+
+// ---- A(16) = key count, X = table offset, Y = tile row ----
+ce_kbd_draw_krow:
+	php
+	rep #$30 : .al : .xl
+	sta @ce_tmp
+	phy
+	phx
+	jsr ovl_row_clear                          // leaves X = 64 (its fill index): keep ours
+	plx
+	ldy #CEK_KEY_COL
+	sep #$20 : .as
+cekr_l:
+	rep #$20 : .al
+	lda @ce_tmp
+	beq cekr_done
+	dec
+	sta @ce_tmp
+	sep #$20 : .as
+	lda @ce_kbd_keys, x
+	sta OVL_RB, y
+	inx
+	iny
+	iny
+	bra cekr_l
+cekr_done:
+	rep #$30 : .al : .xl
+	plx                                        // X = the row
+	phx
+	jsr ovl_flush_abs
+	plx
+	jsr tr_side_repair
+	plp
+	rts
+
+// ---- X = table offset of the current key row ----
+// A(16) = number of key rows for the current mode
+ce_kbd_nrows:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kmode
+	and #$00ff
+	bne +
+	lda #CEK_HEX_ROWS
+	plp
+	rts
++	lda #CEK_ALN_ROWS
+	plp
+	rts
+
+// A(16) = tile row of key-grid row 0 for the current mode
+ce_kbd_toprow:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kmode
+	and #$00ff
+	bne +
+	lda #CEK_HEX_ROW
+	plp
+	rts
++	lda #CEK_ALN_ROW0
+	plp
+	rts
+
+// X(16) = table byte offset of the current row (hex base 0, alnum base CEK_ALN_BASE)
+ce_kbd_rowbase:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_krow
+	and #$00ff
+	asl : asl : asl : asl                      // krow*16
+	sta @ce_tmp
+	lda @ce_kmode
+	and #$00ff
+	beq +
+	lda @ce_tmp
+	clc : adc #CEK_ALN_BASE
+	sta @ce_tmp
++	lda @ce_tmp
+	tax
+	plp
+	rts
+
+// ---- A(16) = keys on the current row ----
+ce_kbd_rowlen:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_krow
+	and #$00ff
+	tax
+	lda @ce_kmode
+	and #$00ff
+	bne cekl_aln
+	lda @ce_kbd_hex_len, x
+	and #$00ff
+	plp
+	rts
+cekl_aln:
+	lda @ce_kbd_aln_len, x
+	and #$00ff
+	plp
+	rts
+
+// ---- A(8) = the glyph under the cursor ----
+ce_kbd_char:
+	php
+	rep #$30 : .al : .xl
+	jsr ce_kbd_rowbase
+	txa
+	clc : adc @ce_kcol
+	tax
+	sep #$20 : .as
+	lda @ce_kbd_keys, x
+	plp                                        // the caller pushes A as a byte (ce_kbd_put)
+	rts
+
+ce_kbd_input:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_edge
+	bit #$0040                                 // X -> OK
+	beq +
+	jsr ce_kbd_ok
+	plp
+	rts
++	bit #$0080                                 // A -> type
+	beq +
+	jsr ce_kbd_type
+	plp
+	rts
++	bit #$4000                                 // Y -> backspace
+	beq +
+	jsr ce_kbd_backspace
+	plp
+	rts
++	bit #$2000                                 // Select -> space (name only)
+	beq +
+	jsr ce_kbd_space
+	plp
+	rts
++	bit #$0200                                 // Left
+	beq +
+	jsr ce_kbd_left
+	plp
+	rts
++	bit #$0100                                 // Right
+	beq +
+	jsr ce_kbd_right
+	plp
+	rts
++	bit #$0800                                 // Up
+	beq +
+	jsr ce_kbd_up
+	plp
+	rts
++	bit #$0400                                 // Down
+	beq +
+	jsr ce_kbd_down
++	plp
+	rts
+
+ce_kbd_type:
+	php
+	rep #$30 : .al : .xl
+	jsr ce_kbd_char
+	jsr ce_kbd_put
+	plp
+	rts
+
+ce_kbd_space:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kmode
+	beq ceksp_done                             // no spaces in a code
+	sep #$20 : .as
+	lda #$20
+	jsr ce_kbd_put
+ceksp_done:
+	plp
+	rts
+
+ce_kbd_left:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kcol
+	bne cekl_dec
+	jsr ce_kbd_rowlen
+	sta @ce_kcol
+cekl_dec:
+	lda @ce_kcol : dec : sta @ce_kcol
+	plp
+	rts
+
+ce_kbd_right:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kcol : inc : sta @ce_kcol
+	jsr ce_kbd_rowlen
+	cmp @ce_kcol
+	bne cekr_done2
+	lda #$0000 : sta @ce_kcol
+cekr_done2:
+	plp
+	rts
+
+ce_kbd_up:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_krow
+	and #$00ff
+	bne ceku_dec
+	jsr ce_kbd_nrows
+ceku_dec:
+	dec
+	sta @ce_krow
+	jsr ce_kbd_clampcol
+	plp
+	rts
+
+ce_kbd_down:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_krow : inc
+	sta @ce_krow
+	jsr ce_kbd_nrows
+	cmp @ce_krow
+	bne cekd_st
+	lda #$0000 : sta @ce_krow
+cekd_st:
+	jsr ce_kbd_clampcol
+	plp
+	rts
+
+ce_kbd_clampcol:
+	php
+	rep #$30 : .al : .xl
+	jsr ce_kbd_rowlen
+	dec
+	cmp @ce_kcol
+	bcs cekc_done
+	sta @ce_kcol
+cekc_done:
+	plp
+	rts
+
+// ---- store A(8) at field[klen], advance, re-terminate, repaint the field ----
+ce_kbd_put:
+	php
+	phb
+	sep #$20 : .as
+	rep #$10 : .xl
+	pha
+	rep #$20 : .al
+	lda @ce_klen
+	cmp @ce_kmax
+	bcc cekp_room
+	sep #$20 : .as
+	pla                                        // full: nothing happens
+	plb
+	plp
+	rts
+cekp_room:
+	clc : adc @ce_kfield
+	tax
+	sep #$20 : .as
+	pla
+	sta @$ff0000, x
+	inx
+	lda #$00
+	sta @$ff0000, x
+	rep #$20 : .al
+	lda @ce_klen : inc : sta @ce_klen
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr ce_kbd_draw_field
+	plb
+	plp
+	rts
+
+// ---- Y: drop the last character; on the name, whole UTF-8 sequences (a .yml may carry
+//      multi-byte text) ----
+ce_kbd_backspace:
+	php
+	phb
+	rep #$30 : .al : .xl
+	lda @ce_klen
+	beq cekb_done
+	dec : sta @ce_klen
+	lda @ce_kmode
+	beq cekb_term
+cekb_utf:
+	lda @ce_klen
+	beq cekb_term
+	clc : adc @ce_kfield
+	tax
+	sep #$20 : .as
+	lda @$ff0000, x
+	and #$c0
+	cmp #$80                                   // continuation byte -> keep going
+	rep #$30 : .al : .xl
+	bne cekb_term
+	lda @ce_klen : dec : sta @ce_klen
+	bra cekb_utf
+cekb_term:
+	rep #$30 : .al : .xl
+	lda @ce_klen
+	clc : adc @ce_kfield
+	tax
+	sep #$20 : .as
+	lda #$00
+	sta @$ff0000, x
+	lda #$f4 : pha : plb
+	rep #$30 : .al : .xl
+	jsr ce_kbd_draw_field
+cekb_done:
+	rep #$30 : .al : .xl
+	plb
+	plp
+	rts
+
+// ---- carry set = the code field is 8 hex digits, or 9 with '-' at [4] ----
+ce_code_valid:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_klen
+	cmp #$0008
+	beq cecv_scan
+	cmp #$0009
+	bne cecv_bad
+	lda @ce_kfield
+	tax
+	sep #$20 : .as
+	lda @$ff0004, x                            // field[4]
+	cmp #$2d                                   // '-'
+	rep #$30 : .al : .xl
+	bne cecv_bad
+cecv_scan:
+	lda @ce_kfield
+	tax
+	lda #$0000 : sta @ce_tmp
+cecv_l:
+	lda @ce_tmp
+	cmp @ce_klen
+	bcs cecv_good
+	cmp #$0004
+	bne cecv_chk
+	lda @ce_klen
+	cmp #$0009
+	bne cecv_chk
+	inx                                        // the dash of a GG code
+	lda @ce_tmp : inc : sta @ce_tmp
+	bra cecv_l
+cecv_chk:
+	sep #$20 : .as
+	lda @$ff0000, x
+	cmp #$30                                   // '0'
+	bcc cecv_bad8
+	cmp #$3a                                   // '9'+1
+	bcc cecv_next
+	cmp #$41                                   // 'A'
+	bcc cecv_bad8
+	cmp #$47                                   // 'F'+1
+	bcs cecv_bad8
+cecv_next:
+	rep #$30 : .al : .xl
+	inx
+	lda @ce_tmp : inc : sta @ce_tmp
+	bra cecv_l
+cecv_bad8:
+	rep #$30 : .al : .xl
+cecv_bad:
+	plp
+	clc
+	rts
+cecv_good:
+	plp
+	sec
+	rts
+
+// ---- X: accept.  Names always; a code only when ce_code_valid says so. ----
+ce_kbd_ok:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kmode
+	bne ceko_accept
+	jsr ce_code_valid
+	bcs ceko_accept
+	lda #IGM_CE_BADCODE
+	jsr ce_show_msg
+	plp
+	rts
+ceko_accept:
+	lda @ce_kitem
+	bne ceko_back
+	sep #$20 : .as
+	lda @CE_FLAGS
+	ora #$01                                   // the name is authoritative now
+	sta @CE_FLAGS
+	rep #$30 : .al : .xl
+ceko_back:
+	lda #$0000 : sta @ce_kadd
+	lda #CE_MODE_EDITOR : sta @ce_mode
+	jsr ce_draw_screen
+	plp
+	rts
+
+// ---- B in the keyboard: cancel.  A code that was just appended goes away again; on a
+//      brand-new cheat whose only code that was, the whole add is dropped. ----
+ce_kbd_cancel:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_kadd
+	beq cekx_editor
+	lda #$0000 : sta @ce_kadd
+	lda @ce_isnew
+	beq cekx_drop
+	lda @ce_n
+	cmp #$0002
+	bcs cekx_drop
+	lda #$0000 : sta @ce_changed               // nothing to add: back to the list unchanged
+	jsr ce_close_to_list
+	plp
+	rts
+cekx_drop:
+	lda @ce_n : dec : sta @ce_n
+	sta @ce_sel                                // the previous last code (or the Name)
+	jsr ce_clamp_top
+cekx_editor:
+	lda #CE_MODE_EDITOR : sta @ce_mode
+	jsr ce_draw_screen
+	plp
+	rts
+
+// ========================================================================================
+//  Shell glue
+// ========================================================================================
+// ---- the CHEATS tab input while the editor owns it ----
+ce_input:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_mode
+	cmp #CE_MODE_KBD
+	beq cein_kbd
+	cmp #CE_MODE_CONFIRM
+	beq cein_cf
+	jsr ce_ed_input
+	plp
+	rts
+cein_kbd:
+	jsr ce_kbd_input
+	plp
+	rts
+cein_cf:
+	jsr ce_cf_input
+	plp
+	rts
+
+// ---- B at the content level, offered to us BEFORE the shell drops focus (the trainer_back
+//      contract): carry set = consumed, clear = not ours (the list itself) ----
+cheats_back:
+	php
+	rep #$30 : .al : .xl
+	lda @ce_mode
+	beq cheb_no
+	cmp #CE_MODE_KBD
+	beq cheb_kbd
+	cmp #CE_MODE_CONFIRM
+	beq cheb_cf
+	lda #$0000 : sta @ce_changed               // editor: back to the list, nothing saved
+	jsr ce_close_to_list
+	plp
+	sec
+	rts
+cheb_kbd:
+	jsr ce_kbd_cancel
+	plp
+	sec
+	rts
+cheb_cf:
+	lda #CE_MODE_EDITOR : sta @ce_mode
+	jsr ce_draw_screen
+	plp
+	sec
+	rts
+cheb_no:
+	plp
+	clc
+	rts
+
+// ---- ig_bar_sync target for the CHEATS tab (igb_t_cheats jumps here): the list row, or --
+//      while the editor is up -- its item row / the key cell.  .al/.xl, ends in igb_place. ----
+igb_cheats_target:
+	lda @ce_mode
+	bne igb_ce
+	lda @ovl_count
+	bne igbcl_row
+	jmp igb_place                              // empty list ("no cheats" message) -> capsule
+igbcl_row:
+	lda @ovl_selrow                            // SCREEN row 0..visible-1
+	clc : adc #OVL_LIST_ROW0
+	sta @ig_bar_row
+	lda #IGB_LIST_XL : sta @ig_bar_xl
+	lda #IGB_LIST_WL : sta @ig_bar_wl
+	jmp igb_place
+igb_ce:
+	lda @ce_mode
+	cmp #CE_MODE_KBD
+	beq igbce_key
+	lda @ce_sel
+	sec : sbc @ce_top
+	clc : adc #CE_ROW0
+	sta @ig_bar_row
+	lda #CE_INT_COL : sta @ig_bar_xl
+	lda #CE_INT_W : sta @ig_bar_wl
+	jmp igb_place
+igbce_key:
+	lda @ce_kmode
+	beq igbce_hex
+	lda @ce_krow
+	clc : adc #CEK_ALN_ROW0
+	bra igbce_row
+igbce_hex:
+	lda @ce_krow
+	clc : adc #CEK_HEX_ROW
+igbce_row:
+	sta @ig_bar_row
+	lda @ce_kcol
+	asl
+	clc : adc #CEK_KEY_COL
+	sta @ig_bar_xl
+	lda #$0001 : sta @ig_bar_wl
+	jmp igb_place
+
+// ========================================================================================
+//  Data (bank $C8)
+// ========================================================================================
+// key grid: row 0 = hex (17 keys, padded to CEK_ALN_BASE), then six alnum rows of 16 bytes.
+// Every glyph is ASCII = its font code.  No '"' and no '\' (the .yml writer/parser treat
+// them specially).  Same table as the menu editor's.
+ce_kbd_keys:
+	.byt "0123456789", 0,0,0,0,0,0        // hex row 0 (offset 0)
+	.byt "ABCDEF-", 0,0,0,0,0,0,0,0,0     // hex row 1 (offset 16 = CEK_STRIDE)
+	.byt "ABCDEFGHIJKLM", 0,0,0           // alnum row 0 (offset 32 = CEK_ALN_BASE)
+	.byt "NOPQRSTUVWXYZ", 0,0,0
+	.byt "abcdefghijklm", 0,0,0
+	.byt "nopqrstuvwxyz", 0,0,0
+	.byt "0123456789-_.,", 0,0
+	.byt "'!?()/:+=*#<>", 0,0,0
+ce_kbd_hex_len:
+	.byt 10, 7
+ce_kbd_aln_len:
+	.byt 13, 13, 13, 13, 14, 13
+// code-format hint (code keyboard only). Language-neutral, so no igm_cheatedit_tbl entry.
+ce_fmt_gg:
+	.byt "Game Genie:  XXXX-YYYY", 0
+ce_fmt_par:
+	.byt "PAR / raw:   AAAAAADD", 0

@@ -40,6 +40,9 @@ igmenu_header:
 #include "trainer_defs.i65"        ; TRAINER tab layout/scratch/macros. Must be in scope
                                    ; EARLY: ig_bar_sync reads tr_bar_row long before the
                                    ; code include at the bottom of this file.
+#include "cheatedit_defs.i65"      ; cheat EDITOR (CHEATS tab add/edit/delete) layout/scratch.
+                                   ; Same reason: ig_bar_sync, cheats_input/tick and the
+                                   ; footer read ce_mode before the code include.
 #include "igmenu_lang.i65"         ; GENERATED: HELP tab i18n string tables + IGM_HELP_NLINES/
                                    ; IGM_LANG_COUNT (bank $C8 data, jumped over -- included
                                    ; BEFORE help_enter so its #defines are in scope)
@@ -328,6 +331,7 @@ igmenu_main:
 	lda #$0000
 	sta @igmenu_flags                       ; (active_tab is NOT cleared here: it persists across
 	sta @igmenu_prevtab                     ;  close/reopen -- the session gate below inits it once)
+	sta @ce_mode                            ; cheat editor closed: a START-close mid-edit reopens on the list
 	sta @man_list_cursor                    ; GUIDES tab-level cursor (host scratch; the viewer
 	                                        ;   never reads it, so it is NOT in man_state_reset)
 	jsr man_state_reset                     ; MANUAL viewer scratch + $ffff sentinels -- ONE
@@ -605,6 +609,11 @@ ig_not_viewer:
 	beq ig_content_disp
 	rep #$30 : .al : .xl
 	lda @active_tab : and #$00ff
+	bne ig_b_not_cheats
+	jsr cheats_back                         ; CHEATS: the cheat editor / keyboard / confirm
+	bcc ig_b_leave                          ;   consume B first (same contract as trainer_back)
+	jmp ig_loop_tail
+ig_b_not_cheats:
 	cmp #$0004
 	bne ig_b_leave
 	jsr trainer_back                        ; TRAINER has screens of its own (results ->
@@ -949,6 +958,8 @@ cde_lang_ok:
 #define IGM_SH_FT_GENERIC 2
 #define IGM_SH_MASTER_ON  3
 #define IGM_SH_MASTER_OFF 4
+#define IGM_SH_FT_CE_EDIT 5
+#define IGM_SH_FT_CE_KBD  6
 
 ; ---- draw shell-chrome string A(16)=line index centered on absolute row X(16).
 ;      Sets sst_lang itself, so it works from any tab. DBR is set here. ----
@@ -1087,13 +1098,38 @@ ch_sl_d:
 
 cheats_input:
 	php
-	; A ($0080) -> toggle
+	; the cheat EDITOR (snes/cheatedit.i65) owns the pad while it is up
 	rep #$20 : .al
+	lda @ce_mode
+	beq ci_list
+	jsr ce_input
+	plp
+	rts
+ci_list:
+	; A ($0080) -> toggle
 	lda @ovl_edge : bit #$0080
 	sep #$20 : .as
 	beq ci_no_a
 	jsr ss_ovl_toggle
 ci_no_a:
+	; Y ($4000) -> EDIT the selected cheat; Select ($2000) -> ADD a cheat. Both hand the tab
+	;   to the editor, so nothing below runs this frame.
+	rep #$20 : .al
+	lda @ovl_edge : bit #$4000
+	sep #$20 : .as
+	beq ci_no_y
+	jsr ce_open_edit
+	plp
+	rts
+ci_no_y:
+	rep #$20 : .al
+	lda @ovl_edge : bit #$2000
+	sep #$20 : .as
+	beq ci_no_sel
+	jsr ce_open_new
+	plp
+	rts
+ci_no_sel:
 	; Left ($0200) -> page up
 	rep #$20 : .al
 	lda @ovl_edge : bit #$0200
@@ -1250,11 +1286,22 @@ ifn_done:
 	rts
 
 cheats_tick:
+	php
+	rep #$20 : .al
+	lda @ce_mode                              ; the marquee marks the list dirty and the rebuild
+	sep #$20 : .as                            ;   would paint the list over the editor
+	bne ct_done
 	jsr ss_ovl_marquee
+ct_done:
+	plp
 	rts
 
 cheats_leave:
 	jsr ig_master_clear                       ; X is CHEATS-only -> so is its status line
+	php
+	rep #$20 : .al
+	lda #$0000 : sta @ce_mode                 ; a tab switch abandons an open editor
+	plp
 	rts
 
 ig_noop:
@@ -3058,6 +3105,16 @@ ig_ft_content:
 	lda @active_tab
 	and #$00ff
 	bne ig_ft_generic
+	lda @ce_mode                              ; CHEATS: the cheat editor has footers of its own
+	beq ig_ft_cheats
+	cmp #CE_MODE_KBD
+	beq ig_ft_kbd
+	lda #IGM_SH_FT_CE_EDIT
+	bra ig_ft_go
+ig_ft_kbd:
+	lda #IGM_SH_FT_CE_KBD
+	bra ig_ft_go
+ig_ft_cheats:
 	lda #IGM_SH_FT_CHEATS
 	bra ig_ft_go
 ig_ft_generic:
@@ -3354,16 +3411,10 @@ igb_tr_row:
 	jmp igb_place
 
 igb_t_cheats:
-	lda @ovl_count
-	bne igb_c_row
-	jmp igb_place                                ; empty list ("no cheats" message) -> capsule
-igb_c_row:
-	lda @ovl_selrow                              ; SCREEN row 0..visible-1
-	clc : adc #OVL_LIST_ROW0
-	sta @ig_bar_row
-	lda #IGB_LIST_XL : sta @ig_bar_xl
-	lda #IGB_LIST_WL : sta @ig_bar_wl
-	jmp igb_place
+	jmp igb_cheats_target                        ; body in cheatedit.i65 (list row, or the cheat
+	                                             ;   editor's item row / key cell). Moved out of
+	                                             ;   here so the igb_content branches above stay
+	                                             ;   within short range.
 
 igb_t_states:
 	lda @sst_disabled
@@ -3896,6 +3947,7 @@ iot_done:
 ; exist yet) and every igmenu helper it calls is already assembled -- no forward
 ; references, no short-branch surprises. Its data tail is followed only by labels.
 #include "trainer.i65"
+#include "cheatedit.i65"           ; cheat EDITOR code (uses tr_nav_repeat / tr_side_repair)
 
 ; ======================================================================
 ;  Data (bank $C8; never executed).

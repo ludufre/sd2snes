@@ -277,7 +277,7 @@ def main():
                     ("text_no_", 22), ("cheat_tab_head", 48),
                     ("text_mtl_", 40), ("text_mt_", 32), ("text_pcm_", 40),
                     ("mtext_", 40),
-                    ("mdesc_", 160), ("text_err_", 26))
+                    ("mdesc_", 160), ("text_err_", 26), ("text_ce_", 6))
     WIDTH_DEFAULT = 56
 
     def encoded_len(text):

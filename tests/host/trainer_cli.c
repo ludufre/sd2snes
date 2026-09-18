@@ -107,7 +107,7 @@ int main(void) {
   CHECK(cheat_program_calls == 1 && cheat_window_calls == 1, "deploy/window not refreshed");
 
   uint32_t r = rec_addr(3);
-  CHECK(psram[r] == CHEAT_FLAG_ENABLE, "record not enabled");
+  CHECK(psram[r] == (CHEAT_FLAG_ENABLE | CHEAT_FLAG_RUNTIME), "record not enabled+runtime (got %02x)", psram[r]);
   CHECK(!strcmp((char *)psram + r + 1, "Trainer $7E0791 = 92"),
         "description is '%s'", (char *)psram + r + 1);
   CHECK(psram[r + 255] == 1, "numpatches != 1");
@@ -145,14 +145,14 @@ int main(void) {
   request(TRAINER_REQ_ADD, 2, 0x0100, 0x33, 1);
   b = blk_read();
   uint32_t r3 = rec_addr(b.fz_idx[2]);
-  CHECK(psram[r3] == 0, "add-to-cheats armed the record");
+  CHECK(psram[r3] == CHEAT_FLAG_RUNTIME, "add-to-cheats must be disabled but still runtime-marked (got %02x)", psram[r3]);
   CHECK(psram[SRAM_CHEAT_FLAGS_ADDR + b.fz_idx[2]] == 0, "add-to-cheats armed the mirror");
 
   /* ---- UNFREEZE disables the record but leaves it listed ---- */
   request(TRAINER_REQ_UNFREEZE, 0, 0, 0, 1);
   b = blk_read();
   CHECK(b.fz_idx[0] == 0xFFFF, "unfreeze did not release the slot");
-  CHECK(psram[r] == 0, "unfreeze did not clear the enable bit");
+  CHECK(psram[r] == CHEAT_FLAG_RUNTIME, "unfreeze must clear ONLY the enable bit (got %02x)", psram[r]);
   CHECK(psram[SRAM_CHEAT_FLAGS_ADDR + 3] == 0, "unfreeze did not clear the mirror");
 
   /* ---- guards: out-of-range offset, bad slot, no magic, and a full record table ---- */

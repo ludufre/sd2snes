@@ -50,6 +50,7 @@
 #include "pcmplay.h"/* pcmplay_publish: menu PCM player status block */
 #include "gameinfo.h" /* gameinfo_fmv_idle_check : stop a lingering FMV when its screen closes */
 #include "cheat.h"
+#include "cheatedit.h"
 #include "trainer.h"
 #include "savestate.h"
 #include "manual.h"
@@ -552,6 +553,16 @@ uint8_t game_cmd_serve(uint8_t cmd) {
       msu_dac_hold();
       srm_slot_save(file_lfn, (uint8_t)(snes_get_mcu_param() & 0x03));
       saveinfo_stage(file_lfn);
+      msu_dac_release();
+      break;
+    case SNES_CMD_CHEAT_EDIT:
+      /* in-game CHEATS tab: add / edit / delete a cheat (request in the CHEAT_EDIT
+         block), redeploy live, then rewrite the game's cheat .yml -- the same
+         frozen-SNES SD write SET_SRM_SLOT and SAVESTATE already do.  Sibling calls
+         (see menucmd.c) keep the stack at max(edit, save). */
+      msu_dac_hold();
+      if(cheat_edit_serve(1) && cheat_yaml_save_current())
+        sram_writebyte(CHEAT_EDIT_RES_SAVEFAIL, SRAM_CHEAT_EDIT_ADDR + CHEAT_EDIT_OFS_RESULT);
       msu_dac_release();
       break;
     case SNES_CMD_MANUAL_ZPAGE: {

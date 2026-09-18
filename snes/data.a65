@@ -558,4 +558,29 @@ msu_inside      .byt 0     ; 1 = the current listing is a folder opened as its M
 gi_nav_mcu      .byt 0     ; != 0 = an info-screen Up/Down step talked to the MCU (READDIR or
                            ;   CMD_MSU_PROBE) -- long enough to trip the FMV idle watchdog
 
+;----------cheat editor (snes/cheatedit.a65, bank $C1) ----------
+; Cursor state only: the text being edited lives in the CHEAT_EDIT block ($FF0800),
+; which is the request payload as well.  Zeroed by the editor on entry ($55 fill).
+ce_isnew        .byt 0     ; 1 = adding a cheat, 0 = editing the one under the list cursor
+ce_ret          .byt 0     ; out: 1 = the list is empty after the session
+ce_changed      .byt 0     ; 1 = a Save/Delete went through (recount the list)
+ce_idx          .word 0    ; absolute record index being edited
+ce_n            .byt 0     ; codes in the block (mirror of CE_NUMCODES)
+ce_sel          .byt 0     ; selected item: 0 Name, 1..n code n, n+1 Save, n+2 Delete
+ce_top          .byt 0     ; first visible item
+ce_row          .byt 0     ; row being drawn / loop counter
+ce_item         .byt 0     ; item on the row being drawn
+ce_kmode        .byt 0     ; keyboard: 0 = hex (codes), 1 = alnum (name)
+ce_krow         .byt 0     ; key cursor
+ce_kcol         .byt 0
+ce_klen         .byt 0     ; field length
+ce_kmax         .byt 0     ; field cap (9 for a code, 63 for the name)
+ce_kok          .byt 0     ; keyboard result: 1 = OK
+ce_kfield       .word 0    ; field offset inside bank $FF
+ce_tmp          .word 0
+ce_tmp2         .word 0
+ce_tmp3         .word 0
+ce_numbuf       .byt 0,0,0,0,0   ; "#NN",0 + slack (hiprint peeks one byte past print_count)
+ce_linebuf      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; one key row: 17 keys * 2 + NUL + slack
+
 _END            .byt 0
