@@ -1,0 +1,694 @@
+// ighelp.i65 -- HELP screen of the in-game menu: every in-game shortcut, with the button
+// combo that is REALLY armed for the running game.
+//
+// SELECT at the tab-bar level opens it from any tab (help_open), B or SELECT goes back to
+// the tab it came from (help_close), START closes the whole menu as usual. It is tab index
+// 5 in the dispatch tables but it is NOT on the bar (IGMENU_TABS = 5):
+//   - it only ever runs with the content-focus bit (igmenu_flags bit1) SET, which greys
+//     the bar, so no tab is highlighted and the slot maths never sees index 5;
+//   - index 5 is never persisted: ig_close runs help_close_fixup first, so a START-close
+//     from this screen reopens on the tab underneath, at the tab-bar level.
+//
+// Nothing here is a baked string of buttons. The firmware publishes, per game load, the
+// pad words the handlers match against, and the screen renders THOSE (ig_combo_draw):
+//   MENU_COMBO / MENU_COMBO_INV    combo that opens this menu (config.yml)
+//   CS_SAVE_INPUT / CS_LOAD_INPUT  savestate combos AFTER the per-game override of
+//                                  /sd2snes/savestate_inputs.yml was applied
+//   CS_SLOT_INPUT                  slot change (+ a d-pad direction)
+//   CS_CTRL                        0 = savestates are off for this game; the three words
+//                                  above are then STALE (left by the previous game)
+// The six L+R gestures are fixed in every FPGA core, so their words are immediates here;
+// CFG_ENABLE_INGAME_BUTTONS = 0 disarms all six and the rows grey out.
+//
+// A pad word has the layout of $4218/$4219:
+//   B $8000  Y $4000  Select $2000  Start $1000  Up $0800  Down $0400  Left $0200
+//   Right $0100  A $0080  X $0040  L $0020  R $0010
+//
+// Runs in FORCED BLANK only (ig_switch_to / states_enter). DBR = $F4 for the OVL_RB stores.
+// snescom preprocessing: // comments only, never `;` inside an included file.
+
+// HELP i18n string indices -- lockstep with HELP_LABELS in gen_igmenu_lang.py.
+#define IGM_HP_HDR       0
+#define IGM_HP_PERGAME   11
+#define IGM_HP_HDR_KEYS  12
+#define IGM_HP_KEYS1     13
+#define IGM_HP_KEYS2     14
+#define IGM_HP_UNAVAIL   15
+
+// Layout (tile rows / logical columns; the frame is ig_frame_geom record 5: interior rows
+// 4..23, columns 2..61). The action label may run to column 31 (HELP_LABEL_MAX = 24) and
+// the value column holds a combo or the 28-column "unavailable" text up to column 61.
+#define IGH_HDR_ROW      4
+#define IGH_NOTE_ROW     18
+#define IGH_KEYS_ROW     20
+#define IGH_KEYS1_ROW    21
+#define IGH_KEYS2_ROW    22
+#define IGH_LABEL_COL    8
+#define IGH_VALUE_COL    34
+
+// igh_rows record kinds
+#define IGH_K_FIXED      0
+#define IGH_K_MENU       1
+#define IGH_K_SAVE       2
+#define IGH_K_LOAD       3
+#define IGH_K_SLOT       4
+
+// ========================================================================================
+//  String helpers. Every store into OVL_RB is bounds-checked BEFORE it happens: a composed
+//  line (label + combo + suffix) can reach the cap with Y already past it, and a guard that
+//  only tests for equality after the increment would then run to the NUL.
+// ========================================================================================
+
+// ---- A(16) = line index -> A(16) = word index into an igm_*_tbl for the current language.
+//      16-bit A on entry and exit, no flags contract. Uses sst_lang. ----
+igc_idx:
+	.al : .xl
+	asl : asl : asl
+	clc : adc @sst_lang
+	asl
+	rts
+
+// ---- copy the NUL-terminated $C8 string at offset X(16) into OVL_RB at column Y(16).
+//      Returns Y = column after the last character. DBR = $F4. ----
+igc_puts:
+	php
+	sep #$20 : .as
+	rep #$10 : .xl
+igc_puts_l:
+	.as : .xl
+	cpy #IG_HELP_MAXCOL
+	bcs igc_puts_d
+	lda @$c80000, x
+	beq igc_puts_d
+	sta OVL_RB, y
+	inx
+	iny
+	bra igc_puts_l
+igc_puts_d:
+	.as : .xl
+	plp
+	rts
+
+// ---- X(16) = $C8 offset of a NUL-terminated string -> A(16) = its length (cap 60).
+//      Clobbers X and Y. ----
+igc_len:
+	php
+	rep #$30 : .al : .xl
+	ldy #$0000
+	sep #$20 : .as
+igc_len_l:
+	.as : .xl
+	lda @$c80000, x
+	beq igc_len_d
+	inx
+	iny
+	cpy #60
+	bne igc_len_l
+igc_len_d:
+	.as : .xl
+	rep #$30 : .al : .xl
+	tya
+	plp
+	rts
+
+// ---- HELP / STATES table flavours of igc_puts: A(16) = line index, Y(16) = column. ----
+igh_puts:
+	php
+	rep #$30 : .al : .xl
+	jsr igc_idx
+	tax
+	lda @igm_help_tbl, x
+	tax
+	jsr igc_puts
+	plp
+	rts
+
+igs_puts:
+	php
+	rep #$30 : .al : .xl
+	jsr igc_idx
+	tax
+	lda @igm_states_tbl, x
+	tax
+	jsr igc_puts
+	plp
+	rts
+
+// ---- draw HELP string A(16) centered on absolute tile row X(16), in ovl_pal. ----
+igh_draw_centered:
+	php
+	rep #$30 : .al : .xl
+	sta @sst_tmp
+	txa
+	sta @sst_row
+	lda @sst_tmp
+	jsr igc_idx
+	tax
+	lda @igm_help_tbl, x
+	tax
+	jsr igc_len
+	sta @sst_scr_coff
+	lda #$0040
+	sec : sbc @sst_scr_coff
+	lsr
+	tay
+	jsr ovl_row_clear
+	lda @sst_tmp
+	jsr igh_puts
+	lda @sst_row
+	tax
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ========================================================================================
+//  ig_combo_draw: A(16) = pad word, Y(16) = column -> the combo as text ("L+R+Select+X"),
+//  Y = column after it. DBR = $F4.
+//  Order: "L+R" first when BOTH shoulders are held (how every L+R gesture is spelled), then
+//  Select Start Y X B A L R and the four directions -- which yields the spellings people
+//  already know: $4230 L+R+Y+Left, $1010 Start+R, $0050 X+R, $6010 Select+Y+R.
+//  A word of 0 draws "--".
+// ========================================================================================
+ig_combo_draw:
+	php
+	rep #$30 : .al : .xl
+	sta @igc_word
+	tya
+	sta @igc_col0
+	lda @igc_word
+	bne igc_have
+	ldx #!igc_s_none
+	jsr igc_puts
+	plp
+	rts
+igc_have:
+	.al : .xl
+	and #$0030
+	cmp #$0030
+	bne igc_scan
+	ldx #!igc_s_lr
+	jsr igc_puts
+	lda @igc_word
+	and #$ffcf
+	sta @igc_word
+igc_scan:
+	.al : .xl
+	lda #$0000
+	sta @igc_ti
+igc_scan_l:
+	.al : .xl
+	lda @igc_ti
+	tax
+	lda @igc_tok_tbl, x
+	beq igc_done
+	and @igc_word
+	beq igc_next
+	tya
+	cmp @igc_col0
+	beq igc_nosep
+	ldx #!igc_s_plus
+	jsr igc_puts
+igc_nosep:
+	.al : .xl
+	lda @igc_ti
+	tax
+	inx : inx
+	lda @igc_tok_tbl, x
+	cmp #$0004
+	bcs igc_tok_go
+	jsr igc_idx
+	tax
+	lda @igm_keys_tbl, x
+igc_tok_go:
+	.al : .xl
+	tax
+	jsr igc_puts
+igc_next:
+	.al : .xl
+	lda @igc_ti
+	clc : adc #$0004
+	sta @igc_ti
+	bra igc_scan_l
+igc_done:
+	.al : .xl
+	plp
+	rts
+
+// ---- the combo that opens this menu -> A(16). The firmware publishes the word AND its
+//      complement; an old firmware writes neither, and the region survives resets, so a
+//      nonzero word alone proves nothing (same rule as ss_hot_mask_build). ----
+ig_menu_combo:
+	php
+	rep #$30 : .al : .xl
+	lda @MENU_COMBO
+	beq igmc_dflt
+	eor @MENU_COMBO_INV
+	inc
+	bne igmc_dflt
+	lda @MENU_COMBO
+	plp
+	rts
+igmc_dflt:
+	.al : .xl
+	lda #$4230
+	plp
+	rts
+
+// ---- are savestates live for THIS game? A(16) = CS_CTRL, Z set when they are off.
+//      16-bit A on entry AND exit; no php/plp on purpose, the caller branches on Z. ----
+igh_ss_on:
+	.al : .xl
+	sep #$20 : .as
+	lda @CS_CTRL
+	rep #$20 : .al
+	and #$00ff
+	rts
+
+// ========================================================================================
+//  HELP screen body
+// ========================================================================================
+help_enter:
+	php
+	phb
+	sep #$20 : .as
+	lda #$f4 : pha : plb
+	lda @CFG_LANGUAGE
+	cmp #IGM_LANG_COUNT
+	bcc ighe_lang_ok
+	lda #$00
+ighe_lang_ok:
+	.as
+	rep #$30 : .al : .xl
+	and #$00ff
+	sta @sst_lang
+	lda #$0000
+	sta @igh_marked
+	sta @igh_ri
+	lda #$2c00 : sta @ovl_pal
+	lda #IGM_HP_HDR
+	ldx #IGH_HDR_ROW
+	jsr igh_draw_centered
+ighe_row_l:
+	.al : .xl
+	lda @igh_ri
+	tax
+	lda @igh_rows, x
+	and #$00ff
+	cmp #$00ff
+	beq ighe_rows_done
+	jsr igh_draw_row
+	lda @igh_ri
+	clc : adc #$0005
+	sta @igh_ri
+	bra ighe_row_l
+ighe_rows_done:
+	.al : .xl
+	lda #$2000 : sta @ovl_pal
+	lda @igh_marked
+	beq ighe_no_note
+	lda #IGM_HP_PERGAME
+	ldx #IGH_NOTE_ROW
+	jsr igh_draw_centered
+ighe_no_note:
+	.al : .xl
+	lda #$2c00 : sta @ovl_pal
+	lda #IGM_HP_HDR_KEYS
+	ldx #IGH_KEYS_ROW
+	jsr igh_draw_centered
+	lda #$2000 : sta @ovl_pal
+	lda #IGM_HP_KEYS1
+	ldx #IGH_KEYS1_ROW
+	jsr igh_draw_centered
+	lda #IGM_HP_KEYS2
+	ldx #IGH_KEYS2_ROW
+	jsr igh_draw_centered
+	plb
+	plp
+	rts
+
+// ---- one shortcut row: the igh_rows record at byte offset igh_ri. A live row is white
+//      with the combo in the frame colour; a row whose feature is off is grey all over. ----
+igh_draw_row:
+	php
+	rep #$30 : .al : .xl
+	jsr ovl_row_clear
+	lda @igh_ri
+	tax
+	inx
+	lda @igh_rows, x
+	and #$00ff
+	ldy #IGH_LABEL_COL
+	jsr igh_puts
+	jsr igh_resolve
+	sta @igc_word
+	lda @igh_state
+	cmp #$0002
+	bne ighd_combo
+	lda #IGM_HP_UNAVAIL
+	ldy #IGH_VALUE_COL
+	jsr igh_puts
+	bra ighd_flush
+ighd_combo:
+	.al : .xl
+	lda @igc_word
+	ldy #IGH_VALUE_COL
+	jsr ig_combo_draw
+	lda @igh_ri
+	tax
+	inx : inx
+	lda @igh_rows, x
+	and #$00ff
+	cmp #IGH_K_SLOT
+	bne ighd_star
+	ldx #!igc_s_dpad
+	jsr igc_puts
+ighd_star:
+	.al : .xl
+	lda @igh_star
+	beq ighd_flush
+	ldx #!igc_s_star
+	jsr igc_puts
+ighd_flush:
+	.al : .xl
+	tya
+	sta @ig_rc_end
+	lda @igh_ri
+	tax
+	lda @igh_rows, x
+	and #$00ff
+	sta @ig_rc_row
+	lda @igh_state
+	beq ighd_live
+	lda #$2400 : sta @ovl_pal
+	lda @ig_rc_row
+	tax
+	jsr ovl_flush_abs
+	plp
+	rts
+ighd_live:
+	.al : .xl
+	lda #$2000 : sta @ovl_pal
+	lda @ig_rc_row
+	tax
+	jsr ovl_flush_abs
+	lda #IGH_VALUE_COL : sta @ig_rc_col
+	lda #$2c00 : sta @ig_rc_pal
+	jsr ig_recolor
+	plp
+	rts
+
+// ---- resolve the record at igh_ri -> A(16) = pad word. Side results:
+//        igh_state  0 = live, 1 = feature switched off (grey), 2 = not available for this
+//                   game (the value column shows the "unavailable" text instead)
+//        igh_star   1 = a savestate combo that differs from config.yml, i.e. this game has
+//                   its own line in savestate_inputs.yml (also latches igh_marked, which
+//                   makes help_enter print the footnote) ----
+igh_resolve:
+	php
+	rep #$30 : .al : .xl
+	lda #$0000
+	sta @igh_state
+	sta @igh_star
+	lda @igh_ri
+	tax
+	inx : inx
+	lda @igh_rows, x
+	and #$00ff
+	sta @igc_ti
+	bne ighr_not_fixed
+	// --- FIXED: one of the six FPGA gestures; the word is in the record ---
+	sep #$20 : .as
+	lda @CFG_ENABLE_INGAME_BUTTONS
+	rep #$30 : .al : .xl
+	and #$00ff
+	bne ighr_fixed_on
+	lda #$0001 : sta @igh_state
+ighr_fixed_on:
+	.al : .xl
+	lda @igh_ri
+	tax
+	inx : inx : inx
+	lda @igh_rows, x
+	plp
+	rts
+ighr_not_fixed:
+	.al : .xl
+	cmp #IGH_K_MENU
+	bne ighr_savestate
+	jsr ig_menu_combo
+	plp
+	rts
+ighr_savestate:
+	.al : .xl
+	jsr igh_ss_on
+	bne ighr_ss_live
+	lda #$0002 : sta @igh_state
+	lda #$0000
+	plp
+	rts
+ighr_ss_live:
+	.al : .xl
+	lda @igc_ti
+	cmp #IGH_K_SLOT
+	bne ighr_save_load
+	sep #$20 : .as
+	lda @CFG_ENABLE_SAVESTATE_SLOTS
+	rep #$30 : .al : .xl
+	and #$00ff
+	bne ighr_slot_on
+	lda #$0001 : sta @igh_state
+ighr_slot_on:
+	.al : .xl
+	lda @CS_SLOT_INPUT
+	plp
+	rts
+ighr_save_load:
+	.al : .xl
+	cmp #IGH_K_SAVE
+	bne ighr_load
+	lda @CS_SAVE_INPUT
+	cmp @CFG_INGAME_BUTTONS_SAVE_STATE
+	beq ighr_sl_done
+	bra ighr_sl_star
+ighr_load:
+	.al : .xl
+	lda @CS_LOAD_INPUT
+	cmp @CFG_INGAME_BUTTONS_LOAD_STATE
+	beq ighr_sl_done
+ighr_sl_star:
+	.al : .xl
+	pha
+	lda #$0001
+	sta @igh_star
+	sta @igh_marked
+	pla
+ighr_sl_done:
+	.al : .xl
+	plp
+	rts
+
+// ========================================================================================
+//  Open / close. The focus bit goes up BEFORE the switch: the redraw inside ig_switch_to
+//  then paints the bar greyed with no highlight and picks the content-level footer.
+// ========================================================================================
+help_open:
+	php
+	rep #$30 : .al : .xl
+	lda @active_tab
+	and #$00ff
+	sta @help_prev_tab
+	lda @igmenu_flags
+	ora #$0002
+	sta @igmenu_flags
+	lda #$0005
+	jsr ig_switch_to
+	plp
+	rts
+
+help_close:
+	php
+	rep #$30 : .al : .xl
+	lda @igmenu_flags
+	and #$fffd
+	sta @igmenu_flags
+	lda @help_prev_tab
+	cmp #IGMENU_TABS
+	bcc hcl_tab_ok
+	lda #$0000
+hcl_tab_ok:
+	.al : .xl
+	jsr ig_switch_to
+	// The shell still runs this frame's tick for the tab we landed on. On CHEATS that is
+	// the marquee, which would shift the (greyed, unfocused) selected row: park it.
+	lda #OVL_MQ_INIT
+	sta @ovl_mq_wait
+	plp
+	rts
+
+// ---- tab 5 input: SELECT toggles the screen shut (B is the shell's own back key, routed
+//      here through ig_focus_leave). ----
+help_input:
+	php
+	rep #$30 : .al : .xl
+	lda @ovl_edge
+	bit #$2000
+	beq hin_done
+	jsr help_close
+hin_done:
+	.al : .xl
+	plp
+	rts
+
+// ---- called first thing by ig_close: a START-close with this screen up must persist the
+//      tab UNDERNEATH (index 5 is not a tab the bar can show) at the tab-bar level. ----
+help_close_fixup:
+	php
+	rep #$30 : .al : .xl
+	lda @active_tab
+	and #$00ff
+	cmp #$0005
+	bne hcf_done
+	lda @help_prev_tab
+	cmp #IGMENU_TABS
+	bcc hcf_tab_ok
+	lda #$0000
+hcf_tab_ok:
+	.al : .xl
+	sta @active_tab
+	lda @igmenu_flags
+	and #$fffd
+	sta @igmenu_flags
+hcf_done:
+	.al : .xl
+	plp
+	rts
+
+// ---- ig_bar_sync target for tab 5 (jumped to from inside ig_bar_sync, which already did
+//      its php): there is no cursor on this screen, so collapse the BAR's window
+//      (left > right = empty), the state ig_theme_init starts it in. ----
+igb_help_target:
+	.al : .xl
+	sep #$20 : .as
+	lda #$01 : sta @$002126
+	lda #$00 : sta @$002127
+	plp
+	rts
+
+// ========================================================================================
+//  SAVESTATES tab hint: "<save combo> save   <load combo> load", composed from the words
+//  armed for this game and centered. Built twice -- once at column 0 to measure, once in
+//  place. states_enter only gets here with savestates live (CS_CTRL != 0).
+// ========================================================================================
+sst_hint_draw:
+	php
+	rep #$30 : .al : .xl
+	jsr ovl_row_clear
+	ldy #$0000
+	jsr sst_hint_build
+	tya
+	sta @sst_scr_coff
+	lda #$0040
+	sec : sbc @sst_scr_coff
+	lsr
+	cmp #$0006
+	bcs shw_col_ok
+	lda #$0006
+shw_col_ok:
+	.al : .xl
+	tay
+	jsr ovl_row_clear
+	jsr sst_hint_build
+	ldx #SST_HINT_ROW
+	jsr ovl_flush_abs
+	plp
+	rts
+
+// ---- Y(16) = start column -> Y = column after the composed hint. ----
+sst_hint_build:
+	php
+	rep #$30 : .al : .xl
+	lda @CS_SAVE_INPUT
+	jsr ig_combo_draw
+	ldx #!igc_s_sp1
+	jsr igc_puts
+	lda #IGM_ST_HINT_SAVE
+	jsr igs_puts
+	ldx #!igc_s_sp3
+	jsr igc_puts
+	lda @CS_LOAD_INPUT
+	jsr ig_combo_draw
+	ldx #!igc_s_sp1
+	jsr igc_puts
+	lda #IGM_ST_HINT_LOAD
+	jsr igs_puts
+	plp
+	rts
+
+// ========================================================================================
+//  Data (bank $C8; never executed)
+// ========================================================================================
+
+// Shortcut rows: tile row, HELP label index, kind, pad word (FIXED only). $FF ends it.
+// Lockstep with HELP_LABELS (indices 1..10) in gen_igmenu_lang.py.
+igh_rows:
+	.byt 6, 1, 1 : .word $0000
+	.byt 7, 2, 2 : .word $0000
+	.byt 8, 3, 3 : .word $0000
+	.byt 9, 4, 4 : .word $0000
+	.byt 11, 5, 0 : .word $3030
+	.byt 12, 6, 0 : .word $2070
+	.byt 13, 7, 0 : .word $10b0
+	.byt 14, 8, 0 : .word $9030
+	.byt 15, 9, 0 : .word $5030
+	.byt 16, 10, 0 : .word $1070
+	.byt $ff
+
+// Combo tokens IN DRAW ORDER: pad mask, then either the $C8 offset of a neutral name or
+// 0..3 = a localized direction (igm_keys_tbl line, KEYS_LABELS order). A string offset can
+// never be below 4 -- the image starts with the 11-byte header. Mask 0 ends the table.
+igc_tok_tbl:
+	.word $2000 : .word igc_s_select
+	.word $1000 : .word igc_s_start
+	.word $4000 : .word igc_s_y
+	.word $0040 : .word igc_s_x
+	.word $8000 : .word igc_s_b
+	.word $0080 : .word igc_s_a
+	.word $0020 : .word igc_s_l
+	.word $0010 : .word igc_s_r
+	.word $0800 : .word $0000
+	.word $0400 : .word $0001
+	.word $0200 : .word $0002
+	.word $0100 : .word $0003
+	.word $0000
+
+// Button names as printed on the pad: language-neutral, so no igm_*_tbl entry.
+igc_s_select:
+	.byt "Select", 0
+igc_s_start:
+	.byt "Start", 0
+igc_s_y:
+	.byt "Y", 0
+igc_s_x:
+	.byt "X", 0
+igc_s_b:
+	.byt "B", 0
+igc_s_a:
+	.byt "A", 0
+igc_s_l:
+	.byt "L", 0
+igc_s_r:
+	.byt "R", 0
+igc_s_lr:
+	.byt "L+R", 0
+igc_s_plus:
+	.byt "+", 0
+igc_s_dpad:
+	.byt " + D-Pad", 0
+igc_s_star:
+	.byt " *", 0
+igc_s_none:
+	.byt "--", 0
+igc_s_sp1:
+	.byt " ", 0
+igc_s_sp3:
+	.byt "   ", 0

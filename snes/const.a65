@@ -209,26 +209,41 @@ text_lang_de                      .byt "Deutsch", 0
 text_lang_fr                      .byt "Fran", 141, "ais", 0
 text_lang_it                      .byt "Italiano", 0
 text_lang_ru                      .byt 80, 121, 99, 99, 207, 205, 206, 0
-; ---- In-game TAB menu HELP tab (Phase 2). These are the ENGLISH base; the
-;      per-language dicts (utils/lang_*.py) carry the translations. build_const.py
-;      pools them into bank $C1 (the menu never renders them), and the SEPARATE
-;      generator utils/gen_igmenu_lang.py re-reads THESE labels + the same dicts to
-;      emit igmenu_lang.i65 (font-encoded 5-lang tables) linked into igmenu.bin ($C2).
+; ---- In-game TAB menu HELP screen (SELECT at the tab-bar level). These are the ENGLISH
+;      base; the per-language dicts (utils/lang_*.py) carry the translations. build_const.py
+;      DROPS every text_igm_* label from the menu link (the menu never renders them); the
+;      SEPARATE generator utils/gen_igmenu_lang.py re-reads THESE labels + the same dicts to
+;      emit igmenu_lang.i65 (font-encoded tables) linked into igmenu.bin ($C8).
 ;      Keep the label set in lockstep with HELP_LABELS in gen_igmenu_lang.py and the
-;      igm_help_rows/igm_help_cols tables in igmenu.a65 (same count + order).
-text_igm_hdr_controls             .byt "IN-GAME CONTROLS", 0
-text_igm_open                     .byt "Open menu:      L+R+Y+Left", 0
-text_igm_save                     .byt "Save savestate: Start+R", 0
-text_igm_load                     .byt "Load savestate: Start+L", 0
-text_igm_slot                     .byt "Choose slot:    Select + D-Pad", 0
-text_igm_reset                    .byt "Reset to menu:  L+R+Select+X", 0
+;      IGM_HP_* indices in snes/ighelp.i65 (same count + order).
+;      The shortcut lines carry the ACTION only: the button combo next to each one is
+;      rendered at run time from the word the firmware published for THIS game
+;      (ig_combo_draw), so a per-game savestate combo or a custom menu combo shows as it
+;      really is. Action labels are capped at 24 columns (value column starts at 32).
+text_igm_hdr_controls             .byt "IN-GAME SHORTCUTS", 0
+text_igm_open                     .byt "Open this menu", 0
+text_igm_save                     .byt "Save state", 0
+text_igm_load                     .byt "Load state", 0
+text_igm_slot                     .byt "Choose slot", 0
+text_igm_reset_game               .byt "Reset game", 0
+text_igm_reset                    .byt "Reset to menu", 0
+text_igm_cheats_on                .byt "Cheats on", 0
+text_igm_cheats_off               .byt "Cheats off", 0
+text_igm_hooks_off                .byt "Disable hooks", 0
+text_igm_hooks_10s                .byt "Disable hooks for 10 s", 0
+text_igm_pergame                  .byt "* combo set for this game (savestate_inputs.yml)", 0
 text_igm_hdr_keys                 .byt "MENU KEYS", 0
-text_igm_tab                      .byt "L / R:     switch tab", 0
-text_igm_page                     .byt "Left/Right: change page", 0
-text_igm_nav                      .byt "Up / Down:  move", 0
-text_igm_act                      .byt "A: apply     X: all", 0
-text_igm_close                    .byt "B: close menu", 0
-text_igm_note                     .byt "Some combos set in the Options menu", 0
+text_igm_keys1                    .byt "Left/Right: tab   L/R: first/last   A: open", 0
+text_igm_keys2                    .byt "B: back   START: close   SELECT: this help", 0
+text_igm_unavail                  .byt "unavailable for this game", 0
+; ---- D-pad direction names used INSIDE a rendered combo (ig_combo_draw). The other button
+;      names (A B X Y L R Start Select) are printed on the pad and stay neutral ASCII in
+;      snes/ighelp.i65. Capped at 8 columns. Lockstep with KEYS_LABELS in
+;      gen_igmenu_lang.py, ORDER Up/Down/Left/Right (= pad word bits $0800/$0400/$0200/$0100).
+text_igm_key_up                   .byt "Up", 0
+text_igm_key_down                 .byt "Down", 0
+text_igm_key_left                 .byt "Left", 0
+text_igm_key_right                .byt "Right", 0
 ; ---- In-game TAB menu STATES tab (Phase 3). ENGLISH base; per-language dicts carry
 ;      the translations. build_const.py pools them into $C1 (menu never renders them),
 ;      gen_igmenu_lang.py re-reads THESE + the dicts to emit igm_states_tbl in
@@ -239,8 +254,10 @@ text_igm_st_title                 .byt "SELECT SAVESTATE SLOT", 0
 text_igm_st_slot                  .byt "SLOT", 0
 text_igm_st_full                  .byt "OCCUPIED", 0
 text_igm_st_empty                 .byt "EMPTY", 0
-text_igm_st_hint                  .byt "Start+R save   Start+L load", 0
+text_igm_st_hint_save             .byt "save", 0
 text_igm_st_disabled              .byt "Savestate slots disabled", 0
+text_igm_st_hint_load             .byt "load", 0
+text_igm_st_unavail               .byt "Savestates unavailable for this game", 0
 ; ---- In-game TAB menu tab-bar labels (i18n). ENGLISH base; per-language dicts carry the
 ;      translations. gen_igmenu_lang.py re-reads THESE + the dicts to emit igm_tab_tbl in
 ;      igmenu_lang.i65 ($C2), read by igmenu.a65's tab bar. Lockstep with TAB_LABELS in
@@ -738,13 +755,14 @@ text_cheat      .byt "Cheats for ", 0
 ; directly, and the in-game list (a separate $C2 link that cannot reach this pool)
 ; gets text_igm_cheat_noname staged into OVL_NONAME_BUF by whichever host opened it.
 text_igm_ch_none      .byt "No cheats", 0
-text_igm_ft_tab       .byt "<>:TAB L/R:ENDS A:OPEN B:CLOSE", 0
+text_igm_ft_tab       .byt "<>:TAB L/R:ENDS A:OPEN SEL:HELP B:CLOSE", 0
 text_igm_ft_cheats    .byt "A:ON/OFF Y:EDIT SEL:ADD X:CHEATS B:BACK", 0
 text_igm_ft_generic   .byt "A:SELECT B:BACK", 0
 text_igm_master_on    .byt "CHEATS: ON", 0
 text_igm_master_off   .byt "CHEATS: OFF", 0
 text_igm_ft_ce_edit   .byt "A:EDIT SEL:ADD CODE Y:REMOVE B:BACK", 0
 text_igm_ft_ce_kbd    .byt "A:TYPE Y:DELETE SEL:SPACE X:OK B:CANCEL", 0
+text_igm_ft_help      .byt "B:BACK START:CLOSE", 0
 ; ---- In-game cheat EDITOR (CHEATS tab: Y = edit, Select = add). ENGLISH base; per-language
 ;      dicts carry the translations; gen_igmenu_lang.py emits igm_cheatedit_tbl (bank $C8).
 ;      Lockstep with CHEATEDIT_LABELS + the IGM_CE_* indices in snes/cheatedit_defs.i65.
