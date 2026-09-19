@@ -1,0 +1,124 @@
+name: CI
+
+# Catches the class of bug that shipped an untranslated m3nu.bin once (see
+# snes/Makefile): build the menu and the firmware on every push/PR so a bank
+# overflow, an undefined symbol, or a compiler warning fails loudly here
+# instead of on someone's cartridge. Also runs the host-side regression suite
+# in tests/host and the i18n glyph/accent parity check in tests/.
+#
+# Everything below runs on a plain ubuntu-latest runner. snescom/sneslink
+# (the 65816 assembler+linker) are not packaged anywhere, so this workflow
+# builds them from source each run; see CONTRIBUTING.md for why that source
+# needs nothing special on Linux (it only gets awkward on Windows, where the
+# POSIX fork()/pipe() it uses for its preprocessing step needs MSYS2's own
+# gcc -- ubuntu-latest's gcc supports that natively).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SNESCOM_VERSION: 1.8.1.1
+
+jobs:
+  build-menu:
+    name: Build SNES menu (snescom/sneslink)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache snescom/sneslink build
+        id: snescom-cache
+        uses: actions/cache@v4
+        with:
+          path: snescom-${{ env.SNESCOM_VERSION }}
+          key: snescom-${{ env.SNESCOM_VERSION }}-${{ runner.os }}-v1
+
+      - name: Build snescom/sneslink from source
+        if: steps.snescom-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o snescom.tar.gz \
+            "https://bisqwit.iki.fi/src/arch/snescom-${SNESCOM_VERSION}.tar.gz"
+          tar xzf snescom.tar.gz
+          make -C "snescom-${SNESCOM_VERSION}" -j"$(nproc)"
+
+      - name: Install snescom/sneslink
+        run: |
+          sudo install -m 755 "snescom-${SNESCOM_VERSION}/snescom" /usr/local/bin/snescom
+          sudo install -m 755 "snescom-${SNESCOM_VERSION}/sneslink" /usr/local/bin/sneslink
+
+      - name: Build menu (menu.bin / m3nu.bin / igmenu.bin)
+        working-directory: snes
+        run: make -j"$(nproc)"
+
+      - name: Upload menu binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: menu-binaries
+          path: |
+            snes/menu.bin
+            snes/m3nu.bin
+            snes/igmenu.bin
+          if-no-files-found: error
+
+  build-firmware:
+    name: Build firmware (${{ matrix.config }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [config-mk2, config-mk3, config-mk3-stm32]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+
+      - name: Build host tools (genhdr, lpcchksum)
+        working-directory: src/utils
+        run: make
+
+      - name: Stub the FPGA bitstream (CI-only placeholder)
+        # The firmware header embeds the FPGA core's bitstream (CONFIG_CFGWARE),
+        # built separately with Xilinx tools we don't have here. A real release
+        # ships the actual core; CI only needs *some* bytes so the C build --
+        # the thing this job actually checks -- can link and produce a header.
+        run: |
+          mkdir -p verilog/sd2snes_mini
+          head -c 4096 /dev/urandom > verilog/sd2snes_mini/fpga_mini.bit
+          head -c 4096 /dev/urandom > verilog/sd2snes_mini/fpga_mini.bi3
+
+      - name: Build firmware
+        working-directory: src
+        run: make CONFIG=${{ matrix.config }}
+
+  host-tests:
+    name: Host test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run tests/host/*.sh (ASan/UBSan-instrumented conformance suite)
+        working-directory: tests/host
+        run: |
+          status=0
+          for script in run*.sh; do
+            echo "::group::$script"
+            if ! bash "$script"; then
+              echo "FAILED: $script"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - name: i18n glyph/accent parity (tests/test_i18n_parity.py)
+        run: python3 tests/test_i18n_parity.py
