@@ -392,6 +392,7 @@
    (ovl_stage_theme), read by snes/igmenu.a65. Lives in the once-free $F48252..$F48FFF
    gap -- above the igmenu Slice-2 scratch ($F48240..$F4824F), clear of OVL_RB
    ($F48200..$F4823F) and OVL_TMBUF ($F49000..$F499FF) -- now occupied up to $F48397:
+   the igmenu HELP-screen / combo-renderer scratch $F48252-$F4825D (igmenu.a65),
    IGM_THM_* $F48260-$F482D2, ovl_sb_* $F482DE-$F482E7 (cheatlist.i65), OVL_CUR_OFF
    $F482E8, ig_hdma_mask + BAR scratch $F482F0-$F482FF and theme WRAM/DMA-reg saves
    $F48300-$F483A3 (igmenu.a65); then ig_win_x..h $F483A4-A7, tint $F483A8, pos_focus

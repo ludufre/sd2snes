@@ -50,18 +50,19 @@ igmenu_header:
 ; --- shell scratch vars (PSRAM $F4, ABOVE the overlay's ovl_* block $F48100-$F48127 and
 ;     BELOW the snapshot scratch $F48130-$F48144; the $F48128-$F4812F gap). Zeroed by
 ;     igmenu_main (PSRAM stale). Accessed @long. ---
-#define active_tab      $F48128    ; 0=Cheats 1=Savestate 2=SaveGame 3=Guides 4=Help
+#define active_tab      $F48128    ; 0=Cheats 1=Savestate 2=SaveGame 3=Guides 4=Trainer; 5=Help,
+                                   ;   which is NOT on the bar (SELECT opens it, see ighelp.i65)
 #define igmenu_tabcount $F4812A    ; visible tab count (Phase 0 = 5)
 #define igmenu_flags    $F4812C    ; bit0 = manual viewer sub-mode; bit1 = content focused (two-level
                                    ;   nav: clear = tab bar owns L/R, set = the active tab owns input)
 #define igmenu_prevtab  $F4812E    ; previous tab (for leave/enter on switch)
 
-; --- HELP tab (Phase 2) scratch, in the reserved i18n/handoff gap $F48160-7F ---
-#define help_lang       $F48160    ; CFG.language clamped 0..IGM_LANG_COUNT-1 (word)
-#define help_lineno     $F48162    ; HELP line loop counter 0..IGM_HELP_NLINES-1 (word)
+; --- HELP screen (ighelp.i65) scratch, in the reserved i18n/handoff gap $F48160-7F ---
+#define igh_star        $F48160    ; 1 = the row being drawn carries a per-game combo (word)
+#define igh_ri          $F48162    ; byte offset of the igh_rows record being drawn (word)
 #define IG_HELP_MAXCOL  62         ; stop the per-line copy before the 64-col row edge
 
-; --- STATES tab (Phase 3) scratch, in the SAME reserved gap, AFTER help_lineno (word at
+; --- STATES tab (Phase 3) scratch, in the SAME reserved gap, AFTER igh_ri (word at
 ;     $F48162 occupies $F48162-63, so the next free byte is $F48164). All words; the
 ;     first three persist across frames (read by states_input), the rest are transient
 ;     helper args. STATES and HELP are never the active tab at the same time, so sharing
@@ -103,6 +104,15 @@ igmenu_header:
 #define ig_rc_addr   $F4824C
 #define ig_notch_end $F4824E
 #define sst_moved    $F48250    ; States/Saves: 1 if the cursor/active changed this frame -> repaint
+; --- HELP screen + combo renderer (ighelp.i65), the rest of the run below IGM_THM_MAGIC
+;     ($F48260). Words, @long. help_prev_tab is written by help_open before anything reads
+;     it; the others are transients of one draw. ---
+#define help_prev_tab $F48252   ; tab the HELP screen was opened over (where B/SELECT go back to)
+#define igc_word     $F48254    ; ig_combo_draw: pad word still to be spelled out
+#define igc_col0     $F48256    ; ig_combo_draw: start column (no '+' before the first token)
+#define igc_ti       $F48258    ; ig_combo_draw: igc_tok_tbl byte offset / igh_resolve: row kind
+#define igh_state    $F4825A    ; row state: 0 live, 1 feature off (grey), 2 unavailable here
+#define igh_marked   $F4825C    ; 1 = some row showed a per-game combo -> print the footnote
 
 ; --- THEME scratch + the borrowed-state save areas (ig_theme_init / ig_theme_teardown).
 ;     HDMA cannot fetch its table from ROM/PSRAM (same reason the menu copies hdma_*_src into
@@ -188,14 +198,24 @@ igmenu_header:
 ; @long reads/writes reach it exactly like the handler does. Byte semantics: 0 = slots
 ; off; 1..4 = active slot; bit7 = MCU-busy flag (we mask it on read, NEVER set it).
 #define CS_SLOT         $FE100F
+; The pad words the savestate handler matches against, as the firmware armed them for THIS
+; game (config.yml, then the per-game line of savestate_inputs.yml on top), and CS_CTRL:
+; 0 = savestates are off for this game (overlay-only load -- the three words are then stale
+; leftovers of the previous game and must not be shown). Same local-define rule as CS_SLOT.
+#define CS_SAVE_INPUT   $FE1002
+#define CS_LOAD_INPUT   $FE1004
+#define CS_SLOT_INPUT   $FE1010
+#define CS_CTRL         $FE1012
 
 ; STATES i18n string indices -- lockstep with STATES_LABELS order in gen_igmenu_lang.py.
 #define IGM_ST_TITLE    0
 #define IGM_ST_SLOT     1
 #define IGM_ST_FULL     2
 #define IGM_ST_EMPTY    3
-#define IGM_ST_HINT     4
+#define IGM_ST_HINT_SAVE 4         ; word after the save combo in the composed hint
 #define IGM_ST_DISABLED 5
+#define IGM_ST_HINT_LOAD 6         ; word after the load combo
+#define IGM_ST_UNAVAIL  7          ; savestates are off for this game
 
 ; STATES layout (tile rows/logical columns; body is rows 4..23). WS-C: there are no marker
 ; glyphs -- the selection BAR shows the local cursor and a GREEN "SLOT n" label shows the
@@ -357,6 +377,16 @@ igmenu_main:
 	lda #MN_FR_Y0 : sta @man_pos_fry
 	lda #MN_POS_MAGIC : sta @man_pos_magic
 igm_pos_kept:
+	; --- a tab index the bar cannot show never survives a reopen (the HELP screen is index
+	;     5 and help_close_fixup keeps it from being persisted; this is the belt to that) ---
+	lda @active_tab
+	cmp #IGMENU_TABS
+	bcc igm_tab_ok
+	lda #$0000
+	sta @active_tab
+	sta @igm_pos_focus
+igm_tab_ok:
+	.al : .xl
 	; --- reopen straight into the CONTENT when the shell was START-closed while focused
 	;     (igm_pos_focus persists bit1 under the same magic; bit0/viewer never persists --
 	;     the fresh-session path above just zeroed it, so this is safe on both paths) ---
@@ -647,6 +677,7 @@ ig_tabbar_lvl:
 	sep #$20 : .as
 	beq ig_tb_chk_l
 ig_close:
+	jsr help_close_fixup                    ; HELP screen up -> persist the tab underneath
 	rep #$20 : .al
 	lda @igmenu_flags
 	and #$0002
@@ -697,9 +728,17 @@ ig_tb_chk_a:
 	lda @ovl_edge
 	bit #$0080                              ; A -> focus the active tab's content
 	sep #$20 : .as
-	beq ig_loop_tail
+	beq ig_tb_chk_sel
 	jsr ig_focus_enter
 	jmp ig_loop_tail
+ig_tb_chk_sel:
+	.as
+	rep #$20 : .al
+	lda @ovl_edge
+	bit #$2000                              ; SELECT -> the HELP screen (every shortcut)
+	sep #$20 : .as
+	beq ig_loop_tail
+	jsr help_open
 ig_loop_tail:
 	sep #$20 : .as
 	- lda @$004212 : bmi -                  ; wait out of vblank
@@ -742,6 +781,14 @@ ig_focus_enter:
 ig_focus_leave:
 	php
 	rep #$30 : .al : .xl
+	lda @active_tab : and #$00ff
+	cmp #$0005
+	bne ifl_normal
+	jsr help_close                                        ; HELP screen: B goes back to the tab
+	plp                                                   ;   it was opened over
+	rts
+ifl_normal:
+	.al : .xl
 	lda @igmenu_flags : and #$fffd : sta @igmenu_flags   ; clear bit1 (content focus)
 	sep #$20 : .as
 	lda #$80 : sta @$002100                              ; force blank (both paths redraw the footer)
@@ -962,6 +1009,7 @@ cde_lang_ok:
 #define IGM_SH_MASTER_OFF 4
 #define IGM_SH_FT_CE_EDIT 5
 #define IGM_SH_FT_CE_KBD  6
+#define IGM_SH_FT_HELP    7
 
 ; ---- draw shell-chrome string A(16)=line index centered on absolute row X(16).
 ;      Sets sst_lang itself, so it works from any tab. DBR is set here. ----
@@ -1309,90 +1357,7 @@ cheats_leave:
 ig_noop:
 	rts
 
-; ======================================================================
-;  Tab 4 (HELP): static i18n controls/hooks reference. Forced blank (direct VRAM).
-;  Reads CFG.language from the CFG BSRAM mirror ($FF01B7 = CFG_LANGUAGE, readable
-;  in-game under IS_PATCH exactly like CHEAT_FLAGS), clamps to 0..IGM_LANG_COUNT-1,
-;  then draws IGM_HELP_NLINES font-encoded lines from igmenu_lang.i65. The row +
-;  start column per line come from igm_help_rows/igm_help_cols (layout, language-
-;  independent). Each source string is a NUL-terminated, already-encoded run in bank
-;  $C8, read via `lda @$c80000, x` (long,X). Input/tick are ig_noop for this tab.
-; ======================================================================
-help_enter:
-	php
-	phb
-	sep #$20 : .as
-	lda #$f4 : pha : plb                       ; DBR=$F4 (OVL_RB abs writes)
-	lda @CFG_LANGUAGE                           ; CFG.language 0=EN..4=FR ($FF01B7)
-	cmp #IGM_LANG_COUNT
-	bcc he_lang_ok
-	lda #$00                                    ; out of range -> English (column 0)
-he_lang_ok:
-	rep #$30 : .al : .xl
-	and #$00ff
-	sta @help_lang
-	lda #$0000 : sta @help_lineno
-he_loop:
-	lda @help_lineno
-	cmp #IGM_HELP_NLINES
-	bcc he_body
-	jmp he_done
-he_body:
-	jsr ovl_row_clear                          ; OVL_RB = 64 spaces (DBR=$F4)
-	; --- dest column = igm_help_cols[lineno] -> Y ---
-	lda @help_lineno : tax
-	sep #$20 : .as
-	lda @igm_help_cols, x                       ; long,X byte (bank $C8)
-	rep #$30 : .al : .xl
-	and #$00ff
-	tay                                        ; Y = dest column in OVL_RB
-	; --- source offset = igm_help_tbl[(lineno*IGM_LANG_STRIDE + lang)*2] ---
-	;     IGM_LANG_SHIFT asl == *IGM_LANG_STRIDE. The row stride is a power of two
-	;     precisely so adding a language never touches this arithmetic; the generator
-	;     hard-fails the build if the language count ever outgrows the stride.
-	lda @help_lineno
-	asl : asl : asl                            ; lineno*8 (IGM_LANG_STRIDE)
-	clc : adc @help_lang                       ; + lang column
-	asl                                        ; *2 (word index)
-	tax
-	lda @igm_help_tbl, x                        ; A = string offset within bank $C8
-	tax                                        ; X = source byte offset
-	sep #$20 : .as
-he_copy:
-	lda @$c80000, x                             ; long,X source byte (bank $C8)
-	beq he_copy_done
-	sta OVL_RB, y                              ; abs,Y (DBR=$F4)
-	inx
-	iny
-	cpy #IG_HELP_MAXCOL
-	bne he_copy
-he_copy_done:
-	; --- section headers (line 0 = IN-GAME CONTROLS, line 6 = MENU KEYS) in cyan accent ---
-	rep #$30 : .al : .xl
-	lda @help_lineno
-	beq hh_hdr
-	cmp #$0006
-	beq hh_hdr
-	lda #$2000 : sta @ovl_pal
-	bra hh_paldone
-hh_hdr:
-	lda #$2c00 : sta @ovl_pal
-hh_paldone:
-	; --- flush the built row to igm_help_rows[lineno] ---
-	lda @help_lineno : tax
-	sep #$20 : .as
-	lda @igm_help_rows, x                       ; long,X row byte (bank $C8)
-	rep #$30 : .al : .xl
-	and #$00ff
-	tax                                        ; X = absolute tile row
-	jsr ovl_flush_abs                           ; de-interleave OVL_RB -> BG1/BG2 (clobbers X/Y)
-	lda @help_lineno : inc : sta @help_lineno
-	jmp he_loop
-he_done:
-	lda #$2000 : sta @ovl_pal                    ; restore white for later draws
-	plb
-	plp
-	rts
+; (Tab 5, the HELP screen -- help_enter and the combo renderer -- lives in ighelp.i65.)
 
 ; ======================================================================
 ;  Tab 1 (STATES): savestate slot selector (SELECTION-ONLY -- save/load stay on the
@@ -1421,6 +1386,20 @@ se_lang_ok:
 	rep #$30 : .al : .xl
 	and #$00ff
 	sta @sst_lang
+	; --- savestates off for THIS game (CS_CTRL = 0: the toggle, or a core/cart without
+	;     them)? Then there is no slot to pick and the armed-combo words are stale. ---
+	jsr igh_ss_on                              ; ighelp.i65; Z set = off
+	bne se_ss_live
+	lda #$0001 : sta @sst_disabled
+	lda #$2400 : sta @ovl_pal
+	lda #IGM_ST_UNAVAIL : ldx #SST_DIS_ROW
+	jsr sst_draw_centered
+	lda #$2000 : sta @ovl_pal
+	plb
+	plp
+	rts
+se_ss_live:
+	.al : .xl
 	; --- slots enabled? (CFG mirror $FF01A5) ---
 	sep #$20 : .as
 	lda @CFG_ENABLE_SAVESTATE_SLOTS
@@ -1463,9 +1442,8 @@ se_row_loop:
 	lda @sst_scr_slot : inc : sta @sst_scr_slot
 	cmp #$0005
 	bcc se_row_loop
-	; --- save/load hint ---
-	lda #IGM_ST_HINT : ldx #SST_HINT_ROW
-	jsr sst_draw_centered
+	; --- save/load hint, spelled from the combos armed for this game (ighelp.i65) ---
+	jsr sst_hint_draw
 	plb
 	plp
 	rts
@@ -2977,6 +2955,8 @@ itb_lbl_ok:
 	lda @igm_tab_tint : cmp #$2c00
 	bne itb_no_hl                             ; greyed bar = uniform, no active highlight
 	lda @active_tab : and #$00ff
+	cmp #IGMENU_TABS
+	bcs itb_no_hl                             ; off-bar index (HELP) -> nothing to highlight
 	sta @ovl_cur                              ; tab-bar scratch, dead after the loop
 	asl                                       ; *2
 	clc : adc @ovl_cur                        ; *3
@@ -3120,8 +3100,16 @@ ig_ft_cheats:
 	lda #IGM_SH_FT_CHEATS
 	bra ig_ft_go
 ig_ft_generic:
+	.al : .xl
+	cmp #$0005
+	bne ig_ft_gen2
+	lda #IGM_SH_FT_HELP                       ; HELP screen: nothing to select
+	bra ig_ft_go
+ig_ft_gen2:
+	.al : .xl
 	lda #IGM_SH_FT_GENERIC
 ig_ft_go:
+	.al : .xl
 	ldx #IG_FOOTER_ROW
 	jsr sh_draw_centered
 	plp
@@ -3398,7 +3386,8 @@ igb_content:
 	cmp #$0002 : beq igb_t_saves
 	cmp #$0003 : beq igb_t_guides
 	cmp #$0004 : beq igb_t_trainer
-	jmp igb_place                                ; tab 5 (HELP) is static -> keep the capsule
+	jmp igb_help_target                          ; tab 5 (HELP): no cursor -> hide the BAR
+	                                             ;   (body in ighelp.i65, same reason as below)
 
 igb_t_trainer:
 	jmp igb_trainer_target                       ; body in trainer.i65 (the selected row, or the
@@ -3942,6 +3931,7 @@ iot_done:
 ; references, no short-branch surprises. Its data tail is followed only by labels.
 #include "trainer.i65"
 #include "cheatedit.i65"           ; cheat EDITOR code (uses tr_nav_repeat / tr_side_repair)
+#include "ighelp.i65"              ; HELP screen (SELECT at the bar) + the pad-combo renderer
 
 ; ======================================================================
 ;  Data (bank $C8; never executed).
@@ -3952,14 +3942,14 @@ tab_enter_tbl:
 	.word saves_enter                        ; 2 SAVES  (battery save status)
 	.word manual_enter                       ; 3 GUIDES (image viewer prompt)
 	.word trainer_enter                      ; 4 TRAINER (WRAM search)
-	.word help_enter                         ; 5 HELP   (static i18n reference, off the bar)
+	.word help_enter                         ; 5 HELP   (off the bar: SELECT opens it, ighelp.i65)
 tab_input_tbl:
 	.word cheats_input                       ; 0 CHEATS
 	.word states_input                       ; 1 SAVESTATES
 	.word saves_input                        ; 2 SAVES: SRAM slot nav (noop when slots off)
 	.word manual_input                       ; 3 GUIDES: list nav / A -> enter the viewer
 	.word trainer_input                      ; 4 TRAINER
-	.word ig_noop                            ; 5 HELP  (static page, no input)
+	.word help_input                         ; 5 HELP  (SELECT closes it; B comes via ig_focus_leave)
 tab_tick_tbl:
 	.word cheats_tick                        ; 0 CHEATS
 	.word ig_noop                            ; 1 SAVESTATES
@@ -3997,13 +3987,6 @@ ig_icon_font:
 	.byt $18,$3c,$7e,$18,$18,$7e,$3c,$18   ; 4 TRAINER    (magnifier/target)
 	.byt $3c,$66,$06,$0c,$18,$00,$18,$00   ; 5 HELP       (question mark)
 
-; HELP tab layout: absolute tile row + start column per line. Language-independent;
-; lockstep with HELP_LABELS order in gen_igmenu_lang.py (IGM_HELP_NLINES=13 entries).
-igm_help_rows:
-	.byt 4,  6, 7, 8, 9, 10,  13,  15, 16, 17, 18, 19,  22
-igm_help_cols:
-	.byt 12, 16,16,16,16,16,  12,  16,16,16,16,16,  10
-
 ; Baked fallback for the selection BAR's colour-math HDMA table (ch5, transfer mode 1 =
 ; $2131 CGADSUB + $2132 COLDATA), used when IGM_THM_MAGIC is not $A5. Byte-for-byte the
 ; menu's hdma_math_src (const.a65) with the DEFAULT normal bar colour already stamped into
@@ -4030,7 +4013,7 @@ ig_frame_geom:
 	                       ;   the wide status-only view is dead code) -- same box as SAVESTATES
 	.byt  5, 4, 54, 18     ; 3 GUIDES: list r5-14 / prompt r6..19 (keys r18/19)
 	.byt  5, 4, 54, 18     ; 4 TRAINER: title r6, fields r8+, actions, hint r20
-	.byt  1, 3, 62, 22     ; 5 HELP (kept for the future options screen; the old full body)
+	.byt  1, 3, 62, 22     ; 5 HELP screen (ighelp.i65): the full body, interior cols 2..61
 
 ig_thm_math_def:
 	.byt $01, $00, $2a                       ; 1 line : $2131 = $00, $2132 = $2a  (bar colour)
