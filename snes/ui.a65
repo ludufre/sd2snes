@@ -20,6 +20,10 @@
 ; resolve_str: language-resolve print_src/print_bank in place. If the pointer is a
 ; dispatch table in [strtab_lo, strtab_hi), replace it with the active-language
 ; string; any other pointer is left untouched. Preserves A/X/Y/P/D/B.
+;   The tables ($C1, const_lang_tab.a65) and the string pool ($C2,
+; const_lang_str.a65) are DIFFERENT banks: the table is reached with ^strtab_lo and
+; the string it names with ^strpool_lo. Swapping either one assembles clean and
+; renders junk, so keep the pair in lockstep with build_const.py.
 resolve_str:
   php
   rep #$30 : .al : .xl
@@ -61,8 +65,8 @@ resolve_str:
   lda [resolve_ptr]
   sta print_src
   sep #$20 : .as
-  lda #^strtab_lo
-  sta print_bank
+  lda #^strpool_lo         ; the POOL bank ($C2), not the table's ($C1): the entry
+  sta print_bank           ; just read is a 16-bit offset with no bank byte
 resolve_str_out:
   plb
   pld

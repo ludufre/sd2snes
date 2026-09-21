@@ -881,7 +881,8 @@ cm_put_full:
 ;  That rules out resolve_str (which works through print_src/print_bank in WRAM), so
 ;  the dispatch table is indexed here by hand, exactly the way resolve_str does it.
 ;  Registers only: X is the destination index (long,X reaches PSRAM from any DB) and Y
-;  walks the source under DB = the source bank.
+;  walks the source under DB = the source bank -- which for a dispatch table entry is
+;  the POOL bank (^strpool_lo, $C2), not the table's own ($C1).
 ;  jsl from cheatoverlay.a65's init, before the first list paint.
 ; ======================================================================
 ovl_fill_noname:
@@ -914,6 +915,9 @@ ovl_fnn_lang_ok:
   lda !0, x
   tay
   sep #$20 : .as
+  lda #^strpool_lo         ; the string the entry names lives in the POOL bank ($C2),
+  pha                      ; NOT in the table's bank ($C1) -- the copy below is
+  plb                      ; DB-relative, so DB has to move before it runs
   bra ovl_fnn_copy_init
 ovl_fnn_have:
   pha

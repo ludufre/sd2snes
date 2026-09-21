@@ -152,9 +152,10 @@ snes/menu.rtc
 snes/menu.srm
 
 # generated multilingual menu strings (snes/utils/build_const.py): the $C0 neutral-data
-# file AND the $C1 localized string-pool/dispatch-table file (2-bank split). Both generated.
+# file, the $C2 string pool and the $C1 dispatch tables (3-bank split). All generated.
 snes/const_lang.a65
 snes/const_lang_str.a65
+snes/const_lang_tab.a65
 # generated in-game HELP tab i18n tables (snes/utils/gen_igmenu_lang.py)
 snes/igmenu_lang.i65
 

@@ -386,12 +386,18 @@ def main():
         for label, args in plaindefs:
             out.append(f"{label} .byt {args}")
 
-    # The interned pool + dispatch tables live in a SEPARATE bank ($C2) so the
-    # menu can grow past 128K. resolve_str reads every pooled string with
-    # bank ^strtab_lo, and menudata reaches each dispatch table via ^label, so the
-    # bank split is transparent to the menu. Output -> <out>_str.a65, linked at $C2.
+    # The interned pool and the dispatch tables live in SEPARATE banks so the menu
+    # can grow past 128K AND the scarce pool bank is not also paying for the tables:
+    # the pool -> <out>_str.a65 at $C2, the tables -> <out>_tab.a65 at $C1 (tens of KB
+    # free). menudata reaches each dispatch table via ^label, so the split is
+    # transparent there, but resolve_str (ui.a65) and ovl_fill_noname
+    # (sysinfo_render.a65) MUST use ^strtab_lo for the table and ^strpool_lo for the
+    # string it names -- getting one of the two wrong assembles clean and renders junk.
     strout = [".link page $c2", "",
-              "; ==== interned language string pool (deduplicated) ===="]
+              "; ==== interned language string pool (deduplicated) ====",
+              "; strpool_lo: the bank of THIS label is the bank of every pooled string",
+              "; (^strpool_lo in resolve_str / ovl_fill_noname).",
+              "strpool_lo"]
     for args in pool_order:
         strout.append(f"{pool[args]} .byt {args}")
 
@@ -409,24 +415,29 @@ def main():
         if any(differs(d.get(l), l) for l in order):
             nlang = idx + 1
 
-    strout += ["", f"; ==== dispatch tables: resolve_str range [strtab_lo, strtab_hi) ===="]
     lang_names = ", ".join(["EN"] + [code for code, _ in langs])
-    strout += [f"; each table = {nlang} x 16-bit address ({lang_names})[:{nlang}]; NO bank byte:",
-               "; every pooled string lives in the same bank as strtab_lo, so resolve_str",
-               "; uses ^strtab_lo as the bank for all of them. cur_lang >= strtab_nlang -> EN."]
-    strout.append(f"strtab_nlang .byt {nlang}")
-    strout.append("strtab_lo")
+    tabout = [".link page $c1", "",
+              f"; ==== dispatch tables: resolve_str range [strtab_lo, strtab_hi) ====",
+              f"; each table = {nlang} x 16-bit address ({lang_names})[:{nlang}]; NO bank byte:",
+              "; the pool is a DIFFERENT bank ($C2), so a reader takes the table with",
+              "; ^strtab_lo and the string it names with ^strpool_lo.",
+              "; cur_lang >= strtab_nlang -> EN."]
+    tabout.append(f"strtab_nlang .byt {nlang}")
+    tabout.append("strtab_lo")
     for label, labels in tabledefs:
         cols = labels[:nlang]
         # `label .word ...` (no colon) matches the proven `label .byt ...` style.
-        strout.append(f"{label} " + " : ".join(f".word !{c}" for c in cols))
-    strout.append("strtab_hi")
+        tabout.append(f"{label} " + " : ".join(f".word !{c}" for c in cols))
+    tabout.append("strtab_hi")
 
     out_path.write_text("\n".join(out) + "\n")
     str_path = out_path.with_name(out_path.stem + "_str" + out_path.suffix)
     str_path.write_text("\n".join(strout) + "\n")
-    print(f"generated {out_path} + {str_path}: {len(order)} localized labels "
-          f"({len(pool_order)} pooled strings in bank $C2), {nlang} language column(s)")
+    tab_path = out_path.with_name(out_path.stem + "_tab" + out_path.suffix)
+    tab_path.write_text("\n".join(tabout) + "\n")
+    print(f"generated {out_path} + {str_path} + {tab_path}: {len(order)} localized labels "
+          f"({len(pool_order)} pooled strings in bank $C2, "
+          f"{len(tabledefs)} dispatch tables in bank $C1), {nlang} language column(s)")
 
 
 if __name__ == "__main__":

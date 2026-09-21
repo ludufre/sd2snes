@@ -1,7 +1,11 @@
 IPS = header.ips
 # const_lang.o65 is generated from the English base const.a65 + the per-language
 # dicts (utils/lang_*.py) by utils/build_const.py -> multilingual const_lang.a65.
-O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 cheatmenu.o65 cheatedit.o65 iris.o65 # gfx.o65 # vars.o65
+# One run emits three objects, in three different banks: const_lang ($C0, neutral
+# labels), const_lang_str ($C2, the string pool) and const_lang_tab ($C1, the
+# dispatch tables). The tables sit apart from the pool because $C2 is the scarce
+# bank and $C1 has tens of KB free.
+O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 const_lang_tab.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 cheatmenu.o65 cheatedit.o65 iris.o65 # gfx.o65 # vars.o65
 
 OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
@@ -11,7 +15,8 @@ OUT = menu.bin m3nu.bin
 # loaded by the MCU to PSRAM $C80000 at game-load). NOT part of m3nu.bin.
 IGMENU = igmenu.bin
 # 3 banks ($C0-$C2). Lockstep with THEME_MENU_SIZE in src/theme.c. $C2 carries the
-# i18n string pool (const_lang_str, build_const.py) and stays RESIDENT in-game
+# i18n string pool (const_lang_str, build_const.py; the dispatch tables that name
+# those strings live in $C1, const_lang_tab) and stays RESIDENT in-game
 # (igmenu moved to $C8, the dir buffer to $DB), so in-game readers like the cheat
 # overlay's (no name) lookup keep working.
 MENU_SIZE = 196608
@@ -24,10 +29,11 @@ GENDEPFLAGS = -MM -MP -MF $(DEPDIR)/$(@F).d -MT $(@F)
 
 all: $(OUT) $(IGMENU) $(MAP)
 
-# Generate the const source from the English base + language dicts. One run
-# emits both files: const_lang.a65 (bank $C0: neutral data) and const_lang_str.a65
-# (bank $C1: the localized string pool + dispatch tables) -> m3nu.bin spans 2 banks.
-const_lang.a65 const_lang_str.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py
+# Generate the const source from the English base + language dicts. One run emits
+# three files: const_lang.a65 (bank $C0: neutral data), const_lang_str.a65 (bank $C2:
+# the localized string pool) and const_lang_tab.a65 (bank $C1: the dispatch tables
+# resolve_str walks) -> m3nu.bin spans 3 banks.
+const_lang.a65 const_lang_str.a65 const_lang_tab.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py
 	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py -o const_lang.a65
 
 # igmenu_lang.i65: the in-game HELP tab's font-encoded i18n string tables, generated
@@ -94,7 +100,7 @@ link.log: $(OBJS)
 	  echo "*** snescom FAILED on $< (see $(@:.log=).log)"; rm -f $(@:.log=); exit 1; fi
 
 clean:
-	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 igmenu_lang.i65 $(OUT) *.o65.log *.ips.log $(IGMENU) igmenu_raw.smc igmenu.link.log
+	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 const_lang_tab.a65 igmenu_lang.i65 $(OUT) *.o65.log *.ips.log $(IGMENU) igmenu_raw.smc igmenu.link.log
 
 -include $(info $(DEPDIR)) $(shell mkdir $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*)
 
