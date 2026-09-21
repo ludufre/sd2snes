@@ -461,7 +461,8 @@ menu_enttab_browser:
  .byt  ^mdesc_browser_menumusic_random
  .byt  0,0,0
  .byt  0,0,0
- .byt  0,0,0
+ .word !(mfunc_isenabled_menumusic-1)  ; grey when Menu music is off
+ .byt  ^(mfunc_isenabled_menumusic-1)
 
  .byt  MTYPE_VALUE
  .word !mtext_browser_menusfx
@@ -1236,6 +1237,13 @@ mfunc_isenabled_scic:
 
 mfunc_isenabled_autosave:
   lda @CFG_ENABLE_AUTOSAVE
+  eor #$ff
+  ror
+  rtl
+
+; Random music only means something while the menu music itself is on.
+mfunc_isenabled_menumusic:
+  lda @CFG_ENABLE_MENU_MUSIC
   eor #$ff
   ror
   rtl
