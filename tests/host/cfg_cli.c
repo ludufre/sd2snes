@@ -408,6 +408,7 @@ static void cfg_make_allchanged(void) {
   CFG.language = 3;                              /* German; survives the >5 clamp */
   CFG.patch_verify_integrity = 1;
   CFG.enable_menu_music = 0;
+  CFG.menu_music_random = 0;   /* default is 1 */
   CFG.covers_in_lists = 0;
   CFG.enable_menu_sfx = 0;
   strcpy((char *)CFG.bgm_name, "/music/track01.spc");

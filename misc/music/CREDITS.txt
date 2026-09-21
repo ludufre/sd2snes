@@ -1,0 +1,30 @@
+sd2snes+ menu music  --  /sd2snes/music/
+==========================================
+
+Every .spc in this folder is a candidate for the menu's random music mode
+(config.yml: MenuMusicRandom / MenuMusicFolder).  Drop your own .spc files here
+to add them to the draw, or delete the ones you do not like.  /sd2snes/menu.spc
+(a copy of "28") is the fallback when this folder is empty or random is off.
+
+file               title         author    licence          source
+-----------------  ------------  --------  ---------------  -----------------------
+un-tarde.spc       un tarde      K. Jose   CC BY 4.0        The Mod Archive #212763
+jungle-song.spc    Jungle song   Beyond    Public domain    The Mod Archive #181158
+28.spc             28            Beyond    Public domain    The Mod Archive #181427
+
+  https://modarchive.org/index.php?request=view_by_moduleid&query=212763
+  https://modarchive.org/index.php?request=view_by_moduleid&query=181158
+  https://modarchive.org/index.php?request=view_by_moduleid&query=181427
+
+Attribution and changes
+  "un tarde" by K. Jose, licensed under CC BY 4.0
+  (https://creativecommons.org/licenses/by/4.0/).  Changes: converted from the
+  Impulse Tracker module to SPC700, one sparse channel folded into another to
+  fit the 8 voices of the S-DSP, S-DSP echo added.
+  "Jungle song" and "28" by Beyond were released into the public domain on
+  The Mod Archive; credit is given here as a courtesy.  Changes: converted to
+  SPC700, samples resampled to fit the 64 KB of audio RAM, S-DSP echo added.
+
+The .spc files were built with SNESMOD (https://github.com/mukunda-/snesmod),
+MIT License, Copyright 2009-2025 Mukunda Johnson.  Each file embeds the
+SNESMOD SPC700 sound driver.
