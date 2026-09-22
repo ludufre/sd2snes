@@ -35,6 +35,7 @@
 #include "cfg.h"
 #include "memory.h"
 #include "sufami.h"
+#include "bootleg.h"
 
 extern cfg_t CFG;
 snes_romprops_t romprops;
@@ -383,18 +384,34 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
       /* ST0011 LoROM */
       else if (header->map == 0x30 && header->carttype == 0xf6 && header->romsize < 0xa) {
         props->has_dspx = 1;
+        /* uPD96050 family: identical FPGA-side bus decode, external-fetch
+           path, SaveRAM sizing and savestate limitations as ST0010 (see
+           savestate.c's dsp_ok check, which gates on has_st0010) -- only
+           the firmware filename and the core differ.
+           FEAT_ST0010 is the "uPD96050 present" bit and ST011 sets it too;
+           the ST010/ST011 split is by CORE (fpga_dsp vs fpga_st0011), not
+           by featurebit. There is no free bit to split them with -- see
+           the note in fpga_spi.h. ST010 keeps fpga_dsp and is untouched. */
         props->has_st0011 = 1;
         props->dsp_fw = DSPFW_ST0011;
-        props->fpga_conf = FPGA_DSP;
-       // props->fpga_features |= FEAT_ST0011;
-        props->error = MENU_ERR_NOIMPL;
-        props->error_param = (uint8_t*)"ST0011";
+        props->fpga_conf = FPGA_ST0011;
+        props->fpga_features |= FEAT_ST0010;
+        header->ramsize = 2;
       }
       /* ST0018 LoROM */
       else if (header->map == 0x30 && header->carttype == 0xf5) {
-        props->has_st0011 = 1;
-        props->error = MENU_ERR_NOIMPL;
-        props->error_param = (uint8_t*)"ST0018";
+        /* ST0018 is an ARM core, unrelated to the uPD96050 -- it must not
+           set has_st0011 or has_dspx (those select the uPD96050 core and
+           its word-oriented firmware loader). It gets its own core,
+           fpga_st0018, which carries an ARMv3 CPU and runs the 160 KB
+           st018.rom out of the Bus 2 SRAM (loaded by load_st018()).
+           No featurebit: the core alone identifies the chip -- all 16
+           bits are allocated (see fpga_spi.h), the same reason ST010 and
+           ST011 are told apart by core. Savestates stay off automatically:
+           FPGA_ST0018 is not in savestate.c's core_has_snapshot list. */
+        props->has_st0018 = 1;
+        props->dsp_fw = DSPFW_ST0018;
+        props->fpga_conf = FPGA_ST0018;
       }
       /* OBC1 LoROM */
       else if (header->map == 0x30 && header->carttype == 0x25) {
@@ -561,6 +578,26 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
     props->mapper_id = 4;
   }
 
+  /* Copy-protected unlicensed bootlegs (fpga_bootleg core, see bootleg.c).
+     Identified by image CRC32, only on a game load (bootleg_scan, set by
+     memory.c) and only for an image size that occurs in the table.  Runs even
+     if the header claimed a chip -- pirate headers are copied/garbage -- and a
+     match wins over whatever the header said.
+     SDRAM mode (IPS/BPS re-detect) cannot afford a PSRAM CRC: a patched image
+     of the bootleg that is currently loaded keeps its variant instead, so a
+     translation patch does not recore it back to fpga_base. */
+  if(!props->has_combo && props->mapper_id != 4) {
+    uint32_t image_size = SMC_FSIZE() - props->offset;
+    uint8_t variant = BOOTLEG_NONE;
+    if(!smc_src_active) {
+      if(bootleg_scan) variant = bootleg_identify_file(file_offset + props->offset, image_size);
+    } else if(props != &romprops && romprops.fpga_conf == FPGA_BOOTLEG
+              && romprops.fpga_dspfeat != BOOTLEG_NONE) {
+      variant = (uint8_t)romprops.fpga_dspfeat;
+    }
+    bootleg_apply(props, variant, image_size);
+  }
+
   /* $80-$9F boot remap for the listed LoROM slot carts (see smc_needs_bslorom).
      The pack window itself is auto-detected at load in memory.c. */
   if(props->mapper_id == 1 && !props->fpga_conf && smc_needs_bslorom(header->name)) {
@@ -618,7 +655,10 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
 
   /* ~12.5MHz for ST0010, 8MHz for DSPx */
   if(props->has_dspx) {
-    if(props->has_st0010) {
+    if(props->has_st0010 || props->has_st0011) {
+      /* uPD96050 family. Both want zero extra waitstates -- ST011's host
+         protocol is DMA-paced with no handshake and the core is already
+         slower than the real chip, so throttling it only loses bytes. */
       props->fpga_dspfeat = 0;
     } else {
       props->fpga_dspfeat = 4; /* 4 extra waitstates */

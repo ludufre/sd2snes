@@ -34,7 +34,11 @@
 #define DSPFW_DSP1B ((const uint8_t*)"/sd2snes/dsp1b.bin")
 #define DSPFW_ST0010 ((const uint8_t*)"/sd2snes/st0010.bin")
 #define STBIOS_FW ((const uint8_t*)"/sd2snes/stbios.bin")
-#define DSPFW_ST0011 ((const uint8_t*)"/sd2snes/st0011.bin")
+#define DSPFW_ST0011 ((const uint8_t*)"/sd2snes/st011.rom")
+/* ST018: 160 KB = 128 KB ARM program ROM followed by 32 KB data ROM (the
+   same layout the common emulators use for st018.rom). */
+#define DSPFW_ST0018 ((const uint8_t*)"/sd2snes/st018.rom")
+#define ST0018_FW_SIZE (0x28000)
 // extern const uint8_t *DSPFW_PTRTEST=((uint8_t*)"/sd2snes/hurz");
 
 typedef struct __attribute__ ((__packed__)) {

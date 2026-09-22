@@ -151,6 +151,15 @@
 #define FPGA_CMD_DSPWRITEPGM     (0xe9)
 #define FPGA_CMD_DSPWRITEDAT     (0xea)
 #define FPGA_CMD_DSPRESET        (0xeb)
+/* ST018 core only (fpga_st0018): $e8 resets the firmware load pointer and
+   invalidates the ARM's ROM cache, $e9 then streams ONE image byte per
+   parameter byte into the Bus 2 SRAM (not 3-byte words as on the uPD cores),
+   $e5 starts a read-back checksum sweep of the 160 KB image and $f5 returns
+   {busy, sum[31:24], sum[23:16], sum[15:8], sum[7:0]}. All of them are only
+   accepted while $eb holds the ARM in reset. Per-core opcodes, like 0xfb
+   below: $e5 is RTCSET and $f5 MSUREAD on the other cores. */
+#define FPGA_CMD_ST018_VSUMSTART (0xe5)
+#define FPGA_CMD_ST018_VSUMREAD  (0xf5)
 #define FPGA_CMD_DACBOOST        (0xec)
 #define FPGA_CMD_SETFEATURE      (0xed)
 #define FPGA_CMD_SET213F         (0xee)
@@ -226,6 +235,8 @@ void fpga_write_dspx_pgm(uint32_t data);
 void fpga_write_dspx_dat(uint16_t data);
 void fpga_dspx_reset(uint8_t reset);
 void fpga_dspx_ss_halt(uint8_t halt);
+void fpga_st018_vsum_start(void);
+uint8_t fpga_st018_vsum_read(uint32_t *sum);
 void fpga_set_dac_boost(uint8_t boost);
 void fpga_set_features(uint16_t feat);
 void fpga_set_ovl_combo(uint16_t combo);

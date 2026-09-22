@@ -90,6 +90,18 @@ assign IS_PATCH = snescmd_unlock & &SNES_ADDR[23:22];
 
 assign IS_WRITABLE = IS_SAVERAM | IS_PATCH;
 
+// col20 effective-bank logic.  Declared BEFORE SRAM_SNES_ADDR uses it: Quartus
+// tolerates use-before-declaration, but the XST (Spartan-3 / mk2) Verilog parser
+// rejects it (HDLCompilers:28 'has not been declared').
+// prg32k: base_bank bit7=1 & bit6=0 locks the whole mapped window to a
+// single 32KB page (base_bank alone, no per-SNES-bank increment).
+wire prg32k = base_bank[7] & ~base_bank[6];
+// Standard LoROM bank position (mod 32) -- same expression this core uses
+// for LOROM_OFF below (MAME's "bank = offset / 0x10000" term).
+wire [4:0] col20_bank_rel = SNES_ADDR[20:16];
+// Effective ROM page: MAME's "(m_base_bank & 0x1f) + bank" (0 contribution
+// from bank_rel when prg32k is locked).
+wire [4:0] col20_eff_bank = prg32k ? base_bank[4:0] : (base_bank[4:0] + col20_bank_rel);
 assign SRAM_SNES_ADDR = IS_PATCH
                         // hook window: identity-map $C0-$FF (handler code + scratch)
                         ? SNES_ADDR
@@ -116,8 +128,6 @@ assign SRAM_SNES_ADDR = IS_PATCH
 
 assign ROM_ADDR = SRAM_SNES_ADDR;
 
-assign ROM_SEL = 1'b0;
-
 assign ROM_HIT = IS_ROM | IS_WRITABLE;
 
 assign msu_enable = featurebits[FEAT_MSU1] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff8) == 16'h2000));
@@ -133,15 +143,6 @@ assign col20_enable =
     (SNES_ADDR[23:16] == 8'h00) &&
     (SNES_ADDR[15:12] == 4'h8);
 
-// prg32k: base_bank bit7=1 & bit6=0 locks the whole mapped window to a
-// single 32KB page (base_bank alone, no per-SNES-bank increment).
-wire prg32k = base_bank[7] & ~base_bank[6];
-// Standard LoROM bank position (mod 32) -- same expression this core uses
-// for LOROM_OFF below (MAME's "bank = offset / 0x10000" term).
-wire [4:0] col20_bank_rel = SNES_ADDR[20:16];
-// Effective ROM page: MAME's "(m_base_bank & 0x1f) + bank" (0 contribution
-// from bank_rel when prg32k is locked).
-wire [4:0] col20_eff_bank = prg32k ? base_bank[4:0] : (base_bank[4:0] + col20_bank_rel);
 assign snescmd_enable = ({SNES_ADDR[22], SNES_ADDR[15:9]} == 8'b0_0010101);
 assign nmicmd_enable = (SNES_ADDR == 24'h002BF2);
 assign return_vector_enable = (SNES_ADDR == 24'h002A6C);

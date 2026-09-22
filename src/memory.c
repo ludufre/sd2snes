@@ -33,6 +33,7 @@ memory.c: RAM operations
 #include "cic.h"
 #include "crc.h"
 #include "crc32.h"
+#include "bootleg.h"
 #include "ff.h"
 #include "fileops.h"
 #include "spi.h"
@@ -807,6 +808,8 @@ static void load_set_features(const load_ctx_t *c) {
 }
 /* Chip BIOSes and firmware blobs the staged ROM needs: BS-X, Sufami Turbo, DSPx.
    Takes ticksstart only to close out the load timer printed here. */
+static uint8_t load_st018(const uint8_t *filename);
+
 static void load_stage_bios(tick_t ticksstart) {
   tick_t ticks_total=0;
   printf("rom header map: %02x; mapper id: %d\n", romprops.header.map, romprops.mapper_id);
@@ -852,6 +855,12 @@ static void load_stage_bios(tick_t ticksstart) {
       load_dspx(DSPFW_DSP1B, romprops.fpga_features);
     }
     if(file_res) {
+      snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)romprops.dsp_fw);
+    }
+  }
+  if(romprops.has_st0018) {
+    printf("ST018 game. Loading firmware image %s...\n", romprops.dsp_fw);
+    if(!load_st018(romprops.dsp_fw)) {
       snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)romprops.dsp_fw);
     }
   }
@@ -1272,7 +1281,12 @@ static uint32_t load_identify(load_ctx_t *c) {
   uint8_t flags = c->flags;
 
   smc_set_file_span(c->filesize);
+  /* game loads only: CRC-scan 1/2/3 MB images for protected bootlegs (bootleg.c) */
+  bootleg_scan = !c->is_menu && !(flags & LOADROM_WITH_COMBO)
+                 && !sms_active && !a26_romprops.has_a26
+                 && !sgb_romprops.has_sgb && !nes_romprops.has_nes;
   smc_id(&romprops, c->file_offset);
+  bootleg_scan = 0;
   /* the player is a plain LoROM; force the SMS core + drop any chip the header faked */
   if (sms_active) {
     romprops.fpga_conf = FPGA_SMS;
@@ -1351,7 +1365,7 @@ static uint32_t load_check_prereqs(load_ctx_t *c) {
   uint8_t  *filename = c->filename;
   DWORD     filesize = c->filesize;
   uint8_t   flags    = c->flags;
-  /* unimplemented chip (ST0011/ST0018/SPC7110): smc_id already flagged it */
+  /* unimplemented chip: smc_id already flagged it */
   if(romprops.error == MENU_ERR_NOIMPL) {
     return load_abort_missing(flags, MENU_ERR_NOIMPL, (char*)romprops.error_param);
   }
@@ -1370,6 +1384,10 @@ static uint32_t load_check_prereqs(load_ctx_t *c) {
       return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
                                 path_leaf((const char*)romprops.dsp_fw));
     }
+  }
+  /* ST018 firmware: 160 KB, streamed into the Bus 2 SRAM by load_st018(). */
+  if(romprops.has_st0018 && !file_exists((const char*)DSPFW_ST0018)) {
+    return load_abort_missing(flags, MENU_ERR_SUPPLFILE, path_leaf((const char*)DSPFW_ST0018));
   }
   /* The .st has no reset vector of its own: the BIOS boots and jumps into the slot. */
   if(romprops.has_sufami && !file_exists((const char*)STBIOS_FW)) {
@@ -2257,7 +2275,74 @@ void sram_memset(uint32_t base_addr, uint32_t len, uint8_t val) {
   FPGA_DESELECT();
 }
 
-void load_dspx(const uint8_t *filename, uint8_t coretype) {
+/* ST018 (fpga_st0018 core): stream st018.rom -- 128 KB ARM program ROM
+   followed by 32 KB data ROM -- into the Bus 2 SRAM while the ARM is held in
+   reset, then let the FPGA read the whole image back and compare checksums.
+   The image is one byte per $e9 parameter byte; MCU_RDY (FPGA_WAIT_RDY)
+   paces the SRAM writes and also covers the cache invalidation that $e8
+   starts. One retry on a verify mismatch. Returns 1 when the image in the
+   SRAM is verified. The ARM is released later by deassert_reset(). */
+static uint8_t load_st018(const uint8_t *filename) {
+  for(uint8_t attempt = 0; attempt < 2; attempt++) {
+    UINT bytes_read;
+    uint32_t total = 0, sum = 0, fsum = 0;
+    uint8_t busy = 1;
+    uint16_t polls = 0;
+
+    file_open((uint8_t*)filename, FA_READ);
+    if(file_res) {
+      printf("Could not read %s: error %d\n", filename, file_res);
+      return 0;
+    }
+    if(file_handle.fsize != ST0018_FW_SIZE) {
+      printf("%s: %lu bytes, expected %lu -- not an ST018 image\n", filename,
+             (unsigned long)file_handle.fsize, (unsigned long)ST0018_FW_SIZE);
+      file_close();
+      return 0;
+    }
+
+    fpga_dspx_reset(1);          /* hold the ARM (loader is gated on it) */
+    fpga_reset_dspx_addr();      /* $e8: pointer = 0, invalidate ROM cache */
+
+    FPGA_SELECT();
+    FPGA_TX_BYTE(FPGA_CMD_DSPWRITEPGM);
+    while((bytes_read = file_read()) != 0) {
+      for(UINT i = 0; i < bytes_read; i++) {
+        FPGA_TX_BYTE(file_buf[i]);
+        FPGA_WAIT_RDY_INLINE();
+        sum += file_buf[i];
+      }
+      total += bytes_read;
+      if(total >= ST0018_FW_SIZE) break;
+    }
+    FPGA_DESELECT();
+    file_close();
+    if(total != ST0018_FW_SIZE) {
+      printf("%s: short read (%lu bytes)\n", filename, (unsigned long)total);
+      return 0;
+    }
+
+    fpga_st018_vsum_start();
+    delay_ms(2);
+    while(busy && polls++ < 100) {
+      delay_ms(1);
+      busy = fpga_st018_vsum_read(&fsum);
+    }
+    if(!busy && fsum == sum) {
+      printf("ST018 firmware loaded and verified (sum %08lx)\n", (unsigned long)sum);
+      return 1;
+    }
+    printf("ST018 firmware verify FAILED (attempt %d): FPGA %08lx, file %08lx%s\n",
+           attempt + 1, (unsigned long)fsum, (unsigned long)sum, busy ? ", sweep timed out" : "");
+  }
+  return 0;
+}
+
+void load_dspx(const uint8_t *filename, uint16_t coretype) {
+  /* coretype is uint16_t, NOT uint8_t: fpga_features is 16 bits and
+     FEAT_ST0011 is bit 14. Narrowing it here silently passed 0 and hit the
+     "unknown core" path, loading no firmware at all. FEAT_ST0010 (bit 1)
+     and FEAT_DSPX (bit 0) fit in 8 bits, which is why this went unnoticed. */
   UINT bytes_read;
   uint16_t word_cnt;
   uint8_t wordsize_cnt = 0;
@@ -2268,7 +2353,14 @@ void load_dspx(const uint8_t *filename, uint8_t coretype) {
   uint32_t pgmdata = 0;
   uint16_t datdata = 0;
 
-  if(coretype & FEAT_ST0010) {
+  if(romprops.has_st0011) {
+    /* ST011: uPD96050 geometry -- 16384 words of 24-bit program (48KB)
+       and 2048 words of 16-bit data ROM (4KB). Keyed on has_st0011
+       rather than a featurebit because ST010 and ST011 share
+       FEAT_ST0010; they are told apart by core, not by bit. */
+    datsize = 2048;
+    pgmsize = 16384;
+  } else if (coretype & FEAT_ST0010) {
     datsize = 1536;
     pgmsize = 2048;
   } else if (coretype & FEAT_DSPX) {

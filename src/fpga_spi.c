@@ -569,6 +569,32 @@ void fpga_dspx_reset(uint8_t reset) {
   FPGA_DESELECT();
 }
 
+/* ST018 core: start the FPGA-side read-back checksum of the firmware image
+   in the Bus 2 SRAM (sum of all 160 KB bytes). Takes ~14 ms. */
+void fpga_st018_vsum_start(void) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_ST018_VSUMSTART);
+  FPGA_TX_BYTE(0x00);
+  FPGA_TX_BYTE(0x00);
+  FPGA_DESELECT();
+}
+
+/* ST018 core: read the checksum sweep result. Returns 1 while still busy. */
+uint8_t fpga_st018_vsum_read(uint32_t *sum) {
+  uint32_t s;
+  uint8_t busy;
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_ST018_VSUMREAD);
+  busy = FPGA_RX_BYTE() & 0x01;
+  s = FPGA_RX_BYTE();
+  s = (s << 8) | FPGA_RX_BYTE();
+  s = (s << 8) | FPGA_RX_BYTE();
+  s = (s << 8) | FPGA_RX_BYTE();
+  FPGA_DESELECT();
+  *sum = s;
+  return busy;
+}
+
 /* savestate halt for the uPD7725 (DSP1-4) core: freezes every DSP flop so its
    internal state can be snapshotted/restored. MCU-driven path for bring-up;
    the savestate handler drives the same halt SNES-side via the $E8:07FF scan-window control byte. */
