@@ -284,6 +284,70 @@ mhg_out:
 	rtl
 
 ; ======================================================================
+;  cheathost_from_gi: SELECT on the ficha opens the game's cheat list -- the very list the
+;  context menu's "Cheats" opens, for the ficha's own source: the browser selection, or the
+;  Recents/Favorites index the ficha was opened with.  The list is a menu window, so the
+;  ficha is torn down first (gi_dc_restore, the B path's own teardown) and rebuilt on the
+;  way back with the query the guide viewer's exit fires, which also re-arms the FMV that
+;  the list's commands stopped.  MCU_PARAM[0..3] is saved across the list (its toggle
+;  command writes over it, and for Recents/Favorites the low byte IS the index the query
+;  needs).  Any DBR/DP in; runs with both 0 (every menu variable sits below $2000, so the
+;  cheat list reaches them through the low-RAM mirror); ends in rtl.
+; ======================================================================
+cheathost_from_gi:
+	php
+	phb
+	phd
+	sep #$20 : .as
+	rep #$10 : .xl
+	lda #$00 : pha : plb
+	pea $0000 : pld
+	ldx #$0000
+chg_pbak:
+	lda @MCU_PARAM, x
+	sta @mh_pbak, x
+	inx
+	cpx #$0004
+	bne chg_pbak
+	jsl @gi_call_dc_restore                    ; menu graphics back, screen_dma_disable = 0
+	sep #$20 : .as
+	rep #$10 : .xl
+	lda #$81 : sta @$004200                    ; NMI on: the list is drawn by the menu NMI's
+	lda #$00 : sta @isr_done                   ;   tile DMA (gi_dc_restore leaves it off)
+	lda #$02 : sta @SFX_MAILBOX                ; confirm blip, after the restore's cover burst
+	lda @gi_query_cmd
+	cmp #CMD_GAME_INFO_RECENT
+	beq chg_recent
+	cmp #CMD_GAME_INFO_FAVORITE
+	beq chg_fav
+	jsl @gi_call_fill_param                    ; browser: MCU_PARAM = cwd + the selected entry
+	jsl @cheat_menu_for_selected_file
+	bra chg_back
+chg_recent:
+	jsl @cheat_menu_for_recent_file
+	bra chg_back
+chg_fav:
+	jsl @cheat_menu_for_favorite_file
+chg_back:
+	sep #$20 : .as
+	rep #$10 : .xl
+	ldx #$0000
+chg_prst:
+	lda @mh_pbak, x
+	sta @MCU_PARAM, x
+	inx
+	cpx #$0004
+	bne chg_prst
+	jsl @gi_call_query
+	lda #$81 : sta @$004200                    ; NMI on before gi_dc_show / gin_syncread
+	lda #$00 : sta @isr_done                   ;   wait on isr_done
+	jsl @gi_call_dc_show
+	pld
+	plb
+	plp
+	rtl
+
+; ======================================================================
 ;  Guide picker.  Draws one row per guide into the ficha's body buffer and runs the SAME
 ;  debounced input the ficha uses (gin_syncread + read_pad edges/auto-repeat), so the feel
 ;  matches the rest of the screen.  Returns carry CLEAR = mh_cursor chosen, SET = B.

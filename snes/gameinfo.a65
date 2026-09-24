@@ -103,10 +103,11 @@
                                    ; the normal screen's gap; footer on row 26, always fixed below)
 #define GIB_FULL_ROWS    8         ; rows 17..24 -> the full-description scroll window height
 #define GIB_FOOT_ROW     26        ; footer row: aligns with the browser status bar (see layout note)
-#define GIB_FOOT_W       56        ; normal-screen footer print_count. The "+ X: Guides" variants
-                                   ; run to 47 encoded bytes in the widest language (DE), so the
-                                   ; old 40 would have clipped them; 56 is build_const.py's
-                                   ; WIDTH_DEFAULT for text_gi_*, i.e. the enforced ceiling.
+#define GIB_FOOT_W       56        ; normal-screen footer print_count. The "X: Guides" + "Sel:
+                                   ; Cheats" variants run to 53 encoded bytes in the widest
+                                   ; languages (DE, IT; the up/down arrows are one byte each);
+                                   ; 56 is build_const.py's WIDTH_DEFAULT for text_gi_*, i.e.
+                                   ; the enforced ceiling.
 #define GIB_SB_X         62        ; scrollbar column: last usable half-col (edge mask clips px > 252)
 
 ; -- gameinfo_select_file: drop-in for the `jsr ips_select_file` in filesel.a65.
@@ -280,6 +281,8 @@ gin_loop:
   bne gin_to_full
   lda pad_x                  ; X -> the guide/manual viewer (normal screen only; in Y mode
   bne gin_manual             ; the scroll owns the text area, so X stays inert there)
+  lda pad_select             ; SELECT -> the game's cheat list (normal screen only too)
+  bne gin_cheats
   lda gi_query_fill          ; Up/Down jump games -- FILE BROWSER only (Recents/Favorites
   beq gin_loop               ; carry a list index in MCU_PARAM, not filesel_sel)
   lda pad_up
@@ -296,6 +299,12 @@ gin_manual:
   ; at gin_drain, not gin_loop: the A that confirmed the picker (or the B that closed the
   ; viewer) is still HELD and would otherwise read as a fresh Play/Back edge.
   jsl @manhost_from_gi
+  jmp gin_drain
+gin_cheats:
+  ; cheathost_from_gi ($C1) runs the cheat list over the menu's own screen and rebuilds this
+  ; one before returning, like manhost_from_gi -- so gin_drain again: the B that closed the
+  ; list is still held.
+  jsl @cheathost_from_gi
   jmp gin_drain
 gin_full:
   ; --- full-description (Y) mode ---
@@ -559,12 +568,12 @@ gnu_noscroll:
 gin_reload:
   .as : .xl
   ; fade OUT to black (cur_bright starts at CFG_BRIGHTNESS_LIMIT -- gi_dc_show pinned it).
-  ; ~3 levels/frame => a quick ~5-frame dim.
+  ; ~5 levels/frame => a quick ~3-frame dim each way.
 gro_fadeout:
   jsr waitblank
   lda cur_bright
   sec
-  sbc #$03
+  sbc #$05
   bcs gro_out_set
   lda #$00
 gro_out_set:
@@ -582,7 +591,7 @@ gro_fadein:
   jsr waitblank
   lda cur_bright
   clc
-  adc #$03
+  adc #$05
   cmp @CFG_BRIGHTNESS_LIMIT
   bcc gro_in_set
   lda @CFG_BRIGHTNESS_LIMIT
@@ -1978,6 +1987,16 @@ gi_call_dc_show:
 
 gi_call_query:
   jsr gameinfo_query
+  rtl
+
+; -- the two halves cheathost_from_gi ($C1) needs from this page: the ficha's teardown and
+;    the browser-selection MCU_PARAM packing (the cheat list's filesel session reads it).
+gi_call_dc_restore:
+  jsr gi_dc_restore
+  rtl
+
+gi_call_fill_param:
+  jsr cover_fill_param_for_current_sel
   rtl
 
 ; -- re-scan the current browser directory (historical: the manual staging used to

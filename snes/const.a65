@@ -829,15 +829,15 @@ text_gi_year      .byt "Year", 0
 text_gi_players   .byt "Players", 0
 text_gi_genre     .byt "Genre", 0
 text_gi_chip      .byt "Chip", 0
-text_gi_footer    .byt "A: Play   B: Back   Y: Description", 0
-text_gi_footer_nav .byt "A:Play B:Back Y:Desc Up/Down:Game", 0
+text_gi_footer    .byt "A: Play   B: Back   Y: Description   Sel: Cheats", 0
+text_gi_footer_nav .byt "A:Play B:Back Y:Desc Sel:Cheats ", 241, 242, ":Game", 0
 text_gi_footer_full .byt "B: Back   Up/Down: Scroll", 0
 ; Footer variants shown when the game HAS a readable guide, i.e. when X opens the viewer
 ; (gi_man_avail in gameinfo.a65 is the single gate both these and the handler answer to).
 ; "Guides" tracks the in-game GUIDES tab label per language, not the document-type slug.
 ; Plus the key legend the guide PICKER puts on the same row while it owns the body.
-text_gi_footer_man .byt "A: Play   B: Back   Y: Description   X: Guides", 0
-text_gi_footer_nav_man .byt "A:Play B:Back Y:Desc X:Guides Up/Down:Game", 0
+text_gi_footer_man .byt "A:Play B:Back Y:Desc X:Guides Sel:Cheats", 0
+text_gi_footer_nav_man .byt "A:Play B:Back Y:Desc X:Guides Sel:Cheats ", 241, 242, ":Game", 0
 text_gi_footer_pick .byt "A: Open   B: Back", 0
 ; Document-type labels for the GUIDES picker on the game-info screen (X). Same five slugs
 ; as the in-game shell's text_igm_mn_slug_*, but build_const.py DROPS every text_igm_*

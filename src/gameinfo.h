@@ -13,7 +13,7 @@
  * GI_* offsets in snes/memmap.i65 - keep in sync, just like cfg_t/CFG_ADDR). The
  * DirectColor image is staged as: 8bpp tiles -> SRAM_GAMEINFO_TILES_ADDR ($CA0000),
  * 16-bit tilemap -> SRAM_GAMEINFO_TMAP_ADDR ($CB0000). All text fields are already
- * font-encoded (accents -> codes 130..159).
+ * font-encoded (accents and Cyrillic -> their font codes, see gi_cp_to_font).
  */
 
 #ifndef GAMEINFO_H

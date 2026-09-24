@@ -24,30 +24,76 @@ extern cfg_t CFG;   /* game info "Show video" / "Play video music" toggles (game
 _Static_assert(SRAM_GAMEINFO_ADDR + sizeof(gameinfo_meta_t) <= SRAM_GAMEINFO_DESCEXT_ADDR,
                "gameinfo_meta_t runs into SRAM_GAMEINFO_DESCEXT_ADDR");
 
-/* UTF-8 codepoint -> sd2snes font byte. MUST match the ACCENTS map in
- * snes/utils/build_const.py (and snes/font.a65). Only the Latin accents the font
- * has glyphs for (codes 130..159); everything else renders as '?'.
- * The codes are consecutive, so the table holds codepoints only and the font byte
- * is GI_ACCENT_BASE + the index -- the ORDER below IS the code assignment. */
-#define GI_ACCENT_BASE 130
-static const uint16_t gi_accent_cp[] = {
-  0x00E1,0x00E0,0x00E2,0x00E3,0x00E9,0x00EA,
-  0x00ED,0x00F3,0x00F4,0x00F5,0x00FA,0x00E7,
-  0x00C1,0x00C0,0x00C2,0x00C3,0x00C9,0x00CA,
-  0x00CD,0x00D3,0x00D4,0x00D5,0x00DA,0x00C7,
-  0x00F1,0x00D1,0x00FC,0x00DC,0x00BF,0x00A1,
+/* UTF-8 codepoint -> sd2snes font byte. Every glyph entry MUST match ENCODE (ACCENTS +
+ * HOMOGLYPHS) in snes/utils/build_const.py -- guarded by tests/test_i18n_parity.py, which parses
+ * these two tables. Every mapped codepoint lives in Latin-1 (the pt/es/fr/it/de accents) or in
+ * the Cyrillic block (ru), so each block is a direct lookup indexed by the codepoint; 0 = no
+ * glyph. Cyrillic homoglyphs map to the Latin tile that draws them (А -> 'A'). The Latin-1 table
+ * also carries plain-ASCII stand-ins in slots the font has no glyph for (« » -> '"', the
+ * no-break space -> ' ', ° º -> 'o', ...): same lookup, zero extra bytes. Anything longer, or
+ * outside these blocks, goes through gi_fb_cp/gi_fb_str below. */
+#define GI_FONT_LATIN1_BASE   0x00A0
+#define GI_FONT_CYRILLIC_BASE 0x0400
+static const uint8_t gi_font_latin1[96] = {
+   32, 159,   0,   0,   0,   0,   0,   0,   0,   0,  97,  34,   0,   0,   0,   0,  /* U+00A0 */
+  111,   0,   0,   0,  39,   0,   0,  46,   0,   0, 111,  34,   0,   0,   0, 158,  /* U+00B0 */
+  143, 142, 144, 145, 239,   0,   0, 153, 232, 146, 147,   0, 233, 148,   0,   0,  /* U+00C0 */
+    0, 155, 234, 149, 150, 151, 240, 120,   0, 235, 152,   0, 157,   0,   0, 238,  /* U+00D0 */
+  131, 130, 132, 133, 236,   0,   0, 141, 224, 134, 135, 228, 230, 136, 226, 227,  /* U+00E0 */
+    0, 154, 231, 137, 138, 139, 237,   0,   0, 225, 140, 229, 156,   0,   0,   0,  /* U+00F0 */
 };
 
-/* Map a decoded (>= 0x80) codepoint to its font byte, or '?' if unmapped. */
-static uint8_t gi_cp_to_font(uint32_t cp) {
-  for(unsigned k = 0; k < sizeof(gi_accent_cp) / sizeof(gi_accent_cp[0]); k++)
-    if(gi_accent_cp[k] == cp) return GI_ACCENT_BASE + k;
-  return '?';
+static const uint8_t gi_font_cyrillic[96] = {
+    0, 181,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  /* U+0400 */
+   65, 178,  66, 179, 180,  69, 182, 183, 184, 185,  75, 186,  77,  72,  79, 187,  /* U+0410 */
+   80,  67,  84, 177, 188,  88, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198,  /* U+0420 */
+   97, 199, 200, 201, 202, 101, 203, 204, 205, 206, 207, 208, 209, 210, 111, 211,  /* U+0430 */
+  112,  99, 212, 121, 213, 120, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,  /* U+0440 */
+    0, 228,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  /* U+0450 */
+};
+
+/* Typography with no glyph of its own, spelled with glyphs the font has (up to 3 bytes; ""
+ * = drop the codepoint). Measured on the GameDB descriptions, the em dash, the curly quotes and
+ * apostrophe, the ellipsis and the bullet alone were ~23k '?' across the seven languages. Only
+ * characters with an obvious ASCII spelling belong here: kana/kanji/hangul stay '?'. Sorted by
+ * codepoint (the test checks it); the two parallel arrays keep 5 bytes per entry. */
+static const uint16_t gi_fb_cp[] = {
+  0x00AD, 0x00C6, 0x00E6, 0x0100, 0x0101, 0x0112, 0x0113, 0x012A, 0x012B, 0x014C, 0x014D,
+  0x0152, 0x0153, 0x016A, 0x016B, 0x200B, 0x200C, 0x200D, 0x2018, 0x2019, 0x201A, 0x201B,
+  0x201C, 0x201D, 0x201E, 0x201F, 0x2022, 0x2026, 0x202F, 0x2032, 0x2033, 0x2122, 0x2212,
+  0xFEFF,
+};
+static const char gi_fb_str[][3] = {
+  "",    "AE", "ae", "A",  "a",  "E",  "e",  "I",  "i",  "O",  "o",
+  "OE",  "oe", "U",  "u",  "",   "",   "",   "'",  "'",  "'",  "'",
+  "\"", "\"", "\"", "\"", "*",  "...", " ",  "'",  "\"", "TM", "-",
+  "",
+};
+
+/* Decoded (>= 0x80) codepoint -> 0..3 font bytes into out. A glyph when the font has one, a
+ * typographic stand-in when it has not, '?' otherwise. */
+static int gi_cp_emit(uint32_t cp, uint8_t *out) {
+  uint8_t b = 0;
+  if(cp - GI_FONT_LATIN1_BASE < sizeof(gi_font_latin1))
+    b = gi_font_latin1[cp - GI_FONT_LATIN1_BASE];
+  else if(cp - GI_FONT_CYRILLIC_BASE < sizeof(gi_font_cyrillic))
+    b = gi_font_cyrillic[cp - GI_FONT_CYRILLIC_BASE];
+  else if(cp - 0x2002 <= 0x200A - 0x2002) b = ' ';     /* the typographic spaces */
+  else if(cp - 0x2010 <= 0x2015 - 0x2010) b = '-';     /* hyphens and dashes */
+  if(b) { out[0] = b; return 1; }
+  for(unsigned k = 0; k < sizeof(gi_fb_cp) / sizeof(gi_fb_cp[0]); k++) {
+    if(gi_fb_cp[k] != cp) continue;
+    int n = 0;
+    while(n < 3 && gi_fb_str[k][n]) { out[n] = (uint8_t)gi_fb_str[k][n]; n++; }
+    return n;
+  }
+  out[0] = '?';
+  return 1;
 }
 
 /* Copy src -> dst (NUL-terminated, bounded), decoding UTF-8 to font byte codes.
- * Plain ASCII is copied verbatim; mapped accents become 130..159; anything else
- * becomes '?'. Bounded by dstsize; safe on truncated/invalid UTF-8. */
+ * Plain ASCII is copied verbatim; mapped accents and Cyrillic become their font codes;
+ * anything else becomes '?'. Bounded by dstsize; safe on truncated/invalid UTF-8. */
 static void gi_utf8_to_font(const char *src, char *dst, int dstsize) {
   int di = 0;
   const unsigned char *s = (const unsigned char *)src;
@@ -68,7 +114,9 @@ static void gi_utf8_to_font(const char *src, char *dst, int dstsize) {
       s++;
     }
     if(!ok) { dst[di++] = '?'; continue; }
-    dst[di++] = (char)gi_cp_to_font(cp);
+    uint8_t fb[3];
+    int nf = gi_cp_emit(cp, fb);
+    for(int k = 0; k < nf && di < dstsize - 1; k++) dst[di++] = (char)fb[k];
   }
   dst[di] = 0;
 }
@@ -78,18 +126,18 @@ static void gi_utf8_to_font(const char *src, char *dst, int dstsize) {
  * still expected (0 = between codepoints); cp = the sequence accumulator. */
 typedef struct { uint32_t cp; int cont; } gi_font_state_t;
 
-/* Feed one input byte; write 0..2 font bytes to `out` and return the count. Byte-for-byte
- * equivalent to gi_utf8_to_font (ASCII verbatim, mapped accents 130..159, else '?'), but
+/* Feed one input byte; write 0..3 font bytes to `out` and return the count. Byte-for-byte
+ * equivalent to gi_utf8_to_font (ASCII verbatim, codepoints via gi_cp_emit, else '?'), but
  * stateful so it survives chunk boundaries. A byte that breaks an in-progress sequence emits
  * '?' for the truncated codepoint and is then reprocessed as a fresh lead/ASCII byte (so up
- * to 2 outputs). Call gi_font_flush after the last byte to emit a trailing '?' for a value
- * that ended mid-sequence. */
+ * to 2 outputs there; a completed codepoint's stand-in is up to 3). Call gi_font_flush after
+ * the last byte to emit a trailing '?' for a value that ended mid-sequence. */
 static int gi_font_feed(gi_font_state_t *st, unsigned char c, uint8_t *out) {
   int n = 0;
   if(st->cont) {
     if((c & 0xC0) == 0x80) {                 /* valid continuation byte */
       st->cp = (st->cp << 6) | (c & 0x3F);
-      if(--st->cont == 0) out[n++] = gi_cp_to_font(st->cp);
+      if(--st->cont == 0) n += gi_cp_emit(st->cp, out + n);
       return n;
     }
     out[n++] = '?';                          /* truncated sequence -> '?' ... */
@@ -141,16 +189,19 @@ static void gi_field(const char *key, char *field, int size) {
 /* The `.yml` key that carries the description in the MENU language. English (CFG.language 0) is
  * the canonical `description:`; every other language rides a sibling `description_<code>:` key
  * written next to it. The index order MUST match cfg.h (0: English, 1: Portugues BR, 2: Spanish,
- * 3: German, 4: French, 5: Italian) and the codes the info generator emits. NULL = use the plain
+ * 3: German, 4: French, 5: Italian, 6: Russian) and the codes the info generator emits. NULL = use the plain
  * `description:` (English, and any out-of-range value -- cfg_load clamps, but never trust it here).
  * A missing/empty localized key falls back to English, so a card written before this existed (or a
  * game with no translation) keeps working unchanged. */
 static const char *gi_desc_lang_key(void) {
   static const char *const keys[] = {
     NULL, "description_pt", "description_es", "description_de", "description_fr", "description_it",
+    "description_ru",
   };
   return (CFG.language < sizeof(keys) / sizeof(keys[0])) ? keys[CFG.language] : NULL;
 }
+
+static unsigned gi_value_scan(const char *key, char *mem, unsigned memcap);
 
 /* leave a single "-" placeholder for an empty metadata field (the SNES then
  * prints every field unconditionally - no empty check needed there). */
@@ -463,6 +514,13 @@ void gameinfo_load(uint8_t *rom_path) {
   static gameinfo_meta_t meta;
   static char base[288] IN_AHBRAM;
   static char path[300] IN_AHBRAM;
+  /* Silence the previous game's clip FIRST. Everything below reads the card (the .yml, the
+   * localized description scan, the cover transcode) without pumping the DAC, and a clip left
+   * playing through that loops the last 2 KB of its buffer -- the "zeet" heard on every Up/Down
+   * between two games that both have a preview soundtrack. */
+  gi_fmv_close();                            /* drop any prior open .fmv (reentry) */
+  gi_fmv_path[0] = 0;                         /* invalidate the saved reopen path */
+  menu_music_stop();                         /* and any prior FMV audio clip */
   int fmv_eligible = 1;                 /* only probe <rom>.fmv if the .yml declares "fmv:" (or
                                          * there is no .yml). Skips a full scan of the (huge)
                                          * info dir for the 99% of games that have no video. */
@@ -498,17 +556,23 @@ void gameinfo_load(uint8_t *rom_path) {
     gi_field("players",      meta.players,      sizeof(meta.players));
     gi_field("genre",        meta.genre,        sizeof(meta.genre));
     gi_field("special_chip", meta.special_chip, sizeof(meta.special_chip));
-    /* description: the MENU language first (description_<code>), English (description) as the
-     * fallback -- for a missing key AND for a present-but-empty one. Both are plain keys in the
-     * same file, so the language can change without re-syncing the card. The localized keys are
-     * written LAST in the file, so this is the only lookup that can scan the whole `.yml`. */
-    {
-      const char *lkey = gi_desc_lang_key();
-      if(lkey) gi_field(lkey, meta.description, sizeof(meta.description));
-      if(!meta.description[0]) gi_field("description", meta.description, sizeof(meta.description));
-    }
+    /* description: English (description) first, as the fallback; the MENU language
+     * (description_<code>) replaces it below when present and non-empty. */
+    gi_field("description", meta.description, sizeof(meta.description));
     { yaml_token_t tok; fmv_eligible = yaml_get_itemvalue("fmv", &tok) ? 1 : 0; }
     yaml_file_close();
+    /* The localized keys are written LAST in the file, after the other long description lines,
+     * and the YAML parser cannot read past a line longer than YAML_BUFLEN: f_gets hands back the
+     * rest of such a line as if it were a new one, a continuation parsed as a key swallows the
+     * next real line as its value, and description_<code> was then never found -- the screen
+     * showed English while Y (gi_value_scan, which only matches a key at the start of a PHYSICAL
+     * line) showed the translation. Read it with that same scanner, after the parser is closed
+     * (both use the shared file handle). Absent/empty -> meta.description keeps the English. */
+    {
+      const char *lkey = gi_desc_lang_key();
+      if(lkey) gi_value_scan(lkey, meta.description, sizeof(meta.description));
+      file_res = 0;                  /* soft, like a missing .yml: the English stays */
+    }
   } else {
     file_res = 0; /* soft fail: no .yml is fine; fmv_eligible stays 1 (probe .fmv as before) */
   }
@@ -533,9 +597,6 @@ void gameinfo_load(uint8_t *rom_path) {
    * layout (gi_cov_to_gcv) so it still shares the band with the screenshot. All bounded +
    * fail-safe; if nothing exists the band is gradient. The .fmv/.gss f_open scans the (huge) info
    * dir, so it is gated behind the .yml "fmv:" flag. */
-  gi_fmv_close();                            /* drop any prior open .fmv (reentry) */
-  gi_fmv_path[0] = 0;                         /* invalidate the saved reopen path */
-  menu_music_stop();                         /* and any prior FMV audio clip */
   {
     /* DECOUPLED paletted band: the cover (left) and the screenshot/FMV region (right) are
      * SEPARATE files, each into its own CGRAM range. The right region comes from EITHER the animated
@@ -573,12 +634,14 @@ void gameinfo_load(uint8_t *rom_path) {
 }
 
 /* Scan the last-loaded .yml for `key:` and stage its COMPLETE value, font-encoded, into
- * SRAM_GAMEINFO_DESCEXT_ADDR. Returns the number of font bytes staged (0 = key absent, empty, or
- * any error -- the region is then left invalid, 1st byte 0). Bounded + fail-safe: never hangs the
+ * SRAM_GAMEINFO_DESCEXT_ADDR -- or, with `mem`, into that buffer (at most memcap-1 bytes + NUL).
+ * Returns the number of font bytes staged (0 = key absent, empty, or any error -- the SRAM region
+ * is then left invalid, 1st byte 0; `mem` is then left UNTOUCHED, so a caller can pre-fill it with
+ * a fallback). Bounded + fail-safe: never hangs the
  * menu loop. Matches the generator's format -- one physical line per field, the value is either
  * double-quoted (terminates at the next '"', which is always the closer since inner quotes were
  * rewritten to ''') or bare (terminates at end-of-line / EOF). */
-static unsigned gi_descext_scan(const char *key) {
+static unsigned gi_value_scan(const char *key, char *mem, unsigned memcap) {
   /* IN_AHBRAM scratch: off the tight main SRAM (growing .bss can silently corrupt a global).
      Fully written before read; touched only here (menu-loop, never from an IRQ), so the
      NOLOAD/no-zero-init of .ahbram is fine. */
@@ -587,7 +650,8 @@ static unsigned gi_descext_scan(const char *key) {
   gi_font_state_t st = { 0, 0 };
   uint32_t out_addr = SRAM_GAMEINFO_DESCEXT_ADDR;
   uint32_t scanned  = 0;
-  unsigned out_total = 0;                /* font bytes staged (excl. NUL); cap LEN-1 */
+  unsigned out_total = 0;                /* font bytes staged (excl. NUL); cap below */
+  const unsigned cap = mem ? memcap - 1 : GAMEINFO_DESCEXT_LEN - 1;
   unsigned ob = 0;                       /* bytes buffered in obuf */
   int at_line_start = 1;                 /* the next chunk begins a physical line */
   int in_value = 0;                      /* streaming the description value */
@@ -595,8 +659,8 @@ static unsigned gi_descext_scan(const char *key) {
   int done     = 0;
 
   /* 1) invalidate first: if we find nothing, the menu falls back to description[256]. */
-  sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
-  if(!gi_yml_path[0]) return 0;
+  if(!mem) sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
+  if(!gi_yml_path[0] || (mem && !memcap)) return 0;
 
   /* 2) open the last-loaded .yml with the shared handle (free during the info screen; the
    *    FMV has its own gi_fmv_fil). Any error -> return (region stays invalid). */
@@ -641,10 +705,11 @@ static unsigned gi_descext_scan(const char *key) {
       } else if(c == '\n' || c == '\r') {
         done = 1; break;                               /* bare value ends at EOL */
       }
-      uint8_t fo[2];
+      uint8_t fo[3];
       int nf = gi_font_feed(&st, c, fo);
       for(int i = 0; i < nf; i++) {
-        if(out_total >= GAMEINFO_DESCEXT_LEN - 1) { done = 1; break; }
+        if(out_total >= cap) { done = 1; break; }
+        if(mem) { mem[out_total++] = (char)fo[i]; continue; }
         obuf[ob++] = fo[i];
         out_total++;
         if(ob == sizeof(obuf)) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; ob = 0; }
@@ -655,12 +720,19 @@ static unsigned gi_descext_scan(const char *key) {
 
   /* flush a trailing '?' for a value that ended mid-sequence (fidelity with gi_utf8_to_font),
    * then drain the buffer and terminate. */
-  if(out_total < GAMEINFO_DESCEXT_LEN - 1) {
+  if(out_total < cap) {
     uint8_t fo[1];
-    if(gi_font_flush(&st, fo)) { obuf[ob++] = fo[0]; out_total++; }
+    if(gi_font_flush(&st, fo)) {
+      if(mem) mem[out_total++] = (char)fo[0];
+      else { obuf[ob++] = fo[0]; out_total++; }
+    }
   }
-  if(ob) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; }
-  sram_writebyte(0, out_addr);           /* NUL terminator (re-zeroes byte 0 if empty) */
+  if(mem) {
+    if(out_total) mem[out_total] = 0;    /* empty -> keep the caller's fallback text */
+  } else {
+    if(ob) { sram_writeblock(obuf, out_addr, (uint16_t)ob); out_addr += ob; }
+    sram_writebyte(0, out_addr);         /* NUL terminator (re-zeroes byte 0 if empty) */
+  }
   file_close();
   return out_total;
 }
@@ -672,6 +744,6 @@ static unsigned gi_descext_scan(const char *key) {
  * fail-safe; on failure the region stays invalid and the menu keeps the 256-char copy. */
 void gameinfo_desc_full(void) {
   const char *lkey = gi_desc_lang_key();
-  if(lkey && gi_descext_scan(lkey)) return;   /* localized text staged */
-  gi_descext_scan("description");             /* English (also re-invalidates on failure) */
+  if(lkey && gi_value_scan(lkey, NULL, 0)) return;   /* localized text staged */
+  gi_value_scan("description", NULL, 0);             /* English (also re-invalidates on failure) */
 }
