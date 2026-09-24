@@ -8,6 +8,26 @@ NET "SPI_SCK" LOC = P71;
 NET "SPI_SCK" CLOCK_DEDICATED_ROUTE = FALSE;
 NET "SPI_SCK" TNM_NET = "SPI_SCK";
 TIMESPEC TS_SPI_SCK = PERIOD "SPI_SCK" 48.1MHz HIGH 50 %;
+# GUARD BAND on the CLK2 domain (the SA-1, ~86 MHz) -- do not drop this line.
+# Spartan-3 timing computes no clock uncertainty by itself (trce INFO
+# Timing:3389/3390, "Clock Uncertainty: 0.000ns"), but CLK2 is the CLKFX of a
+# DCM whose measured period jitter is 0.75 ns peak to peak (DCM_Scope.v header).
+# Without this line the fits built with IGNORE_TIMING=1 up to 2.17b5 "met" timing
+# with +0.025 ns and were -0.31 ns short with the jitter counted, on 98
+# endpoints inside the SA-1 CPU execute stage -- and on a real Mk.II those fits
+# froze Super Mario RPG around battles within minutes (the official v1.11.2 .bit
+# too), while the same netlist closed against this constraint ran clean; the
+# Mk.III (Cyclone IV, +1 ns of slack) runs the same logic clean.
+# jitter/sqrt(2) = 0.339 ns per path, the same value the spc7110 and gsu3 use.  The PERIOD itself is
+# derived from the DCM and untouched, so Timing Score 0 means 0.34 ns of real
+# margin.
+SYSTEM_JITTER = 0.48 ns;
+# PLACER COST TABLE: 9, stamped in the .xise (Map AND Par, with PAR extra effort
+# "Continue on Impossible").  The core fills 99% of the device and the placement
+# decides which side of the requirement it lands on; the number is the best of a
+# sweep of the 100 tables on the current netlist.  It is a choice of seed, not a
+# relaxation.  ANY edit to the netlist re-rolls it -- sweep again instead of
+# reaching for IGNORE_TIMING (the build no longer passes it for this core).
 
 NET "SPI_SCK" IOSTANDARD = LVCMOS33;
 NET "SPI_SCK" DRIVE = 8;

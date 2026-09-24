@@ -473,6 +473,14 @@ always @(posedge CLK) begin
   end
 end
 
+// Mk.II keeps the SA-1 core as it was before upstream 2f82adf ("SA-1 speed
+// enhancements", v1.11.1): the four hunks of that commit are `ifndef MK2 below.
+// On the Spartan-3 the 2f82adf pipeline still froze Super Mario RPG around battles
+// now and then even with a timing-clean fit (2 in 15 long hardware runs), while the
+// pre-2f82adf logic ran clean; the Mk.III runs 2f82adf clean and keeps it (it is the
+// fix for the SA-1 slowdown of upstream issue #244, e.g. SMRPG's opening desyncing
+// from the music, which the Mk.II gets back).
+`ifndef MK2
 // Minimum cycle counter for pipeline advance.
 // Enforce 8 CLK2 cycle minimum between instruction commits
 // without the alignment penalty of sa1_clock_en.
@@ -490,6 +498,8 @@ always @(posedge CLK) begin
     sa1_commit_cnt_r <= sa1_commit_cnt_r + 1;
   end
 end
+
+`endif
 
 reg [31:0] sa1_cycle_cnt_r; initial sa1_cycle_cnt_r = 0;
 
@@ -1634,6 +1644,7 @@ always @(posedge CLK) begin
 
           mmc_state_end_r <= ST_MMC_DMA_END;
         end
+`ifndef MK2
         // save a cycle in fetch if we are going to rom.
         else if (EXE_STATE[clog2(ST_EXE_FETCH)] & ~exe_mmc_int & ~exe_fetch_byte_val & ~exe_fetch_move) begin
           mmc_byte_total_r <= exe_mmc_byte_total_r;
@@ -1652,6 +1663,7 @@ always @(posedge CLK) begin
 
           mmc_state_end_r <= ST_MMC_EXE_END;
         end
+`endif
         else if (exe_mmc_rd_r | exe_mmc_wr_r) begin
           mmc_byte_total_r <= exe_mmc_byte_total_r;
           mmc_dpe_r <= exe_mmc_dpe_r;
@@ -3928,7 +3940,11 @@ always @(posedge CLK) begin
   // - Normal DMA with ROM source (SD=00, CDEN=0)
   // - VBD: reads from ROM (et al.)
   // Normal DMA from IRAM/BRAM and CC2 (reg -> IRAM) do not halt the CPU
+`ifdef MK2
+  dma_active_r <= dma_cc1_active_r | dma_normal_pri_active_r | vbd_active_r;
+`else
   dma_active_r <= dma_cc1_active_r | (dma_normal_pri_active_r & ~dma_dcnt_r[`DCNT_CDEN] & ~|dma_dcnt_r[`DCNT_SD]) | vbd_active_r;
+`endif
 
 `ifdef DEBUG
   if (sa1_clock_en & ~|exe_waitcnt_r & EXE_STATE[clog2(ST_EXE_WAIT)] & ~step_r) cycle_wait_r <= 1;
@@ -3943,7 +3959,11 @@ always @(posedge CLK) begin
 `endif
 end
 
+`ifdef MK2
+assign pipeline_advance = sa1_clock_en & ~|exe_waitcnt_r & EXE_STATE[clog2(ST_EXE_WAIT)] & step_r & ~dma_active_r & ~WAI_r;
+`else
 assign pipeline_advance = ~|exe_waitcnt_r & EXE_STATE[clog2(ST_EXE_WAIT)] & step_r & ~dma_active_r & ~WAI_r & sa1_commit_ready;
+`endif
 
 //-------------------------------------------------------------------
 // DEBUG OUTPUT

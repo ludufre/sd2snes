@@ -1395,9 +1395,15 @@ always @(posedge CLK2) begin
       
       if(free_slot | SNES_DEADr) begin
 `ifndef MK2
-        // ctx (context/PPU-mirror) write -- top priority (mk3 snapshot).  The
-        // trailing `end else` folds cleanly into the SA1 `if` below: on mk3 it
-        // chains as `... end else if(SA1...)`, on mk2 the block vanishes.
+        // ctx (register-shadow mirror) write -- TOP priority, as on the base core.
+        // Since the #49 fix the ctx only mirrors the write-only $21xx/$42xx/$2BF0
+        // shadows and the APU ports (ctx.v IS_WRITE); the WRAM/VRAM/CGRAM/OAM streams
+        // that starved the SA-1 are gone, so this is a few writes per frame.  It must
+        // win over the SA-1: ctx.v drops a request while one is pending, and while it
+        // sat below the SA-1 fetches (the first #49 fix) a lost $2101/$2107-$210C write
+        // left a stale shadow that the in-game menu restored on close -- Super Mario
+        // RPG's file screen came back with the wrong sprites or background tiles.
+        // Hardware: level-up text 10/10 and the menu close exact 3/3 in this order.
         if (CTX_WR_PENDr) begin
           STATE <= ST_CTX_WR_ADDR;
           ST_MEM_DELAYr <= ROM_CYCLE_LEN;

@@ -545,7 +545,16 @@ assign SRAM_SNES_ADDR[23:0] = IS_WRAM
                                             :                (8'hF4 + SNES_PA[1:0])))
                             : 24'hF98000;
 
-assign IS_WRITE = IS_WRAM | IS_VRAM | IS_CGRAM | IS_OAM | IS_APU | IS_PPUREG | IS_CPUREG | IS_MISC; // | IS_SNESCAST_NMI; // NMI for SNESCAST
+// SA-1 core: only the write-only register shadows ($21xx/$42xx/$2BF0 gamepad) and the
+// APU port/ARAM mirror are written to PSRAM.  The WRAM/VRAM/CGRAM/OAM mirrors are NOT
+// requested on this core: the savestate/overlay handlers read those memories back
+// from the console directly (snes/savestate.a65, snes/cheatoverlay.a65 -- the snoop
+// mirror drops writes under load and was never trusted here), and every mirrored
+// byte was a PSRAM write competing with the SA-1's own ROM fetches.  During a VRAM
+// DMA that is one PSRAM write per transferred byte, enough to starve the SA-1 while
+// it converts text (Super Mario RPG "Level Up Bonus": the box text came out as the
+// same garbage tile repeated -- reproduced and fixed on hardware, issue #49).
+assign IS_WRITE = IS_APU | IS_PPUREG | IS_CPUREG | IS_MISC; // | IS_SNESCAST_NMI; // NMI for SNESCAST
 assign IS_WORD = IS_PPUREG;
 
 // flop request
