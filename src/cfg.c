@@ -86,6 +86,9 @@ _Static_assert(offsetof(cfg_t, text_antialias_mode) == 0x1cd, "cfg_t.text_antial
 _Static_assert(offsetof(cfg_t, ask_clock_on_boot) == 0x1ce, "cfg_t.ask_clock_on_boot must stay at CFG_ADDR+$1CE");
 _Static_assert(offsetof(cfg_t, open_msu_folders) == 0x1cf, "cfg_t.open_msu_folders must stay at CFG_ADDR+$1CF");
 _Static_assert(offsetof(cfg_t, show_sd2snes_folder) == 0x1d0, "cfg_t.show_sd2snes_folder must stay at CFG_ADDR+$1D0");
+_Static_assert(offsetof(cfg_t, gbc_mode) == 0x1d1, "cfg_t.gbc_mode must stay at CFG_ADDR+$1D1");
+_Static_assert(offsetof(cfg_t, gbc_sync) == 0x1d2, "cfg_t.gbc_sync must stay at CFG_ADDR+$1D2");
+_Static_assert(offsetof(cfg_t, gbc_stretch) == 0x1d4, "cfg_t.gbc_stretch must stay at CFG_ADDR+$1D4");
 
 const cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -154,7 +157,10 @@ const cfg_t CFG_DEFAULT = {
   .text_antialias_mode = 0,
   .ask_clock_on_boot = 1,
   .open_msu_folders = 1,
-  .show_sd2snes_folder = 0
+  .show_sd2snes_folder = 0,
+  .gbc_mode = 0,             /* Auto: .gbc / $0143 bit 7 -> GBC core */
+  .gbc_sync = 0,             /* Genlock */
+  .gbc_stretch = 0           /* hi-colour screens stay 160x144 */
 };
 
 cfg_t CFG;
@@ -319,7 +325,12 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_TEXT_ANTIALIAS,              text_antialias_mode,        CK_NUM,     0x20),
   CFGI(CFG_ASK_CLOCK_ON_BOOT,           ask_clock_on_boot,          CK_BOOL,    0),
   CFGI(CFG_OPEN_MSU_FOLDERS,            open_msu_folders,           CK_BOOL,    0),
-  CFGI(CFG_SHOW_SD2SNES_FOLDER,         show_sd2snes_folder,        CK_BOOL,    0)
+  CFGI(CFG_SHOW_SD2SNES_FOLDER,         show_sd2snes_folder,        CK_BOOL,    0),
+  /* 0 Auto / 1 Prefer SGB / 2 Prefer GBC -- out of range is not a core the
+     firmware knows how to load, so clamp back to Auto. */
+  CFGI(CFG_GBC_MODE,                    gbc_mode,                   CK_NUM,     0x20),
+  CFGI(CFG_GBC_SYNC,                    gbc_sync,                   CK_BOOL,    0),
+  CFGI(CFG_GBC_STRETCH,                 gbc_stretch,                CK_BOOL,    0)
 };
 #undef CFGI
 

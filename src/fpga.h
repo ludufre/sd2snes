@@ -65,6 +65,10 @@ extern uint8_t fpga_boot_led;
 /* Atari 2600 core (verilog/sd2snes_a26) -- mk3-only, like NES/SMS: only fpga_a26.bi3
    exists, no mk2 .bit is planned (see atari.c). */
 #define FPGA_A26 ((const uint8_t*)"/sd2snes/fpga_a26." FPGA_CONF_EXT)
+/* Game Boy Color core (verilog/sd2snes_gbc, the SGB core promoted to CGB) -- mk3-only:
+   only fpga_gbc.bi3 exists, no mk2 .bit is planned (see gbc.c; on the mk2 a .gb/.gbc
+   keeps booting the SGB core).  Selected by gbc_id() through sgb_update_romprops. */
+#define FPGA_GBC ((const uint8_t*)"/sd2snes/fpga_gbc." FPGA_CONF_EXT)
 #define FPGA_BASE ((const uint8_t*)"/sd2snes/fpga_base." FPGA_CONF_EXT)
 #define FPGA_DSP ((const uint8_t*)"/sd2snes/fpga_dsp." FPGA_CONF_EXT)
 /* mk2: boot-display bootstrap config ("fpga_mini"), loaded from SD instead of

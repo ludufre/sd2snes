@@ -169,6 +169,7 @@
 #include "timer.h"
 #include "sdnative.h"
 #include "cfg.h"
+#include "wdiag.h"
 
 extern cfg_t CFG;   /* bus_compat -> featurebits[13] in fpga_set_features */
 
@@ -177,6 +178,9 @@ extern cfg_t CFG;   /* bus_compat -> featurebits[13] in fpga_set_features */
    pasted into every one of their ~200 call sites; the code they run is the original
    macro body, verbatim.  noinline keeps LTO from undoing that on the mk2. */
 void __attribute__((noinline)) fpga_select(void) {
+#ifdef GBC_WEDGE_DIAG
+  wd_spi_select();
+#endif
   FPGA_SELECT_INLINE();
 }
 
@@ -185,7 +189,25 @@ void __attribute__((noinline)) fpga_deselect(void) {
 }
 
 void __attribute__((noinline)) fpga_wait_rdy(void) {
+#ifdef GBC_WEDGE_DIAG
+  /* the original body with the MCU_RDY poll bounded by WD_RDY_LIMIT_US */
+  __NOP(); __NOP(); __NOP(); __NOP();
+  while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE));
+  __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();
+  if(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)) {
+    uint32_t t0 = wd_cycles(), dt = 0;
+    while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)) {
+      dt = wd_cycles() - t0;
+      if(dt > WD_RDY_LIMIT_US * WD_CYC_PER_US) {
+        wd_rdy_timeout(dt);
+        return;
+      }
+    }
+    wd_rdy_waited(dt);
+  }
+#else
   FPGA_WAIT_RDY_INLINE();
+#endif
 }
 
 int __attribute__((noinline)) fpga_wait_rdy_to(void) {
@@ -216,6 +238,9 @@ void set_dac_addr(uint16_t address) {
 }
 
 void set_mcu_addr(uint32_t address) {
+#ifdef GBC_WEDGE_DIAG
+  wd_set_addr(address);
+#endif
   FPGA_SELECT();
   // wait for prior operations to clear out
   FPGA_WAIT_RDY();

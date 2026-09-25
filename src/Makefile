@@ -80,7 +80,7 @@ SRC  = main.c ff.c ccsbcs.c
 SRC += printf.c fileops.c fpga.c fpga_spi.c snes.c smc.c
 SRC += memory.c filetypes.c faulthandler.c sort.c crc32.c cic.c cover.c patch.c patchmeta.c patch_copier.c theme.c
 SRC += cli.c ymodem.c rle.c msu1.c crc16.c sysinfo.c
-SRC += cfg.c cheat.c yaml.c savestate.c sgb.c sms.c atari.c nes.c nes_chr.c hwinfo.c gameinfo.c igmenu.c manual.c
+SRC += cfg.c cheat.c yaml.c savestate.c sgb.c gbc.c sms.c atari.c nes.c nes_chr.c hwinfo.c gameinfo.c igmenu.c manual.c
 # Shared helpers: menu command handlers, file->PSRAM streaming, string/path
 # utilities and the YAML sidecar writer.
 SRC += menucmd.c psram_io.c strutil.c yamlw.c trainer.c cheatcode.c cheatedit.c
@@ -99,6 +99,10 @@ SRC += spc7110rtc.c
 SRC += sufami.c
 
 SRC += usbdesc.c usbcore.c usbuser.c cdcuser.c usbinterface.c
+
+# Wedge diagnostic instrument (wdiag.h): only a private diagnostic config sets
+# GBC_WEDGE_DIAG = y; every shipped config leaves it out.
+SRC += $(if $(filter y,$(GBC_WEDGE_DIAG)),wdiag.c)
 
 # List Assembler source files here.
 #     Make them always end in a capital .S.  Files ending in a lowercase .s

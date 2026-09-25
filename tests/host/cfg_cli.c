@@ -426,6 +426,9 @@ static void cfg_make_allchanged(void) {
   CFG.ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_X | SNES_BUTTON_RIGHT;
   CFG.a26_video_width = 1;                       /* 256 px stretched */
   CFG.cc_time_limit = 15;                        /* 18 minutes */
+  CFG.gbc_mode = 2;                              /* Prefer GBC; survives the >2 clamp */
+  CFG.gbc_sync = 1;                              /* Exact */
+  CFG.gbc_stretch = 1;                           /* hi-colour screens at 256x192 */
 }
 
 /* ---- the alternating-booleans config ------------------------------------

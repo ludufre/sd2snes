@@ -8,6 +8,7 @@
 #include "config.h"
 #include "uart.h"
 #include "led.h"
+#include "wdiag.h"
 
 /* Everything below is the serial console itself: the TX ring buffer, the UART IRQ
    handler and the port setup. CONFIG_UART_DEBUG off (Mk.II) leaves this file empty --
@@ -154,7 +155,30 @@ void uart_putc(char c) {
     UART_REGS->THR = (unsigned char)c;
   } else {
 #ifdef CONFIG_UART_DEADLOCKABLE
+#ifdef GBC_WEDGE_DIAG
+    /* Bounded twin of the spin below.  On timeout: count it, note whether the
+       transmitter was idle (lost THRE interrupt), feed THR once to restart the
+       interrupt chain, and drop this char if the buffer is still full. */
+    {
+      uint32_t t0 = wd_cycles();
+      while (tmp == read_idx) {
+        if (wd_cycles() - t0 > WD_UART_LIMIT_US * WD_CYC_PER_US) {
+          uint8_t thre = BITBAND(UART_REGS->LSR, 5);
+          wd_uart_timeout(thre);
+          BITBAND(UART_REGS->IER, 1) = 0;
+          if (thre && read_idx != write_idx) {
+            UART_REGS->THR = (unsigned char)txbuf[read_idx];
+            read_idx = (read_idx+1) & (sizeof(txbuf)-1);
+          }
+          BITBAND(UART_REGS->IER, 1) = 1;
+          if (tmp == read_idx) return;
+          break;
+        }
+      }
+    }
+#else
     while (tmp == read_idx) ;
+#endif
 #endif
     BITBAND(UART_REGS->IER, 1) = 0; // turn off UART interrupt
     txbuf[write_idx] = c;

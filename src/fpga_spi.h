@@ -79,6 +79,12 @@
    BEFORE the wait -- the NOP spacing and both poll loops run unchanged. */
 #define FPGA_WAIT_RDY_INLINE()    do {__NOP(); __NOP(); __NOP(); __NOP(); while(!BITBAND(SPI_REGS->SPI_SR, SPI_TFE)); __NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP(); while(!BITBAND(FPGA_MCU_RDY_REG->GPIO_I, FPGA_MCU_RDY_BIT)); } while (0)
 #define FPGA_WAIT_RDY()    fpga_wait_rdy()
+#ifdef GBC_WEDGE_DIAG
+/* Wedge diagnostic build (wdiag.h): every MCU_RDY wait goes through the bounded,
+   counting out-of-line body -- slower streaming, but no wait can hang. */
+#undef FPGA_WAIT_RDY_INLINE
+#define FPGA_WAIT_RDY_INLINE() fpga_wait_rdy()
+#endif
 
 /* Used ONLY by the ROM patcher.  An enhancement-chip FPGA core can leave the
    MCU SDRAM-port ready line (FPGA_MCU_RDY) deasserted, which makes the unbounded

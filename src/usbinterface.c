@@ -49,6 +49,7 @@
 #include "cdcuser.h"
 #include "cheat.h"
 #include "yaml.h"
+#include "wdiag.h"
 
 static inline void __DMB2(void) { asm volatile ("dmb" ::: "memory"); }
 
@@ -492,8 +493,20 @@ void usbint_recv_block(void) {
 
 // send a block
 void usbint_send_block(int blockSize) {
+#ifdef GBC_WEDGE_DIAG
+    uint8_t wd_thread = !__get_IPSR();
+    WD_SITE_SAVE(wd_prev);
+    tick_t wd_t0 = getticks();
+    if (wd_thread) WD_SITE(WD_SITE_USB_SEND);
+#endif
     // FIXME: don't need to double buffer anymore if using interrupt
     while(CDC_block_send((unsigned char*)send_buffer[send_buffer_index], blockSize) == -1) { usbint_check_connect(); }
+#ifdef GBC_WEDGE_DIAG
+    if (wd_thread) {
+        wd_usb_spin(WD_SITE_USB_SEND, getticks() - wd_t0);
+        WD_SITE_RESTORE(wd_prev);
+    }
+#endif
     send_buffer_index = (send_buffer_index + 1) & 0x1;
 }
 
@@ -836,6 +849,10 @@ int usbint_handler_cmd(void) {
         // chop from the beginning
         if (strlen(tempFileName) > (MAX_STRING_LENGTH - 16)) tempFileName += strlen(tempFileName) - (MAX_STRING_LENGTH - 16);
         strncpy((char *)(send_buffer[send_buffer_index]) + 16, current_filename, MAX_STRING_LENGTH - 16);
+#ifdef GBC_WEDGE_DIAG
+        /* wedge diagnostic counters in the unused tail 388..511 (wdiag.c) */
+        wd_info_fill(send_buffer[send_buffer_index]);
+#endif
     }
 
     // send response.  also triggers data interrupt.
@@ -863,7 +880,16 @@ int usbint_handler_cmd(void) {
 
     // lock process.  this avoids a conflict with the rest of the menu accessing the file system or sram
     // FIXME: streaming blocks saves
+#ifdef GBC_WEDGE_DIAG
+    WD_SITE_SAVE(wd_prev);
+    tick_t wd_t0 = getticks();
+    WD_SITE(WD_SITE_USB_LOCK);
+#endif
     while(server_state == USBINT_SERVER_STATE_HANDLE_LOCK || server_state == USBINT_SERVER_STATE_HANDLE_DAT || server_state == USBINT_SERVER_STATE_HANDLE_STREAM) { usbint_check_connect(); };
+#ifdef GBC_WEDGE_DIAG
+    wd_usb_spin(WD_SITE_USB_LOCK, getticks() - wd_t0);
+    WD_SITE_RESTORE(wd_prev);
+#endif
 
     // if the execute bit is set then perform operation
     if (server_info.flags & USBINT_SERVER_FLAGS_SETX) {

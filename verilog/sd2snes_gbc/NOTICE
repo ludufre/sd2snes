@@ -1,0 +1,59 @@
+sd2snes_gbc -- Game Boy Color core
+==================================
+
+Licence
+-------
+GPL-2.0-only, like the rest of the sd2snes FPGA sources.
+
+
+Origin
+------
+This core is derived from the Super Game Boy core of the sd2snes project
+(GPLv2), which implements the SGB2 cartridge: the SM83 CPU, PPU, APU, timers,
+serial port and the cartridge mappers.  Those files are carried over here
+essentially unchanged.
+
+What is new in this core is the SNES-facing half.  The SGB's ICD2 chip
+(sgb_icd2.v), which packed the Game Boy's 2-bit pixel output into scanline
+buffers for the SNES boot ROM to fetch, is replaced by:
+
+  gbc_clk.v     Game Boy clock-enable generation
+  gbc_bridge.v  the SNES bridge: read-only views over the Game Boy's own state
+                in cartridge banks $E0-$E3, and byte-wide commands in $EF00xx
+
+The picture is re-rendered on the SNES side from those views instead of being
+composed in the FPGA.  The protocol between the two halves is specified in
+GBC-CORE-CONTRACT.md.
+
+  c6_fb.v       (wire $03) the optional framebuffer mode: the PPU's own CGB
+                pixel, quantised to SNES direct colour, kept in block RAM and
+                read by the SNES as 8bpp tiles in bank $E4 -- for the scenes
+                whose per-line palette traffic the view/log path cannot carry.
+
+
+Block RAM rules
+---------------
+The EP4CE15 has 56 M9K and this core uses 53 of them.  Any new memory follows
+the two rules the framebuffer fit established (c6_fb.v header):
+
+  * a RAM deeper than 512 words gets maximum_depth = 512 on its altsyncram,
+    or the fitter builds it from 1K x 8 blocks and wastes a third of them;
+  * a small array read by index (a few dozen entries) gets ramstyle = "logic",
+    or each one is placed in a block of its own.
+
+
+Technical references
+--------------------
+Behaviour was implemented from public documentation and from source that is
+compatible with the GPLv2:
+
+  Pan Docs                    CC0        Game Boy / Game Boy Color hardware
+                                         reference (registers, timing, tile
+                                         maps, OAM, palettes, power-up state)
+  ares (ares/gb, sm83)        ISC        Game Boy Color behaviour
+  SameBoy (Core, BootROMs)    MIT        edge cases and the free CGB boot ROM
+  gambatte (libgambatte and   GPL-2.0    CGB timing model (speed switch, HDMA,
+  its hardware test ROMs)                end of mode 3) and the hwtests suite
+  mooneye-test-suite          MIT        hardware-verified timing test ROMs
+
+No code or documentation from GPL-3.0 projects was used, read or adapted.

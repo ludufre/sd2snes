@@ -58,6 +58,7 @@ void sgb_id(sgb_romprops_t* props, uint8_t *filename) {
   props->fpga_conf = NULL;
   props->has_sgb = 0;
   props->has_rtc = 0;
+  props->core_is_gbc = 0;
   props->srambase = 0;
   props->sramsize_bytes = 0;
   props->error = 0;
@@ -141,6 +142,10 @@ void sgb_id(sgb_romprops_t* props, uint8_t *filename) {
     case 0x02: props->ramsize_bytes = 8*1024;   break;
     case 0x03: props->ramsize_bytes = 32*1024;  break;
     case 0x04: props->ramsize_bytes = 128*1024; break;
+    /* MBC30 (Pokemon Crystal): 64 KB of cart RAM.  The FPGA mapper already banks
+       it (verilog/sd2snes_sgb/sgb.v); without this case the header read 0 and the
+       game lost every save past bank 3. */
+    case 0x05: props->ramsize_bytes = 64*1024;  break;
     default:   props->ramsize_bytes = 0;        break;
   }
   if (props->mapper_id == 2) props->ramsize_bytes = 512;
@@ -248,7 +253,9 @@ uint8_t sgb_update_romprops(snes_romprops_t *romprops, uint8_t *filename) {
       return 0;
     }
     
-    romprops->fpga_conf = FPGA_SGB;
+    /* Same LoROM slot for both cores; only which bitstream boots it differs.
+       core_is_gbc is set by gbc_id() and is always 0 on the mk2. */
+    romprops->fpga_conf = sgb_romprops.core_is_gbc ? FPGA_GBC : FPGA_SGB;
     romprops->load_address = 0x880000;
 
 #ifdef CONFIG_MK2
@@ -277,77 +284,83 @@ void sgb_load_sram(uint8_t *sgb_filename) {
 
 void sgb_cheat_program(void) {
   if (sgb_romprops.has_sgb) {
+    /* The GBC core has none of this plumbing in v0: no 64 KB CTX (the CGB state does
+       not fit it), no $010F11 snoop, no ingame hook.  Arming the hooks there would
+       park the SNES on a vector that never comes back, so gate the whole block --
+       cheat_wram_present(0) stays, it is the same statement for both cores. */
+    uint8_t hooks_ok = !sgb_romprops.core_is_gbc;
+
     /* update cheats based on SGB file and configuration state */
-    if (CFG.sgb_enable_ingame_hook) cheat_nmi_enable(1);
-    if (CFG.sgb_enable_ingame_hook) cheat_irq_enable(1);
+    if (hooks_ok && CFG.sgb_enable_ingame_hook) cheat_nmi_enable(1);
+    if (hooks_ok && CFG.sgb_enable_ingame_hook) cheat_irq_enable(1);
     
     /* save states (repurpose cheats) enabled via config */
-    cheat_enable((CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? 1 : 0);
+    cheat_enable((hooks_ok && CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? 1 : 0);
     
     /* wram never present */
     cheat_wram_present(0);
   }
 }
 
+/* CRC32 of the whole file at `path`.  Returns 0 when the file cannot be OPENED
+   (nothing written to *crc_out); a read error part way through stops the walk and
+   reports the partial CRC, which the callers then see as a mismatch -- the exact
+   behaviour of the two loops this replaces.  The file is left closed either way.
+   Factored out of sgb_bios_state (which ran this loop twice) and shared with
+   gbc_bios_state (gbc.c), so three checks cost one copy of the loop. */
+uint8_t file_crc32(const uint8_t *path, uint32_t *crc_out) {
+  uint32_t crc = crc32_init();
+  UINT bytes_read = 0;
+
+  file_open((uint8_t*) path, FA_READ);
+  if (file_res) {
+    file_close();
+    return 0;
+  }
+  while ((bytes_read = file_read())) {
+    if (file_res) break;
+
+    for (UINT i = 0; i < bytes_read; i++) crc = crc32_update(crc, file_buf[i]);
+  }
+  file_close();
+  *crc_out = crc32_finalize(crc);
+  return 1;
+}
+
 uint8_t sgb_bios_state(void) {
   uint8_t state = SGB_BIOS_OK;
+  uint32_t crc = 0;
 
   snprintf(SGBFW, sizeof(SGBFW), "/sd2snes/sgb%d_boot.bin", CFG.sgb_bios_version);
   snprintf(SGBSR, sizeof(SGBSR), "/sd2snes/sgb%d_snes.bin", CFG.sgb_bios_version);
 
-  file_open((uint8_t*) SGBFW, FA_READ);
-  if (file_res) {
+  if (!file_crc32((uint8_t*) SGBFW, &crc)) {
     state = SGB_BIOS_MISSING;
   }
-  else {
-    uint32_t crc = crc32_init();
-    UINT bytes_read = 0;
-    
-    while ((bytes_read = file_read())) {
-      if (file_res) break;
-
-      for (UINT i = 0; i < bytes_read; i++) crc = crc32_update(crc, file_buf[i]);
-    }
-    crc = crc32_finalize(crc);
-    if (state <= SGB_BIOS_MISMATCH
+  else if (state <= SGB_BIOS_MISMATCH
        && (  (crc != 0x53d0dd63) // sgb2_boot.bin
           && (crc != 0xec8a83b9) // sgb1_boot.bin
           && (crc != 0x73bd96dc) // sgb2_boot.bin (SameBoy)
           && (crc != 0xedac680e) // sgb1_boot.bin (SameBoy)
           )
        ) {
-      printf("SGB sgb%d_boot.bin CRC mismatch: 0x%08x\n", CFG.sgb_bios_version, (unsigned int)crc);
-      state = SGB_BIOS_MISMATCH;
-    }
+    printf("SGB sgb%d_boot.bin CRC mismatch: 0x%08x\n", CFG.sgb_bios_version, (unsigned int)crc);
+    state = SGB_BIOS_MISMATCH;
   }
-  file_close();
 
-  file_open((uint8_t*) SGBSR, FA_READ);
-  if (file_res) {
+  if (!file_crc32((uint8_t*) SGBSR, &crc)) {
     state = SGB_BIOS_MISSING;
   }
-  else {
-    uint32_t crc = crc32_init();
-    UINT bytes_read = 0;
-    
-    while ((bytes_read = file_read())) {
-      if (file_res) break;
-
-      for (UINT i = 0; i < bytes_read; i++) crc = crc32_update(crc, file_buf[i]);
-    }
-    crc = crc32_finalize(crc);
-    if (state <= SGB_BIOS_MISMATCH
+  else if (state <= SGB_BIOS_MISMATCH
        && (  (crc != 0xcb176e45) // sgb2 bios (JP)
           && (crc != 0x2e353dbb) // sgb bios v1.0 (JU)
           && (crc != 0x27a03c98) // sgb bios v1.1 (JU)
           && (crc != 0x8a4a174f) // sgb bios v1.2 (UE)
           )
        ) {
-      printf("SGB sgb%d_snes.bin CRC mismatch: 0x%08x\n", CFG.sgb_bios_version, (unsigned int)crc);
-      state = SGB_BIOS_MISMATCH;
-    }
+    printf("SGB sgb%d_snes.bin CRC mismatch: 0x%08x\n", CFG.sgb_bios_version, (unsigned int)crc);
+    state = SGB_BIOS_MISMATCH;
   }
-  file_close();
   
   return state;
 }

@@ -26,6 +26,7 @@ memory.c: RAM operations
 
 
 #include "config.h"
+#include "wdiag.h"
 #include "uart.h"
 #include "fpga.h"
 #include "cfg.h"
@@ -54,6 +55,7 @@ memory.c: RAM operations
 #include "rtc.h"
 #include "savestate.h"
 #include "sgb.h"
+#include "gbc.h"
 #include "spc7110rtc.h"
 #include "nes.h"
 #include "sms.h"
@@ -788,6 +790,20 @@ static void load_set_features(const load_ctx_t *c) {
   if(!STS.has_satellaview) {
     romprops.fpga_features |= FEAT_SATELLABASE;
   }
+
+#ifndef CONFIG_MK2
+  /* GBC core: the in-game button gestures (reset the game / back to the menu) are
+     matched by the player itself, which then writes the command to MCU_CMD ($2A00).
+     No NMI hook runs under the player, so nothing raises snescmd_unlock, and in
+     main.v the data-bus buffer for the snescmd window only opens on
+     snescmd_unlock | FEAT_CMD_UNLOCK: without this bit the write strobes the buffer
+     with the bus undriven, $2A00 never changes and the gesture blanks the screen
+     and goes nowhere.  (The menu gets the bit from fpga_features_preload; a game
+     load used to drop it here.) */
+  if(sgb_romprops.has_sgb && sgb_romprops.core_is_gbc) {
+    romprops.fpga_features |= FEAT_CMD_UNLOCK;
+  }
+#endif
 }
 /* Chip BIOSes and firmware blobs the staged ROM needs: BS-X, Sufami Turbo, DSPx.
    Takes ticksstart only to close out the load timer printed here. */
@@ -884,6 +900,11 @@ static void load_setup_masks(load_ctx_t *c) {
   /* SGB setup romprops and load SRAM */
   sgb_load_sram(c->sgb_filename);
 
+  /* GBC: the player image load_stream just staged carries a config block; fill
+     in the user's options before the SNES leaves reset.  No-op unless this load
+     boots the GBC core (and on the mk2, where gbc.c is stubs). */
+  gbc_stage_config(c->base_addr + romprops.load_address);
+
   /* SMS: stage the .sms ROM into PSRAM (FPGA Z80 fetches it) before the SNES boots */
   sms_load_rom();
 
@@ -897,10 +918,16 @@ static void load_setup_masks(load_ctx_t *c) {
     c->filename = c->sgb_filename;
     c->filesize = c->sgb_filesize;
 
-    /* update SaveRAM properties */
-    romprops.ramsize_bytes = (CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? (128 * 1024) : sgb_romprops.ramsize_bytes;
+    /* update SaveRAM properties.  The 128 KB expansion is the SGB SAVESTATE area
+       (the state is parked above the cart RAM); the GBC core has no savestates in
+       v0 and its cart RAM window is exactly ramsize_bytes, so claiming 128 KB there
+       would only mask the real SaveRAM mask off. */
+    uint8_t sgb_state_area = !sgb_romprops.core_is_gbc
+                             && CFG.sgb_enable_state
+                             && sgb_romprops.ramsize_bytes <= 64 * 1024;
+    romprops.ramsize_bytes = sgb_state_area ? (128 * 1024) : sgb_romprops.ramsize_bytes;
     romprops.srambase = sgb_romprops.srambase;
-    romprops.sramsize_bytes = (CFG.sgb_enable_state && sgb_romprops.ramsize_bytes <= 64 * 1024) ? (128 * 1024) : sgb_romprops.sramsize_bytes;
+    romprops.sramsize_bytes = sgb_state_area ? (128 * 1024) : sgb_romprops.sramsize_bytes;
 
     rammask = sgb_romprops.ramsize_bytes ? (sgb_romprops.ramsize_bytes - 1) : 0;
     rommask = sgb_romprops.romsize_bytes ? (sgb_romprops.romsize_bytes - 1) : 0;
@@ -1078,8 +1105,15 @@ static uint32_t load_stage_consoles(load_ctx_t *c) {
   uint8_t *sgb_filename = filename;
   DWORD    sgb_filesize = file_handle.fsize;
   sgb_id(&sgb_romprops, sgb_filename);
-  /* SGB SNES BIOS (sgbN_snes.bin) missing -> message + NACK (else the menu would
-     hang in game_handshake waiting for an ACK/NACK that never came). */
+  /* GBC routing: a POLICY pass over what sgb_id() just parsed (gbc.h).  It runs
+     BEFORE sgb_update_file because it may swap SGBFW/SGBSR for the GBC boot ROM and
+     player -- the file that gets opened below, and the ones the pre-checks in
+     load_check_prereqs then f_stat.  No-op on the mk2 (stub) and for a plain DMG
+     image, which keeps booting the SGB. */
+  gbc_id(&sgb_romprops, sgb_filename);
+  /* SGB SNES BIOS (sgbN_snes.bin, or gbc_snes.bin on the GBC core) missing ->
+     message + NACK (else the menu would hang in game_handshake waiting for an
+     ACK/NACK that never came). */
   if (!sgb_update_file(&filename)) {
     return load_abort_missing(flags, MENU_ERR_SUPPLFILE, path_leaf(SGBSR));
   }
@@ -2104,6 +2138,9 @@ uint8_t sram_reliable() {
     if(val==0x12345678) {
       score++;
     } else {
+#ifdef GBC_WEDGE_DIAG
+      wd_sentinel_bad(val);
+#endif
       printf("i=%d val=%08lX\n", i, val);
     }
   }

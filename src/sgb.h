@@ -55,6 +55,13 @@ typedef struct __attribute__ ((__packed__)) _sgb_romprops {
   uint8_t* fpga_conf;   /* FPGA config file to load (default: base) */
   uint8_t has_sgb;            /* SGB presence flag */
   uint8_t has_rtc;            /* RTC presence flag */
+  uint8_t core_is_gbc;        /* route this Game Boy image to the GBC core instead of the SGB
+                                 one.  Set by gbc_id() (gbc.h), which runs as a POLICY pass
+                                 right after sgb_id() and rewrites SGBFW/SGBSR/fpga_sgbfeat;
+                                 everything downstream keeps reading those, so this flag is
+                                 only consulted where the two cores genuinely differ (which
+                                 fpga_* to load, the savestate SaveRAM expansion, the ingame
+                                 hooks).  Always 0 on the mk2: the GBC core is mk3-only. */
   uint32_t srambase;          /* saveram base address */
   uint32_t sramsize_bytes;    /* saveram size in bytes */
   uint16_t fpga_sgbfeat;      /* SGB configuration bits */
@@ -64,6 +71,10 @@ typedef struct __attribute__ ((__packed__)) _sgb_romprops {
 } sgb_romprops_t;
 
 enum { SGB_BIOS_CHECK = 0, SGB_BIOS_OK = 1, SGB_BIOS_MISMATCH = 2, SGB_BIOS_MISSING = 3 };
+
+/* CRC32 of a whole file, streamed through file_buf.  Shared with gbc.c so the boot
+   ROM checks of both cores walk the file exactly once, the same way. */
+uint8_t file_crc32(const uint8_t *path, uint32_t *crc_out);
 
 void sgb_id(sgb_romprops_t*, uint8_t *);
 uint8_t sgb_update_file(uint8_t **);

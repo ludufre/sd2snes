@@ -229,7 +229,8 @@ typedef struct __attribute__ ((__packed__)) _mcu_status {
   uint8_t is_mk2;                  /* +8. 1 on Mk.II (LPC1754). Board identity, published on
                                       every boot: m3nu.bin is ONE binary shared across configs,
                                       so anything the mk2 firmware cannot carry has to be gated
-                                      at RUNTIME from here. No menu code gates on it today.
+                                      at RUNTIME from here. The menu greys the Game Boy
+                                      Color rows with it (mfunc_isenabled_gbc).
                                       Lockstep with ST_IS_MK2. */
 } mcu_status_t;
 

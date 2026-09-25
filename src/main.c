@@ -32,6 +32,7 @@
 #include "manual.h"
 #include "nes.h"
 #include "menucmd.h"
+#include "wdiag.h"
 
 //usb
 #include "usb.h"
@@ -99,8 +100,26 @@ uart_putc('\n');
   }
 }
 
+#ifdef GBC_WEDGE_DIAG
+/* in-game loop condition of the wedge diagnostic build: same fpga_test(), plus
+   the heartbeat and a count of bad test tokens (wdiag.h) */
+static uint8_t wd_loop_test(void) {
+  WD_SITE(WD_SITE_LOOP_TEST);
+  uint8_t t = fpga_test();
+  if(t != FPGA_TEST_TOKEN) wd_fpga_test_bad(t);
+  wd_heartbeat();
+  return t;
+}
+#define LOOP_FPGA_TEST() wd_loop_test()
+#else
+#define LOOP_FPGA_TEST() fpga_test()
+#endif
+
 int main(void) {
   power_init();
+#ifdef GBC_WEDGE_DIAG
+  wd_init();
+#endif
   GPIO_MODE_OUT(SNES_CIC_PAIR_REG, SNES_CIC_PAIR_BIT);
   SET_BIT(SNES_CIC_PAIR_REG, SNES_CIC_PAIR_BIT);
   GPIO_MODE_OUT(FPGA_SSREG, FPGA_SSBIT);
@@ -228,7 +247,7 @@ int main(void) {
     STM.num_recent_games = cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 1);
     STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
 #ifdef CONFIG_MK2
-    STM.is_mk2 = 1;   /* board identity; nothing in the menu gates on it today, see snes.h */
+    STM.is_mk2 = 1;   /* board identity; the menu greys the Game Boy Color rows with it, see snes.h */
 #else
     STM.is_mk2 = 0;
 #endif
@@ -479,22 +498,29 @@ int main(void) {
     int loop_ticks = getticks();
     uint8_t usb_cmd = 0;
 // uint8_t snes_res;
-    while(fpga_test() == FPGA_TEST_TOKEN) {
+#ifdef GBC_WEDGE_DIAG
+    wd_loop_enter();
+#endif
+    while(LOOP_FPGA_TEST() == FPGA_TEST_TOKEN) {
       cli_entrycheck();
       //usb upload/boot/lock
+      WD_SITE(WD_SITE_USBINT);
       usb_cmd |= usbint_handler();
       if (usb_cmd == SNES_CMD_GAMELOOP) usb_cmd = 0;
 
 //        sleep_ms(250);
+      WD_SITE(WD_SITE_SRAM_REL);
       sram_reliable();
       /* NES in-game debug snapshot ("NDBG" @ PSRAM 0x400100): PC/regs do
          6502 + contadores da bridge, lidos da config-bus (grupo 0x04) e
          publicados 1x/iteracao.  No-op sem .nes; bounded (ver nes.c). */
+      WD_SITE(WD_SITE_NES_DBG);
       nes_dbg_publish();
       
       // loop if we are in the middle of a reset
       if (usbint_server_reset()) continue;
       
+      WD_SITE(WD_SITE_RESET);
       if(reset_changed) {
         printf("reset\n");
         reset_changed = 0;
@@ -512,10 +538,16 @@ int main(void) {
         if(getticks() > loop_ticks + 25) {
           loop_ticks = getticks();
  //         sram_reliable();
+          WD_SITE(WD_SITE_CIC_PRINT);
           printf("%s ", get_cic_statename(get_cic_state()));
+          WD_SITE(WD_SITE_SNES_LOOP);
           cmd=snes_main_loop();
           if (usb_cmd && !cmd) cmd = usb_cmd;
           if(cmd) {
+#ifdef GBC_WEDGE_DIAG
+            wd_cmd(cmd);
+#endif
+            WD_SITE(WD_SITE_CMD_SERVE);
             printf("snes loop cmd=%02x\n", cmd);
             /* in-game shell / overlay commands are served by the shared dispatcher
                (snes.c), which the parallel MSU-1 loop calls too -- one body, so the
@@ -546,6 +578,7 @@ int main(void) {
                 printf("unknown cmd: %02x\n", cmd);
                 break;
             }
+            WD_SITE(WD_SITE_ACK_CMD);
             snes_set_mcu_cmd(0);
           }
         }
@@ -556,6 +589,9 @@ int main(void) {
     if(fpga_test() != FPGA_TEST_TOKEN){
       led_panic(LED_PANIC_FPGA_DEAD);
     }
+#ifdef GBC_WEDGE_DIAG
+    wd_loop_exit();
+#endif
     /* else reset */
   }
 }

@@ -55,6 +55,7 @@
 #include "savestate.h"
 #include "manual.h"
 #include "sufami.h"
+#include "wdiag.h"
 
 uint32_t saveram_crc, saveram_crc_old;
 uint32_t bs_pack_crc, bs_pack_crc_old; /* BS Memory Pack autosave */
@@ -476,6 +477,7 @@ uint8_t snes_main_loop() {
     bs_pack_didnotsave = 0;
   }
 
+  WD_SITE(WD_SITE_GET_CMD);
   return snes_get_mcu_cmd();
 }
 

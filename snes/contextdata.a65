@@ -454,6 +454,34 @@ kv_sgb_clock:
 .word $0001, !text_sgb_clock2 : .byt ^text_sgb_clock2
 .word $ffff
 
+; GbcMode (CFG+$1D1): 0 Auto / 1 Prefer SGB / 2 Prefer GBC -- gbc_mode_t in
+; src/gbc.h. cfg_load clamps it into 0..2, so every stored value is in the table;
+; numeric order.
+kv_gbc_mode:
+.word $0000, !text_auto : .byt ^text_auto
+.word $0001, !text_gbc_prefer_sgb : .byt ^text_gbc_prefer_sgb
+.word $0002, !text_gbc_prefer_gbc : .byt ^text_gbc_prefer_gbc
+.word $ffff
+
+; GbcSync (CFG+$1D2): 0 Genlock / 1 Exact -- gbc_sync_t in src/gbc.h.
+kv_gbc_sync:
+.word $0000, !text_gbc_genlock : .byt ^text_gbc_genlock
+.word $0001, !text_gbc_exact : .byt ^text_gbc_exact
+.word $ffff
+
+; mfunc_isenabled_gbc -- greying predicate of the three Game Boy Color rows of the
+; SGB menu (menudata.a65).  The GBC core has no Spartan-3 build and the Mk.II
+; firmware ignores GbcMode/GbcSync/GbcStretch, so the rows are drawn disabled whenever the
+; board flag ST_IS_MK2 is set.  Carry set = drawn disabled.  COSMETIC only, like
+; every mfunc_isenabled_* (menu_check_disabled_func only picks a palette), hence
+; the "Mk.III only" in every description.  Entered by rtl from
+; menu_check_disabled_func with A in 8 bits, which is also why it may live in $C1.
+mfunc_isenabled_gbc:
+  .as
+  lda @ST_IS_MK2
+  cmp #$01                   ; C = 1 for any non-zero flag (Mk.II)
+  rtl
+
 kv_screensaver_timeout:
 .word $0001, !text_1min : .byt ^text_1min
 .word $0002, !text_2min : .byt ^text_2min

@@ -85,6 +85,9 @@
 #define CFG_ASK_CLOCK_ON_BOOT            ("AskClockOnBoot")
 #define CFG_OPEN_MSU_FOLDERS             ("OpenMsuFolders")
 #define CFG_SHOW_SD2SNES_FOLDER          ("ShowSd2snesFolder")
+#define CFG_GBC_MODE                     ("GbcMode")
+#define CFG_GBC_SYNC                     ("GbcSync")
+#define CFG_GBC_STRETCH                  ("GbcStretch")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -209,6 +212,33 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      also lists the files with no known extension (saves, savestates, sidecars) as TYPE_FILE,
      so saves/ and info/ do not look empty. The menu re-reads the current folder when the
      value changes (filesel_key_x). Default 0. */
+  uint8_t  gbc_mode;                /* CFG @ $1D1: which core a Game Boy image boots on --
+     0 = Auto (a .gbc extension or $0143 bit 7 goes to the GBC core, a plain DMG image to the
+     SGB), 1 = Prefer SGB (only CGB-ONLY images, $0143 == $C0, go to the GBC core -- everything
+     the Super Game Boy can run keeps its border and SGB colourisation), 2 = Prefer GBC (every
+     Game Boy image). Read at load time by gbc_id() (src/gbc.c), which rewrites the boot ROM,
+     the SNES-side image and the FPGA core for that one load; the enum is gbc_mode_t in gbc.h
+     and the value IS the clamp max in cfg_items[], so do not renumber. mk3-only: the GBC core
+     has no Spartan-3 build, the mk2 stubs ignore this byte and .gb/.gbc keep booting the SGB
+     there (the menu greys the row on a Mk.II). YAML GbcMode + menu "Game Boy Color mode" (SGB
+     menu). Default 0. */
+  uint8_t  gbc_sync;                /* CFG @ $1D2: how the GBC core clocks the Game Boy --
+     0 = Genlock (the GB frame is locked to the SNES frame, 60.0988 Hz / +0.62%, so the SNES
+     read window never crosses the GB's own vblank and nothing tears), 1 = Exact (the real
+     4.194304 MHz; the two frames drift and a snapshot is occasionally skipped, which shows up
+     as one frame of lag, never as a torn image). Shipped to the core as CHIPFEAT $EF bit 5
+     before it leaves reset (GBC-CORE-CONTRACT.md sec. 2). YAML GbcSync + menu "Game Boy Color
+     sync" (SGB menu). Default 0. */
+  uint8_t  cfg_rsvd_1d3;            /* CFG @ $1D3: reserved */
+  uint8_t  gbc_stretch;             /* CFG @ $1D4: stretch the GBC core's framebuffer screens
+     (the hi-colour mode, wire $03) to 256x192 instead of showing them 160x144 in the middle of
+     the screen. 0 = off, 1 = on. Only those screens change: the normal tile path stays 160x144
+     either way, so a game that enters and leaves hi-colour visibly changes size. A still
+     hi-colour picture comes out clean; an animated one shows 8-line bands, because the
+     stretched frame is too big to refresh whole every frame. Handed to the player through the
+     "GBCF" config block of the staged gbc_snes.bin (gbc_stage_config, src/gbc.c), never to
+     the FPGA. mk3-only like the rest of the GBC core. YAML GbcStretch + menu "Game Boy Color
+     stretch" (SGB menu). Default 0. */
 } cfg_t;
 
 int cfg_save(void);

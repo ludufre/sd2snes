@@ -712,6 +712,57 @@ menu_enttab_sgb:
  .byt  0,0,0
  .byt  0,0,0
 
+; Game Boy Color core (GbcMode / GbcSync / GbcStretch, CFG+$1D1/$1D2/$1D4). They
+; sit with the SGB rows because GbcMode is exactly the choice between the two cores
+; for a .gb/.gbc. The GBC core is Mk.III-only: the mk2 firmware ignores the three
+; bytes (gbc.c stubs) and every Game Boy image keeps booting the SGB there, so
+; mfunc_isenabled_gbc greys the rows on a Mk.II. Greying is COSMETIC (the row stays
+; editable), which is why every description also says "Mk.III only".
+ .byt  MTYPE_VALUE
+ .word !mtext_gbc_mode
+ .byt  ^mtext_gbc_mode
+ .word !kv_gbc_mode
+ .byt  ^kv_gbc_mode
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GBC_MODE
+ .byt  ^CFG_GBC_MODE
+ .word !mdesc_gbc_mode
+ .byt  ^mdesc_gbc_mode
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_gbc-1)
+ .byt  ^(mfunc_isenabled_gbc-1)
+
+ .byt  MTYPE_VALUE
+ .word !mtext_gbc_sync
+ .byt  ^mtext_gbc_sync
+ .word !kv_gbc_sync
+ .byt  ^kv_gbc_sync
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GBC_SYNC
+ .byt  ^CFG_GBC_SYNC
+ .word !mdesc_gbc_sync
+ .byt  ^mdesc_gbc_sync
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_gbc-1)
+ .byt  ^(mfunc_isenabled_gbc-1)
+
+ .byt  MTYPE_VALUE
+ .word !mtext_gbc_stretch
+ .byt  ^mtext_gbc_stretch
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_GBC_STRETCH
+ .byt  ^CFG_GBC_STRETCH
+ .word !mdesc_gbc_stretch
+ .byt  ^mdesc_gbc_stretch
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_gbc-1)
+ .byt  ^(mfunc_isenabled_gbc-1)
+
  .byt 0
 
 menu_enttab_ingame:
