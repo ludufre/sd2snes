@@ -184,7 +184,7 @@ TRANSLATIONS = {
     'mdesc_mm_sysinfo': 'Informatie over firmwareversie, SD-kaart, SNES, CIC{127}{128}',
     'mdesc_cfg_time': 'Datum en tijd instellen',
     'mdesc_cfg_ask_clock': 'Vraag bij het opstarten om de tijd zolang de klok nog niet is ingesteld',
-    'mdesc_cfg_boot_intro': 'Toont het scherm ludufre presents, met geluid, bij het inschakelen van de console',
+    'mdesc_cfg_boot_intro': 'Toont een openingsscherm, met geluid, bij het inschakelen van de console',
     'mdesc_cfg_bsx': 'Specifieke instellingen voor BS-X/Satellaview',
     'mdesc_cfg_browser': 'Instellingen voor verkenner wijzigen',
     'mdesc_cfg_chip': 'Speciale chipfuncties instellen',

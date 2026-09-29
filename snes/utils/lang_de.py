@@ -189,7 +189,7 @@ TRANSLATIONS = {
     'mdesc_mm_sysinfo': 'Info zu FW, SD, SNES, CIC{127}{128}',
     'mdesc_cfg_time': 'Datum und Uhrzeit einstellen',
     'mdesc_cfg_ask_clock': 'Fragt beim Start nach der Zeit, solange die Uhr ungestellt ist',
-    'mdesc_cfg_boot_intro': 'Zeigt beim Einschalten der Konsole den Bildschirm ludufre presents mit Klang',
+    'mdesc_cfg_boot_intro': 'Zeigt beim Einschalten der Konsole einen Startbildschirm mit Klang',
     'mdesc_cfg_bsx': 'BS-X/Satellaview-spezifische Optionen',
     'mdesc_cfg_browser': 'Optionen des Dateibrowsers aendern',
     'mdesc_cfg_chip': 'Spezialchip-Funktionen einstellen',

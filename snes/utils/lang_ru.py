@@ -187,7 +187,7 @@ TRANSLATIONS = {
     'mdesc_mm_sysinfo': 'Сведения о прошивке, SD-карте, SNES, CIC{127}{128}',
     'mdesc_cfg_time': 'Установить дату и время',
     'mdesc_cfg_ask_clock': 'Спрашивает время при старте, пока часы не настроены',
-    'mdesc_cfg_boot_intro': 'Показывает заставку ludufre presents со звуком при включении консоли',
+    'mdesc_cfg_boot_intro': 'Показывает заставку со звуком при включении консоли',
     'mdesc_cfg_bsx': 'Настройки, относящиеся к BS-X/Satellaview',
     'mdesc_cfg_browser': 'Изменить настройки файлового браузера',
     'mdesc_cfg_chip': 'Настроить возможности спецчипов',

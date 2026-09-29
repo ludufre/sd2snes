@@ -185,7 +185,7 @@ TRANSLATIONS = {
     'mdesc_mm_sysinfo': 'Infos sur version FW, carte SD, SNES, CIC{127}{128}',
     'mdesc_cfg_time': 'Régler la date et l\'heure',
     'mdesc_cfg_ask_clock': "Demande l'heure au démarrage tant que l'horloge est non réglée",
-    'mdesc_cfg_boot_intro': "Affiche l'écran ludufre presents, avec son carillon, à l'allumage de la console",
+    'mdesc_cfg_boot_intro': "Affiche un écran d'ouverture, avec un carillon, à l'allumage de la console",
     'mdesc_cfg_bsx': 'Paramètres spécifiques au BS-X/Satellaview',
     'mdesc_cfg_browser': 'Modifier les paramètres du navigateur de fichiers',
     'mdesc_cfg_chip': 'Définir les fonctionnalités des puces spéciales',

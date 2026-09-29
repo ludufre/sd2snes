@@ -373,7 +373,7 @@ static void cfg_make_allchanged(void) {
     memcpy(CFG.bsx_time, t, sizeof t);
   }
   CFG.r213f_override = 0;
-  CFG.enable_ingame_hook = 1;
+  CFG.enable_ingame_hook = 0;
   CFG.enable_ingame_buttons = 0;
   CFG.enable_hook_holdoff = 0;
   CFG.enable_screensaver = 0;
@@ -389,7 +389,7 @@ static void cfg_make_allchanged(void) {
   CFG.led_brightness = 4;                        /* survives the >15 clamp */
   CFG.enable_cheats = 0;
   CFG.reset_patch = 0;
-  CFG.enable_ingame_savestate = 1;
+  CFG.enable_ingame_savestate = 0;
   CFG.loadstate_delay = 20;
   CFG.enable_savestate_slots = 0;
   CFG.ingame_buttons_savestate   = SNES_BUTTON_START | SNES_BUTTON_X;   /* "SX" */
