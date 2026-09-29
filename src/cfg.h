@@ -90,6 +90,7 @@
 #define CFG_ENABLE_INGAME_PAD2           ("EnableIngamePad2")
 #define CFG_GBC_STRETCH                  ("GbcStretch")
 #define CFG_ONBOARDING_VERSION           ("OnboardingVersion")
+#define CFG_BOOT_INTRO                   ("BootIntro")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -255,6 +256,10 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      tags them). Written by the gate on B and by the tour itself before
      SNES_CMD_ONBOARDING_DONE. A config.yml without the key shows the tour once. YAML
      OnboardingVersion, no menu entry. Default 0. */
+  uint8_t  boot_intro;              /* CFG @ $1D6: show the "ludufre presents" screen (with its
+     chime) on the first menu boot after the console is switched on (snes/bootintro.a65). Never on
+     a menu reload, a return from a game or the reset button, nor when autoboot starts a game.
+     YAML BootIntro + menu "Power-on screen" (browser settings). Default 1. */
 } cfg_t;
 
 int cfg_save(void);

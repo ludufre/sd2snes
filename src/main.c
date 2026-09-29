@@ -315,6 +315,10 @@ int main(void) {
        and jumps into the menu once MCU_CMD_RDY shows up, with the S-SMP still playing.
        The byte tells the menu's coldboot to leave the APU alone. */
     snescmd_writebyte(menu_handoff ? MENU_HANDOFF_MAGIC : 0, SNESCMD_MENU_HANDOFF);
+    /* The power-on screen: only on the first menu load since power-on, and not when
+       autoboot is about to start a game (the file is read only on that first load). */
+    snescmd_writebyte((firstboot && CFG.boot_intro && !cfg_is_autoboot_enabled())
+                      ? BOOT_INTRO_MAGIC : 0, SNESCMD_BOOT_INTRO);
     if(!menu_handoff) snes_reset(1);
     fpga_reset_srtc_state();
     if(!firstboot) {

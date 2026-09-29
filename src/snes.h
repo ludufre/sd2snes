@@ -160,6 +160,8 @@
 #define SNESCMD_SFX_MAILBOX          (0x2be0) /* menu sound effects: effect+1 (1-4), 0 = consumed. Dedicated byte in the unreferenced $2BB4-$2BEF gap. NOT 0x2a08: MCU_PARAM is a 12-byte region (0x2a04-0x2a0f; settime uses +11) - parking the mailbox inside it corrupted cover request params and saved garbled favorites names. */
 #define SNESCMD_MENU_HANDOFF         (0x2be1) /* MENU_HANDOFF_MAGIC = this menu load came from the onboarding tour WITHOUT a console reset (the tour waited in WRAM): the S-SMP still runs the music the tour left, and BGM_STATE says what, so the menu's coldboot skips apu_ram_init. Written by main.c on every menu load (0 when it resets), cleared by the menu. Next to SFX_MAILBOX in the unreferenced $2BB4-$2BEF gap. Lockstep with MENU_HANDOFF in snes/memmap.i65 */
 #define MENU_HANDOFF_MAGIC           (0xa5)
+#define SNESCMD_BOOT_INTRO           (0x2be2) /* BOOT_INTRO_MAGIC = show the "ludufre presents" screen (snes/bootintro.a65) on this menu boot: the first menu load since power-on, with CFG.boot_intro on and no autoboot. Written by main.c on every menu load (0 otherwise) BEFORE the console leaves reset, cleared by the menu as it reads it -- so the reset button in the menu does not replay it. Next to MENU_HANDOFF in the unreferenced $2BB4-$2BEF gap. Lockstep with BOOT_INTRO in snes/memmap.i65 */
+#define BOOT_INTRO_MAGIC             (0xb7)
 #define SNESCMD_INGAME_HOOK          (0x2a10)
 #define SNESCMD_RESET_HOOK           (0x2a7d)
 #define SNESCMD_WRAM_CHEATS          (0x2ad8)

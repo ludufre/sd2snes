@@ -432,6 +432,20 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_cfg_boot_intro
+ .byt  ^mtext_cfg_boot_intro
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_BOOT_INTRO
+ .byt  ^CFG_BOOT_INTRO
+ .word !mdesc_cfg_boot_intro
+ .byt  ^mdesc_cfg_boot_intro
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  MTYPE_FUNC
  .word !mtext_browser_restoretheme
  .byt  ^mtext_browser_restoretheme

@@ -1,0 +1,400 @@
+; ===========================================================================
+; The power-on screen: "- ludufre - Presents", with a chime, once per power-on. It
+; reproduces Super Mario World's "- Nintendo - Presents" screen -- layout, pixel style,
+; timing and sound, measured on the game (utils/gen_boot_intro.py has the numbers).
+;
+; Called with jsl from snes/main.a65's coldboot, first thing after killdma and BEFORE
+; clear_wram / apu_ram_init / snes_init: the console is fresh out of reset, so this
+; owns the whole machine -- the PPU (any register, any VRAM), the direct page (the
+; $55 fill right after wipes what it used) and the S-SMP, still at its IPL. It hands
+; everything back as it found it: forced blank, NMI/HDMA/auto-joypad off, and the
+; S-SMP back at the IPL with the S-DSP muted and its echo writes off, so the
+; apu_ram_init that follows and the rest of the boot run exactly as they would
+; without it.
+;
+; Gate: BOOT_INTRO == BOOT_INTRO_MAGIC. src/main.c writes it before the console
+; leaves reset, only on the first menu load since power-on with CFG BootIntro on and
+; no autoboot; this clears it on the way in, so the reset button in the menu does
+; not replay it. Any new button press cuts it short.
+;
+; The picture and the chime program are generated (utils/gen_boot_intro.py ->
+; bootintro_data.i65); the chime runs on the S-SMP, so it needs no file on the card.
+; Every wait on the S-SMP is bounded: if it does not answer, the screen still shows,
+; silent.
+;
+; WHY $C1: the $C0 page has a few hundred bytes left; only the `jsl` costs $C0.
+; Nothing here calls into $C0 (every routine it needs is its own).
+; ===========================================================================
+
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it.
+.link page $c1
+
+#include "bootintro_data.i65"
+
+; direct page scratch (DP = 0; clear_wram refills it with $55 right after)
+#define bi_snd      $00   /* 1 = the chime program runs */
+#define bi_bright   $01   /* INIDISP brightness written at the next VBlank */
+#define bi_cnt      $02   /* frame counter of the current phase */
+#define bi_limit    $03   /* CFG_BRIGHTNESS_LIMIT (the menu's maximum brightness) */
+#define bi_prev     $04   /* word: pad held last frame */
+#define bi_vaddr    $06   /* word: VRAM word address of the tilemap row */
+#define bi_src      $08   /* word: source of the tilemap row */
+
+#define BI_VRAM_MAP $7c00 /* BG1 tilemap, word address ($2107 = $7c) */
+#define BI_BLACK    30    /* frames of black before the picture (the S-DSP settles meanwhile) */
+
+boot_intro:
+  php
+  phb
+  phd
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @BOOT_INTRO
+  cmp #BOOT_INTRO_MAGIC
+  beq bi_start
+bi_out:
+  .as : .xl
+  pld
+  plb
+  plp
+  rtl
+
+bi_start:
+  .as : .xl
+  lda #$00
+  sta @BOOT_INTRO           ; one-shot
+  pea $0000
+  pld
+  pha
+  plb                       ; DB = 0: the $21xx/$42xx registers by absolute address
+  lda @CFG_BRIGHTNESS_LIMIT
+  and #$0f
+  bne +
+  lda #$0f                  ; 0 would show nothing: take the full brightness
++ sta bi_limit
+  stz bi_bright
+  jsr bi_ppu_setup
+  jsr bi_spc_load
+  lda #$01
+  sta $4200                 ; auto-joypad read on, NMI stays off
+  jsr bi_frame              ; primes bi_prev: a button already held does not skip
+
+; --- black for a moment ------------------------------------------------------------
+  lda #BI_BLACK
+  sta bi_cnt
+bi_black:
+  .as : .xl
+  jsr bi_frame
+  bcs bi_fadeout
+  dec bi_cnt
+  bne bi_black
+
+; --- the picture, all at once; the chime follows it (BI_T_*: frames after it shows,
+;     measured on the screen this reproduces -- see utils/gen_boot_intro.py) ---------
+  lda bi_limit
+  sta bi_bright
+  stz bi_cnt
+bi_show:
+  .as : .xl
+  jsr bi_frame              ; the first one turns the picture on
+  bcs bi_fadeout
+  inc bi_cnt
+  lda bi_cnt
+  cmp #BI_T_NOTE1
+  bne +
+  lda #BI_CMD_NOTE1
+  bra bi_show_cmd
++ cmp #BI_T_OFF1
+  beq bi_show_off
+  cmp #BI_T_OFF2
+  beq bi_show_off
+  cmp #BI_T_NOTE2
+  bne bi_show_next
+  lda #BI_CMD_NOTE2
+  bra bi_show_cmd
+bi_show_off:
+  .as : .xl
+  lda #BI_CMD_OFF
+bi_show_cmd:
+  .as : .xl
+  jsr bi_cmd
+bi_show_next:
+  .as : .xl
+  lda bi_cnt
+  cmp #BI_T_FADE
+  bcc bi_show
+
+; --- fade out, one step every 2 frames (also where a button press jumps to) ---------
+bi_fadeout:
+  .as : .xl
+  lda #BI_CMD_OFF
+  jsr bi_cmd
+- lda bi_bright
+  beq +
+  dec bi_bright
+  jsr bi_frame
+  jsr bi_frame
+  bra -
++
+; --- hand the machine back ------------------------------------------------------------
+  lda #BI_CMD_EXIT
+  jsr bi_cmd
+  lda bi_snd
+  beq +
+  jsr bi_wait_ipl           ; the program jumped back to the IPL ($BBAA on ports 0/1)
++ lda #$80
+  sta $2100
+  stz $4200
+  jmp bi_out
+
+; -- bi_frame: wait for the next VBlank, write the brightness, read the pad. ---------
+;    carry set = a button went down since the last frame. .as/.xl, DB=0, DP=0.
+bi_frame:
+  .as : .xl
+- lda $4212
+  bmi -
+- lda $4212
+  bpl -
+  lda bi_bright
+  sta $2100
+  ; the auto-joypad read starts a few dots into the VBlank and takes ~3 lines;
+  ; bounded wait for it to start, then for it to end
+  ldx #$0200
+- lda $4212
+  lsr
+  bcs bi_fr_busy
+  dex
+  bne -
+  bra bi_fr_read
+bi_fr_busy:
+  .as : .xl
+- lda $4212
+  lsr
+  bcs -
+bi_fr_read:
+  .as : .xl
+  rep #$20 : .al
+  lda $4218
+  and #$fff0                ; the four ID bits are not buttons
+  tay
+  eor bi_prev
+  sty bi_prev
+  and bi_prev               ; went down: changed AND held now
+  sep #$20 : .as
+  clc
+  beq +
+  sec
++ rts
+
+; -- bi_ppu_setup: mode 1, BG1 4bpp; picture, tilemap and palette in. Forced blank. -
+bi_ppu_setup:
+  .as : .xl
+  lda #$80
+  sta $2100
+  stz $4200
+  stz $420b
+  stz $420c
+  ; every PPU register $2101-$2133 to 0, each written twice (covers the write-twice
+  ; scroll / mode 7 pairs; the data ports only get zeros, overwritten below)
+  ldx #$0001
+- stz $2100,x
+  stz $2100,x
+  inx
+  cpx #$0034
+  bne -
+  lda #$01
+  sta $2105                 ; mode 1
+  lda #$7c
+  sta $2107                 ; BG1 tilemap at BI_VRAM_MAP, 32x32; tiles at $0000
+  lda #$ff
+  sta $210e
+  sta $210e                 ; BG1VOFS = -1: tilemap line 0 on screen line 0
+  lda #$01
+  sta $212c                 ; BG1 on the main screen only
+  lda #$80
+  sta $2115                 ; VRAM: word writes, increment after the high byte
+
+  ; the whole tilemap to tile 0 (VRAM holds garbage at power-on)
+  ldx #BI_VRAM_MAP
+  stx $2116
+  lda #$09                  ; fixed source, two registers
+  sta $4370
+  lda #$18
+  sta $4371
+  ldx #!bi_zero
+  stx $4372
+  lda #^bi_zero
+  sta $4374
+  ldx #$0800
+  stx $4375
+  lda #$80
+  sta $420b
+
+  ; the tiles (tile 0 is blank)
+  ldx #$0000
+  stx $2116
+  lda #$01
+  sta $4370
+  ldx #!bi_tiles
+  stx $4372
+  lda #^bi_tiles
+  sta $4374
+  ldx #BI_TILE_BYTES
+  stx $4375
+  lda #$80
+  sta $420b
+
+  ; the used rectangle of the tilemap, row by row
+  rep #$20 : .al
+  lda #BI_MAP_VADDR
+  sta bi_vaddr
+  lda #!bi_map
+  sta bi_src
+  ldy #BI_MAP_H
+bi_map_row:
+  .al : .xl
+  lda bi_vaddr
+  sta $2116
+  lda bi_src
+  sta $4372
+  lda #BI_MAP_ROWBYTES
+  sta $4375
+  sep #$20 : .as
+  lda #^bi_map
+  sta $4374
+  lda #$80
+  sta $420b
+  rep #$20 : .al
+  lda bi_vaddr
+  clc
+  adc #$0020
+  sta bi_vaddr
+  lda bi_src
+  clc
+  adc #BI_MAP_ROWBYTES
+  sta bi_src
+  dey
+  bne bi_map_row
+  sep #$20 : .as
+
+  ; the palette (colour 0 = the black backdrop)
+  stz $2121
+  stz $4370                 ; one register, written twice per colour
+  lda #$22
+  sta $4371
+  ldx #!bi_pal
+  stx $4372
+  lda #^bi_pal
+  sta $4374
+  ldx #$0020
+  stx $4375
+  lda #$80
+  sta $420b
+  rts
+
+; -- bi_spc_load: the chime program into ARAM through the IPL, then start it. -----
+;    bi_snd = 1 when it runs. Every wait is bounded; on a timeout the screen goes on
+;    silent (the S-SMP stays where it is -- the IPL, which apu_ram_init expects).
+bi_spc_load:
+  .as : .xl
+  stz bi_snd
+  jsr bi_wait_ipl
+  bcs bi_sl_out
+  ldx #BI_SPC_ADDR
+  stx $2142
+  lda #$cc
+  sta $2141
+  sta $2140
+  jsr bi_wait_p0
+  bcs bi_sl_out
+  ldx #$0000
+bi_sl_byte:
+  .as : .xl
+  lda @bi_spc,x
+  sta $2141
+  txa                       ; A = the low byte of the index: the transfer counter
+  sta $2140
+  jsr bi_wait_p0
+  bcs bi_sl_out
+  inx
+  cpx #BI_SPC_LEN
+  bne bi_sl_byte
+  ldx #BI_SPC_ENTRY
+  stx $2142
+  stz $2141                 ; port 1 = 0: "execute at port 2/3"
+  lda $2140
+  inc
+  inc
+  sta $2140
+  jsr bi_wait_p0
+  bcs bi_sl_out
+  inc bi_snd
+bi_sl_out:
+  .as : .xl
+  rts
+
+; -- bi_wait_p0: wait (bounded) for port 0 to read A. carry clear = it did. -------
+bi_wait_p0:
+  .as : .xl
+  phy
+  ldy #$0000
+- cmp $2140
+  beq +
+  dey
+  bne -
+  ply
+  sec
+  rts
++ ply
+  clc
+  rts
+
+; -- bi_wait_ipl: wait (bounded, ~1 s) for the IPL's $BBAA. carry clear = there. ---
+bi_wait_ipl:
+  .as : .xl
+  phy
+  rep #$20 : .al
+  ldx #$0000
+  ldy #$0004
+- lda $2140
+  cmp #$bbaa
+  beq bi_wi_ok
+  dex
+  bne -
+  dey
+  bne -
+  sep #$20 : .as
+  ply
+  sec
+  rts
+bi_wi_ok:
+  .al : .xl
+  sep #$20 : .as
+  ply
+  clc
+  rts
+
+; -- bi_cmd: send the chime program command A on port 1 and wait (bounded) for its
+;    echo. No-op without the program; a lost echo silences the rest. ------------------
+bi_cmd:
+  .as : .xl
+  pha
+  lda bi_snd
+  beq bi_cmd_none
+  pla
+  sta $2141
+  ldy #$0000
+- cmp $2141
+  beq +
+  dey
+  bne -
+  stz bi_snd
++ rts
+bi_cmd_none:
+  .as : .xl
+  pla
+  rts
+
+bi_zero .byt 0

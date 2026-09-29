@@ -708,6 +708,8 @@
 #define CMD_RESTORE_CLASSIC         $39 /* apply /sd2snes/classic.thm (the pre-2.16 baked look), reload menu; NACK ($aa) if the file is missing */
 #define MENU_HANDOFF                $002BE1 /* fork: MENU_HANDOFF_MAGIC = this boot came from the onboarding tour WITHOUT a console reset (src/main.c writes it on every menu load, 0 when it resets): the S-SMP still runs what the tour left and BGM_STATE says what, so coldboot skips apu_ram_init. Coldboot clears it. Lockstep with SNESCMD_MENU_HANDOFF in src/snes.h */
 #define MENU_HANDOFF_MAGIC          $a5
+#define BOOT_INTRO                  $002BE2 /* fork: BOOT_INTRO_MAGIC = show the power-on screen (bootintro.a65) on this boot: the first menu load since power-on, CFG_BOOT_INTRO on, no autoboot. src/main.c writes it on every menu load before the console leaves reset; the screen clears it as it reads it, so the reset button in the menu does not replay it. Lockstep with SNESCMD_BOOT_INTRO in src/snes.h */
+#define BOOT_INTRO_MAGIC            $b7
 #define SFX_MAILBOX                 $002BE0 /* fork: menu sound effects mailbox (sfx.a65 <-> MCU menu loop). Value = effect+1 (1-4: cursor/confirm/back/error), 0 = consumed. DEDICATED byte: sharing MCU_CMD raced the real commands. NOT $2A08: MCU_PARAM is a 12-BYTE region ($2A04-$2A0F, settime writes +11) - parking there corrupted cover requests and saved garbled favorites. $2BE0 sits in the unreferenced $2BB4-$2BEF gap. Newest-wins, fire-and-forget. */
 
 /* WiFi status/scan block + connect params, RESERVED for the Companion port.
@@ -876,6 +878,7 @@
 #define CFG_ENABLE_INGAME_PAD2          CFG_ADDR+$01D3 /* 0/1: also read the in-game button gestures from the controller in port 2 (EnableIngamePad2, default OFF). The menu entry lives in menu_enttab_ingame under "In-game buttons"; the firmware acts on it at game load by patching `jsl @hx_pad` over the nmihook stub's `sta @NMI_PAD`. Lockstep with src/cfg.h. */
 #define CFG_GBC_STRETCH                 CFG_ADDR+$01D4 /* 0/1: stretch the GBC core's framebuffer (hi-colour, wire $03) screens to 256x192. YAML GbcStretch; menu row "Game Boy Color stretch" in the SGB menu (kv_onoff, greyed on Mk.II by mfunc_isenabled_gbc). The player never reads this byte: the MCU copies it into the "GBCF" block of the staged gbc_snes.bin (image offset $7F80, +5). Lockstep with src/cfg.h. */
 #define CFG_ONBOARDING_VERSION          CFG_ADDR+$01D5 /* the tour version seen (0 = never). The gate (snes/onboarding/onboarding_gate.a65) asks while it is below ONB_VERSION; the gate on B and the tour at its end write ONB_VERSION. YAML OnboardingVersion, no menu entry. Lockstep with src/cfg.h. */
+#define CFG_BOOT_INTRO                  CFG_ADDR+$01D6 /* the power-on screen on/off (the MCU folds it into BOOT_INTRO; the menu only edits it). YAML BootIntro. Lockstep with src/cfg.h. */
 #define ONB_VERSION                     1              /* the first-boot tour's version: bump it when a release adds cards to the tour (tag them with it, +ONB_FD_SINCE), and the tour comes back once showing only them. Lockstep with snes/onboarding/onb_memmap.i65. */
 
 #define MENU_ENTRY_SIZE             23

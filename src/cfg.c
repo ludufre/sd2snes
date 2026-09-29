@@ -91,6 +91,7 @@ _Static_assert(offsetof(cfg_t, gbc_sync) == 0x1d2, "cfg_t.gbc_sync must stay at 
 _Static_assert(offsetof(cfg_t, enable_ingame_pad2) == 0x1d3, "cfg_t.enable_ingame_pad2 must stay at CFG_ADDR+$1D3");
 _Static_assert(offsetof(cfg_t, gbc_stretch) == 0x1d4, "cfg_t.gbc_stretch must stay at CFG_ADDR+$1D4");
 _Static_assert(offsetof(cfg_t, onboarding_version) == 0x1d5, "cfg_t.onboarding_version must stay at CFG_ADDR+$1D5");
+_Static_assert(offsetof(cfg_t, boot_intro) == 0x1d6, "cfg_t.boot_intro must stay at CFG_ADDR+$1D6");
 
 const cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -164,7 +165,8 @@ const cfg_t CFG_DEFAULT = {
   .gbc_sync = 0,             /* Genlock */
   .enable_ingame_pad2 = 0,   /* in-game gestures stay controller-1 only */
   .gbc_stretch = 0,          /* hi-colour screens stay 160x144 */
-  .onboarding_version = 0    /* never seen: the first boot after an update shows the tour prompt */
+  .onboarding_version = 0,   /* never seen: the first boot after an update shows the tour prompt */
+  .boot_intro = 1            /* the power-on screen is on out of the box */
 };
 
 cfg_t CFG;
@@ -336,7 +338,8 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_GBC_SYNC,                    gbc_sync,                   CK_BOOL,    0),
   CFGI(CFG_ENABLE_INGAME_PAD2,          enable_ingame_pad2,         CK_BOOL,    0),
   CFGI(CFG_GBC_STRETCH,                 gbc_stretch,                CK_BOOL,    0),
-  CFGI(CFG_ONBOARDING_VERSION,          onboarding_version,         CK_NUM,     0)
+  CFGI(CFG_ONBOARDING_VERSION,          onboarding_version,         CK_NUM,     0),
+  CFGI(CFG_BOOT_INTRO,                  boot_intro,                 CK_BOOL,    0)
 };
 #undef CFGI
 

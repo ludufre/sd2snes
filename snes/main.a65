@@ -79,6 +79,11 @@ set_bank:
 coldboot:       ; Regular, cold-start init
   sep #$20 : .as
   jsr killdma
+  ; fork: the power-on screen (bootintro.a65, $C1). Self-gated on BOOT_INTRO, which
+  ; the MCU sets only on the first menu load since power-on. First, while the console
+  ; is fresh out of reset: it owns the PPU, the S-SMP (still at the IPL) and the
+  ; direct page, and the init below resets all three.
+  jsl @boot_intro
   jsr clear_wram
   ; fork: the onboarding tour hands the console over WITHOUT a reset (src/main.c sets
   ; MENU_HANDOFF): the S-SMP keeps the music it plays and the tour left BGM_STATE

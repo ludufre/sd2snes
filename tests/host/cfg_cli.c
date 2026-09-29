@@ -432,6 +432,7 @@ static void cfg_make_allchanged(void) {
   CFG.enable_ingame_pad2 = 1;                    /* in-game gestures also from port 2 */
   CFG.gbc_stretch = 1;                           /* hi-colour screens at 256x192 */
   CFG.onboarding_version = 1;                    /* the first-boot tour already seen */
+  CFG.boot_intro = 0;                            /* no power-on screen */
 }
 
 /* ---- the alternating-booleans config ------------------------------------

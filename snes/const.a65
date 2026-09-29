@@ -364,6 +364,7 @@ text_igm_tr_savefail             .byt "Could not save the cheat", 0
 text_igm_tr_unpin                .byt "REMOVE FROM LIST", 0
 mtext_cfg_time                    .byt "Set Clock", 0
 mtext_cfg_ask_clock               .byt "Ask for clock on boot", 0
+mtext_cfg_boot_intro              .byt "Power-on screen", 0
 mtext_cfg_bsx                     .byt "BS-X Settings", 0
 mtext_cfg_browser                 .byt "Browser Settings", 0
 mtext_cfg_chip                    .byt "Chip Options", 0
@@ -444,6 +445,7 @@ mdesc_mm_memtest                  .byt "FPGA-RAM wiring check (10 s). The full t
 mdesc_mm_language                 .byt "Set the menu/firmware language", 0
 mdesc_cfg_time                    .byt "Set the date and time", 0
 mdesc_cfg_ask_clock               .byt "Ask for the time at startup while the clock is unset", 0
+mdesc_cfg_boot_intro              .byt "Show the ludufre presents screen, with its chime, when the console is switched on", 0
 mdesc_cfg_bsx                     .byt "BS-X/Satellaview specific settings", 0
 mdesc_cfg_browser                 .byt "Change file browser settings", 0
 mdesc_cfg_chip                    .byt "Set special chip features", 0
