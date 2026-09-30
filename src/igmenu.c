@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "crc16.h"
 #include "igmenu.h"
+#include "scratch.h"
 
 #include <string.h>
 
@@ -13,10 +14,13 @@
    over the body bytes, init 0xFFFF, final XOR 0xFFFF. crc16_update is the standard
    reflected-0xA001 table step (src/crc16.c). */
 
-void igmenu_stage(void) {
-  /* Read buffer lives in AHB SRAM (NOT the tight main .bss -- see the .bss/AHB gotcha):
-     it is written by f_read before it is read, so .ahbram's NOLOAD/no-zero-init is fine. */
-  static uint8_t buf[512] IN_AHBRAM;
+/* Read buffer = the shared LEAF scratch (scratch.h, AHB SRAM -- NOT the tight main .bss):
+   it is written by f_read before it is read. */
+typedef struct { uint8_t buf[512]; } igmenu_scratch_t;
+SCRATCH_FITS(igmenu_scratch_t, SCRATCH_LEAF_BYTES);
+#define buf (SCRATCH_LEAF(igmenu_scratch_t)->buf)
+
+static void igmenu_stage_body(void) {
   uint32_t off = 0;
   uint16_t n;
   uint16_t crc = 0xFFFF;
@@ -73,4 +77,16 @@ void igmenu_stage(void) {
     printf("igmenu.bin rejected (hdr=%d ver=%d crc=%04x/%04x)\n",
            got_header, ver, crc, hdr_crc);
   }
+}
+#undef buf
+
+void igmenu_stage(void) {
+  if (!scratch_leaf_take(SCR_IGMENU)) {
+    /* the body's own "absent" outcome: header + gate invalid -> the hook's fail-safe */
+    sram_memset(SRAM_IGMENU_ADDR, 8, 0);
+    sram_writebyte(0, SRAM_IGMENU_GATE_ADDR);
+    return;
+  }
+  igmenu_stage_body();
+  scratch_leaf_drop();
 }

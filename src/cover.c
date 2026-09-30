@@ -10,9 +10,13 @@
 #include "cover.h"
 #include "msu1.h"   /* menu_sfx_pump: keep a playing effect fed during streams */
 #include "psram_io.h"
+#include "scratch.h"
 
-/* derived from the rom path by swapping the extension to ".cov" */
-static uint8_t cover_path[260];
+/* derived from the rom path by swapping the extension to ".cov"; lives in the shared LEAF
+   scratch (scratch.h), taken by load_cover for the whole build + load */
+typedef struct { uint8_t path[260]; } cover_scratch_t;
+SCRATCH_FITS(cover_scratch_t, SCRATCH_LEAF_BYTES);
+#define cover_path (SCRATCH_LEAF(cover_scratch_t)->path)
 
 /* write the 8-byte meta block the SNES polls. Always called before returning
  * so the menu never waits on stale state. */
@@ -148,10 +152,7 @@ static int load_cover_dir(const uint8_t *dir_path, uint32_t sram_addr) {
   return load_cover_path((char*)cover_path, sram_addr);
 }
 
-int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
-  /* fail-safe default: mark "no cover" up front; only OK after a clean load */
-  cover_set_status(sram_addr, COVER_STATUS_NONE, 0, 0, 0, 0, 0);
-
+static int load_cover_body(const uint8_t *rom_path, uint32_t sram_addr) {
   /* the browser hands folders over with their trailing '/' */
   size_t plen = strlen((const char*)rom_path);
   if(plen && rom_path[plen-1] == '/') return load_cover_dir(rom_path, sram_addr);
@@ -171,4 +172,14 @@ int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
   strcpy(dot, ".cov");
 
   return load_cover_path((char*)cover_path, sram_addr);
+}
+
+int load_cover(const uint8_t *rom_path, uint32_t sram_addr) {
+  int r;
+  /* fail-safe default: mark "no cover" up front; only OK after a clean load */
+  cover_set_status(sram_addr, COVER_STATUS_NONE, 0, 0, 0, 0, 0);
+  if(!scratch_leaf_take(SCR_COVER)) return 0;
+  r = load_cover_body(rom_path, sram_addr);
+  scratch_leaf_drop();
+  return r;
 }

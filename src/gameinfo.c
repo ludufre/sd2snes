@@ -14,6 +14,7 @@
 #include "gameinfo.h"
 #include "psram_io.h"
 #include "util.h"
+#include "scratch.h"  /* gameinfo_load FRAME + three LEAF helpers (see scratch.h) */
 
 extern cfg_t CFG;   /* game info "Show video" / "Play video music" toggles (game_info_video/_music) */
 
@@ -247,18 +248,22 @@ static int gi_load_gcv(const char *path) {
  * Writes the 120-colour palette to SRAM_GAMEINFO_TMAP_ADDR ($CB0000 -> CGRAM 48) and 256 8bpp tiles
  * to SRAM_COVER_ADDR ($C90000 -> window-0), matching gi_load_gcv. Bounded (fixed 256-cell loop, tiles
  * read on demand); returns 1 on success. The caller then sets GAMEINFO_FLAG_COVER (the .gcv path). */
-static int gi_cov_to_gcv(uint32_t scratch_base) {
-  /* ~560 B of scratch, in AHB SRAM (IN_AHBRAM) -- NOT plain .bss on the main SRAM.
-     As plain statics these 560 B shrank the tiny LPC1756 main-SRAM budget (which
-     also holds the stack) just enough that the USB command server went silent on
-     real hardware (INFO/PUT returned 0 bytes; menu still worked). AHB SRAM is the
-     right home for main-loop-only scratch (like ptrcache): these are
-     touched ONLY here (gameinfo_load path, SPI PIO), never from an IRQ. All three
-     are fully written before read (covpal/blockmap via sram_readblock, gcvpal via
-     memset), so the NOLOAD/no-zero-init of .ahbram is fine. See IN_AHBRAM (config.h). */
-  static uint8_t covpal[COVER_MAX_PALETTES * 32] IN_AHBRAM;  /* up to 8*16 BGR555 = 256 B */
-  static uint8_t gcvpal[GCV_PAL_BYTES] IN_AHBRAM;            /* 120 colours = 240 B -> CGRAM 48..167 */
-  static uint8_t blockmap[COVER_OBJ_MAX_W * COVER_OBJ_MAX_H] IN_AHBRAM;  /* one palette idx / sprite, <= 64 */
+/* ~560 B of scratch, in the shared LEAF region (scratch.h, AHB SRAM) -- NOT plain .bss on the
+   main SRAM. As plain statics these 560 B shrank the tiny LPC1756 main-SRAM budget (which also
+   holds the stack) just enough that the USB command server went silent on real hardware (INFO/PUT
+   returned 0 bytes; menu still worked). Touched ONLY here (SPI PIO, never from an IRQ). All three
+   are fully written before read (covpal/blockmap via sram_readblock, gcvpal via memset). */
+typedef struct {
+  uint8_t covpal[COVER_MAX_PALETTES * 32];               /* up to 8*16 BGR555 = 256 B */
+  uint8_t gcvpal[GCV_PAL_BYTES];                         /* 120 colours = 240 B -> CGRAM 48..167 */
+  uint8_t blockmap[COVER_OBJ_MAX_W * COVER_OBJ_MAX_H];   /* one palette idx / sprite, <= 64 */
+} gi_cov_scratch_t;
+SCRATCH_FITS(gi_cov_scratch_t, SCRATCH_LEAF_BYTES);
+#define covpal   (SCRATCH_LEAF(gi_cov_scratch_t)->covpal)
+#define gcvpal   (SCRATCH_LEAF(gi_cov_scratch_t)->gcvpal)
+#define blockmap (SCRATCH_LEAF(gi_cov_scratch_t)->blockmap)
+
+static int gi_cov_to_gcv_body(uint32_t scratch_base) {
   uint8_t meta[COVER_META_SIZE];
 
   sram_readblock(meta, scratch_base + COVER_OFF_STATUS, COVER_META_SIZE);
@@ -320,6 +325,17 @@ static int gi_cov_to_gcv(uint32_t scratch_base) {
     }
   }
   return 1;
+}
+#undef covpal
+#undef gcvpal
+#undef blockmap
+
+static int gi_cov_to_gcv(uint32_t scratch_base) {
+  int r;
+  if(!scratch_leaf_take(SCR_GI_COV)) return 0;
+  r = gi_cov_to_gcv_body(scratch_base);
+  scratch_leaf_drop();
+  return r;
 }
 
 /* ---- animated screenshot (.fmv) streaming -------------------------------------
@@ -504,16 +520,19 @@ void gameinfo_fmv_idle_check(void) {
     gameinfo_fmv_stop();
 }
 
+/* gameinfo_load's working set, in the shared FRAME scratch (scratch.h) -- not the stack (the menu
+ * loop is single-threaded and non-reentrant, and the LPC stack is tight) and not .bss (main SRAM
+ * is tight; growing it can silently corrupt a global). Every call's first access is a write
+ * (memset of meta; gi_join builds path, then base from path, before either is read). */
+typedef struct {
+  gameinfo_meta_t meta;
+  char            base[288];
+  char            path[300];
+} gi_load_frame_t;
+SCRATCH_FITS(gi_load_frame_t, SCRATCH_FRAME_BYTES);
+
 void gameinfo_load(uint8_t *rom_path) {
-  /* static (not stack): the menu loop is single-threaded and non-reentrant, so this
-   * keeps a large frame off the tight LPC stack (see cfg.c note on frame overrun).
-   * base[]/path[] additionally live IN_AHBRAM (main SRAM is tight; growing .bss can
-   * silently corrupt a global). .ahbram is NOLOAD (not zeroed at boot), which is safe:
-   * both are scratch used ONLY inside gameinfo_load and every call's first access is a
-   * write (gi_join builds path, then base from path, before either is read). */
-  static gameinfo_meta_t meta;
-  static char base[288] IN_AHBRAM;
-  static char path[300] IN_AHBRAM;
+  gi_load_frame_t *const f = SCRATCH_FRAME(gi_load_frame_t);
   /* Silence the previous game's clip FIRST. Everything below reads the card (the .yml, the
    * localized description scan, the cover transcode) without pumping the DAC, and a clip left
    * playing through that loops the last 2 KB of its buffer -- the "zeet" heard on every Up/Down
@@ -525,40 +544,40 @@ void gameinfo_load(uint8_t *rom_path) {
                                          * there is no .yml). Skips a full scan of the (huge)
                                          * info dir for the 99% of games that have no video. */
 
-  memset(&meta, 0, sizeof(meta));
-  meta.magic[0] = GAMEINFO_MAGIC0;
-  meta.magic[1] = GAMEINFO_MAGIC1;
+  memset(&f->meta, 0, sizeof(f->meta));
+  f->meta.magic[0] = GAMEINFO_MAGIC0;
+  f->meta.magic[1] = GAMEINFO_MAGIC1;
   /* The screen always shows when ShowGameInfo is on: a ROM with no .yml still
    * gets a title (its filename), "-" metadata, and -- if a sibling <rom>.cov
    * exists -- the OBJ box-art floated in the band where the .gd cover would be. */
-  meta.status   = GAMEINFO_STATUS_OK;
+  f->meta.status   = GAMEINFO_STATUS_OK;
 
   /* build "/sd2snes/info/[<ns>/]<BB>/<stem>" (namespace + bucket, extension stripped). stem_off is where
    * <stem> starts -- keep it instead of recomputing the prefix width later. */
-  int stem_off = path_asset(base, sizeof(base), GAMEINFO_DIR, (const char *)rom_path, "");
+  int stem_off = path_asset(f->base, sizeof(f->base), GAMEINFO_DIR, (const char *)rom_path, "");
   if(stem_off < 0) stem_off = 0;
 
   /* /sd2snes/info/<stem>.yml -- now OPTIONAL: a missing .yml is no longer a skip,
    * it just leaves every field empty (filled by the fallbacks below). */
-  gi_join(path, sizeof(path), base, ".yml");
+  gi_join(f->path, sizeof(f->path), f->base, ".yml");
   /* save the .yml path for the "full description" (Y) command (gameinfo_desc_full), and
      invalidate the extended-description region so navigating Up/Down between ROMs never
      leaves a previous game's full text behind (a 1st byte of 0 = invalid; the menu then
      uses the struct's description[256]). */
-  strlcpy_nul(gi_yml_path, path, sizeof(gi_yml_path));
+  strlcpy_nul(gi_yml_path, f->path, sizeof(gi_yml_path));
   sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
-  yaml_file_open(path, FA_READ);
+  yaml_file_open(f->path, FA_READ);
   if(!file_res) {
-    gi_field("title",        meta.title,        sizeof(meta.title));
-    gi_field("developer",    meta.developer,    sizeof(meta.developer));
-    gi_field("publisher",    meta.publisher,    sizeof(meta.publisher));
-    gi_field("release_year", meta.year,         sizeof(meta.year));
-    gi_field("players",      meta.players,      sizeof(meta.players));
-    gi_field("genre",        meta.genre,        sizeof(meta.genre));
-    gi_field("special_chip", meta.special_chip, sizeof(meta.special_chip));
+    gi_field("title",        f->meta.title,        sizeof(f->meta.title));
+    gi_field("developer",    f->meta.developer,    sizeof(f->meta.developer));
+    gi_field("publisher",    f->meta.publisher,    sizeof(f->meta.publisher));
+    gi_field("release_year", f->meta.year,         sizeof(f->meta.year));
+    gi_field("players",      f->meta.players,      sizeof(f->meta.players));
+    gi_field("genre",        f->meta.genre,        sizeof(f->meta.genre));
+    gi_field("special_chip", f->meta.special_chip, sizeof(f->meta.special_chip));
     /* description: English (description) first, as the fallback; the MENU language
      * (description_<code>) replaces it below when present and non-empty. */
-    gi_field("description", meta.description, sizeof(meta.description));
+    gi_field("description", f->meta.description, sizeof(f->meta.description));
     { yaml_token_t tok; fmv_eligible = yaml_get_itemvalue("fmv", &tok) ? 1 : 0; }
     yaml_file_close();
     /* The localized keys are written LAST in the file, after the other long description lines,
@@ -570,7 +589,7 @@ void gameinfo_load(uint8_t *rom_path) {
      * (both use the shared file handle). Absent/empty -> meta.description keeps the English. */
     {
       const char *lkey = gi_desc_lang_key();
-      if(lkey) gi_value_scan(lkey, meta.description, sizeof(meta.description));
+      if(lkey) gi_value_scan(lkey, f->meta.description, sizeof(f->meta.description));
       file_res = 0;                  /* soft, like a missing .yml: the English stays */
     }
   } else {
@@ -581,14 +600,14 @@ void gameinfo_load(uint8_t *rom_path) {
    * Applied unconditionally so the .yml-less screen is filled. Uses the offset path_asset
    * returned -- the old code hardcoded sizeof(GAMEINFO_DIR)-1+2 for a ONE-char bucket, which is
    * exactly the kind of arithmetic that silently shifts when the layout changes. */
-  if(!meta.title[0])
-    gi_utf8_to_font(base + stem_off, meta.title, sizeof(meta.title));
-  gi_dash(meta.developer);
-  gi_dash(meta.publisher);
-  gi_dash(meta.year);
-  gi_dash(meta.players);
-  gi_dash(meta.genre);
-  gi_dash(meta.special_chip);
+  if(!f->meta.title[0])
+    gi_utf8_to_font(f->base + stem_off, f->meta.title, sizeof(f->meta.title));
+  gi_dash(f->meta.developer);
+  gi_dash(f->meta.publisher);
+  gi_dash(f->meta.year);
+  gi_dash(f->meta.players);
+  gi_dash(f->meta.genre);
+  gi_dash(f->meta.special_chip);
 
   /* band: paletted cover (left) + paletted screenshot/animation (.fmv clip / .gss snapshot,
    * right), each its own file into its own CGRAM range so they coexist (cover = CGRAM 48..167,
@@ -602,35 +621,35 @@ void gameinfo_load(uint8_t *rom_path) {
      * SEPARATE files, each into its own CGRAM range. The right region comes from EITHER the animated
      * clip (.fmv) OR the static snapshot (.gss) -- two files, so a future "no preview clip" toggle can
      * fall back to the snapshot. Either region absent -> gradient. */
-    gi_join(path, sizeof(path), base, ".gcv");
-    if(gi_load_gcv(path)) {
-      meta.flags |= GAMEINFO_FLAG_COVER;                       /* cover -> C9 + CGRAM 48..167 */
+    gi_join(f->path, sizeof(f->path), f->base, ".gcv");
+    if(gi_load_gcv(f->path)) {
+      f->meta.flags |= GAMEINFO_FLAG_COVER;                    /* cover -> C9 + CGRAM 48..167 */
     } else if(load_cover(rom_path, SRAM_GAMEINFO_TILES_ADDR)   /* stage the 4bpp .cov to scratch (bank CA,
                                                                * reused by the FMV AFTER this) */
               && gi_cov_to_gcv(SRAM_GAMEINFO_TILES_ADDR)) {    /* transcode it into the paletted BG cover */
-      meta.flags |= GAMEINFO_FLAG_COVER;                       /* same CGRAM-48..167 BG path as a real .gcv */
+      f->meta.flags |= GAMEINFO_FLAG_COVER;                    /* same CGRAM-48..167 BG path as a real .gcv */
     }
     if(fmv_eligible) {
       int shown = 0;
       /* the animated clip (.fmv) is gated by the "Show video" toggle; off -> static snapshot below */
       if(CFG.game_info_video) {
-        gi_join(path, sizeof(path), base, ".fmv");
-        if(gi_fmv_begin(path, &meta)) {      /* sets GAMEINFO_FLAG_FMV; N frames -> animated */
+        gi_join(f->path, sizeof(f->path), f->base, ".fmv");
+        if(gi_fmv_begin(f->path, &f->meta)) {  /* sets GAMEINFO_FLAG_FMV; N frames -> animated */
           shown = 1;
           if(CFG.game_info_music) {          /* clip soundtrack gated by the "Play video music" toggle */
-            gi_join(path, sizeof(path), base, ".pcm");
-            menu_music_play(path);           /* clip audio; silent if absent */
+            gi_join(f->path, sizeof(f->path), f->base, ".pcm");
+            menu_music_play(f->path);        /* clip audio; silent if absent */
           }
         }
       }
       if(!shown) {                           /* video off / clip absent: the static snapshot (.gss, 1 frame) */
-        gi_join(path, sizeof(path), base, ".gss");
-        gi_fmv_begin(path, &meta);           /* sets GAMEINFO_FLAG_FMV; 1 frame -> the pump no-ops */
+        gi_join(f->path, sizeof(f->path), f->base, ".gss");
+        gi_fmv_begin(f->path, &f->meta);     /* sets GAMEINFO_FLAG_FMV; 1 frame -> the pump no-ops */
       }
     }
   }
 
-  sram_writeblock(&meta, SRAM_GAMEINFO_ADDR, sizeof(meta));
+  sram_writeblock(&f->meta, SRAM_GAMEINFO_ADDR, sizeof(f->meta));
 }
 
 /* Scan the last-loaded .yml for `key:` and stage its COMPLETE value, font-encoded, into
@@ -641,12 +660,17 @@ void gameinfo_load(uint8_t *rom_path) {
  * menu loop. Matches the generator's format -- one physical line per field, the value is either
  * double-quoted (terminates at the next '"', which is always the closer since inner quotes were
  * rewritten to ''') or bare (terminates at end-of-line / EOF). */
-static unsigned gi_value_scan(const char *key, char *mem, unsigned memcap) {
-  /* IN_AHBRAM scratch: off the tight main SRAM (growing .bss can silently corrupt a global).
-     Fully written before read; touched only here (menu-loop, never from an IRQ), so the
-     NOLOAD/no-zero-init of .ahbram is fine. */
-  static char    chunk[256] IN_AHBRAM;   /* one f_gets line-piece */
-  static uint8_t obuf[128]  IN_AHBRAM;   /* font-encoded output, flushed in bursts */
+/* LEAF scratch (scratch.h): off the tight main SRAM. Fully written before read; touched only
+   here (menu-loop, never from an IRQ). */
+typedef struct {
+  char    chunk[256];                    /* one f_gets line-piece */
+  uint8_t obuf[128];                     /* font-encoded output, flushed in bursts */
+} gi_scan_scratch_t;
+SCRATCH_FITS(gi_scan_scratch_t, SCRATCH_LEAF_BYTES);
+#define chunk (SCRATCH_LEAF(gi_scan_scratch_t)->chunk)
+#define obuf  (SCRATCH_LEAF(gi_scan_scratch_t)->obuf)
+
+static unsigned gi_value_scan_body(const char *key, char *mem, unsigned memcap) {
   gi_font_state_t st = { 0, 0 };
   uint32_t out_addr = SRAM_GAMEINFO_DESCEXT_ADDR;
   uint32_t scanned  = 0;
@@ -735,6 +759,17 @@ static unsigned gi_value_scan(const char *key, char *mem, unsigned memcap) {
   }
   file_close();
   return out_total;
+}
+#undef chunk
+#undef obuf
+
+static unsigned gi_value_scan(const char *key, char *mem, unsigned memcap) {
+  unsigned r;
+  if(!mem) sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);   /* the body's step 1, for a refusal */
+  if(!scratch_leaf_take(SCR_GI_SCAN)) return 0;
+  r = gi_value_scan_body(key, mem, memcap);
+  scratch_leaf_drop();
+  return r;
 }
 
 /* "Full description" (Y) pump. The YAML parser caps a value at YAML_BUFLEN (256), so the struct's

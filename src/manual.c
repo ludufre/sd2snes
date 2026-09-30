@@ -23,6 +23,7 @@
 #include "fileops.h"    /* file_lfn: the current game's path (in-game rebuild source, see below) */
 #include "manual.h"
 #include "psram_io.h"
+#include "scratch.h"    /* man_buf = the shared LEAF scratch (see scratch.h) */
 
 extern cfg_t CFG;
 
@@ -171,7 +172,12 @@ static uint8_t  man_guide_count;          /* compacted valid guide count (0..8) 
 static uint8_t  man_open_nn;              /* nn of the guide currently open in man_fil; 0xff = none */
 static struct { uint8_t nn, npages, zoom;      /* zoom: 1 = scrollable zoom section present */
                 uint16_t nblocks; } man_guides[MAN_MAX_GUIDES] IN_AHBRAM;
-static uint8_t  man_buf[512]  IN_AHBRAM;  /* shared path/header/index/stream scratch */
+/* path/header/index/stream scratch: the shared LEAF region (scratch.h), held by each public
+   stager (manual_stage_meta / _s1page / _zpage) for its whole run -- nothing survives between
+   calls, every read of it follows a write in the same call. */
+typedef struct { uint8_t buf[512]; } man_scratch_t;
+SCRATCH_FITS(man_scratch_t, SCRATCH_LEAF_BYTES);
+#define man_buf (SCRATCH_LEAF(man_scratch_t)->buf)
 /* Which zoom page is currently resident in $C5/$C6. Staging one is ~180KB of SPI (~180ms), and
    BOTH 1x bands of a PDF page map to the SAME zoom page -- so remembering it turns "toggle 2x on
    the other half of the page" from a visible reload into an instant scroll. 0xff = none. */
@@ -192,6 +198,8 @@ static uint8_t  man_meta_cache_valid;     /* .bss on purpose -- see above */
 static uint8_t  man_meta_cache_cfg;       /* CFG.enable_game_manual captured at arm time: toggling
                                              the option must invalidate the hit, or a cached
                                              "present" would survive the user turning it OFF */
+static uint8_t  man_stage_refused;        /* the last manual_stage_meta could not take the
+                                             scratch: its "no guides" must not be cached */
 /* Where man_stage_zattrs builds one prebuilt tilemap row, INSIDE man_buf (attr bytes land at +0,
    the 128B of entries at +MAN_ZMAP_OFS). A dedicated buffer is a bad idea: the AHB region is down
    to ~100B free (measured from the .map after man_meta_cache_path went in; it was ~356B before),
@@ -288,7 +296,12 @@ void manual_stage_meta(uint8_t *rom_path) {
      bounds the persistence to one game session. Lockstep with man_pos_magic in snes/igmenu.a65. */
   sram_writeshort(0x0000, IGMENU_PERSIST_MAGIC_ADDR);
 
+  man_stage_refused = 0;
   if(!CFG.enable_game_manual) return;   /* toggle off -> stay "not present" */
+  if(!scratch_leaf_take(SCR_MANUAL)) {  /* scratch busy: stay "not present", uncached */
+    man_stage_refused = 1;
+    return;
+  }
 
   /* Find which of the 8 candidates exist with ONE directory pass. A failed f_open scans the
      WHOLE directory comparing long names, and /sd2snes/info/<C> holds hundreds of entries, so
@@ -411,6 +424,7 @@ void manual_stage_meta(uint8_t *rom_path) {
     sram_writeblock(head, SRAM_MANUAL_GUIDES_ADDR, sizeof(head));
     man_publish_meta();
   }
+  scratch_leaf_drop();
 }
 
 /* Menu-side wrapper: stage the meta only when the game actually changed. See manual.h. */
@@ -421,6 +435,7 @@ void manual_stage_meta_cached(uint8_t *rom_path) {
      && !strcmp(man_meta_cache_path, (const char *)rom_path)) return;
 
   manual_stage_meta(rom_path);          /* clears man_meta_cache_valid itself */
+  if(man_stage_refused) return;
 
   /* Re-arm the cache with the path we just staged. A path that does not FIT is simply left
      uncached (restage every time, i.e. today's behaviour): storing a truncated key would make two
@@ -662,7 +677,7 @@ static void man_blank_zrows(uint16_t from, uint16_t to) {
   }
 }
 
-void manual_stage_s1page(uint8_t guide, uint16_t page) {
+static void man_stage_s1page_body(uint8_t guide, uint16_t page) {
   int      tries;
   uint8_t  nn;
   uint16_t npages = 0;
@@ -741,7 +756,7 @@ void manual_stage_s1page(uint8_t guide, uint16_t page) {
   man_s1res_guide = 0xff;
 }
 
-void manual_stage_zpage(uint8_t guide, uint16_t index, uint8_t mode) {
+static void man_stage_zpage_body(uint8_t guide, uint16_t index, uint8_t mode) {
   int      tries;
   uint8_t  nn, f;
   uint16_t page, entry_y = 0;
@@ -824,4 +839,28 @@ zfail:
   man_zres_guide = 0xff;                             /* nothing trustworthy is resident */
   f = sram_readbyte(SRAM_MANUAL_META_ADDR);
   sram_writebyte((uint8_t)(f | MAN_META_FLAG_ERROR), SRAM_MANUAL_META_ADDR);
+}
+
+/* The two page stagers hold the LEAF scratch (man_buf) for their whole run. A refusal is the
+   body's own failure: the 1x page stays "not ready", the 2x one raises the error latch. */
+void manual_stage_s1page(uint8_t guide, uint16_t page) {
+  if(!scratch_leaf_take(SCR_MANUAL)) {
+    sram_writebyte(0, SRAM_MANUAL_S1META_ADDR);
+    man_s1res_guide = 0xff;
+    return;
+  }
+  man_stage_s1page_body(guide, page);
+  scratch_leaf_drop();
+}
+
+void manual_stage_zpage(uint8_t guide, uint16_t index, uint8_t mode) {
+  uint8_t f;
+  if(!scratch_leaf_take(SCR_MANUAL)) {
+    man_zres_guide = 0xff;
+    f = sram_readbyte(SRAM_MANUAL_META_ADDR);
+    sram_writebyte((uint8_t)((f & ~MAN_META_FLAG_ZREADY) | MAN_META_FLAG_ERROR), SRAM_MANUAL_META_ADDR);
+    return;
+  }
+  man_stage_zpage_body(guide, index, mode);
+  scratch_leaf_drop();
 }

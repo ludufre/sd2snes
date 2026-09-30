@@ -19,12 +19,17 @@
 #include "sms.h"
 #include "uart.h"
 #include "util.h"
+#include "scratch.h"
 
 uint8_t sms_active = 0;
 
 #ifndef CONFIG_MK2
 
-static char sms_rompath[256];
+/* The .sms path, from sms_id to sms_load_rom within one load_rom: part of the game
+   load's FRAME scratch (scratch.h), the same bytes atari.c uses for a .a26. */
+typedef struct { char rompath[256]; } sms_frame_t;
+SCRATCH_FITS(sms_frame_t, SCRATCH_FRAME_BYTES);
+#define sms_rompath (SCRATCH_FRAME(sms_frame_t)->rompath)
 
 /* case-insensitive ".sms" extension check */
 void sms_id(uint8_t *filename) {

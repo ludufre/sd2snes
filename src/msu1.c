@@ -594,11 +594,15 @@ typedef struct {
 } menusfx_slot_t;
 static menusfx_slot_t menusfx_slots[MENU_SFX_SLOTS];  /* .bss: zero-init = all free */
 static uint32_t menusfx_next = SRAM_MENU_SFX_ADDR;    /* bump allocator: next free byte */
-static FIL menusfx_pre_fil IN_AHBRAM;                 /* preload handle (off the main .bss) */
 
 /* Stream one effect's PCM body (offset 8..EOF) into its PSRAM slot, once.
-   Bounded + fail-safe (never hangs the MCU): any error marks the slot silent. */
-static void menusfx_preload(menusfx_slot_t *s) {
+   Bounded + fail-safe (never hangs the MCU): any error marks the slot silent.
+   The FIL is on the stack: it is open only inside this call, which runs from the idle
+   menu loop (menu_main_loop -> menu_sfx_play), far shallower than the deep command
+   paths that set the stack peak -- a static one held 552 B of RAM for the whole session.
+   noinline keeps the frame out of menu_main_loop. */
+static __attribute__((noinline)) void menusfx_preload(menusfx_slot_t *s) {
+  FIL menusfx_pre_fil;
   UINT br = 0;
   uint8_t magic[4];
   DWORD fsz;

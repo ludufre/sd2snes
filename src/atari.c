@@ -34,6 +34,7 @@
 #include "snes.h"
 #include "atari.h"
 #include "uart.h"
+#include "scratch.h"
 
 a26_romprops_t a26_romprops;
 
@@ -41,20 +42,26 @@ a26_romprops_t a26_romprops;
 
 extern cfg_t CFG;   /* a26_video_width -> feat16[5] (picture width) in a26_id */
 
-/* Both buffers live in AHB SRAM (IN_AHBRAM) -- NOT plain .bss on the main SRAM.
-   The main SRAM's stack/heap headroom is tight and these 770 B pushed it below
-   the safe line. Both are written before they are ever read (the path via
-   strncpy on detection, the scan block via f_read before parsing), so the
-   NOLOAD/no-zero-init of .ahbram is fine. See IN_AHBRAM (config.h) and the
-   same pattern in igmenu.c / gameinfo.c. */
-static char a26_rompath[256] IN_AHBRAM;
+/* Both buffers live in the shared scratch (scratch.h, AHB SRAM) -- NOT plain .bss
+   on the main SRAM, whose stack/heap headroom is tight. Both are written before
+   they are ever read (the path via strncpy on detection, the scan block via
+   f_read before parsing).
+   The path is part of the game load's FRAME: a26_id writes it and a26_load_rom
+   reads it back later in the same load_rom (sms.c keeps its path in the same
+   bytes; a file is never both a .sms and a .a26). */
+typedef struct { char rompath[256]; } a26_frame_t;
+SCRATCH_FITS(a26_frame_t, SCRATCH_FRAME_BYTES);
+#define a26_rompath (SCRATCH_FRAME(a26_frame_t)->rompath)
 
 /* One block of the streaming scan plus the 2-byte carry-over that keeps the
    3-byte sliding window intact across a block boundary. The image is at most
-   32KB, so the whole scan is one linear pass through this buffer. */
+   32KB, so the whole scan is one linear pass through this buffer (LEAF scratch,
+   held for the scan only). */
 #define A26_SCAN_BLOCK 512
 #define A26_SCAN_CARRY 2
-static uint8_t a26_scanbuf[A26_SCAN_BLOCK + A26_SCAN_CARRY] IN_AHBRAM;
+typedef struct { uint8_t buf[A26_SCAN_BLOCK + A26_SCAN_CARRY]; } a26_scan_scratch_t;
+SCRATCH_FITS(a26_scan_scratch_t, SCRATCH_LEAF_BYTES);
+#define a26_scanbuf (SCRATCH_LEAF(a26_scan_scratch_t)->buf)
 
 /* 6502 opcodes carrying a 16-bit absolute operand. These two tables ARE the
    signature generator: a reference to an address is <opcode><lo><hi>, so a window
@@ -354,8 +361,11 @@ void a26_id(a26_romprops_t *props, uint8_t *filename) {
   props->romsize_bytes = romsize;
 
   a26_scan_reset(&st);
-  if(romsize == 2048 || romsize == 4096 || romsize == 8192
-     || romsize == 16384 || romsize == 32768) {
+  /* A refused scratch skips the scan: like a truncated one (below) it can only
+     LOSE evidence, so the image boots as the default for its size. */
+  if((romsize == 2048 || romsize == 4096 || romsize == 8192
+      || romsize == 16384 || romsize == 32768)
+     && scratch_leaf_take(SCR_A26)) {
     f_lseek(&file_handle, 0);
     while(pos < romsize) {
       UINT got = 0;
@@ -381,6 +391,7 @@ void a26_id(a26_romprops_t *props, uint8_t *filename) {
       pos += got;
     }
     f_lseek(&file_handle, 0);
+    scratch_leaf_drop();
   }
 
   a26_decide(props, &st, romsize);

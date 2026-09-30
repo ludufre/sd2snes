@@ -65,9 +65,12 @@ mkdir -p build
 # Quoted #includes resolve in the includer's own directory first, which would
 # pull the REAL firmware headers next to src/atari.c. Compiling a byte-exact
 # copy from build/ makes the shim headers win while atari.c stays unmodified.
+# scratch.c (the shared scan buffer a26_id borrows) gets the same treatment.
 cp ../../src/atari.c build/atari_under_test.c || exit 1
+cp ../../src/scratch.c build/scratch_under_test.c || exit 1
 $CC -O1 -g -fsanitize=address,undefined -I shim -I ../../src \
-    a26_detect_cli.c build/atari_under_test.c -o build/a26_detect_cli || exit 1
+    a26_detect_cli.c build/atari_under_test.c build/scratch_under_test.c \
+    -o build/a26_detect_cli || exit 1
 CLI=./build/a26_detect_cli
 
 echo "== corpus ($CORPUS) =="
