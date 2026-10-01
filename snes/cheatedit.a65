@@ -918,6 +918,7 @@ ce_draw_ed_hint:
   ldx #!ce_ed_hint
   stx print_src
   jsr ce_print_centered
+  jsl @hint_keys              ; keys in green (manhost.a65)
   rts
 
 ; ----------------------------------------------------------------------
@@ -1546,6 +1547,7 @@ ce_kbd_draw_hint:
   ldx #!ce_kbd_hint_aln
 + stx print_src
   jsr ce_print_centered
+  jsl @hint_keys
   rts
 
 ; ---- on the CODE keyboard only, show the two accepted formats with example

@@ -319,9 +319,13 @@ ighe_no_note:
 	lda #IGM_HP_KEYS1
 	ldx #IGH_KEYS1_ROW
 	jsr igh_draw_centered
+	ldx #IGH_KEYS1_ROW
+	jsr ig_hint_keys                     // keys in green
 	lda #IGM_HP_KEYS2
 	ldx #IGH_KEYS2_ROW
 	jsr igh_draw_centered
+	ldx #IGH_KEYS2_ROW
+	jsr ig_hint_keys
 	plb
 	plp
 	rts

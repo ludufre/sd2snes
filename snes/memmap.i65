@@ -401,7 +401,8 @@
    $F482E8, ig_hdma_mask + BAR scratch $F482F0-$F482FF and theme WRAM/DMA-reg saves
    $F48300-$F483A3 (igmenu.a65); then ig_win_x..h $F483A4-A7, tint $F483A8, pos_focus
    $F483AA, pos_slot $F483AC and the guide-picker mh_* block $F483B0-$F483BB
-   (manhost.a65) -- free again from $F483BC, with OVL_NONAME_BUF taking $F483C0-$F483DF. */
+   (manhost.a65), gfk_colon $F483BC-BD (manhost.a65, the ficha footer's key colouring) -- free
+   again from $F483BE, with OVL_NONAME_BUF taking $F483C0-$F483DF. */
 #define IGM_THM_MAGIC               $F48260 /* 1B: $A5 = staged block valid, written LAST by the overlay before the jsl $c80008; 0 = invalid (aborted/never staged) and the shell must fall back to its baked colours. */
 #define IGM_THM_GRAD                $F48261 /* 55B: backdrop gradient blob ([count,lo,hi]* terminated by a 0 count), copied from the THEMED hdma_pal_src. Same 55-byte region size main.a65 DMAs into the hdma_pal WRAM buffer. */
 #define IGM_THM_GRAD_A              $8261   /* 16-bit abs alias of IGM_THM_GRAD for abs,Y reads under DBR=$F4 (igt_grad_build walks two cursors and the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with IGM_THM_GRAD above -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65. */

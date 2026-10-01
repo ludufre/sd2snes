@@ -368,6 +368,7 @@ patchsel_draw_footer:
     lda #52
     sta print_count
     jsr hiprint
+    jsl @hint_keys              ; keys in green (manhost.a65)
     plp
     rts
 

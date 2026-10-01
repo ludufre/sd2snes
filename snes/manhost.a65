@@ -284,6 +284,150 @@ mhg_out:
 	rtl
 
 ; ======================================================================
+;  hint_keys: paint the KEYS of a key-hint line green, like the tour's footer -- the
+;  ficha's footers, the browser status bar, the dialogs' hints. Runs right after the
+;  hiprint that drew the line, and reads where it drew it from the print_x / print_y /
+;  print_done it left behind, so no caller's layout constants live here. Call it only
+;  after a HINT line: a file name with a ':' in it would get coloured too. A key is the part of a space-separated word before its first
+;  ':' ("A:Play", "A: Play", the up/down arrows of "{241}{242}:Game"); its cells get
+;  palette 2, the green the ficha's values use. Words without a ':' are left alone, so
+;  the translations need no markup. Hi-res text: half-column h lives in BG1 when odd and
+;  BG2 when even, at byte offset row*64 + (h & ~1) (hiprint's own mapping).
+;  Any DBR/DP in (long addressing only); ends in rtl.
+; ======================================================================
+#define gfk_colon       $F483BC    ; word: half-column of the current word's ':' ($ffff = none)
+
+hint_keys:
+	php
+	rep #$30 : .al : .xl
+	lda @print_done
+	and #$00ff
+	sta @gfk_colon                             ; borrow the slot for the end column...
+	lda @print_x
+	and #$00ff
+	tax                                        ; X = h
+	clc
+	adc @gfk_colon
+	pha                                        ; ...end = print_x + print_done, on the stack
+	txy                                        ; Y = this word's first column
+	lda #$ffff
+	sta @gfk_colon
+gfk_loop:
+	.al : .xl
+	txa
+	cmp $01, s
+	bcs gfk_last
+	jsr gfk_cell
+	and #$03ff
+	lsr                                        ; tile index = character code * 2
+	cmp #$0020
+	beq gfk_space
+	cmp #$003a
+	bne gfk_next
+	lda @gfk_colon
+	cmp #$ffff
+	bne gfk_next                               ; only a word's FIRST ':' ends its key
+	txa
+	sta @gfk_colon
+	bra gfk_next
+gfk_space:
+	.al : .xl
+	jsr gfk_paint
+	inx
+	txy                                        ; the next word starts after the space
+	lda #$ffff
+	sta @gfk_colon
+	bra gfk_loop
+gfk_next:
+	.al : .xl
+	inx
+	bra gfk_loop
+gfk_last:
+	.al : .xl
+	jsr gfk_paint
+	pla
+	plp
+	rtl
+
+; gfk_paint: palette 2 on columns [Y, gfk_colon) when the word had a ':'. X/Y preserved.
+gfk_paint:
+	.al : .xl
+	lda @gfk_colon
+	cmp #$ffff
+	beq gfk_p_out
+	phx
+	tyx
+gfk_p_loop:
+	.al : .xl
+	txa
+	cmp @gfk_colon
+	bcs gfk_p_done
+	jsr gfk_cell
+	and #$e3ff
+	ora #$0800                                 ; palette 2 (bits 10-12)
+	jsr gfk_store
+	inx
+	bra gfk_p_loop
+gfk_p_done:
+	.al : .xl
+	plx
+gfk_p_out:
+	rts
+
+; gfk_cell: A = the tilemap word at half-column X of the print_y row. X/Y preserved.
+gfk_cell:
+	.al : .xl
+	phx
+	jsr gfk_off
+	bcs gfk_c_bg1
+	lda @BG2_TILE_BUF, x
+	plx
+	rts
+gfk_c_bg1:
+	.al : .xl
+	lda @BG1_TILE_BUF, x
+	plx
+	rts
+
+; gfk_store: write A back to half-column X of the print_y row. X/Y preserved.
+gfk_store:
+	.al : .xl
+	phx
+	pha
+	jsr gfk_off
+	pla                                        ; PLA leaves the carry gfk_off set
+	bcs gfk_s_bg1
+	sta @BG2_TILE_BUF, x
+	plx
+	rts
+gfk_s_bg1:
+	.al : .xl
+	sta @BG1_TILE_BUF, x
+	plx
+	rts
+
+; gfk_off: X = half-column in; X = byte offset out, carry = odd column (BG1). A clobbered.
+gfk_off:
+	.al : .xl
+	lda @print_y
+	and #$00ff
+	xba
+	lsr
+	lsr                                        ; row * 64
+	pha
+	txa
+	lsr                                        ; carry = odd
+	php
+	txa
+	and #$fffe
+	clc
+	adc $02, s                                 ; + row * 64 (under the pushed flags)
+	tax
+	plp                                        ; the odd/even carry back
+	pla
+	rts
+
+; ======================================================================
 ;  cheathost_from_gi: SELECT on the ficha opens the game's cheat list -- the very list the
 ;  context menu's "Cheats" opens, for the ficha's own source: the browser selection, or the
 ;  Recents/Favorites index the ficha was opened with.  The list is a menu window, so the
@@ -437,6 +581,7 @@ mhd_flush:
 	sep #$20 : .as
 	lda #^text_gi_footer_pick : sta @print_bank
 	jsl @gi_call_hiprint                       ; resolve_str localizes it, like the slugs
+	jsl @hint_keys                          ; keys in green, like the ficha's own footer
 	jsl @gi_call_sel_flush                     ; NMI off + vblank + blank -> gi_dma_body
 	plp
 	.as : .xl

@@ -2264,10 +2264,13 @@ mn_chk_present:
 	jsr mn_draw_pages
 	lda #IGM_MN_KEYS1 : ldx #MN_KEYS1_ROW
 	jsr mn_draw_centered
+	ldx #MN_KEYS1_ROW : jsr ig_hint_keys          ; keys in green
 	lda #IGM_MN_KEYS2 : ldx #MN_KEYS2_ROW
 	jsr mn_draw_centered
+	ldx #MN_KEYS2_ROW : jsr ig_hint_keys          ; keys in green
 	lda #IGM_MN_READ : ldx #MN_READ_ROW
 	jsr mn_draw_centered
+	ldx #MN_READ_ROW : jsr ig_hint_keys          ; keys in green
 	plb
 	plp
 	rts
@@ -2277,8 +2280,10 @@ mn_list:
 	                                           ;  the P we arrived with and it never touches DBR)
 	lda #IGM_MN_KEYS1 : ldx #MN_KEYS1_ROW      ; same legend as the count==1 prompt: the list only
 	jsr mn_draw_centered                       ;   reaches row 14 (8 guides max), so 18/19 are free
+	ldx #MN_KEYS1_ROW : jsr ig_hint_keys          ; keys in green
 	lda #IGM_MN_KEYS2 : ldx #MN_KEYS2_ROW
 	jsr mn_draw_centered
+	ldx #MN_KEYS2_ROW : jsr ig_hint_keys          ; keys in green
 	plb
 	plp
 	rts
@@ -3150,6 +3155,66 @@ ig_ft_go:
 	.al : .xl
 	ldx #IG_FOOTER_ROW
 	jsr sh_draw_centered
+	jsr ig_footer_keys                        ; the keys in green, like the m3nu ficha and the tour
+	plp
+	rts
+
+; ---- ig_hint_keys: repaint the KEYS of a key-hint row green (palette 2, the ON/OCCUPIED
+;      green), like the m3nu's hint_keys and the tour's footer. A key is the part of a
+;      space-separated word before its first ':' ("A:ABRIR", "<>:ABA", "L/R:PONTAS"), so
+;      the eight translations need no markup; words without a ':' stay white. Rides
+;      ig_recolor, which rewrites cells from the glyphs OVL_RB still holds after the row's
+;      flush -- call it right after the *_draw_centered that drew a HINT row, in the same
+;      VRAM context. X = that absolute row; ig_footer_keys is the footer's entry. .al/.xl in.
+ig_footer_keys:
+	ldx #IG_FOOTER_ROW
+ig_hint_keys:
+	php
+	phb
+	rep #$30 : .al : .xl
+	txa : sta @ig_rc_row
+	sep #$20 : .as
+	lda #$f4 : pha : plb                      ; DBR=$F4: OVL_RB abs reads (ig_recolor too)
+	rep #$30 : .al : .xl
+	lda #$2800 : sta @ig_rc_pal
+	ldx #$0000                                ; X = column
+	txy                                       ; Y = first column of the current word
+igk_loop:
+	.al : .xl
+	cpx #$0040
+	bcs igk_out
+	lda OVL_RB, x
+	and #$00ff
+	cmp #$0020
+	beq igk_space
+	cmp #$003a
+	bne igk_next
+	tya : sta @ig_rc_col                      ; ':' -> the key is [word start, ':')
+	txa : sta @ig_rc_end
+	phx : phy
+	jsr ig_recolor
+	ply : plx
+igk_label:
+	.al : .xl
+	inx                                       ; the rest of the word is its label
+	cpx #$0040
+	bcs igk_out
+	lda OVL_RB, x
+	and #$00ff
+	cmp #$0020
+	bne igk_label
+igk_space:
+	.al : .xl
+	inx
+	txy                                       ; the next word starts after the space
+	bra igk_loop
+igk_next:
+	.al : .xl
+	inx
+	bra igk_loop
+igk_out:
+	.al : .xl
+	plb
 	plp
 	rts
 

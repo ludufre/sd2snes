@@ -497,6 +497,7 @@ pcm_dr_tail:
   lda #^text_pcm_prompt
   ldx #!text_pcm_prompt
   jsr pcm_row_str             ; row 5
+  jsl @hint_keys              ; keys in green (pcm_flush is a hiprint; manhost.a65)
 pcm_dr_done:
   plp
   .as : .xl
@@ -518,6 +519,7 @@ pcm_dr_nosup:
   lda #^text_pcm_promptb      ; only B does anything here
   ldx #!text_pcm_promptb
   jsr pcm_row_str             ; row 5
+  jsl @hint_keys
   bra pcm_dr_done
 
 

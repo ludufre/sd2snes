@@ -394,6 +394,7 @@ cheatmenu_draw_l1_hint:
   adc print_done
   sta print_x
   jsr hiprint
+  jsl @hint_keys                      ; keys in green (manhost.a65); print_* untouched
 
 ; --- right bars: palette 3, 8 chars, advanced from previous segment ----
   lda #$03

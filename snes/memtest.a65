@@ -589,6 +589,7 @@ mt_dr_nomore:
   ldx #!text_mtl_prompt
   jsr mt_put_str
   jsr mt_flush
+  jsl @hint_keys              ; keys in green (mt_flush is a hiprint; manhost.a65)
   jsr mt_blank
   lda #^text_mtl_prompt2
   ldx #!text_mtl_prompt2

@@ -1336,6 +1336,8 @@ trds_hint:
 	lda #IGM_TR_HINT_SETUP
 	ldx #TR_ROW_HINT
 	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr ig_hint_keys                     // keys in green
 	plp
 	rts
 
@@ -1416,6 +1418,8 @@ trda_novalue:
 	lda #IGM_TR_HINT_SETUP
 	ldx #TR_ROW_HINT
 	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr ig_hint_keys                     // keys in green
 	plp
 	rts
 
@@ -1532,6 +1536,8 @@ trdrs_hint:
 	lda #IGM_TR_HINT_LIST
 	ldx #TR_ROW_HINT
 	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr ig_hint_keys                     // keys in green
 	plp
 	rts
 
@@ -1687,6 +1693,8 @@ trdd_nopin:
 	lda #IGM_TR_HINT_LIST
 	ldx #TR_ROW_HINT
 	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr ig_hint_keys                     // keys in green
 	plp
 	rts
 
@@ -3169,6 +3177,8 @@ tree_narrow:
 	lda #IGM_TR_HINT_EDIT
 	ldx #TR_ROW_HINT
 	jsr tr_draw_centered
+	ldx #TR_ROW_HINT
+	jsr ig_hint_keys                     // keys in green
 	ldx #TR_ROW_HINT
 	jsr tr_side_repair
 	plb

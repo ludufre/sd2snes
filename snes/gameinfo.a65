@@ -1272,6 +1272,7 @@ gif_plain:
   ldx #!text_gi_footer : lda #^text_gi_footer
 gif_put:
   jsr gi_puts
+  jsl @hint_keys          ; the keys in green, like the tour's footer (manhost.a65, $C1)
   plp
   rts
 
@@ -1526,6 +1527,7 @@ gi_desc_full_redraw:
   lda #40 : sta print_count
   ldx #!text_gi_footer_full : lda #^text_gi_footer_full
   jsr gi_puts
+  jsl @hint_keys          ; keys in green (manhost.a65)
   jsr cover_blank_begin
   jsr gi_dma_body
   jsr cover_blank_end

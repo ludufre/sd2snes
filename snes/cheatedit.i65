@@ -859,6 +859,8 @@ ce_draw_confirm:
 	lda #IGM_CE_CONFIRM_KEYS
 	ldx #CEC_ROW_KEYS
 	jsr ce_draw_centered
+	ldx #CEC_ROW_KEYS
+	jsr ig_hint_keys                     // keys in green
 	jsr ig_bar_sync
 	sep #$20 : .as
 	lda #$0f : sta @$002100

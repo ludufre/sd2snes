@@ -1800,6 +1800,7 @@ confirm_no_name:
   adc #$06
   sta print_y
   jsr confirm_center_print
+  jsl @hint_keys          ; keys in green
 ; options on window_y+4
   jsr confirm_redraw_opts
   jsr enable_screen_update
@@ -2092,6 +2093,7 @@ filesel_statusbar
   adc #$0a
   sta @print_y
   jsr hiprint
+  jsl @hint_keys          ; keys in green (manhost.a65)
   plp
   plx
   pla
