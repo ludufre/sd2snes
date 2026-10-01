@@ -1,0 +1,879 @@
+; ===========================================================================
+; onboarding: the welcome clip, played before the first card every time the tour
+; starts (from the first-boot gate, after the language was picked, or from Settings).
+;
+; The clip is two files. welcome.fmv: the firmware stages it at WEL_BASE on
+; CMD_ONB_WELCOME / WEL_OP_STAGE (SD DMA into PSRAM, so the SNES waits in WRAM).
+; welcome.pcm: the jingle, which the firmware streams from the card to the MSU-1 DAC
+; from the moment it serves WEL_OP_PLAY until WEL_OP_STOP (its tail loops silence).
+; The format, and the encoder that sizes every frame to what this player moves, are
+; in utils/gen_welcome.py.
+;
+; Screen: mode 1, BG1 = the video (4bpp; a pool of 1024 tiles at VRAM $0000 and two
+; tilemaps, $4000 / $4400), the backdrop a gradient by HDMA (ch1 CGADD, ch2 CGDATA,
+; the clip's own table), OBJ = the "Welcome" line of the language in use (name base
+; $6000, 16x16).
+;
+; Pacing: frame n is on screen while the next VBlanks move frame n+1 (WEL_BUDGET per
+; VBlank, commands never split); the tilemap flips at the frame's deadline, every
+; 3 VBlanks (NTSC) or 2 and 3 in turn (PAL), counted from the start of the jingle.
+; Every DMA with HDMA armed ends well inside the VBlank (the S-CPU version 1 hazard):
+; onb_wel_vmax keeps the latest line one ended on, $ffff = past the VBlank.
+;
+; A, B or START (pressed, not held from the gate) skips: the jingle stops and the
+; picture fades out.
+; ===========================================================================
+
+.link page $c8
+#include "onboarding/onb_memmap.i65"
+#include "onboarding/onb_resume.i65"
+.link page $c8
+
+#define WEL_BUDGET_NTSC   3584    ; lockstep with NMI_BUDGET (gen_welcome.py): ends by ~line 249
+#define WEL_BUDGET_PAL    7168    ; lockstep with NMI_BUDGET_PAL: the PAL VBlank is 87 lines
+#define WEL_CMD_COST      256     ; lockstep with CMD_COST: a command's own CPU time
+#define WEL_OAM_COST      608     ; lockstep with OAM_COST
+#define WS_LOAD           0       ; onb_wel_state: moving the next frame
+#define WS_READY          1       ;   its data is in, it flips at the deadline
+#define WS_END            2       ;   the stream ended
+#define WEL_SKIP_KEYS     $9080   ; B, START, A
+
+; ---------------------------------------------------------------------------
+; onb_welcome_check: carry set = play the clip. Every fresh boot of the tour (from the
+;   gate or from Settings), never the boot back from the tour's own music reset (the
+;   resume marker), and only once the firmware has staged a clip. From ONB_MAIN (NMI
+;   off, forced blank, the WRAM wait installed).
+; ---------------------------------------------------------------------------
+onb_welcome_check:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda @onb_resume_magic
+  cmp #ONB_RESUME_MAGIC
+  sep #$20 : .as
+  beq owc_no
+  lda #$00
+  sta @SNES_CMD
+  lda #WEL_OP_STAGE
+  sta @MCU_PARAM
+  lda #CMD_ONB_WELCOME
+  sta @MCU_CMD
+  jsl @ONB_WRAM_WAIT_MCU    ; the firmware streams with SD DMA: nothing may run from PSRAM
+  lda #$00
+  sta @MCU_CMD
+  rep #$20 : .al
+  lda @WEL_BASE             ; "SWV1": a firmware without the command stages nothing
+  cmp #$5753
+  bne owc_no
+  lda @WEL_BASE+2
+  cmp #$3156
+  bne owc_no
+  plp
+  sec
+  rtl
+owc_no:
+  .as : .xl
+  plp
+  clc
+  rtl
+
+; ---------------------------------------------------------------------------
+; onb_welcome_play: the clip, start to end (or to the skip). Leaves the console in
+;   forced blank with NMI and HDMA off; the caller rebuilds the PPU state.
+; ---------------------------------------------------------------------------
+onb_welcome_play:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  pha
+  plb
+  jsr wel_setup
+  ; frame 0 in forced blank, whatever its size
+  lda #$01
+  sta @onb_wel_nobudget
+  jsr wel_run
+  lda #$00
+  sta @onb_wel_nobudget
+  jsr wel_flip
+  lda @onb_wel_bright
+  sta @onb_wel_first_bright
+  ; HDMA on in the VBlank, after every GP-DMA (a HDMA enabled first blacks the screen)
+  jsr wel_waitblank
+  lda #$06
+  sta $420c
+  lda @onb_wel_first_bright
+  sta $2100
+  ; the jingle, then the frame clock: frame 1 flips 3 (or 2) VBlanks from now
+  lda #WEL_OP_PLAY
+  jsr wel_cmd
+  rep #$20 : .al
+  lda #$0000
+  sta @onb_wel_vbl
+  sta @onb_wel_deadline
+  sep #$20 : .as
+  lda #$00
+  sta @onb_wel_fi
+  jsr wel_next_deadline
+  lda #WS_LOAD
+  sta @onb_wel_state
+  rep #$20 : .al
+  jsr wel_pads
+  sta @onb_wel_pad          ; held from the gate: not a skip
+  sep #$20 : .as
+  lda #$01
+  sta @onb_wel_on
+  lda $4210                 ; drop a stale NMI flag
+  lda #$81
+  sta $4200
+
+wel_loop:
+  .as : .xl
+  lda @isr_done
+  beq wel_loop
+  lda #$00
+  sta @isr_done
+- lda $4212
+  lsr
+  bcs -
+  lda @onb_wel_skip
+  bne wel_skipping
+  rep #$20 : .al
+  jsr wel_pads
+  sta @onb_tmp
+  eor @onb_wel_pad
+  and @onb_tmp              ; newly pressed
+  pha
+  lda @onb_tmp
+  sta @onb_wel_pad
+  pla
+  and #WEL_SKIP_KEYS
+  sep #$20 : .as
+  beq +
+  lda #$01
+  sta @onb_wel_skip
+  lda #WEL_OP_STOP
+  jsr wel_cmd
+  bra wel_loop
++ lda @onb_wel_state
+  cmp #WS_END
+  bne wel_loop
+  rep #$20 : .al            ; the last frame keeps its time on screen
+  lda @onb_wel_vbl
+  sec
+  sbc @onb_wel_deadline
+  sep #$20 : .as
+  bmi wel_loop
+  bra wel_done
+wel_skipping:
+  .as : .xl
+  lda @onb_wel_bright
+  bne wel_loop
+wel_done:
+  .as : .xl
+  lda #WEL_OP_STOP          ; release the DAC (a skip stopped the jingle already)
+  jsr wel_cmd
+  stz $4200
+  lda #$80
+  sta $2100
+  stz $420c
+  lda #$00
+  sta @onb_wel_on
+  plb
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------
+; onb_welcome_after: the clip left the silent S-DSP stub on the S-SMP, which takes a
+;   new program only from its IPL. Menu music wanted: the tour's own reset for it
+;   (onb_apu_reset: the resume marker, the MCU resets the console, ONB_MAIN boots on
+;   the same card and uploads the music); the screen is already black. Otherwise the
+;   stub stays and onb_apu_boot leaves it be.
+; ---------------------------------------------------------------------------
+onb_welcome_after:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CFG_ENABLE_MENU_MUSIC
+  bne +
+  lda #$01
+  sta @onb_apu_stub
+  plp
+  rtl
++ lda @onb_card
+  sta @onb_resume_card
+  lda @onb_sel
+  sta @onb_resume_sel
+  lda #$01
+  sta @onb_resume_music
+  rep #$20 : .al
+  lda #ONB_RESUME_MAGIC
+  sta @onb_resume_magic
+  sep #$20 : .as
+  sei
+  lda #CMD_RESET
+  sta @MCU_CMD
+- bra -
+
+; ---------------------------------------------------------------------------
+; onb_menu_handoff: end the tour WITHOUT a console reset, so the S-SMP keeps playing.
+;   A reset is what used to bring the menu back, and it also puts the S-SMP at its
+;   IPL: the music stopped at the menu and started over. Instead: tell the menu what
+;   the S-SMP runs (BGM_STATE, as bgm_update keeps it), wait in WRAM while the firmware
+;   loads the menu over this image (CMD_ONBOARDING_DONE with MCU_PARAM 1; it writes
+;   MENU_HANDOFF so the menu's coldboot leaves the APU alone), then enter the menu
+;   through its reset vector the way a reset would. A firmware without the handoff
+;   resets the console as before. From onb_finish, forced blank. Never returns.
+; ---------------------------------------------------------------------------
+onb_menu_handoff:
+  sep #$20 : .as
+  rep #$10 : .xl
+  sei
+  lda #$00
+  sta @$004200              ; no NMI: its handler is in the image being replaced
+  sta @$00420c
+  lda @onb_music_on         ; 1 = playing, 3 = music off + the DSP stub,
+  beq +                     ; 4 = no track + the DSP stub
+  lda #$01
+  bra ++
++ lda @onb_music_none
+  beq +
+  lda #$04
+  bra ++
++ lda #$03
+++ sta @BGM_STATE
+  rep #$30 : .al : .xl
+  lda #$0026                ; 39 bytes: MVN copies A+1
+  ldx #!onb_handoff_src
+  ldy #!ONB_WRAM_HANDOFF
+  mvn $7e, $c8
+  sep #$20 : .as
+  lda #$00
+  sta @SNES_CMD             ; MCU_CMD_RDY again = the menu is in place
+  lda #$01
+  sta @MCU_PARAM
+  lda #CMD_ONBOARDING_DONE
+  sta @MCU_CMD
+  jmp @ONB_WRAM_HANDOFF
+
+; the WRAM part (copied to ONB_WRAM_HANDOFF, 39 bytes): wait for MCU_CMD_RDY, then
+; the menu's reset vector in emulation mode with DB = DP = 0, like a reset leaves them.
+; jml [$0010] reads the pointer from bank 0 = WRAM $7E0010 (tour data, no longer used).
+onb_handoff_src:
+  .as
+- lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  bne -
+  rep #$20 : .al
+  lda @$c0fffc
+  sta @$7e0010
+  sep #$20 : .as
+  lda #$c0
+  sta @$7e0012
+  lda #$00
+  pha
+  plb
+  pea $0000
+  pld
+  sec
+  xce
+  jml [$0010]
+onb_handoff_end:
+
+; wel_cmd: A = WEL_OP_*, sent as CMD_ONB_WELCOME from PSRAM (no SD DMA for these);
+;   the MCU clears MCU_CMD once it served it. Bounded. .as/.xl, DB = 0.
+wel_cmd:
+  .as : .xl
+  sta @MCU_PARAM
+  lda #CMD_ONB_WELCOME
+  sta @MCU_CMD
+  ldx #$0000
+- lda @MCU_CMD
+  beq +
+  dex
+  bne -
++ rts
+
+; wel_pads: A = both controllers' buttons, merged like onb_read_pad (controller 2 skips the
+;   clip too). .al in and out, DB = 0.
+wel_pads:
+  .al
+  lda $4218
+  and #$000f
+  bne +
+  lda $4218
++ sta @onb_tmp
+  lda $421a
+  and #$000f
+  bne +
+  lda $421a
++ ora @onb_tmp
+  rts
+
+; wel_waitblank: the next VBlank's start. .as, DB = 0.
+wel_waitblank:
+  .as : .xl
+- lda $4212
+  bmi -
+- lda $4212
+  bpl -
+  rts
+
+; ---------------------------------------------------------------------------
+; wel_setup: forced blank, the PPU for the clip, VRAM cleared, the overlay of the
+;   language in use, the OAM tables, the stream pointer, the HDMA channels.
+;   .as/.xl, DB = 0.
+; ---------------------------------------------------------------------------
+wel_setup:
+  .as : .xl
+  lda #$80
+  sta $2100
+  stz $420c
+  lda #$00
+  sta @onb_wel_skip
+  sta @onb_wel_ov
+  sta @onb_wel_state
+  rep #$20 : .al
+  lda #$0000
+  sta @onb_wel_vmax
+  sep #$20 : .as
+  lda $213f                 ; bit 4: PAL
+  and #$10
+  sta @onb_wel_pal
+  lda @CFG_BRIGHTNESS_LIMIT
+  cmp #$10
+  bcc +
+  lda #$0f
++ sta @onb_wel_bmax
+  lda #$01
+  sta $2105                 ; mode 1
+  lda #$40
+  sta $2107                 ; BG1 tilemap $4000, 32x32
+  stz $210b                 ; BG1 characters at $0000
+  lda #$63
+  sta $2101                 ; OBJ 16x16, name base $6000
+  lda #$11
+  sta $212c                 ; BG1 + OBJ
+  stz $212d
+  stz $2123
+  stz $2124
+  stz $2125
+  stz $212a
+  stz $212b
+  stz $212e
+  stz $212f
+  stz $2130
+  stz $2131
+  stz $2133
+  stz $210d
+  stz $210d
+  lda #$ff                  ; V scroll -1: tilemap row 0 on the first line
+  sta $210e
+  lda #$03
+  sta $210e
+  ; VRAM: all 64 KB to zero (slot 0 = the empty tile, both tilemaps on it)
+  lda #$80
+  sta $2115
+  ldx #$0000
+  stx $2116
+  lda #$09                  ; fixed source, $2118/$2119
+  sta $4370
+  lda #$18
+  sta $4371
+  ldx #!wel_zero
+  stx $4372
+  lda #^wel_zero
+  sta $4374
+  ldx #$0000                ; 0 = 65536 bytes
+  stx $4375
+  lda #$80
+  sta $420b
+  jsr wel_overlay
+  jsr wel_oam_hide
+  ; the stream
+  rep #$20 : .al
+  lda @WEL_BASE+6
+  sta @onb_wel_ptr
+  sep #$20 : .as
+  lda #^WEL_BASE
+  sta @onb_wel_bank
+  ; HDMA: ch1 holds CGADD = 0, ch2 writes the clip's backdrop colour per line
+  stz $4310
+  lda #$21
+  sta $4311
+  ldx #!onb_hdma_cg_addr
+  stx $4312
+  lda #^onb_hdma_cg_addr
+  sta $4314
+  lda #$02
+  sta $4320
+  lda #$22
+  sta $4321
+  rep #$20 : .al
+  lda @WEL_BASE+8
+  sta $4322
+  sep #$20 : .as
+  lda #^WEL_BASE
+  sta $4324
+  rts
+
+; wel_overlay: the language's "Welcome" sprites. Characters to the OBJ name table,
+;   and the OAM with them shown (WEL_OAM_SHOW) or not (WEL_OAM_HIDE). .as/.xl, DB = 0.
+wel_overlay:
+  .as : .xl
+  ; both tables: every sprite below the screen, small, x9 = 0
+  ldx #$0000
+- lda #$00
+  sta @WEL_OAM_SHOW,x
+  sta @WEL_OAM_HIDE,x
+  lda #224
+  sta @WEL_OAM_SHOW+1,x
+  sta @WEL_OAM_HIDE+1,x
+  lda #$00
+  sta @WEL_OAM_SHOW+2,x
+  sta @WEL_OAM_HIDE+2,x
+  sta @WEL_OAM_SHOW+3,x
+  sta @WEL_OAM_HIDE+3,x
+  inx
+  inx
+  inx
+  inx
+  cpx #$0200
+  bne -
+- lda #$00
+  sta @WEL_OAM_SHOW,x
+  sta @WEL_OAM_HIDE,x
+  inx
+  cpx #$0220
+  bne -
+  ; the block of onb_cur_lang (none past the clip's languages)
+  lda @onb_cur_lang
+  cmp @WEL_BASE+11
+  bcc +
+  rts
++ rep #$20 : .al
+  and #$00ff
+  asl
+  tax
+  lda @WEL_BASE+12,x
+  tax                       ; X = the block's offset
+  sep #$20 : .as
+  lda @WEL_BASE,x
+  sta @onb_wel_n
+  beq wel_ov_out
+  ; characters: DMA from block + 4 + 2n, length at block + 2
+  rep #$20 : .al
+  lda @WEL_BASE+2,x
+  sta $4375
+  lda @onb_wel_n
+  and #$00ff
+  asl
+  clc
+  adc #$0004
+  sta @onb_tmp
+  txa
+  clc
+  adc @onb_tmp
+  sta $4372
+  lda #$6000
+  sta $2116
+  sep #$20 : .as
+  lda #$80
+  sta $2115
+  lda #$01
+  sta $4370
+  lda #$18
+  sta $4371
+  lda #^WEL_BASE
+  sta $4374
+  lda #$80
+  sta $420b
+  ; OAM: sprite k at (x, y) from the block, characters (k/8)*32 + (k%8)*2, priority 3.
+  ; X = the block (read long), Y = the OAM entry (written with DB = $7e: there is no
+  ; long,Y store)
+  phb
+  lda #$7e
+  pha
+  plb
+  ldy #$0000
+  lda #$00
+  sta @onb_wel_k
+wel_ov_spr:
+  .as : .xl
+  lda @WEL_BASE+4,x
+  sta !WEL_OAM_SHOW,y
+  lda @WEL_BASE+5,x
+  sta !WEL_OAM_SHOW+1,y
+  lda @onb_wel_k
+  and #$07
+  asl
+  sta @onb_tmp
+  lda @onb_wel_k
+  and #$38
+  asl
+  asl
+  ora @onb_tmp
+  sta !WEL_OAM_SHOW+2,y
+  lda #$30
+  sta !WEL_OAM_SHOW+3,y
+  inx
+  inx
+  iny
+  iny
+  iny
+  iny
+  lda @onb_wel_k
+  inc
+  sta @onb_wel_k
+  cmp @onb_wel_n
+  bne wel_ov_spr
+  plb
+wel_ov_out:
+  .as : .xl
+  rts
+
+; wel_oam_hide / wel_oam_show: the whole OAM from one of the two tables (544 bytes).
+wel_oam_hide:
+  .as : .xl
+  ldx #!WEL_OAM_HIDE
+  bra wel_oam_dma
+wel_oam_show:
+  .as : .xl
+  ldx #!WEL_OAM_SHOW
+wel_oam_dma:
+  .as : .xl
+  stx $4372
+  lda #^WEL_OAM_SHOW
+  sta $4374
+  ldx #$0000
+  stx $2102
+  stz $4370
+  lda #$04
+  sta $4371
+  ldx #$0220
+  stx $4375
+  lda #$80
+  sta $420b
+  rts
+
+; ---------------------------------------------------------------------------
+; The VBlank, while onb_wel_on (ONB_NMI_ROUTINE jumps here, DB = 0, .as/.xl; rtl
+; returns to its caller). The flip first (it must land on the deadline), then the
+; next frame's data up to the budget.
+; ---------------------------------------------------------------------------
+onb_wel_nmi:
+  .as : .xl
+  lda @onb_wel_skip
+  beq wn_run
+  lda @onb_wel_bright       ; skipping: only the fade to black
+  beq +
+  dec
+  sta @onb_wel_bright
+  sta $2100
++ bra wn_out
+wn_run:
+  .as : .xl
+  lda @onb_wel_pal
+  beq +
+  rep #$20 : .al
+  lda #WEL_BUDGET_PAL
+  bra ++
++ rep #$20 : .al
+  lda #WEL_BUDGET_NTSC
+++ sta @onb_wel_budget
+  sep #$20 : .as
+  lda @onb_wel_state
+  cmp #WS_READY
+  bne wn_load
+  rep #$20 : .al
+  lda @onb_wel_vbl
+  sec
+  sbc @onb_wel_deadline
+  sep #$20 : .as
+  bmi wn_load
+  jsr wel_flip
+  lda @onb_wel_bright
+  sta $2100
+  jsr wel_next_deadline
+  lda #WS_LOAD
+  sta @onb_wel_state
+wn_load:
+  .as : .xl
+  lda @onb_wel_state
+  bne +
+  jsr wel_run
++ jsr wel_vline
+wn_out:
+  .as : .xl
+  rep #$20 : .al
+  lda @onb_wel_vbl
+  inc
+  sta @onb_wel_vbl
+  sep #$20 : .as
+  lda #$01
+  sta @isr_done
+  rtl
+
+; wel_vline: where this VBlank's work ended. A line inside the VBlank (225..261, or
+;   up to 311 on PAL) raises onb_wel_vmax; one past it (the next frame's lines) makes
+;   it $ffff for good. .as/.xl, DB = 0.
+wel_vline:
+  .as : .xl
+  lda $2137                 ; latch H/V
+  lda $213f                 ; reset the $213d read order
+  lda $213d
+  xba
+  lda $213d
+  and #$01
+  xba
+  rep #$20 : .al
+  cmp #225
+  bcs +
+  lda #$ffff
++ cmp @onb_wel_vmax
+  bcc +
+  sta @onb_wel_vmax
++ sep #$20 : .as
+  rts
+
+; wel_next_deadline: the flip after this one, 3 VBlanks on (NTSC) or 2 and 3 in turn
+;   (PAL, 2.5 on average: 20 frames a second on both). .as/.xl.
+wel_next_deadline:
+  .as : .xl
+  lda @onb_wel_pal
+  beq +
+  lda @onb_wel_fi
+  and #$01
+  clc
+  adc #$02
+  bra ++
++ lda #$03
+++ rep #$20 : .al
+  and #$00ff
+  clc
+  adc @onb_wel_deadline
+  sta @onb_wel_deadline
+  sep #$20 : .as
+  lda @onb_wel_fi
+  inc
+  sta @onb_wel_fi
+  rts
+
+; wel_flip: show the frame just loaded (its tilemap, the overlay state, the
+;   brightness to set). .as/.xl, DB = 0.
+wel_flip:
+  .as : .xl
+  lda @onb_wel_pflags
+  and #$01
+  asl
+  asl
+  ora #$40
+  sta $2107
+  lda @onb_wel_pflags
+  lsr
+  and #$01
+  cmp @onb_wel_ov
+  beq wf_bright
+  sta @onb_wel_ov
+  beq +
+  jsr wel_oam_show
+  bra ++
++ jsr wel_oam_hide
+++ rep #$20 : .al
+  lda @onb_wel_budget
+  sec
+  sbc #WEL_OAM_COST
+  bcs +
+  lda #$0000
++ sta @onb_wel_budget
+  sep #$20 : .as
+wf_bright:
+  .as : .xl
+  lda @onb_wel_pbright
+  cmp @onb_wel_bmax
+  bcc +
+  lda @onb_wel_bmax
++ sta @onb_wel_bright
+  rts
+
+; ---------------------------------------------------------------------------
+; wel_run: the stream's commands until the frame ends (WS_READY), the stream ends
+;   (WS_END) or the next command does not fit what is left of onb_wel_budget (the
+;   first one of a VBlank always runs; onb_wel_nobudget: no limit). The stream is
+;   read with DB = its bank; the registers are written long. .as/.xl, DB = 0 in/out.
+; ---------------------------------------------------------------------------
+wel_run:
+  .as : .xl
+  phb
+  lda #$00
+  sta @onb_wel_any
+wr_loop:
+  .as : .xl
+  lda @onb_wel_bank
+  pha
+  plb
+  rep #$20 : .al
+  lda @onb_wel_ptr
+  tax
+  sep #$20 : .as
+  lda !$0000,x
+  cmp #$01
+  beq wr_vram
+  cmp #$02
+  beq wr_cgram
+  cmp #$03
+  beq wr_frame
+  cmp #$04
+  beq wr_nextbank
+  lda #WS_END               ; $00, or anything unknown
+  sta @onb_wel_state
+  bra wr_out
+wr_nextbank:
+  .as : .xl
+  lda @onb_wel_bank
+  inc
+  sta @onb_wel_bank
+  rep #$20 : .al
+  lda #$0000
+  sta @onb_wel_ptr
+  sep #$20 : .as
+  bra wr_loop
+wr_frame:
+  .as : .xl
+  lda !$0001,x
+  sta @onb_wel_pflags
+  lda !$0002,x
+  sta @onb_wel_pbright
+  lda #$03
+  jsr wr_advance
+  lda #WS_READY
+  sta @onb_wel_state
+wr_out:
+  .as : .xl
+  plb
+  rts
+wr_vram:
+  .as : .xl
+  rep #$20 : .al
+  lda !$0003,x
+  jsr wr_fits
+  bcs wr_out16
+  lda !$0001,x
+  sta @$002116
+  txa
+  clc
+  adc #$0005
+  sta @$004372
+  lda @onb_wel_len
+  sta @$004375
+  sep #$20 : .as
+  lda #$80
+  sta @$002115
+  lda #$01                  ; 2 registers, $2118/$2119
+  sta @$004370
+  lda #$18
+  sta @$004371
+  lda #$05
+  bra wr_go
+wr_cgram:
+  .as : .xl
+  rep #$20 : .al
+  lda !$0002,x
+  jsr wr_fits
+  bcs wr_out16
+  txa
+  clc
+  adc #$0004
+  sta @$004372
+  lda @onb_wel_len
+  sta @$004375
+  sep #$20 : .as
+  lda !$0001,x
+  sta @$002121
+  lda #$00                  ; 1 register, $2122
+  sta @$004370
+  lda #$22
+  sta @$004371
+  lda #$04
+wr_go:
+  .as : .xl
+  pha
+  lda @onb_wel_bank
+  sta @$004374
+  lda #$80
+  sta @$00420b
+  pla                       ; A = the header's size: skip it and the data
+  jsr wr_advance
+  rep #$20 : .al
+  lda @onb_wel_ptr
+  clc
+  adc @onb_wel_len
+  sta @onb_wel_ptr
+  sep #$20 : .as
+  bcc +
+  lda @onb_wel_bank         ; ended right on the bank's end
+  inc
+  sta @onb_wel_bank
++ lda #$01
+  sta @onb_wel_any
+  jmp wr_loop
+wr_out16:
+  .al : .xl
+  sep #$20 : .as
+  bra wr_out
+
+; wr_advance: onb_wel_ptr += A (8 bits). .as.
+wr_advance:
+  .as : .xl
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc @onb_wel_ptr
+  sta @onb_wel_ptr
+  sep #$20 : .as
+  rts
+
+; wr_fits: A (16) = the command's data length. Carry set = it does not fit: stop here.
+;   Else it is charged to the budget (never below 0) and kept in onb_wel_len. .al.
+wr_fits:
+  .al : .xl
+  sta @onb_wel_len
+  sep #$20 : .as
+  lda @onb_wel_nobudget
+  bne wr_fit
+  rep #$20 : .al
+  lda @onb_wel_len
+  clc
+  adc #WEL_CMD_COST
+  sta @onb_tmp
+  sep #$20 : .as
+  lda @onb_wel_any
+  beq wr_charge
+  rep #$20 : .al
+  lda @onb_wel_budget
+  cmp @onb_tmp
+  bcs wr_charge16
+  sec
+  rts
+wr_charge:
+  .as : .xl
+  rep #$20 : .al
+wr_charge16:
+  .al : .xl
+  lda @onb_wel_budget
+  sec
+  sbc @onb_tmp
+  bcs +
+  lda #$0000
++ sta @onb_wel_budget
+  clc
+  rts
+wr_fit:
+  .as : .xl
+  rep #$20 : .al
+  clc
+  rts
+
+wel_zero  .byt $00

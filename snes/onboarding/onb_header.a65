@@ -1,0 +1,112 @@
+; onboarding: SNES header + reset/IRQ/NMI vectors for the standalone onboarding ROM.
+;
+; This is a CLONE of snes/header.a65 (the m3nu.bin header), trimmed for the
+; onboarding tour ROM. The onboarding ROM is a SEPARATE HiROM image
+; (/sd2snes/onboarding.bin) that the firmware boots in place of the menu (see
+; SNES_CMD_LOAD_ONBOARDING in src/menucmd.c + onboarding_pending in src/main.c).
+; It is NOT linked into m3nu.bin -- it has its own bank $C0/$C1
+; namespace, its own font/palette/ui copies, and its own data segment.
+;
+; HiROM ($31 = HiROM + FastROM), deterministic mapper forced by the MCU
+; (set_rom_mask(0x3fffff)/set_mapper(0x7)), so banks $C0/$C1 map to ROM offset
+; $000000.. exactly like the menu. Reset/NMI/IRQ vectors point at the onboarding
+; engine's handlers (onboarding_main.a65 / onb_reset.a65).
+;
+; KEEP THE GENERAL SHAPE IN LOCKSTEP with header.a65: the fill-then-overwrite
+; pattern at $C0FF00/$C0FFB0 is what keeps sneslink from scattering small code
+; objects into the vector area (necessary for a clean map + a flat padded image).
+
+.link page $c0
+#include "onboarding/onb_memmap.i65"
+
+; fill whole area beforehand so the linker does not create multiple
+; objects from it (necessary for map creation), exactly like header.a65.
+*= $C0FF00
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
+*= $C0FF00
+RESET:
+  sei
+  clc
+  xce
+  rep #$20 : .al
+  lda #$1fff
+  tcs
+  jmp @ONB_MAIN          ; -> onboarding_main.a65
+
+; 16-bit NMI/IRQ trampolines. Same structure as boot/header.a65 (the standalone
+; demo); the actual work lives in ONB_NMI_ROUTINE / ONB_IRQ_ROUTINE (onb_reset.a65).
+; The NMI also runs the m3nu's MSU-1 volume poke ($2006 = $FF every frame, after the
+; routine, so the welcome clip's measured VBlank budget does not move): the welcome
+; jingle and the menu-sound previews play on the cart's DAC, and only the SNES can set
+; its volume. The FPGA takes the write only once the MCU has enabled FEAT_MSU1 -- the
+; menu's first blip does that -- so without this a user with menu sounds OFF got the
+; jingle (and the previews) at volume 0.
+NMI_16bit:
+  php
+    rep #$30 : .al : .xl
+    pha : phx : phy : phd : phb
+    jsl @ONB_NMI_ROUTINE
+    sep #$20 : .as
+    lda #$00 : pha : plb                 ; DB = 0: an 8-bit store touches $2006 only
+    lda #$ff : sta $2006                 ; (16-bit would also write $2007, audio control)
+    rep #$30 : .al : .xl
+    plb : pld : ply : plx : pla
+  plp
+  rti
+
+IRQ_16bit:
+  php
+    rep #$30 : .al : .xl
+    pha : phx : phy : phd : phb
+    jsl @ONB_IRQ_ROUTINE
+    rep #$30 : .al : .xl
+    plb : pld : ply : plx : pla
+  plp
+  rti
+
+; error vectors: spin (should never fire)
+ABT_8bit: ABT_16bit:
+BRK_8bit: BRK_16bit:
+COP_8bit: COP_16bit:
+IRQ_8bit:
+NMI_8bit:
+- wai: lda $abcdef : bra -
+
+*= $C0FFB0
+; Zero $FFB0-$FFFF so the linker won't fill it with stray code fragments.
+  .word 0,0,0,0, 0,0,0,0
+  .word 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+  .word 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+
+*= $C0FFB0
+  .byt "MR"     ; 2 bytes - company id
+  .byt "ONBD"   ; 4 bytes - rom id (onboarding)
+
+*= $C0FFC0
+  .byt "SD2SNES ONBOARD      "
+;       123456789012345678901  -  max 21 chars
+
+*= $C0FFD5  .byt $31 ; rom map + speed (HiROM FastROM) -- matches m3nu
+*= $C0FFD6  .byt $00 ; rom type   ROM only (no SRTC/SRAM; onboarding has no save)
+*= $C0FFD7  .byt $09 ; rom size   512 kByte class (9 banks $C0..$C8; the MCU loads the file size)
+*= $C0FFD8  .byt $00 ; sram size  none
+*= $C0FFD9  .byt $01 ; rom region 1 = USA (NTSC, like m3nu)
+*= $C0FFDA  .byt $33 ; company id flag
+
+*= $C0FFDC  .word 0,0 ; checksums (unused; MCU does not verify)
+
+*= $C0FFE4  .word COP_16bit
+*= $C0FFE6  .word BRK_16bit
+*= $C0FFE8  .word ABT_16bit
+*= $C0FFEA  .word NMI_16bit
+*= $C0FFEE  .word IRQ_16bit
+*= $C0FFF4  .word COP_8bit
+*= $C0FFF8  .word ABT_8bit
+*= $C0FFFA  .word NMI_8bit
+*= $C0FFFC  .word RESET
+*= $C0FFFE  .word BRK_8bit
+*= $C0FFFE  .word IRQ_8bit

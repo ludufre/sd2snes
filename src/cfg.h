@@ -89,6 +89,7 @@
 #define CFG_GBC_SYNC                     ("GbcSync")
 #define CFG_ENABLE_INGAME_PAD2           ("EnableIngamePad2")
 #define CFG_GBC_STRETCH                  ("GbcStretch")
+#define CFG_ONBOARDING_VERSION           ("OnboardingVersion")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -247,6 +248,13 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      "GBCF" config block of the staged gbc_snes.bin (gbc_stage_config, src/gbc.c), never to
      the FPGA. mk3-only like the rest of the GBC core. YAML GbcStretch + menu "Game Boy Color
      stretch" (SGB menu). Default 0. */
+  uint8_t  onboarding_version;      /* CFG @ $1D5: the version of the first-boot tour
+     (ONBOARDING_FILENAME) the user has taken or declined; 0 = never. The gate in snes/main.a65
+     asks, right before the browser loop, while it is below the menu's ONB_VERSION, and the tour
+     then shows only the cards added after it (a release with new cards bumps ONB_VERSION and
+     tags them). Written by the gate on B and by the tour itself before
+     SNES_CMD_ONBOARDING_DONE. A config.yml without the key shows the tour once. YAML
+     OnboardingVersion, no menu entry. Default 0. */
 } cfg_t;
 
 int cfg_save(void);

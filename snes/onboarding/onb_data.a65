@@ -1,0 +1,169 @@
+; onboarding: WRAM data segment for the standalone onboarding ROM.
+;
+; Self-contained -- nothing here is shared with m3nu (the onboarding ROM owns its
+; own WRAM). Vars are allocated in sequence; ADD NEW VARS AT THE END (before
+; onb_data_end) so existing addresses don't shift. clear_wram-equivalent (the
+; onboarding cold-boot) does NOT run here; every GATE var read before its first
+; write is zeroed explicitly in onb_clear_vars (onboarding_main.a65).
+;
+; Mirrors the menu's $7E low-WRAM data layout idea (data.a65). Kept well below the
+; fixed regions: tile buffers ($7EA000/$7EB000), window stack ($7E2000), and the
+; WRAM-wait trampoline ($7EF200). The linker puts this segment at $7E0000 (the
+; `*=` below is not honoured), which is also why its pointers work as direct page.
+
+*= $7E0100
+.data
+.link page $7e
+
+; ---- carousel state ----
+onb_card          .byt 0   ; current card index (0..ONB_NUM_CARDS-1)
+onb_focus         .byt 0   ; focused option index on the current card
+onb_screen_static .byt 0   ; 1 while a card is being (re)built -> NMI skips body DMA + fade
+onb_cur_bright    .byt 0   ; current brightness (NMI ramps toward onb_tgt_bright)
+onb_tgt_bright    .byt 0   ; target brightness
+onb_val_dir       .byt 0   ; value change direction: 0 = Left/dec, 1 = Right/inc
+onb_cur_lang      .byt 0   ; active language (0 EN / 1 PT / 2 ES / 3 DE) -- read by resolve_str
+isr_done          .byt 0   ; set by the NMI each frame; input loop syncs on it
+
+; ---- descriptor / dispatch scratch ----
+onb_descptr       .word 0  ; long ptr to the current card descriptor (3 bytes)
+                  .byt 0
+onb_callptr       .word 0  ; long ptr for the indirect card-draw dispatch (3 bytes)
+                  .byt 0
+onb_tmp           .word 0  ; general 16-bit scratch (also stashes X/A across plp)
+                  .word 0
+
+; ---- pad state (onb_read_pad) ----
+onb_pad_mem       .word 0  ; previous frame's held buttons ($4218 layout)
+onb_pad_trig      .word 0  ; edge (newly pressed) buttons
+onb_pad_delay     .word 0  ; d-pad auto-repeat delay counter
+onb_pad_a         .byt 0
+onb_pad_b         .byt 0
+onb_pad_x         .byt 0
+onb_pad_y         .byt 0
+onb_pad_l         .byt 0
+onb_pad_r         .byt 0
+onb_pad_start     .byt 0
+onb_pad_select    .byt 0
+onb_pad_up        .byt 0
+onb_pad_down      .byt 0
+onb_pad_left      .byt 0
+onb_pad_right     .byt 0
+
+; ---- hiprint parameters (mirror the menu's print_* so onb_hiprint works) ----
+onb_print_x       .byt 0
+                  .byt 0
+onb_print_y       .byt 0
+                  .byt 0
+onb_print_src     .word 0
+onb_print_bank    .byt 0
+onb_print_pal     .word 0
+onb_print_temp    .word 0
+onb_print_count   .byt 0
+onb_print_done    .word 0
+onb_print_over    .byt 0
+onb_print_ptr     .word 0  ; 3-byte working pointer for hiprint
+                  .byt 0
+onb_resolve_ptr   .word 0  ; resolve_str working pointer (3 bytes)
+                  .byt 0
+
+; ---- HDMA WRAM tables (HDMA must fetch from WRAM, not ROM) ----
+
+
+; ---- window stack (only if a card uses onb_draw_window; head must init to $ffff) ----
+onb_window_stack_head .word 0
+
+; ---- string buffer for assembling lines (windows/wrap), like the menu's stringbuf ----
+onb_stringbuf     .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+                  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+                  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+                  .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
+; ---- option value right-align (onb_strlen / onb_draw_opt_value) ----
+onb_kv_len        .byt 0    ; resolved value string length (menu kv right-align)
+
+; ---- menu-style bordered dialog box (onb_draw_window) ----
+onb_window_x      .byt 0    ; box origin (half-columns) / size (rows)
+onb_window_y      .byt 0
+onb_window_w      .byt 0
+onb_window_h      .byt 0
+onb_dw_l          .byt 0    ; left/corner glyph of the row being built
+onb_dw_m          .byt 0    ; middle (edge / space) glyph
+onb_dw_r          .byt 0    ; right/corner glyph
+onb_dw_cnt        .byt 0    ; middle-fill counter (onb_dw_buildrow)
+onb_dw_cnt2       .byt 0    ; interior-row counter (onb_draw_window)
+
+; ---- redesign: feature model + bilingual card render ----
+onb_view          .byt 0    ; current view: 2 card / 3 "all set"
+onb_cfgptr        .word 0   ; 3-byte ptr to a CFG field (option cycling)
+                  .byt 0
+
+onb_hdma_bar      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; the option bar (onb_build_hdma)
+
+onb_hdma_en       .byt 0    ; $420c bits onb_build_hdma adds for the current view
+
+onb_sel           .byt 0    ; the focused answer row of the current card
+onb_nopts         .byt 0    ; answer rows of the current card (0 = info card)
+onb_row           .byt 0    ; answer-list render: the row being drawn
+onb_demo_cur      .byt 0    ; demo picture on screen ($ff = none)
+onb_demo_want     .byt 0    ; demo picture the focused answer asks for
+onb_demo_load     .byt 0    ; demo picture the NMI is streaming
+onb_demo_vis      .byt 0    ; VRAM slot on screen (0 / 1)
+onb_demo_busy     .byt 0    ; 1 = the NMI is streaming onb_demo_load, 2 = hide the sprites
+onb_demo_off      .word 0   ; bytes of it streamed so far
+onb_demo_src      .word 0   ; its characters (long pointer)
+                  .byt 0
+onb_demo_pal      .word 0   ; its palette (long pointer)
+                  .byt 0
+
+onb_vis_total     .byt 0    ; cards shown now (onb_count_visible)
+onb_vis_pos       .byt 0    ; the current card's place among them, 1-based
+onb_i             .byt 0    ; onb_count_visible's loop counter
+
+onb_music_want    .byt 0    ; the menu music should play (CFG at boot; the music card's bar)
+onb_music_on      .byt 0    ; the S-SMP is playing it
+onb_resume_magic  .word 0   ; ONB_RESUME_MAGIC after a music-stopping reset (onb_spc.a65)
+onb_resume_card   .byt 0    ;   ... the card to come back to
+onb_resume_sel    .byt 0    ;   ... and its focused answer
+
+onb_para_x        .byt 0    ; onb_emit_para: the column every line starts at
+onb_para_n        .byt 0    ;   ... and the rows the paragraph took
+onb_list_row      .byt 0    ; the answer list's first row (under the paragraph)
+onb_list_vis      .byt 0    ; answers shown (the rest scroll)
+onb_list_top      .byt 0    ; the first answer shown
+onb_list_old      .byt 0    ; onb_list_follow: onb_list_top before it
+onb_list_moved    .byt 0    ; the bar's last move scrolled the list
+onb_sb_thumb      .byt 0    ; the scroll bar's thumb row
+onb_hr_glyph      .byt 0    ; onb_hrule_glyph's glyph
+onb_seen          .byt 0    ; cards up to this tour version are left out (onb_seen_init)
+onb_sfx_pending   .byt 0    ; the "menu sounds" card is previewing its bar in the CFG byte...
+onb_sfx_saved     .byt 0    ;   ... and this is the answer to put back if it is left without A
+onb_music_none    .byt 0    ; the card has no menu track: onb_bgm_start stops asking
+onb_resume_music  .byt 0    ; the resume marker (onb_resume_magic): the music wanted
+
+onb_wel_on        .byt 0    ; the NMI runs the welcome clip (onb_welcome.a65)
+onb_wel_state     .byt 0    ;   WS_LOAD / WS_READY / WS_END
+onb_wel_ptr       .word 0   ;   the stream: offset in its bank...
+onb_wel_bank      .byt 0    ;   ... and the bank
+onb_wel_len       .word 0   ;   the command's data length
+onb_wel_budget    .word 0   ;   what this VBlank may still move
+onb_wel_any       .byt 0    ;   a command ran this VBlank
+onb_wel_nobudget  .byt 0    ;   frame 0, in forced blank: no limit
+onb_wel_vbl       .word 0   ;   VBlanks since the jingle started
+onb_wel_deadline  .word 0   ;   the next flip's VBlank
+onb_wel_fi        .byt 0    ;   frames flipped (PAL's 2/3 cadence)
+onb_wel_pal       .byt 0    ;   a PAL console
+onb_wel_pflags    .byt 0    ;   the loaded frame's flags...
+onb_wel_pbright   .byt 0    ;   ... and brightness
+onb_wel_bright    .byt 0    ;   the brightness on screen
+onb_wel_first_bright .byt 0 ;   frame 0's
+onb_wel_bmax      .byt 0    ;   the CFG brightness limit
+onb_wel_ov        .byt 0    ;   the "Welcome" line is shown
+onb_wel_n         .byt 0    ;   its sprites
+onb_wel_k         .byt 0    ;   (the OAM loop's counter)
+onb_wel_skip      .byt 0    ;   skipped: fading out
+onb_wel_pad       .word 0   ;   the pad last VBlank (a skip is a new press)
+onb_wel_vmax      .word 0   ;   the latest line a VBlank's work ended on ($ffff: past it)
+onb_apu_stub      .byt 0    ; the welcome clip left the silent S-DSP stub running
+
+onb_data_end      .byt 0

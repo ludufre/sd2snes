@@ -1,0 +1,75 @@
+; onboarding: NMI + IRQ service routines for the standalone onboarding ROM.
+;
+; The onboarding split-screen is mostly static (like the game-info screen): the
+; NMI re-DMAs the body text tilemap (so live redraws of the focused option show)
+; and bumps the brightness fade, then sets isr_done so the input loop can sync to
+; a frame. The band (mode-3 themed gradient) is built once in forced blank and
+; left alone. Auto-joypad stays ON so read_pad works.
+;
+; GOTCHA (clear_wram fills WRAM with $55, not 0): every gate var read before its
+; first write MUST be zeroed in the boot init (onboarding_main.a65 coldboot),
+; NOT here. isr_done / fade vars are set unconditionally each frame so they are
+; safe.
+
+.link page $c0
+#include "onboarding/onb_memmap.i65"
+#include "onboarding/onb_dma.i65"
+
+; ---------------------------------------------------------------------------
+; ONB_NMI_ROUTINE -- VBlank. Re-upload the body text rows (16..27) of both BG
+; layers from the WRAM tile buffers so a card's live redraw appears, then run a
+; simple brightness fade toward onb_tgt_bright. Skips the DMA when
+; onb_screen_static is set (card building owns VRAM in forced blank).
+; ---------------------------------------------------------------------------
+ONB_NMI_ROUTINE:
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  pha
+  plb
+  lda @onb_wel_on               ; the welcome clip owns the VBlank (onb_welcome.a65)
+  beq +
+  jmp @onb_wel_nmi
++
+  lda @onb_screen_static
+  bne onb_nmi_nofade            ; card build in progress -> don't touch VRAM/fade
+
+  ; whole screen rows 0..27 (mode-5): BG1 + BG2 tilemaps. The redesign has no static
+  ; mode-3 band -- the entire card lives in the tile buffers, so re-DMA it all (live
+  ; redraws of the option value / language switch appear). 28*64 B/BG fits one VBlank.
+  ldx #BG1_TILE_BASE
+  stx $2116
+  DMA7(#$01, #28*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF, #$18)
+  ldx #BG2_TILE_BASE
+  stx $2116
+  DMA7(#$01, #28*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF, #$18)
+  ; the demo picture being streamed into the hidden slot (onboarding_main.a65)
+  lda @onb_demo_busy
+  beq +
+  jsr onb_demo_step
++
+
+  ; brightness fade toward onb_tgt_bright (1 step/frame). cur==tgt -> no-op.
+  lda @onb_cur_bright
+  cmp @onb_tgt_bright
+  beq onb_nmi_nofade
+  bcs onb_nmi_brdown
+  inc
+  bra onb_nmi_brset
+onb_nmi_brdown:
+  dec
+onb_nmi_brset:
+  sta @onb_cur_bright
+  sta $2100
+onb_nmi_nofade:
+  lda #$01
+  sta @isr_done
+  rtl
+
+; ---------------------------------------------------------------------------
+; ONB_IRQ_ROUTINE -- acknowledge only (onboarding uses no IRQ timers).
+; ---------------------------------------------------------------------------
+ONB_IRQ_ROUTINE:
+  sep #$20 : .as
+  lda $4211
+  rtl

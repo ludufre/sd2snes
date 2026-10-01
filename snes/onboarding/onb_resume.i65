@@ -1,0 +1,4 @@
+/* onboarding: the marker a music-stopping reset leaves in WRAM (onb_spc.a65), read
+   by ONB_MAIN on the next boot. A console reset keeps WRAM; the tour's boot only
+   zeroes its own gate variables (onb_clear_vars), never these. */
+#define ONB_RESUME_MAGIC  $4e4f   /* "ON" */

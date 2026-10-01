@@ -13,6 +13,7 @@ Usage:
     python3 fontedit.py addfrench          Insert French chars (è ù î ï ë û)
     python3 fontedit.py additalian         Insert Italian chars (ì ò È Ì Ò Ù)
     python3 fontedit.py addgerman          Insert German chars (ä ö ß Ä Ö)
+    python3 fontedit.py addtourglyphs      Insert the onboarding tour's glyphs (241-243)
     python3 fontedit.py fixcircumflex      Redraw the 8 circumflex tiles
     python3 fontedit.py addrussian         Insert Cyrillic (codes 177-223)
     python3 fontedit.py clearkatakana      Blank the leftover katakana (161-176)
@@ -86,8 +87,9 @@ in the outer corners and along the bottom row, which stays empty so stacked
 menu rows do not touch. Copying an existing letter and reshaping its strokes
 keeps a new script consistent far more easily than drawing one from scratch.
 
-`import` defaults to --only 160-176,241-255 -- every slot still free: the tail
-of the table plus what Cyrillic left of the dead katakana block (see
+`import` defaults to --only 160-176,244-255 -- every slot still free: the tail
+of the table (241-243 are the tour's arrows and progress line, TOUR_GLYPHS)
+plus what Cyrillic left of the dead katakana block (see
 RECYCLABLE_CODES: it is JIS X 0201 left over from the CP932 era, unreachable
 since 2010). A full-sheet write is not the default because it would silently
 repaint the hand-made Spanish glyphs and the window art whenever an editor
@@ -679,6 +681,52 @@ def add_progressbar():
         print(render_ascii(tile_to_pixels(new_tiles[code])))
 
 
+# -- The onboarding tour's own glyphs ------------------------------------------
+# In free slots; no char maps to them (not in ACCENTS), the tour's data names the
+# codes. Each: (the char a screen reader decodes it as, the art).
+#   241/242: the footer's up/down arrows, drawn by the stroke like the letters
+#            (stroke_to_pixels puts the font's outline around them);
+#   243:     the progress bar's "still to come" part: the rule glyph (24)'s exact
+#            line, half-tone body instead of the text colour, so both parts align.
+TOUR_GLYPHS = {
+    241: ("\u2191", stroke_to_pixels(["...##...",
+                                      "..####..",
+                                      ".######.",
+                                      "...##...",
+                                      "...##...",
+                                      "...##...",
+                                      "........",
+                                      "........"])),
+    242: ("\u2193", stroke_to_pixels(["...##...",
+                                      "...##...",
+                                      "...##...",
+                                      ".######.",
+                                      "..####..",
+                                      "...##...",
+                                      "........",
+                                      "........"])),
+    243: ("\u2500", [[0] * 8, [2] * 8, [3] * 8, [3] * 8, [2] * 8, [0] * 8, [0] * 8, [0] * 8]),
+}
+
+
+def add_tour_glyphs():
+    header, tiles = load_font()
+    new_tiles = dict(enumerate(tiles))  # code -> tile
+    for code, (_, px) in TOUR_GLYPHS.items():
+        new_tiles[code] = pixels_to_tile(px)
+    out_lines = list(header)
+    total = max(len(tiles), max(new_tiles) + 1)
+    for code in range(total):
+        tile = new_tiles.get(code, [0] * 16)
+        label = "font" if code == 0 else None
+        out_lines.extend(encode_tile_lines(tile, label=label))
+    FONT.write_text("\n".join(out_lines) + "\n")
+    print(f"Updated {FONT}")
+    for code in TOUR_GLYPHS:
+        print(f"  tour glyph {code}:")
+        print(render_ascii(tile_to_pixels(new_tiles[code])))
+
+
 def add_scrollbar():
     header, tiles = load_font()
     new_tiles = dict(enumerate(tiles))  # code -> tile
@@ -786,7 +834,7 @@ RECYCLABLE_CODES = set(range(162, 176))
 # what is left of the katakana block. Everything else -- the hand-made Spanish
 # glyphs, the window art -- needs an explicit --only/--all, so an editor
 # shifting a colour cannot quietly repaint them.
-DEFAULT_IMPORT_RANGE = "160-176,241-255"
+DEFAULT_IMPORT_RANGE = "160-176,244-255"
 
 DEFAULT_SHEET = "font_sheet.png"
 DEFAULT_GUIDE = "font_guide.png"
@@ -1120,6 +1168,8 @@ def main():
         clear_katakana()
     elif cmd == "addscrollbar":
         add_scrollbar()
+    elif cmd == "addtourglyphs":
+        add_tour_glyphs()
     elif cmd == "addprogressbar":
         add_progressbar()
     elif cmd == "export":

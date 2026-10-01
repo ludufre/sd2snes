@@ -1367,7 +1367,8 @@ uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   load_ctx_t c = { .filename  = filename,
                    .base_addr = base_addr,
                    .flags     = flags,
-                   .is_menu   = (filename == (uint8_t*)MENU_FILENAME) };
+                   .is_menu   = (filename == (uint8_t*)MENU_FILENAME
+                                 || filename == (uint8_t*)ONBOARDING_FILENAME) };
   tick_t ticksstart = getticks();
 
   /* NB: menu SFX teardown (menu_sfx_shutdown) is deferred all the way down to just

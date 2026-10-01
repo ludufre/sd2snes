@@ -1,0 +1,169 @@
+/* onboarding: memory map for the standalone onboarding ROM.
+
+   This is the onboarding ROM's OWN memmap -- it is a separate image with its own
+   bank $C0/$C1 namespace, so it cannot share m3nu's memmap.i65 symbols. The only
+   addresses that MUST stay in lockstep with the menu/MCU are the SHARED hardware
+   regions: the $2A00 MCU<->SNES command handshake, the $FF0100 CFG block and the
+   SPC staging banks. Everything WRAM/VRAM-local can be
+   chosen freely (the onboarding ROM owns the whole console while it runs). */
+
+.link page $c0
+
+/* ===========================================================================
+   Shared MCU<->SNES command handshake (FPGA $2A region; identical to memmap.i65).
+   The onboarding ROM talks to the MCU exactly like the menu does.
+   =========================================================================== */
+#define BGM_STATE                   $002AF7 /* the menu's music state (snes/memmap.i65): the tour
+                                               leaves it saying what the S-SMP plays when it hands
+                                               the console to the menu without a reset */
+#define SFX_MAILBOX                 $002BE0 /* the menu sounds mailbox (snes/sfx.a65): effect+1, the MCU plays it */
+#define MCU_CMD                     $002A00
+#define SNES_CMD                    $002A02
+#define MCU_PARAM                   $002A04
+#define CMD_MCU_RDY                 $55     /* MCU ACK */
+#define CMD_MCU_ERR                 $aa     /* MCU NACK */
+
+/* SNES->MCU command sent by the tour. LOCKSTEP with src/snes.h + snes/memmap.i65.
+   (CMD_LOAD_ONBOARDING $49 is sent by the GATE in the menu, not by the tour.) */
+#define CMD_ONBOARDING_DONE         $4a     /* tour finished: pull CFG, mark seen, reload m3nu.bin */
+#define CMD_LOAD_MENU_SPC           $1e     /* stage the menu's track at SPC_DATA (onb_spc.a65) */
+#define CMD_RESET                   $80     /* console reset: the only way to silence the S-SMP */
+#define CMD_ONB_WELCOME             $4b     /* the welcome clip (onb_welcome.a65), MCU_PARAM = WEL_OP_*.
+                                               Lockstep with src/snes.h */
+#define WEL_OP_STOP                 0       /*   stop the jingle, release the DAC */
+#define WEL_OP_STAGE                1       /*   stage welcome.fmv at WEL_BASE (SD DMA: wait in WRAM) */
+#define WEL_OP_PLAY                 2       /*   stream welcome.pcm to the DAC */
+#define APUIO0                      $2140
+#define APUIO1                      $2141
+#define APUIO2                      $2142
+#define APUIO3                      $2143
+
+/* ===========================================================================
+   Shared CFG block ($FF0100). Byte-for-byte mirror of cfg_t (src/cfg.h); the MCU
+   pushes the whole struct here on boot (cfg_load_to_menu) and reads it back
+   (cfg_get_from_menu) on CMD_ONBOARDING_DONE. We only touch the fields the tour
+   exposes. Offsets are pinned by the _Static_asserts in src/cfg.c and mirrored by
+   snes/memmap.i65 -- keep all three in lockstep.
+   =========================================================================== */
+#define CFG_ADDR                    $FF0100
+#define CFG_SKIN_NAME               CFG_ADDR+$001A  /* uint8[128] full theme path ("" = baked) */
+#define CFG_BRIGHTNESS_LIMIT        CFG_ADDR+$009D
+#define CFG_ENABLE_RST_TO_MENU      CFG_ADDR+$009F  /* 0 off / 1 menu / 2 folder / 3 rom / 4 by duration */
+#define CFG_ENABLE_INGAME_SAVESTATE CFG_ADDR+$00A3  /* bool */
+#define CFG_SHOW_COVERS             CFG_ADDR+$00B6  /* 0=off 1=large 2=small */
+#define CFG_LANGUAGE                CFG_ADDR+$00B7  /* 0 EN 1 PT 2 ES 3 DE 4 FR 5 IT 6 RU 7 NL */
+#define CFG_PATCH_VERIFY_INTEGRITY  CFG_ADDR+$00B8  /* bool */
+#define CFG_ENABLE_MENU_MUSIC       CFG_ADDR+$00B9  /* bool */
+#define CFG_COVERS_IN_LISTS         CFG_ADDR+$00BA  /* bool (covers in Recent/Favorite lists) */
+#define CFG_ENABLE_MENU_SFX         CFG_ADDR+$00BB  /* bool */
+#define CFG_MENU_MUSIC_FILE         CFG_ADDR+$00BC  /* uint8[128] full bgm .spc path ("" = menu.spc) */
+#define CFG_ENABLE_CHEAT_OVERLAY    CFG_ADDR+$013D  /* bool */
+#define CFG_SHOW_GAME_INFO          CFG_ADDR+$013E  /* 0 off / 1 on / 2 context menu only */
+#define CFG_MENU_MUSIC_RANDOM       CFG_ADDR+$014B  /* bool */
+#define CFG_OPEN_MSU_FOLDERS        CFG_ADDR+$01CF  /* bool */
+#define CFG_ENABLE_INGAME_PAD2      CFG_ADDR+$01D3  /* bool */
+#define CFG_ONBOARDING_VERSION      CFG_ADDR+$01D5  /* the tour version seen, 0 = never (src/cfg.h) */
+#define ONB_VERSION                 1       /* this tour's version; lockstep with snes/memmap.i65.
+                                               A release that adds cards bumps it and tags the new
+                                               cards with it (+ONB_FD_SINCE): the gate shows the tour
+                                               again and only those cards are walked */
+
+#define ONB_NLANG                   8       /* languages; == the menu's language clamp */
+#define ONB_RST_MODES               5       /* CFG_ENABLE_RST_TO_MENU values 0..4 */
+
+/* ===========================================================================
+   Shared SPC staging banks (identical to memmap.i65). The MCU stages the chosen
+   .spc here (CMD_LOAD_MENU_SPC / the reload path); spcplay uploads it to the APU.
+   =========================================================================== */
+#define SPC_DATA                    $FD0000
+#define SPC_HEADER                  $FE0000
+#define SPC_DSP_REGS                $FE0100
+
+/* ===========================================================================
+   Local VRAM layout. The cards are mode-5 hires on the whole screen; only the splash
+   has a mode-3 band (lines 0..55, the menu's banner logo). The demo pictures are OBJ
+   (name tables $2000/$3000). We keep the menu's font char bases so the reused
+   hiprint works unchanged.
+     BG1 char base word $0000, BG2 char base word $4000 (font, both layers)
+     BG1 tilemap $5800, BG2 tilemap $5000 (same as the menu)
+   =========================================================================== */
+#define BG1_TILE_BASE               $5800
+#define BG2_TILE_BASE               $5000
+
+/* ===========================================================================
+   Local WRAM layout. Self-contained; nothing here is shared with m3nu. The tile
+   buffers + window stack mirror the menu's WRAM addresses so the reused
+   ui.a65/draw_window code (if pulled in) keeps working without edits.
+   =========================================================================== */
+#define WINDOW_STACK_BASE           $7E2000
+#define BG2_TILE_BUF                $7EA000
+#define BG1_TILE_BUF                $7EB000
+
+/* WRAM-resident MCU-wait trampoline (ROM is unavailable to the CPU during an
+   MCU command that reconfigures the FPGA, so the spin must run from WRAM). Copied
+   from onb_wram_wait_mcu_src at boot, after setup_gfx (see onboarding_main.a65). */
+#define ONB_WRAM_WAIT_MCU           $7EF200
+#define ONB_WRAM_HANDOFF            $7EF220 /* onb_menu_handoff's wait-and-jump (onb_welcome.a65) */
+#define WEL_OAM_SHOW                $7EC000 /* the welcome clip's OAM, "Welcome" shown (544 B) */
+#define WEL_OAM_HIDE                $7EC400 /*   ... and hidden */
+#define WEL_BASE                    $D00000 /* welcome.fmv as the firmware stages it (src/memmap.h
+                                               SRAM_ONB_WELCOME_ADDR) */
+
+/* ===========================================================================
+   Onboarding FEATURE model.
+   The features are described by a fixed-stride table (onb_feat_table,
+   onboarding_const.a65, bank $C0). The engine (onboarding_main.a65) renders any
+   feature generically from its descriptor -- no per-card draw routines.
+
+   Descriptor row (ONB_FEAT_STRIDE bytes):
+     +0  word  parent CFG byte (low16, bank $FF): the card is left out while it is 0
+               (0 = no parent)
+     +2  word  since: the ONB_VERSION that added the card (low byte); a tour started
+               from the gate skips cards not newer than CFG_ONBOARDING_VERSION
+     +4  word  name  label ptr         (localized strtab row, bank $C1)
+     +6  word  text label ptr          (localized paragraph, pre-wrapped: lines split
+                                        by byte 1, padded to the same count in every
+                                        language -- utils/gen_onb_lang.py)
+     +8  word  unused (0)
+     +10 word  unused (0)
+     +12 byte  accent palette          (ONB_PAL_*; unused since the badge went away)
+     +13 byte  option kind             (ONB_OPT_*)
+     +14 word  cfg field offset        (low16 of the CFG addr; bank $FF implied)
+   =========================================================================== */
+#define ONB_NUM_FEATURES  31    /* 19 cards + the 12 items of the "and more" card */
+#define ONB_FEAT_STRIDE   16
+#define ONB_FD_DEP        0
+#define ONB_FD_SINCE      2       /* the tour version that added the card (low byte) */
+#define ONB_FD_NAME       4
+#define ONB_FD_TEXT       6
+#define ONB_FD_PAL        12
+#define ONB_FD_OPT        13
+#define ONB_FD_CFG        14
+
+/* option kinds (+13 of the descriptor) */
+#define ONB_OPT_INFO      0    /* no interactive option */
+#define ONB_OPT_ONOFF     1    /* bool at cfg offset: "Enable?" Yes/No */
+#define ONB_OPT_COVERS    2    /* show_covers 0/1/2: Off/Large/Small (cycle) */
+#define ONB_OPT_RESET     3    /* enable_rst_to_menu 0..4: Off/Menu/Folder/Game/Duration */
+#define ONB_OPT_LANG      4    /* the tour language itself (onb_cur_lang + CFG_LANGUAGE) */
+#define ONB_OPT_GI        5    /* show_game_info 0..2: Off/On/Context */
+#define ONB_OPT_MORE      6    /* "and more": a list of info items (ONB_MORE_FIRST..), no answer */
+
+/* accent palette indices == the menu palette's text sub-palettes (palette.a65,
+   loaded as is): 0 white, 1 light yellow, 2 light green, 3 window-border blue.
+   MODE-5 HIRES caps crisp text at 4 palettes (0..3). The extra
+   accents fold onto those; genuine per-feature colour badges need OBJ (deferred). */
+#define ONB_PAL_WHITE     0
+#define ONB_PAL_AMBER     1
+#define ONB_PAL_DIM       2
+#define ONB_PAL_CYAN      3
+#define ONB_PAL_GREEN     3
+#define ONB_PAL_BLUE      3
+#define ONB_PAL_RED       1
+#define ONB_PAL_PURPLE    1
+
+/* the demo picture: 128x112 in a 4x4 grid of 32x32 sprites (128 is all one OBJ name table holds),
+   in the right column (lowres x 128..255; the text column on the left ends at x 123), its top
+   level with the paragraph's first row (row 4 = line 32) */
+#define ONB_DEMO_X        128
+#define ONB_DEMO_Y        31      /* line 32, minus the OBJ one-line delay */

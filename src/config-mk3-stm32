@@ -56,6 +56,8 @@ IO_SPEED_H  = 0b10
 IO_SPEED_VH = 0b11
 
 MENU_FILENAME = "/sd2snes/m3nu.bin"
+# first-boot tour ROM, booted in place of the menu by CMD_LOAD_ONBOARDING
+ONBOARDING_FILENAME = "/sd2snes/onboarding.bin"
 
 CONFIG_UART_NUM	         = 2
 CONFIG_CPU_FREQUENCY     = 84000000

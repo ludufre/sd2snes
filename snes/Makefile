@@ -5,7 +5,7 @@ IPS = header.ips
 # labels), const_lang_str ($C2, the string pool) and const_lang_tab ($C1, the
 # dispatch tables). The tables sit apart from the pool because $C2 is the scarce
 # bank and $C1 has tens of KB free.
-O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 const_lang_tab.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 hookxlate.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 cheatmenu.o65 cheatedit.o65 iris.o65 # gfx.o65 # vars.o65
+O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 const_lang_tab.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 hookxlate.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 cheatmenu.o65 cheatedit.o65 iris.o65 onboarding/onboarding_gate.o65 # gfx.o65 # vars.o65
 
 OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
@@ -21,13 +21,49 @@ IGMENU = igmenu.bin
 # overlay's (no name) lookup keep working.
 MENU_SIZE = 196608
 
+# onboarding.bin: the first-boot tour ROM (sources in onboarding/). A SEPARATE HiROM
+# image with its own $C0-$C2 namespace, booted by the firmware IN PLACE OF the menu
+# (SNES_CMD_LOAD_ONBOARDING) -- not linked into m3nu.bin. Only the gate that asks
+# the question (onboarding/onboarding_gate.o65, bank $C1) is part of the menu, in
+# O65 above. The tour reuses the menu's font.o65 (same format) and has its own
+# header/reset/engine/ui/const/data, and the menu's palette; its strings come
+# from utils/gen_onb_lang.py.
+# snescom resolves #include relative to the make CWD (snes/), so tour sources
+# include "onboarding/onb_memmap.i65".
+ONB_O65 = onboarding/onb_header.ips onboarding/onb_reset.o65 onboarding/onboarding_main.o65 onboarding/onb_ui.o65 \
+          onboarding/onboarding_const.o65 onboarding/onb_const_lang.o65 onboarding/onb_data.o65 \
+          onboarding/onb_demo_a.o65 onboarding/onb_demo_b.o65 onboarding/onb_demo_c.o65 onboarding/onb_demo_d.o65 \
+          onboarding/onb_demo_e.o65 onboarding/onb_demo_f.o65 onboarding/onb_demo_g.o65 onboarding/onb_spc.o65 onboarding/onb_welcome.o65 \
+          font.o65 palette.o65 spc700.o65
+ONB_OUT = onboarding.bin
+# 9 banks ($C0 code + the menu's palette, $C1 strings, $C2-$C8 the
+# demo pictures -- utils/gen_onb_demo.py). The image is loaded over the menu's own
+# PSRAM ($C0..$C8), all of it idle while the tour runs ($C8, the igmenu.bin staging,
+# is restaged on every game load; the cover staging at $C9 is never reached). NB: no inline comment on the
+# next line -- make would fold it into the value and break the Python pad expr.
+ONB_SIZE = 589824
+
 LOG = $(OBJS:=.log)
 MAP = $(IPS:.ips=.map) $(O65:.o65=.map)
 
 DEPDIR := .dep
-GENDEPFLAGS = -MM -MP -MF $(DEPDIR)/$(@F).d -MT $(@F)
+# -I. lets cpp's dep-gen resolve the snes/-relative includes of the sources in
+# onboarding/ (cpp otherwise looks next to the SOURCE file; snescom uses the CWD).
+GENDEPFLAGS = -MM -MP -MF $(DEPDIR)/$(@F).d -MT $(@F) -I.
 
-all: $(OUT) $(IGMENU) $(MAP)
+all: $(OUT) $(IGMENU) $(ONB_OUT) $(MAP)
+
+# the tour's own string pool (bank $C1), EN + the same 7 languages as the menu; the
+# answers' value words come from the menu's const.a65 / lang_*.py (menu_text).
+onboarding/onb_const_lang.a65: utils/gen_onb_lang.py utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py
+	python3 utils/gen_onb_lang.py -o onboarding/onb_const_lang.a65
+
+# Same loud guard as the menu link (the `| tee` masks sneslink's exit code).
+$(ONB_OUT): $(ONB_O65)
+	sneslink -fsmc -o $@ $^ 2>&1 | tee onb_link.log
+	@if grep -qE "ERROR:|still undefined|still not defined" onb_link.log; then \
+	  echo "*** onboarding link FAILED -- bank overflow or undefined symbol (see snes/onb_link.log)"; exit 1; fi
+	@python3 -c "from pathlib import Path; p=Path('$@'); d=p.read_bytes(); target=$(ONB_SIZE); assert len(d) <= target, f'{p} too large: {len(d)} > {target}'; p.write_bytes(d + b'\xff' * (target - len(d)))"
 
 # Generate the const source from the English base + language dicts. One run emits
 # three files: const_lang.a65 (bank $C0: neutral data), const_lang_str.a65 (bank $C2:
@@ -101,6 +137,7 @@ link.log: $(OBJS)
 
 clean:
 	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 const_lang_tab.a65 igmenu_lang.i65 $(OUT) *.o65.log *.ips.log $(IGMENU) igmenu_raw.smc igmenu.link.log
+	rm -f -- onboarding/*.o65 onboarding/*.ips onboarding/*.o65.log onboarding/*.ips.log onboarding/onb_const_lang.a65 $(ONB_OUT) onb_link.log
 
 -include $(info $(DEPDIR)) $(shell mkdir $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*)
 

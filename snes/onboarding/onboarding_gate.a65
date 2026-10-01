@@ -1,0 +1,304 @@
+; ===========================================================================
+; onboarding: first-boot GATE (runs INSIDE the menu m3nu.bin, not the tour ROM).
+;
+; Called with jsl from snes/main.a65's coldboot, right before fileselloop (after the
+; browser list and the clock prompt are up). If the tour has already been seen
+; (CFG_ONBOARDING_VERSION >= ONB_VERSION) it returns at once. Otherwise it shows a small prompt:
+;   - a language selector (Left/Right cycle cur_lang live, every string follows);
+;   - "See a tour of the new features?"  A = Yes, B = No.
+;
+; B (skip): CFG_LANGUAGE <- cur_lang, CFG_ONBOARDING_VERSION <- ONB_VERSION, SAVE_CFG, close.
+; A (yes):  CFG_LANGUAGE <- cur_lang, SAVE_CFG, fade to black, CMD_LOAD_ONBOARDING.
+;           The firmware cold-boots /sd2snes/onboarding.bin in place of the menu (the
+;           same reload path a theme change takes), so a successful A never returns.
+;           The tour marks CFG_ONBOARDING_VERSION and sends CMD_ONBOARDING_DONE when
+;           it ends; the firmware saves config.yml and reloads the menu. A missing onboarding.bin is answered with
+;           $aa: the screen comes back and the gate takes the B path, so the question
+;           is not asked again on every boot.
+;
+; WHY $C1: the $C0 page has a few hundred bytes left. Only the `jsl` in main.a65
+; costs $C0; the near routines this needs are reached through the existing $C0
+; trampolines (ui_call_wopen/wclose/pad/coversync, gi_call_hiprint) and the fade
+; is memtest's (same bank).
+; ===========================================================================
+
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
+; '.link page' wins and they emit no bytes) so every byte of this object lands in $C1.
+.link page $c1
+
+#define ONBG_WIN_X   6
+#define ONBG_WIN_Y   11
+#define ONBG_WIN_W   52
+#define ONBG_WIN_H   8
+#define ONBG_TEXT_X  9
+#define ONBG_ROW_Q   12
+#define ONBG_ROW_L   14
+#define ONBG_ROW_H   16
+#define ONBG_VAL_X   20
+#define ONBG_NAME_X  22    /* == ONBG_VAL_X + 2; snescom takes immediates literally */
+#define ONBG_GT_OFS  23    /* == ONBG_VAL_X + 3: '>' after the name, one blank between */
+#define ONBG_NLANG   8     /* == IGM_LANG_COUNT; the language clamps in main.a65/menu.a65 */
+
+; -- onboarding_gate: the hook. jsl from $C0; forces DP=0 / DB=$7E like memtest. --
+onboarding_gate:
+  php
+  phb
+  phd
+  sep #$20 : .as
+  rep #$10 : .xl
+  pea $0000
+  pld
+  lda #$7e
+  pha
+  plb
+  lda @CFG_ONBOARDING_VERSION
+  cmp #ONB_VERSION
+  bcs onbg_out
+
+  jsr onbg_open
+
+onbg_input:
+  lda isr_done
+  beq onbg_input
+  stz isr_done
+  jsl @ui_call_pad
+  lda pad_left
+  bne onbg_lang_prev
+  lda pad_right
+  bne onbg_lang_next
+  lda pad_a
+  bne onbg_yes
+  lda pad_b
+  bne onbg_no
+  bra onbg_input
+
+onbg_lang_prev:
+  .as : .xl
+  lda cur_lang
+  bne +
+  lda #ONBG_NLANG
++ dec
+  bra onbg_lang_set
+onbg_lang_next:
+  .as : .xl
+  lda cur_lang
+  inc
+  cmp #ONBG_NLANG
+  bcc onbg_lang_set
+  lda #$00
+onbg_lang_set:
+  .as : .xl
+  sta cur_lang
+  jsr onbg_draw_text
+  bra onbg_input
+
+; --- B: skip the tour for good. -----------------------------------------------
+onbg_no:
+  .as : .xl
+  jsr onbg_skip
+onbg_close:
+  .as : .xl
+  lda #ONBG_WIN_H
+  sta window_h             ; pop_window counts its rows with window_h
+  jsl @ui_call_wclose
+onbg_out:
+  .as : .xl
+  pld
+  plb
+  plp
+  rtl
+
+; --- A: run the tour. -----------------------------------------------------------
+onbg_yes:
+  .as : .xl
+  lda cur_lang
+  sta @CFG_LANGUAGE
+  jsr onbg_save_cfg        ; the tour boots in the language picked here
+  jsr onbg_load_tour       ; returns only when the firmware refused
+  ; no onboarding.bin (or a firmware that predates the command and ACKed it as
+  ; unknown): treat it as a skip, so the question is not asked on every boot.
+  jsr onbg_skip
+  bra onbg_close
+
+; -- onbg_load_tour: fade to black and ask the firmware to boot the tour ROM. On
+;    success the reload resets the console and this never returns; a return means
+;    the firmware refused, with the screen already back. .as/.xl, DB=$7E, DP=0. --
+onbg_load_tour:
+  .as : .xl
+  jsr mt_fade_out          ; the reload rewrites the image we display and run from
+  jsl @ui_call_coversync   ; an in-flight cover $55 would read as our answer
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_LOAD_ONBOARDING
+  sta @MCU_CMD
+onbg_lt_wait:
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  beq onbg_lt_nack
+  cmp #$aa                  ; NACK
+  bne onbg_lt_wait
+onbg_lt_nack:
+  lda #$00
+  sta @MCU_CMD
+  jmp mt_fade_in
+
+; -- onboarding_replay: Settings > "Tour of the new features" (MTYPE_FUNC, reached
+;    through a long pointer, ends in rtl). Same load as the gate's A; a refusal
+;    shows the firmware's popup (it staged "file missing" + the name) and the
+;    menu stays where it was. A menu FUNC runs with DP != 0: force DP=0/DB=$7E. --
+onboarding_replay:
+  php
+  phb
+  phd
+  sep #$20 : .as
+  rep #$10 : .xl
+  pea $0000
+  pld
+  lda #$7e
+  pha
+  plb
+  jsr onbg_load_tour
+  jsl @ui_call_errmsg
+  pld
+  plb
+  plp
+  rtl
+
+; -- onbg_skip: persist the language + "tour seen". .as/.xl in and out. ----------
+onbg_skip:
+  .as : .xl
+  lda cur_lang
+  sta @CFG_LANGUAGE
+  lda #ONB_VERSION
+  sta @CFG_ONBOARDING_VERSION
+  ; fall through
+; -- onbg_save_cfg: SAVE_CFG, sent ONCE. The menu loop echoes the command into
+;    SNES_CMD before running it and re-arms $55 when it is done, so the end is
+;    SNES_CMD going back to $55 (zeroed here first). Rewriting MCU_CMD until the
+;    echo shows up (menu_edit_value's idiom) re-runs the command every time the
+;    short echo window is missed -- thousands of config.yml writes in a row. ---
+onbg_save_cfg:
+  .as : .xl
+  jsl @ui_call_coversync
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_SAVE_CFG
+  sta @MCU_CMD
+- lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  bne -
+  lda #$00
+  sta @MCU_CMD
+  rts
+
+; --- onbg_open: the bordered window, then the localized text. -------------------
+onbg_open:
+  .as : .xl
+  lda #ONBG_WIN_X
+  sta window_x
+  lda #ONBG_WIN_Y
+  sta window_y
+  lda #ONBG_WIN_W
+  sta window_w
+  lda #ONBG_WIN_H
+  sta window_h
+  lda #^text_empty
+  sta window_tbank
+  ldx #!text_empty
+  stx window_taddr
+  jsl @ui_call_wopen
+  ; fall through
+; --- onbg_draw_text: (re)draw every row for the current cur_lang. hiprint resolves
+;     the text_onbg_* strtab rows by cur_lang; each row is blanked first so a
+;     shorter translation does not leave the tail of the previous one behind. ------
+onbg_draw_text:
+  .as : .xl
+  lda #ONBG_ROW_Q
+  jsr onbg_clear_row
+  lda #ONBG_ROW_L
+  jsr onbg_clear_row
+  lda #ONBG_ROW_H
+  jsr onbg_clear_row
+
+  lda #ONBG_ROW_Q
+  sta print_y
+  ldx #!text_onbg_question
+  lda #^text_onbg_question
+  jsr onbg_print_at
+  lda #ONBG_ROW_L
+  sta print_y
+  ldx #!text_onbg_lang
+  lda #^text_onbg_lang
+  jsr onbg_print_at
+  lda #ONBG_ROW_H
+  sta print_y
+  ldx #!text_onbg_hint
+  lda #^text_onbg_hint
+  jsr onbg_print_at
+
+  ; the language VALUE: "< name >", each language in its own name (text_lang_*,
+  ; the same neutral labels kv_language shows).
+  lda #ONBG_VAL_X
+  sta print_x
+  lda #ONBG_ROW_L
+  sta print_y
+  ldx #!onbg_lt
+  lda #^onbg_lt
+  jsr onbg_print
+  lda cur_lang
+  rep #$20 : .al
+  and #$00ff
+  asl
+  tax
+  lda @onbg_lang_tbl,x
+  tax
+  sep #$20 : .as
+  lda #ONBG_NAME_X
+  sta print_x
+  lda #^text_lang_en
+  jsr onbg_print
+  lda print_done
+  clc
+  adc #ONBG_GT_OFS
+  sta print_x
+  ldx #!onbg_gt
+  lda #^onbg_gt
+  jmp onbg_print
+
+; X = string addr, A = string bank, print_y already set. Prints at ONBG_TEXT_X.
+onbg_print_at:
+  .as : .xl
+  pha
+  lda #ONBG_TEXT_X
+  sta print_x
+  pla
+  ; fall through
+; X = string addr, A = string bank, print_x/print_y already set.
+onbg_print:
+  .as : .xl
+  stx print_src
+  sta print_bank
+  stz print_pal
+  lda #44
+  sta print_count
+  jsl @gi_call_hiprint
+  rts
+
+; A = row. Blanks the box interior on that row.
+onbg_clear_row:
+  .as : .xl
+  sta print_y
+  lda #ONBG_TEXT_X
+  sta print_x
+  ldx #!onbg_blank
+  lda #^onbg_blank
+  bra onbg_print
+
+onbg_lang_tbl:
+  .word !text_lang_en, !text_lang_ptbr, !text_lang_es, !text_lang_de
+  .word !text_lang_fr, !text_lang_it, !text_lang_ru, !text_lang_nl
+onbg_lt     .byt "<", 0
+onbg_gt     .byt ">", 0
+onbg_blank  .byt "                                          ", 0   ; 42 spaces

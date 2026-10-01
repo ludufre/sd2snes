@@ -99,6 +99,11 @@ ui_call_wclose:
   jsr pop_window
   rtl
 
+; onboarding_replay ($C1) shows the firmware's refusal (onboarding.bin missing)
+ui_call_errmsg:
+  jsr show_error_msg
+  rtl
+
 ui_call_pad:
   jsr read_pad
   rtl

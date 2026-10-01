@@ -264,10 +264,18 @@ int main(void) {
     sram_writelong(0x12345678, SRAM_SCRATCHPAD);
     fpga_dspx_reset(1);
     uart_putc('(');
-    load_rom((uint8_t*)MENU_FILENAME, SRAM_MENU_ADDR, 0);
+    /* The first-boot tour boots through this same menu load: it needs the menu's
+       mapper and command window, not a game's.  A load failure falls back to the
+       menu. */
+    if(!onboarding_pending || !load_rom((uint8_t*)ONBOARDING_FILENAME, SRAM_MENU_ADDR, 0)) {
+      onboarding_pending = 0;
+      load_rom((uint8_t*)MENU_FILENAME, SRAM_MENU_ADDR, 0);
+    }
     /* apply the selected menu theme (if any) by patching the gfxptr regions of
-       the just-loaded menu image in PSRAM, before the SNES runs setup_gfx.
-       Fail-safe: a missing/bad theme leaves the baked menu untouched. */
+       the just-loaded image in PSRAM, before the SNES runs setup_gfx.  The tour
+       carries a _GFXPTR_ table too (logo, gradient, selection bar), so it looks
+       like the user's menu.  Fail-safe: a missing/bad theme leaves the baked
+       image untouched. */
     theme_apply();
     /* font edge remaps (outline ring / anti-alias step): the theme's own flags
        OR'd with the CFG.text_outline / CFG.text_antialias options, so the user
@@ -303,7 +311,11 @@ int main(void) {
     }
     sram_memset(SRAM_SYSINFO_ADDR, 13*40, 0x20);
     printf("SNES GO!\n");
-    snes_reset(1);
+    /* The onboarding tour can hand the console over without a reset: it waits in WRAM
+       and jumps into the menu once MCU_CMD_RDY shows up, with the S-SMP still playing.
+       The byte tells the menu's coldboot to leave the APU alone. */
+    snescmd_writebyte(menu_handoff ? MENU_HANDOFF_MAGIC : 0, SNESCMD_MENU_HANDOFF);
+    if(!menu_handoff) snes_reset(1);
     fpga_reset_srtc_state();
     if(!firstboot) {
       if(STS.is_u16 && (STS.u16_cfg & 0x01)) {
@@ -317,7 +329,8 @@ int main(void) {
     fpga_set_dac_boost(CFG.msu_volume_boost);
     cfg_load_to_menu();
     cfg_save();
-    snes_reset(0);
+    if(!menu_handoff) snes_reset(0);
+    menu_handoff = 0;
 
 /* Since the Super Nt workaround requires pair mode to be disabled during reset
    (or the Super Nt doesn't boot), pair mode can only be enabled after reset,

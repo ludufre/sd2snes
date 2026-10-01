@@ -90,6 +90,13 @@
    even survives a game (the entries the SNES stores are offsets relative to
    SRAM_MENU_ADDR, so every consumer followed the move for free). Lockstep with
    ROOT_DIR in snes/memmap.i65. */
+/* The first-boot tour's welcome clip (menucmd.c SNES_CMD_ONB_WELCOME): welcome.fmv,
+   TIME-SHARED with the cheat/patch/directory banks $D0-$DF. Only the tour (booted in
+   place of the menu) stages it, and while the tour runs none of those is in use; the
+   menu reload after it rebuilds what it needs. Lockstep with WEL_BASE in
+   snes/onboarding/onb_memmap.i65. */
+#define SRAM_ONB_WELCOME_ADDR        (0xD00000L)
+#define SRAM_ONB_WELCOME_MAX         (0x100000L)
 #define SRAM_DIR_ADDR                (0xDB0000L)
 #define SRAM_DIR_STRINGS_END         (0xE00000L) /* string table may grow to here (SRAM_SAVE_ADDR) */
 /* In-game TAB menu (igmenu.bin) staging base -- bank $C8 is idle in both modes.

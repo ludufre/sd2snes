@@ -33,6 +33,8 @@ CONFIG_CDC_DEBUG = n
 CONFIG_UART_DEBUG = y
 
 MENU_FILENAME = "/sd2snes/m3nu.bin"
+# first-boot tour ROM, booted in place of the menu by CMD_LOAD_ONBOARDING
+ONBOARDING_FILENAME = "/sd2snes/onboarding.bin"
 
 _PINMODE_ADDR(reg,b)    = (LPC_PINCON_BASE + offsetof(LPC_PINCON_TypeDef, PINMODE0) + ((((void*)reg - (void*)LPC_GPIO0) >> 2) + 4*(b>>4)))
 _PINMODE_REG(reg,b)     = *(__IO uint32_t*)_PINMODE_ADDR(reg,b)

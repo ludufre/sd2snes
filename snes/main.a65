@@ -80,6 +80,17 @@ coldboot:       ; Regular, cold-start init
   sep #$20 : .as
   jsr killdma
   jsr clear_wram
+  ; fork: the onboarding tour hands the console over WITHOUT a reset (src/main.c sets
+  ; MENU_HANDOFF): the S-SMP keeps the music it plays and the tour left BGM_STATE
+  ; saying what, so the APU is not touched (it is not at IPL: apu_ram_init would hang).
+  lda @MENU_HANDOFF
+  cmp #MENU_HANDOFF_MAGIC
+  bne cb_apu_cold
+  lda #$00
+  sta @MENU_HANDOFF
+  bra cb_apu_done
+cb_apu_cold:
+  .as
   jsr apu_ram_init
   ; fork: apu_ram_init just put the S-SMP back at IPL, so nothing is playing.
   ; Reset BGM_STATE so bgm_update reloads the menu music. EVERY non-warm reset
@@ -88,6 +99,9 @@ coldboot:       ; Regular, cold-start init
   ; leave BGM_STATE=1 and the music would never restart. (snescom: no long stz.)
   lda #$00
   sta @BGM_STATE
+cb_apu_done:
+  .as
+  lda #$00
   ; fork: menu sound effects - start with an empty SFX mailbox ($2A region is
   ; not touched by clear_wram; a stale value would play one ghost blip at boot).
   sta @SFX_MAILBOX
@@ -210,6 +224,10 @@ coldboot_autoboot_out:
   beq +
   jsl rtc_init
 +
+  ; First-boot tour question (onboarding/onboarding_gate.a65, $C1). Self-gated on
+  ; CFG_ONBOARDING_VERSION; on "yes" the firmware cold-boots the tour ROM and this
+  ; never returns.
+  jsl @onboarding_gate
   jsr fileselloop
   sei
   stz $4200

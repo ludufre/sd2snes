@@ -1,0 +1,205 @@
+; ===========================================================================
+; onboarding: the menu's music (and its silence) in the tour.
+;
+; The APU is run the way the menu runs it (bgm_update, filesel.a65): the S-SMP always
+; has a program -- the menu's track (CMD_LOAD_MENU_SPC: the chosen .spc, the random
+; draw, or menu.spc, uploaded by the menu's own spcload.i65), or, with the music off
+; or no track on the card, the menu's silent S-DSP stub (sfxdsp.i65), without which
+; the console gates the cart's MSU-1 DAC and the menu sounds go quiet. A program can
+; only be replaced from the S-SMP's IPL, which only a console reset brings back --
+; so turning the music on AND off is a reset (fade, CMD_RESET, the tour boots again
+; on the same card: the resume marker survives in WRAM), like the menu's
+; bgm_silence_reset. On the menu music card the music follows the bar; on any other
+; card it follows the saved answer (a preview left without A is undone).
+; ===========================================================================
+
+.link page $c0
+#include "onboarding/onb_memmap.i65"
+#include "onboarding/onb_resume.i65"
+
+; the menu's spcload.i65 waits for vblank through `waitblank`: the tour's
+waitblank:
+  jmp onb_waitblank
+
+#include "spcload.i65"
+#include "sfxdsp.i65"
+
+onb_spcid       .byt "SNES-SPC700"   ; the header magic spcplay.a65 checks (text_spcid)
+
+; onb_apu_boot: at boot, with the screen up (the uploads turn the NMI off and back
+;   on): the S-SMP is at IPL -- give it the menu's track when onb_music_want asks for
+;   it and the card has one, else the silent S-DSP stub. .as/.xl in.
+onb_apu_boot:
+  .as : .xl
+  lda @onb_apu_stub         ; the welcome clip already runs the stub (the S-SMP is not at IPL)
+  bne +
+  jsr onb_bgm_start
+  lda @onb_music_on
+  bne +
+  jsr sfx_dsp_unmute        ; no music: keep the cart's DAC (the menu sounds) audible
++ rts
+
+; onb_bgm_start: start the menu's music when onb_music_want asks for it. The S-SMP
+;   must be at IPL (only onb_apu_boot calls this). No track staged: onb_music_none,
+;   and the tour stops asking. .as/.xl in.
+onb_bgm_start:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_music_want
+  beq onb_bgm_out
+  lda #CMD_LOAD_MENU_SPC   ; the MCU stages it (and clears MCU_CMD when done)
+  sta @MCU_CMD
+- lda @MCU_CMD
+  bne -
+  ldx #$000a               ; validate the SPC header magic (menu_bgm_load's check)
+- lda @SPC_HEADER, x
+  cmp @onb_spcid, x
+  bne onb_bgm_none         ; nothing staged (no music on the card)
+  dex
+  bne -
+  jsr spc700_load
+  lda #$01
+  sta @onb_music_on
+  bra onb_bgm_out
+onb_bgm_none:
+  .as : .xl
+  lda #$01
+  sta @onb_music_none
+onb_bgm_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_music_sync: on the "menu music" card (the one whose answer is
+;   CFG_ENABLE_MENU_MUSIC), the music follows the focused answer: row 0 (Yes) plays
+;   it, row 1 (No) silences it. Other cards: nothing. .as/.xl in.
+onb_music_sync:
+  .as : .xl
+  jsr onb_feat_cfgptr
+  rep #$20 : .al
+  lda @onb_cfgptr
+  cmp #!CFG_ENABLE_MENU_MUSIC
+  sep #$20 : .as
+  bne onb_mf_out
+  lda @onb_sel
+  and #$01
+  eor #$01                  ; row 0 is Yes
+  bra onb_music_apply
+
+; onb_music_follow: on any card but the menu music one, the music follows the saved
+;   answer (CFG_ENABLE_MENU_MUSIC): a preview left without A is undone. .as/.xl in.
+onb_music_follow:
+  .as : .xl
+  jsr onb_feat_cfgptr
+  rep #$20 : .al
+  lda @onb_cfgptr
+  cmp #!CFG_ENABLE_MENU_MUSIC
+  sep #$20 : .as
+  beq onb_mf_out            ; the music card previews its bar (onb_music_sync)
+  lda @CFG_ENABLE_MENU_MUSIC
+  ; fall through
+; onb_music_apply: A = music wanted (0/1). When what would play differs from what
+;   the S-SMP runs, reset for it (a card without a track plays nothing either way:
+;   no reset). .as/.xl in.
+onb_music_apply:
+  .as : .xl
+  sta @onb_music_want
+  beq +
+  lda @onb_music_none       ; wanted, but there is no track: the stub stays
+  eor #$01
++ cmp @onb_music_on
+  bne onb_apu_reset
+onb_mf_out:
+  .as : .xl
+  rts
+
+; onb_apu_reset: swap the S-SMP's program: mark where to come back (card, bar, the
+;   music wanted), fade to black and let the MCU reset the console; ONB_MAIN boots
+;   again on that card and onb_apu_boot uploads the right program. Never returns.
+onb_apu_reset:
+  .as : .xl
+  lda @onb_card
+  sta @onb_resume_card
+  lda @onb_sel
+  sta @onb_resume_sel
+  lda @onb_music_want
+  sta @onb_resume_music
+  rep #$20 : .al
+  lda #ONB_RESUME_MAGIC
+  sta @onb_resume_magic
+  sep #$20 : .as
+  jsr onb_fade_out
+  sei
+  lda #$80
+  sta @$002100             ; forced blank through the reset
+  lda #CMD_RESET
+  sta @MCU_CMD
+- bra -                    ; the reset takes us back to ONB_MAIN
+
+; ---------------------------------------------------------------------------
+; The menu's sound effects, the way snes/sfx.a65 sends them: effect+1 into the
+; SFX mailbox, newest wins, the MCU plays it -- only while the menu's CFG byte
+; CFG_ENABLE_MENU_SFX is on (read live, so the "menu sounds" card's preview counts).
+; Keep A and the flags.
+; ---------------------------------------------------------------------------
+onb_snd_cursor:
+  php
+  sep #$20 : .as
+  pha
+  lda #$01
+  bra onb_snd_put
+onb_snd_confirm:
+  php
+  sep #$20 : .as
+  pha
+  lda #$02
+  bra onb_snd_put
+onb_snd_back:
+  php
+  sep #$20 : .as
+  pha
+  lda #$03
+onb_snd_put:
+  .as
+  sta @SFX_MAILBOX
+  pla
+  plp
+  rts
+
+; onb_sfx_preview: on the "menu sounds" card (its answer is CFG_ENABLE_MENU_SFX) the
+;   CFG byte the MCU gates the effects on takes the focused answer, so moving to Yes
+;   blips and to No goes quiet. The saved answer waits in onb_sfx_saved until A keeps
+;   the new one, or the card is left and it comes back (onb_sfx_follow). .as/.xl in.
+onb_sfx_preview:
+  .as : .xl
+  jsr onb_feat_cfgptr
+  rep #$20 : .al
+  lda @onb_cfgptr
+  cmp #!CFG_ENABLE_MENU_SFX
+  sep #$20 : .as
+  bne onb_sp_out
+  lda @onb_sfx_pending
+  bne +
+  lda @CFG_ENABLE_MENU_SFX
+  sta @onb_sfx_saved
+  lda #$01
+  sta @onb_sfx_pending
++ lda @onb_sel
+  and #$01
+  eor #$01                  ; row 0 is Yes
+  sta @CFG_ENABLE_MENU_SFX
+onb_sp_out:
+  .as : .xl
+  rts
+
+; onb_sfx_follow: a preview left without A: the saved answer comes back. .as/.xl in.
+onb_sfx_follow:
+  .as : .xl
+  lda @onb_sfx_pending
+  beq +
+  lda @onb_sfx_saved
+  sta @CFG_ENABLE_MENU_SFX
+  lda #$00
+  sta @onb_sfx_pending
++ rts

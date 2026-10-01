@@ -547,3 +547,153 @@ kv_led_bright:
 .word $000e, !text_14 : .byt ^text_14
 .word $000f, !text_15_max : .byt ^text_15_max
 .word $ffff
+
+; ======================================================================
+;  menu_enttab_cfg -- Settings (Main menu > Settings). Moved here from
+;  snes/menudata.a65 for the $C0 room; the last row replays the first-boot tour.
+; ======================================================================
+menu_enttab_cfg:
+; HEADER
+ .byt 1               ; listsel_step=1
+ .word !mtext_mm_cfg
+ .byt ^mtext_mm_cfg
+; ENTRIES
+ ;.byt MTYPE_SUBMENU
+ ;.word !test_mtext_title
+ ;.byt ^test_mtext_title
+ ;.word !menu_enttab_test
+ ;.byt ^menu_enttab_test
+ ;.byt 0
+ ;.byt 0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !mtext_cfg_time
+ .byt  ^mtext_cfg_time
+ .word !rtc_init-1
+ .byt  ^rtc_init
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_time
+ .byt  ^mdesc_cfg_time
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_bsx
+ .byt  ^mtext_cfg_bsx
+ .word !menu_enttab_bsx
+ .byt  ^menu_enttab_bsx
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_bsx
+ .byt  ^mdesc_cfg_bsx
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_browser
+ .byt  ^mtext_cfg_browser
+ .word !menu_enttab_browser
+ .byt  ^menu_enttab_browser
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_browser
+ .byt  ^mdesc_cfg_browser
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_chip
+ .byt  ^mtext_cfg_chip
+ .word !menu_enttab_chip
+ .byt  ^menu_enttab_chip
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_chip
+ .byt  ^mdesc_cfg_chip
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_sgb
+ .byt  ^mtext_cfg_sgb
+ .word !menu_enttab_sgb
+ .byt  ^menu_enttab_sgb
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_sgb
+ .byt  ^mdesc_cfg_sgb
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_ingame
+ .byt  ^mtext_cfg_ingame
+ .word !menu_enttab_ingame
+ .byt  ^menu_enttab_ingame
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_ingame
+ .byt  ^mdesc_cfg_ingame
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_savestates
+ .byt  ^mtext_cfg_savestates
+ .word !menu_enttab_savestates
+ .byt  ^menu_enttab_savestates
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_savestates
+ .byt  ^mdesc_cfg_savestates
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_scic
+ .byt  ^mtext_cfg_scic
+ .word !menu_enttab_scic
+ .byt  ^menu_enttab_scic
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_scic
+ .byt  ^mdesc_cfg_scic
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_SUBMENU
+ .word !mtext_cfg_patch
+ .byt  ^mtext_cfg_patch
+ .word !menu_enttab_patch
+ .byt  ^menu_enttab_patch
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_patch
+ .byt  ^mdesc_cfg_patch
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !mtext_cfg_tour
+ .byt  ^mtext_cfg_tour
+ .word !onboarding_replay-1
+ .byt  ^onboarding_replay-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_tour
+ .byt  ^mdesc_cfg_tour
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt 0

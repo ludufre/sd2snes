@@ -1,0 +1,194 @@
+; onboarding: text rendering for the standalone onboarding ROM.
+;
+; onb_hiprint is a trimmed clone of snes/ui.a65's hiprint -- prints a string in
+; mode-5 pseudo-8x8 tiles across the two BG layers (BG1/BG2 tile buffers). It uses
+; the onboarding's OWN print_* WRAM vars (onb_print_*) and font tile buffers, so
+; it does not depend on the menu's ui.a65 symbols.
+;
+; onb_resolve_str is the i18n resolver: a string pointer inside the localized
+; dispatch table range [onb_strtab_lo, onb_strtab_hi) is swapped for the active
+; language's column (indexed by onb_cur_lang); any other pointer passes through.
+; For now the string pool is EN-only (onboarding_const.a65); the structure is here
+; and ready so build_const-style localization can be added later (see the strtab
+; placeholders in onboarding_const.a65).
+;
+; .as/.xl GOTCHA: every routine with `lda #imm`/`ldx #imm` declares its widths on
+; entry (directives leak in SOURCE order).
+
+.link page $c0
+#include "onboarding/onb_memmap.i65"
+
+; ---------------------------------------------------------------------------
+; onb_resolve_str -- language-resolve onb_print_src/onb_print_bank in place.
+; Preserves A/X/Y/P/D/B. (Condensed from ui.a65 resolve_str.)
+; ---------------------------------------------------------------------------
+onb_resolve_str:
+  php
+  rep #$30 : .al : .xl
+  pha
+  phx
+  phy
+  phd
+  phb
+  pea $0000
+  pld
+  sep #$20 : .as
+  lda #$7e
+  pha
+  plb
+  lda @onb_print_bank
+  cmp #^onb_strtab_lo
+  bne onb_rs_out
+  rep #$20 : .al
+  lda @onb_print_src
+  cmp #!onb_strtab_lo
+  bcc onb_rs_out
+  cmp #!onb_strtab_hi
+  bcs onb_rs_out
+  sep #$20 : .as
+  lda @onb_cur_lang
+  cmp @onb_strtab_nlang     ; languages actually present (placeholder = 1 for now)
+  bcc +
+  lda #$00                  ; past the last present column -> English
++ asl
+  rep #$20 : .al
+  and #$00ff
+  clc
+  adc @onb_print_src
+  sta @onb_resolve_ptr
+  sep #$20 : .as
+  lda #^onb_strtab_lo
+  sta @onb_resolve_ptr+2
+  rep #$20 : .al
+  lda [onb_resolve_ptr]
+  sta @onb_print_src
+  sep #$20 : .as
+  lda #^onb_strtab_lo
+  sta @onb_print_bank
+onb_rs_out:
+  plb
+  pld
+  rep #$30 : .al : .xl
+  ply
+  plx
+  pla
+  plp
+  rts
+
+; ---------------------------------------------------------------------------
+; onb_hiprint -- print onb_print_count chars from onb_print_src/_bank at
+; (onb_print_x, onb_print_y) in onb_print_pal, into BG1_TILE_BUF/BG2_TILE_BUF.
+; Characters 0 and 1 are end-of-string. Direct port of ui.a65 hiprint with the
+; print_* vars renamed onb_print_*. (See ui.a65 for the full annotation.)
+; ---------------------------------------------------------------------------
+onb_hiprint:
+  php
+  phd
+  sep #$20 : .as
+  rep #$10 : .xl
+  pea $0000
+  pld
+  phb
+  lda #$7e
+  pha
+  plb
+  jsr onb_resolve_str
+  ldx onb_print_src
+  stx onb_print_ptr
+  lda @onb_print_bank
+  sta @onb_print_ptr+2
+  rep #$30 : .al : .xl
+  lda @onb_print_pal
+  and #$00ff
+  xba
+  asl
+  asl
+  ora #$2000
+  sta @onb_print_temp
+  lda @onb_print_count
+  and #$00ff
+  beq onb_hp_end
+  tay
+  lda @onb_print_x
+  and #$00ff
+  sta @onb_print_x
+  lda @onb_print_y
+  and #$00ff
+  xba
+  lsr
+  lsr
+  clc
+  adc @onb_print_x
+  and #$fffe
+  tax
+  lda @onb_print_x
+  lsr
+  bcs onb_hp_bg1
+onb_hp_bg2:
+  .al : .xl
+  lda [onb_print_ptr]
+  and #$00ff
+  cmp #$0002                  ; BTN_TOGGLE (gen_onb_lang.py): green on/off, no cell
+  bne +
+  jsr onb_hp_toggle
+  bra onb_hp_bg2
++ lda [onb_print_ptr]
+  ror
+  and #$007f
+  beq onb_hp_end
+  rol
+  asl
+  inc onb_print_ptr
+  ora @onb_print_temp
+  sta !BG2_TILE_BUF, x
+  dey
+  beq onb_hp_end
+onb_hp_bg1:
+  .al : .xl
+  lda [onb_print_ptr]
+  and #$00ff
+  cmp #$0002
+  bne +
+  jsr onb_hp_toggle
+  bra onb_hp_bg1
++ lda [onb_print_ptr]
+  ror
+  and #$007f
+  beq onb_hp_end
+  rol
+  asl
+  inc onb_print_ptr
+  ora @onb_print_temp
+  sta !BG1_TILE_BUF, x
+  inx
+  inx
+  dey
+  beq onb_hp_end
+  bra onb_hp_bg2
+onb_hp_end:
+  .al : .xl
+  sep #$20 : .as
+  lda [onb_print_ptr]
+  and #$fe
+  sta @onb_print_over
+  tya
+  sec
+  sbc @onb_print_count
+  eor #$ff
+  inc
+  sta @onb_print_done
+  plb
+  pld
+  plp
+  rts
+
+; onb_hp_toggle: step over a BTN_TOGGLE byte and flip the cell palette between the
+;   line's (white, 0) and the green of the key hints (ONB_PAL_DIM, 2): bit 11 of the
+;   tilemap word. .al/.xl in and out, X/Y untouched.
+onb_hp_toggle:
+  .al : .xl
+  inc onb_print_ptr
+  lda @onb_print_temp
+  eor #$0800
+  sta @onb_print_temp
+  rts

@@ -1,0 +1,2584 @@
+; ===========================================================================
+; onboarding: carousel engine for the standalone onboarding ROM.
+;
+; The onboarding tour is a SEPARATE HiROM image (/sd2snes/onboarding.bin). The
+; firmware boots it IN PLACE OF THE MENU (SNES_CMD_LOAD_ONBOARDING sets
+; onboarding_pending; the outer loop of src/main.c then loads it at SRAM_MENU_ADDR
+; with the menu mapper), so it gets the $2A00 command window and the CFG block. It
+; owns the whole console while it runs, renders the feature cards and writes the
+; user's choices straight into the CFG block ($FF0100). On exit it sends
+; CMD_ONBOARDING_DONE and the firmware reloads m3nu.bin.
+;
+; The whole screen is mode-5 hires text over the teal gradient (ch1/ch2 HDMA into
+; CGRAM[0]); window 2 masks the mode-5 edge garbage.
+;
+; VIEWS and INPUT:
+;   card   : Up/Down move the bar over the answers, A keeps one and goes on,
+;            Left/Right or L/R page, B back, X language, START finish
+;   done   : A / START finish, B back to the last card
+;
+; GOTCHAS HONORED:
+;   * clear_wram fills WRAM with $55 (NOT 0). onb_coldboot zeroes EVERY gate var
+;     before first read (onb_card, onb_focus, onb_screen_static, fade vars, ...).
+;   * snescom has no long stz -> use `lda #$00 : sta @var`.
+;   * .as/.xl leak in SOURCE order -> EVERY routine with `lda #imm`/`ldx #imm`
+;     declares .as/.xl on entry.
+;   * store the WRAM-wait trampoline AFTER setup_gfx (setup_gfx clears that WRAM).
+; ===========================================================================
+
+.link page $c0
+#include "onboarding/onb_memmap.i65"
+#include "onboarding/onb_dma.i65"
+#include "onboarding/onb_resume.i65"
+
+; ---- card layout ------------------------------------------------------------
+; The whole screen is mode-5 hires (64 half-cols x 28 tile rows) over the menu's
+; gradient. A card is rendered
+; generically from its onb_feat_table descriptor (onboarding_const.a65):
+;   header rows 1..2 : the name + N/total (cards shown now), the rule right under
+;   left   cols 1..30: the card's paragraph under its name, then the answers as a
+;                        list in a menu window right under it (the bar on one; it
+;                        scrolls when the answers do not fit above the progress bar)
+;   right  (OBJ)     : the demo picture of the focused answer (onb_build_oam)
+;   footer rows 25/27: progress bar + the input hints of the view
+#define ONB_NUM_CARDS      19      ; cards walked: the base tour ("and more" last), then the
+                                   ; 2.17 section (its separator card and the release's cards)
+#define ONB_MORE_FIRST     19      ; the "and more" items: descriptors 19..30 of onb_feat_table
+; header
+#define ONB_HDR_ROW        1       ; feature name (primary language)
+
+#define ONB_RULE_ROW       2       ; amber underline, right under the name
+#define ONB_RULE_X         1
+#define ONB_NAME_X         1
+#define ONB_HDR_RIGHT      62      ; right edge for version / N-of-N
+; right column: the demo picture (OBJ, no frame -- ONB_DEMO_X/Y in onb_memmap.i65)
+; left: the text column
+#define ONB_COL_X          1       ; the text column is on the left, under the card's name
+#define ONB_COL_RIGHT      30
+#define ONB_TEXT_W         30      ; == ONB_COL_RIGHT - ONB_COL_X + 1: cols 1..30 (gen_onb_lang budget)
+#define ONB_TEXT_ROW       4       ; the paragraph, one blank row under the rule
+#define ONB_LIST_LAST      23      ; last row an answer may use (the box's bottom border
+                                   ; is on 24, the progress bar on 25)
+#define ONB_LIST_WIN_W     30      ; cols ONB_COL_X .. ONB_COL_X+29
+#define ONB_SB_X           29      ; == ONB_COL_X + ONB_LIST_WIN_W - 2: the scroll bar column
+#define ONB_LIST_LABEL_X   3       ; == ONB_COL_X + 2
+#define ONB_LIST_TITLE_X   3       ; == ONB_COL_X + 2: window_tl, then the question
+#define ONB_BAR_X          3       ; the menu's bar_xl = window_x + 2
+#define ONB_BAR_W          26      ; the menu's bar_wl = window_w - 4
+#define ONB_BAR_WL         10      ; == ONB_BAR_X*4 - 2: window 1 left (NMI_ROUTINE's conversion)
+#define ONB_BAR_WR         115     ; == ONB_BAR_WL + ONB_BAR_W*4 + 1: window 1 right
+; the demo pictures: 3x3 OBJ of 32x32 in two VRAM slots of 12 x 16 characters, one
+; shown while the NMI streams the next into the other (onb_demo_step)
+#define ONB_DEMO_VRAM0     $2000   ; slot 0 = OBJ name table 0 (characters 0..255)
+#define ONB_DEMO_VRAM1     $3000   ; slot 1 = OBJ name table 1 (characters 256..511)
+#define ONB_DEMO_SLOT_WORDS $1000  ; == ONB_DEMO_VRAM1 - ONB_DEMO_VRAM0
+#define ONB_DEMO_BYTES     7168    ; one picture: the top 14 rows of a name table (gen_onb_demo.py);
+                                   ; rows 14..15 of both slots stay blank (onb_setup_gfx)
+#define ONB_DEMO_CHUNK     1024    ; per NMI: on top of the 3.5 KB of tilemaps
+; the demo pictures: OBJ, name base $2000 (free: the BG1 font ends there), two tables
+#define ONB_OBSEL          $61     ; 16/32 sizes, name base $2000
+; footer
+#define ONB_PROG_ROW       25      ; the progress bar
+#define ONB_PROG_W         40      ; its cells (cols 12..51)
+#define ONB_PROG_X         12      ; == (64 - ONB_PROG_W) / 2
+#define ONB_FOOT_ROW       27
+
+; ===========================================================================
+; ONB_MAIN -- reset entry (from onb_header.a65 RESET).
+; ===========================================================================
+ONB_MAIN:
+  sep #$20 : .as
+  rep #$10 : .xl
+  sei
+  stz $4200             ; inhibit NMI during setup
+  lda #$01
+  sta $420d             ; FastROM
+
+onb_coldboot:
+  ; --- zero every WRAM gate var (clear_wram-equivalent leaves $55). We don't run
+  ;     a full WRAM fill here (the onboarding ROM has a small WRAM footprint); we
+  ;     just zero our own gates explicitly, which is the documented requirement. ---
+  jsr onb_clear_vars
+  jsr onb_snes_init     ; PPU registers to a known state (clone of menu snes_init)
+  jsr onb_setup_gfx     ; fonts + tilemaps + palette into VRAM (forced blank)
+  jsr onb_store_wram    ; copy the WRAM-wait trampoline into $7EF200 (hardcoded MVN len)
+
+  ; --- read the persisted language so the whole tour draws localized from frame 1.
+  sep #$20 : .as
+  lda @CFG_LANGUAGE
+  cmp #ONB_NLANG
+  bcc +
+  lda #$00              ; unknown -> English
++ sta @onb_cur_lang
+
+  ; --- where to start: a reset the music card asked for (onb_music_sync) comes back
+  ;     on that card with its answer focused and the music off; anything else is a
+  ;     fresh tour, with the menu's music setting. The marker lives in WRAM, which a
+  ;     console reset keeps. ---
+  sep #$20 : .as
+  jsr onb_seen_init         ; which cards this run shows (onb_card_skipped)
+  lda #$02                  ; no opening screen: straight to the first card shown
+  sta @onb_view
+  lda #$ff
+  jsr onb_next_shown        ; A = the first card shown, $ff = none
+  cmp #$ff
+  bne +
+  lda #$03                  ; nothing to show (cannot happen from the gate): "all set"
+  sta @onb_view
+  lda #$00
++ sta @onb_card
+  jsr onb_sel_init
+  ; The firmware releases the reset and only then finishes its own boot (CIC settle, the
+  ; autoboot probe) before entering the menu loop -- whose first act is clearing MCU_CMD.
+  ; A command sent before that is wiped, and the loop's $55 then reads as its answer: the
+  ; welcome clip was never staged on hardware (the emulator holds the SNES while the MCU
+  ; works, so it never showed). Wait for the loop like the menu's wait_mcu_ready does.
+  jsr onb_wait_mcu_ready
+  ; the welcome clip: first boot from the gate only (onb_welcome.a65)
+  jsl @onb_welcome_check
+  bcc onb_no_welcome
+  jsr sfx_dsp_unmute        ; the console passes the cart's DAC only with the S-DSP running
+  jsl @onb_welcome_play
+  jsl @onb_welcome_after    ; the music wanted: a reset for it (never returns)
+  jsr onb_snes_init         ; the clip took the whole PPU
+  jsr onb_setup_gfx
+onb_no_welcome:
+  .as : .xl
+  lda @CFG_ENABLE_MENU_MUSIC
+  sta @onb_music_want
+  rep #$20 : .al
+  lda @onb_resume_magic
+  cmp #ONB_RESUME_MAGIC
+  sep #$20 : .as
+  bne onb_boot_fresh
+  lda @onb_resume_card       ; a marker with a card out of range is not ours
+  cmp #ONB_NUM_CARDS
+  bcs onb_boot_fresh
+  lda #$00
+  sta @onb_resume_magic
+  sta @onb_resume_magic+1
+  lda @onb_resume_music      ; the music the reset was for
+  sta @onb_music_want
+  lda @onb_resume_card
+  sta @onb_card
+  lda #$02
+  sta @onb_view
+  jsr onb_sel_init
+  lda @onb_resume_sel
+  sta @onb_sel
+onb_boot_fresh:
+  .as : .xl
+
+  ; --- bring the screen up the SAME WAY THE MENU DOES: build the whole screen in
+  ;     FORCED BLANK with NMI OFF first, THEN enable NMI, THEN fade in. Enabling NMI
+  ;     before the screen was built halted the CPU; the menu enables NMI only after
+  ;     snes_init/setup_gfx/video_init/setup_hdma/screen_on. build_split uses
+  ;     onb_waitblank (polls $4212), so it needs no NMI. ---
+  lda #$00
+  sta @onb_focus
+  jsr onb_build_split       ; full screen setup, forced blank -> screen on @ brightness 0
+  lda #$81
+  sta $4200                 ; NMI + auto-joypad ON -- screen is fully built now
+  jsr onb_apu_boot          ; the menu's music or its silent stub (onb_spc.a65) while the
+                            ; screen is still black (brightness 0): the upload stops the
+                            ; NMI for ~0.5 s and a lit screen would sit frozen through it.
+                            ; After the NMI is on: the upload turns it off and back on
+  jsr onb_fade_in           ; ramp brightness 0 -> CFG (NMI does the per-frame step)
+
+; ===========================================================================
+; Main loop. Views: 2 feature card, 3 "all set" (0, the opening screen, and 1, the
+; old feature list, are gone -- the tour opens on its first card).
+;   card   : the card's answers are a list in a menu-style box, the menu's bar on
+;            the focused one. Up/Down move the bar and the demo picture follows it;
+;            A or Right (R) keeps the focused answer and goes on to the next card (past
+;            the last one: the "all set" screen). Left (L) or B goes back without
+;            answering (on the first card: nothing), X cycles the language,
+;            START finishes now keeping every answer given so far.
+;   done   : A / START -> finish, B -> back to the last card
+; The handlers sit well below this dispatch, so each button test uses the inverted
+; "beq + : jmp handler" idiom (a plain `bne handler` would overshoot the short range).
+; ===========================================================================
+onb_loop:
+  .as : .xl
+  jsr onb_demo_kick     ; start streaming the focused answer's picture, if it changed
+  jsr onb_syncread      ; one debounced joypad sample (sync to NMI + auto-read)
+  lda @onb_view
+  cmp #3
+  bne onb_in_card
+onb_in_done:
+  .as : .xl
+  lda @onb_pad_start
+  ora @onb_pad_a
+  beq +
+  jsr onb_snd_confirm
+  jmp onb_finish
++ lda @onb_pad_b
+  beq +
+  jsr onb_snd_back
+  jmp onb_back
++ jmp onb_loop
+onb_in_card:
+  .as : .xl
+  lda @onb_pad_up
+  beq +
+  jmp onb_sel_up
++ lda @onb_pad_down
+  beq +
+  jmp onb_sel_down
++ lda @onb_pad_a
+  beq +
+  jsr onb_snd_confirm
+  jmp onb_answer
++ lda @onb_pad_right
+  ora @onb_pad_r
+  beq +
+  jsr onb_snd_cursor
+  jmp onb_answer        ; Right keeps the focused answer too, like A
++ lda @onb_pad_left
+  ora @onb_pad_l
+  ora @onb_pad_b
+  beq +
+  jsr onb_snd_back
+  jmp onb_back
++ lda @onb_pad_x
+  beq +
+  jmp onb_lang_next
++ lda @onb_pad_start
+  beq +
+  jsr onb_snd_confirm
+  jmp onb_finish
++ jmp onb_loop
+
+; ---- view transitions (onb_show_card fades and rebuilds whatever view is current) ----
+onb_next:
+  .as : .xl
+  lda @onb_card
+  jsr onb_next_shown
+  cmp #$ff
+  bne +
+  lda #$03              ; past the last card: the "all set" screen
+  sta @onb_view
+  bra onb_show_loop
++ sta @onb_card
+  bra onb_show_loop
+onb_back:
+  .as : .xl
+  lda @onb_view
+  cmp #3
+  bne +
+  lda #$02              ; "all set" -> the last card shown
+  sta @onb_view
+  lda #ONB_NUM_CARDS
+  bra onb_back_try
++ lda @onb_card
+onb_back_try:
+  .as : .xl
+  beq onb_back_none     ; nothing shown before it: stay
+  dec
+  pha
+  jsr onb_card_skipped
+  pla
+  bcs onb_back_try
+  sta @onb_card
+  bra onb_show_loop
+onb_back_none:
+  .as : .xl
+  jmp onb_loop
+onb_show_loop:
+  .as : .xl
+  jsr onb_show_card
+  jmp onb_loop
+
+; onb_next_shown: A = a card index ($ff = before the first). A = the next card this
+;   run shows after it, or $ff past the last. .as/.xl in.
+onb_next_shown:
+  .as : .xl
+  inc
+  cmp #ONB_NUM_CARDS
+  bcc +
+  lda #$ff
+  rts
++ pha
+  jsr onb_card_skipped
+  pla
+  bcs onb_next_shown
+  rts
+
+; onb_seen_init: onb_seen = the tour version whose cards this run leaves out. The
+;   gate starts the tour when CFG_ONBOARDING_VERSION < ONB_VERSION: then only the
+;   cards added since the version the user saw are shown (a firmware update does not
+;   repeat what they already know). From Settings the tour is replayed whole (the
+;   stored version is already the current one). .as/.xl in.
+onb_seen_init:
+  .as : .xl
+  lda @CFG_ONBOARDING_VERSION
+  cmp #ONB_VERSION
+  bcc +
+  lda #$00
++ sta @onb_seen
+  rts
+
+; onb_card_skipped: A = card index. Carry SET when the card is left out: it is older
+;   than the version the user has seen (+ONB_FD_SINCE <= onb_seen), or its descriptor
+;   names a parent CFG byte (+ONB_FD_DEP) and that byte is 0 -- no random music
+;   without music, no guides without the in-game menu. Leaves onb_descptr on that
+;   card. .as/.xl in.
+onb_card_skipped:
+  .as : .xl
+  jsr onb_feat_ptr_idx
+  ldy #ONB_FD_SINCE
+  lda [onb_descptr], y
+  cmp @onb_seen
+  beq onb_cs_old
+  bcc onb_cs_old
+  rep #$20 : .al
+  ldy #ONB_FD_DEP
+  lda [onb_descptr], y
+  beq onb_cs_no
+  sta @onb_cfgptr
+  sep #$20 : .as
+  lda #^CFG_ADDR
+  sta @onb_cfgptr+2
+  ldy #$0000
+  lda [onb_cfgptr], y
+  bne onb_cs_no
+  sec
+  rts
+onb_cs_no:
+  sep #$20 : .as
+  clc
+  rts
+onb_cs_old:
+  .as : .xl
+  sec
+  rts
+
+; onb_count_visible: onb_vis_total = cards shown now, onb_vis_pos = the current one's
+;   1-based place among them (the header's N/total and the progress dots). Leaves
+;   onb_descptr on the current card. .as/.xl in.
+onb_count_visible:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  sta @onb_vis_total
+  sta @onb_vis_pos
+  sta @onb_i
+onb_cv_loop:
+  .as : .xl
+  lda @onb_i
+  jsr onb_card_skipped
+  bcs onb_cv_next
+  lda @onb_vis_total
+  inc
+  sta @onb_vis_total
+  lda @onb_i
+  cmp @onb_card
+  bne onb_cv_next
+  lda @onb_vis_total
+  sta @onb_vis_pos
+onb_cv_next:
+  .as : .xl
+  lda @onb_i
+  inc
+  sta @onb_i
+  cmp #ONB_NUM_CARDS
+  bcc onb_cv_loop
+  jsr onb_feat_ptr
+  plp
+  rts
+
+; ---- X: cycle the tour language anywhere ----
+onb_lang_next:
+  .as : .xl
+  lda @onb_cur_lang
+  inc
+  cmp #ONB_NLANG
+  bcc +
+  lda #$00
++ jsr onb_lang_apply
+  bra onb_redraw_loop
+
+; onb_lang_apply: A = language. Sets the tour's and the menu's language, and moves
+;   the language card's cursor with it. .as/.xl in.
+onb_lang_apply:
+  .as : .xl
+  sta @onb_cur_lang
+  sta @CFG_LANGUAGE     ; the menu comes back in it after CMD_ONBOARDING_DONE
+  pha
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_LANG
+  bne +
+  lda @onb_cur_lang
+  sta @onb_sel
+  jsr onb_bar_place     ; the redraw only repaints the text: the bar is HDMA
++ pla
+  rts
+
+; ---- Up/Down: move the bar over the card's answers (it stops at the ends, like the
+;      menu's lists). The demo picture follows; on the language card the whole tour
+;      also switches language. ----
+onb_sel_up:
+  .as : .xl
+  lda @onb_sel
+  bne +
+  jmp onb_loop
++ dec
+  bra onb_sel_set
+onb_sel_down:
+  .as : .xl
+  lda @onb_sel
+  inc
+  cmp @onb_nopts
+  bcc onb_sel_set
+  jmp onb_loop
+onb_sel_set:
+  .as : .xl
+  sta @onb_sel
+  jsr onb_sfx_preview   ; the menu sounds card: the effects follow the bar...
+  jsr onb_snd_cursor    ; ...so this blip is the preview of "Yes"
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_LANG
+  bne +
+  lda @onb_sel
+  jsr onb_lang_apply
+  jsr onb_demo_want_sel ; the focused language's flag
+  bra onb_redraw_loop
++ pha
+  jsr onb_list_follow   ; a list longer than its box scrolls with the bar
+  lda #$00
+  rol
+  sta @onb_list_moved
+  jsr onb_bar_place
+  jsr onb_demo_want_sel
+  jsr onb_music_sync    ; the menu music card plays / stops the music as the bar moves
+  pla
+  cmp #ONB_OPT_MORE     ; "and more": the text beside the list is the focused item's
+  beq onb_redraw_loop
+  lda @onb_list_moved
+  bne onb_redraw_loop
+  jmp onb_loop
+
+; ---- A / Right: keep the focused answer and go on (a card with nothing to answer just
+;      goes on). Right used to page without answering, and the bar left on "No" over
+;      "Menu music" still led to the random music card: what is focused is what is kept. ----
+onb_answer:
+  .as : .xl
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_INFO
+  beq +
+  cmp #ONB_OPT_MORE     ; a list to look at, nothing to keep
+  beq +
+  cmp #ONB_OPT_LANG     ; already applied as the bar moved
+  beq +
+  jsr onb_sel_value
+  pha
+  jsr onb_feat_cfgptr
+  ldy #$0000
+  pla
+  sta [onb_cfgptr], y
+  lda #$00
+  sta @onb_sfx_pending  ; a "menu sounds" preview is the answer now
++ jmp onb_next
+
+onb_redraw_loop:
+  .as : .xl
+  jsr onb_card_redraw   ; repaint in place (NMI DMAs the buffers next frame)
+  jmp onb_loop
+
+; onb_sel_value: A = the CFG value of answer row onb_sel. Yes/no lists read "Yes"
+;   first, so row 0 is 1; every other kind lists its values in order. .as/.xl in.
+onb_sel_value:
+  .as : .xl
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_ONOFF
+  bne +
+  lda @onb_sel
+  eor #$01
+  rts
++ lda @onb_sel
+  rts
+
+; onb_sel_init: the answer count of the current card and the row of its current
+;   value (a stale byte lands on row 0). Called before every card build. .as/.xl in.
+onb_sel_init:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  sta @onb_sel
+  sta @onb_nopts
+  lda @onb_view
+  cmp #2
+  bne onb_si_out
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_LANG
+  bne +
+  lda #ONB_NLANG
+  sta @onb_nopts
+  lda @onb_cur_lang
+  sta @onb_sel
+  bra onb_si_out
++ rep #$20 : .al
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda @onb_opt_count, x
+  sta @onb_nopts
+  beq onb_si_out            ; info card
+  cpx #ONB_OPT_MORE
+  beq onb_si_out            ; "and more": item 0, nothing in the CFG
+  jsr onb_feat_cfgptr
+  ldy #$0000
+  lda [onb_cfgptr], y
+  cmp @onb_nopts
+  bcc +
+  lda #$00
++ sta @onb_sel
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_ONOFF
+  bne onb_si_out
+  lda @onb_sel
+  and #$01
+  eor #$01                  ; value 1 (yes) is row 0
+  sta @onb_sel
+onb_si_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_bar_place: put the menu bar over answer onb_sel, on its screen row (the list
+;   sits under the paragraph and may be scrolled). The WRAM HDMA table has two
+;   pre-line counts (no count may exceed 127): lines before the bar = row*8 - 1
+;   (the HDMA's one-line lag). Takes effect on the next frame.
+onb_bar_place:
+  .as : .xl
+  lda @onb_sel
+  sec
+  sbc @onb_list_top
+  clc
+  adc @onb_list_row
+  rep #$20 : .al
+  and #$00ff
+  asl
+  asl
+  asl
+  dec
+  cmp #114
+  bcc onb_bp_short
+  sec
+  sbc #112                  ; 112 + the rest
+  sep #$20 : .as
+  sta @onb_hdma_bar+3
+  lda #112
+  sta @onb_hdma_bar
+  rts
+onb_bp_short:
+  .al : .xl
+  dec                       ; the rest + 1
+  sep #$20 : .as
+  sta @onb_hdma_bar
+  lda #$01
+  sta @onb_hdma_bar+3
+  rts
+
+; ===========================================================================
+; onb_finish -- end the tour. The answers are already in the CFG block; this marks
+; the tour version as seen there too, and the MCU does cfg_get_from_menu + cfg_save
+; and reloads the menu, which
+; resets the SNES out from under us, so this never returns. Fade to black first:
+; the reload rewrites the image this code runs from.
+; ===========================================================================
+onb_finish:
+  .as : .xl
+  jsr onb_fade_out
+  sep #$20 : .as
+  lda #$80
+  sta $2100             ; forced blank while the image is replaced
+  jsr onb_sfx_follow    ; an unconfirmed "menu sounds" preview is not an answer
+  lda #ONB_VERSION      ; seen: the gate stays quiet until a release adds cards
+  sta @CFG_ONBOARDING_VERSION
+  jmp @onb_menu_handoff ; the menu takes over without a reset (the music goes on)
+
+; ===========================================================================
+; Card dispatch helpers. Each looks up the current card descriptor in
+; onb_card_table and reads a field or calls through the long pointer.
+; ===========================================================================
+
+; onb_feat_ptr: set onb_descptr (long) -> feature descriptor row for onb_card
+; (stride ONB_FEAT_STRIDE=16). Same DP-indirect setup as the old card_desc_ptr.
+; .as/.xl in.
+onb_feat_ptr:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_card
+  jsr onb_feat_ptr_idx
+  plp
+  rts
+
+; onb_feat_ptr_idx: like onb_feat_ptr but for an ARBITRARY feature index in A (used
+; to render each list row without disturbing onb_card = the selection). .as/.xl in.
+onb_feat_ptr_idx:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  and #$00ff
+  asl : asl : asl : asl      ; *16 (stride)
+  clc
+  adc #!onb_feat_table
+  sta @onb_descptr
+  sep #$20 : .as
+  lda #^onb_feat_table
+  sta @onb_descptr+2
+  plp
+  rts
+
+; onb_feat_optkind: A = the feature's option kind (+ONB_FD_OPT). .as/.xl in/out.
+onb_feat_optkind:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr onb_feat_ptr
+  ldy #ONB_FD_OPT
+  lda [onb_descptr], y
+  sta @onb_tmp
+  plp
+  lda @onb_tmp
+  rts
+
+; onb_feat_cfgptr: set onb_cfgptr (3-byte) -> the CFG field of the current feature
+; (bank $FF, offset = descriptor +ONB_FD_CFG). .as/.xl in.
+onb_feat_cfgptr:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr onb_feat_ptr
+  rep #$20 : .al
+  ldy #ONB_FD_CFG
+  lda [onb_descptr], y
+  sta @onb_cfgptr
+  sep #$20 : .as
+  lda #^CFG_ADDR             ; = $FF
+  sta @onb_cfgptr+2
+  plp
+  rts
+
+; ===========================================================================
+; onb_show_card -- fade out, rebuild the whole split-screen for onb_card while
+; black, fade in. Mirrors gameinfo's gin_reload (smooth swap, hides the
+; forced-blank flash). Builds the band (themed gradient) once, then the body.
+; ===========================================================================
+onb_show_card:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr onb_sel_init          ; the answer list of the card about to be built
+  ; fade out (if the screen is up). On the very first call cur_bright is 0 so
+  ; this falls through instantly.
+  jsr onb_fade_out
+  ; rebuild while black
+  jsr onb_build_split   ; forced-blank: band + body + HDMA setup, returns in vblank
+  ; fade in to the configured brightness
+  jsr onb_fade_in
+  ; the sounds follow the answers: a "menu sounds" preview left without A is undone;
+  ; on the menu music card the music follows where its bar landed, on any other it
+  ; follows the saved answer (a preview left without A is undone too)
+  jsr onb_sfx_follow
+  lda @onb_view
+  cmp #$02
+  bne +
+  jsr onb_music_sync
+  jsr onb_music_follow
++ plp
+  rts
+
+; onb_card_redraw -- live redraw of just the body (focus/value changed). Wrap the
+; body DMA in a forced-blank window via onb_screen_static so the NMI doesn't race
+; it (same idea as gameinfo's gi_dma_body inside cover_blank_begin/end). Here we
+; simply rebuild the body buffers and let the NMI DMA them next frame.
+onb_card_redraw:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$01
+  sta @onb_screen_static  ; pause NMI body DMA while we rewrite the buffers
+  jsr onb_build_body      ; rewrite the body tile buffers (title/paragraph/options)
+  lda #$00
+  sta @onb_screen_static  ; NMI re-DMAs the new body next frame
+  plp
+  rts
+
+; ===========================================================================
+; onb_build_split -- the gameinfo-style screen builder. Forced blank, set up the
+; mode-3/mode-5 split via HDMA ch3, the teal gradient via ch1/ch2, the window-2
+; edge mask, load the palette, build the band + body, then enable HDMA at vblank
+; and unblank. This is a CONDENSED clone of gi_dc_show -- see gameinfo.a65 for the
+; full annotated version and every durable gotcha (HDMA-before-GP-DMA = black
+; screen, WRAM HDMA table, $2133 pseudo-512, etc).
+; ===========================================================================
+onb_build_split:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  phb
+  lda #$00
+  pha
+  plb
+
+  ; take over: forced blank, all HDMA off during GP-DMA uploads.
+  lda #$01
+  sta @onb_screen_static
+  jsr onb_waitblank
+  lda #$8f
+  sta $2100
+  stz $420c
+
+  ; WHOLE screen = mode 5 hires (redesign: no mode-3 band, no ch3 BGMODE split).
+  ; BG tilemap + char base as the menu's video_init: BG1 tilemap word $5800, BG2
+  ; tilemap word $5000; char base BG1 $0000 / BG2 $4000; 32x64 maps.
+  lda #$05
+  sta $2105
+  lda #$58 : ora #$02 : sta $2107
+  lda #$50 : ora #$02 : sta $2108
+  lda #$40 : sta $210b
+
+  ; teal gradient: ch1 holds CGADD=0 per line, ch2 writes the per-line colour to
+  ; CGDATA -> CGRAM[0] (backdrop). Self-contained tables (onboarding_const.a65).
+  lda #$00 : sta $4310
+  lda #$21 : sta $4311   ; dest = $2121 (CGADD)
+  ldx #!onb_hdma_cg_addr
+  stx $4312
+  lda #^onb_hdma_cg_addr
+  sta $4314
+  lda #$02 : sta $4320   ; write-twice (15-bit colour)
+  lda #$22 : sta $4321   ; dest = $2122 (CGDATA)
+  ldx #!onb_hdma_pal
+  stx $4322
+  lda #^onb_hdma_pal
+  sta $4324
+
+  ; PPU regs for mode-5 hires text (mirror the working body setup).
+  lda #$10 : sta $2130   ; colour math inside the colour window only (the menu's);
+                         ; NO direct colour: the mode-3 banner is a paletted 8bpp BG
+  stz $2131
+  lda #$08 : sta $2133   ; pseudo-512 (menu's mode-5 text setup)
+  ; window-2 edge mask (kills mode-5 hires edge garbage over the gradient)
+  lda #$cc : sta $2123
+  lda #$20 : sta $2125   ; colour window = W1 (the option bar, below)
+  stz $212a
+  lda #$01 : sta $2128
+  lda #252 : sta $2129
+  lda #$03 : sta $212e
+  lda #$03 : sta $212f
+  lda #$13 : sta $212c   ; BG1 + BG2 + OBJ (the QR)
+  lda #$13 : sta $212d
+  lda #$fc : sta $210d : stz $210d   ; BG1 H scroll = $00fc (menu's hires alignment)
+  stz $210e : stz $210e
+  stz $210f : stz $210f
+  stz $2110 : stz $2110
+  lda #$80 : sta $2115
+
+  ; the menu's palette (CGRAM[1..255]); CGRAM[0] = the gradient HDMA.
+  stz $2121
+  DMA7(#$00, #$0200, #^palette, #!palette, #$22)   ; the menu's (palette.o65)
+  jsr onb_build_oam
+  jsr onb_build_hdma     ; the option bar's channel for this view -> onb_hdma_en
+
+  ; build the whole card into the WRAM tile buffers, then DMA it to VRAM (forced blank).
+  jsr onb_build_body
+  jsr onb_dma_body
+
+  ; enable HDMA (ch1+ch2 gradient only) at vblank, then unblank.
+  jsr onb_waitblank
+  lda @onb_hdma_en
+  ora #$06
+  sta $420c
+  lda #$00
+  sta @onb_screen_static  ; let the NMI resume screen DMA + fade
+  lda #$00
+  sta @onb_cur_bright     ; fade_in ramps cur 0 -> CFG brightness (the NMI does it)
+  lda #$00
+  sta $2100               ; brightness 0 (fade_in ramps up)
+  plb
+  plp
+  rts
+
+; onb_build_hdma -- the per-view HDMA channels (the gradient, ch1/ch2, is always on).
+;   card with a question: ch5 = the menu's selection bar -- $2131/$2132 colour math,
+;   the fixed colour ADDED inside window 1, the same table shape and colour as the
+;   menu's hdma_math/hdma_bar_color_src. Leaves the $420c bits to add in onb_hdma_en
+;   (its own byte: the body render reuses every onb_tmp). Forced blank, DB = 0.
+onb_build_hdma:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  sta @onb_hdma_en          ; extra channels
+  lda @onb_view
+  cmp #2
+  bne onb_bh_out
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_INFO
+  beq onb_bh_out
+  ; the bar table in WRAM: pre-lines up to the row above the answer (split so no
+  ; count exceeds 127), then the menu's 1 + 7 + 1 bar lines
+  ldx #$0000
+- lda @onb_bar_src, x
+  sta @onb_hdma_bar, x
+  inx
+  cpx #19
+  bne -
+  lda #112
+  sta @onb_hdma_bar
+  jsr onb_bar_place
+  ; the (possibly themed) "normal" colour, the menu's list bar: the same four COLDATA
+  ; bytes set_bar_color writes
+  lda @onb_bar_color
+  sta @onb_hdma_bar+2
+  lda @onb_bar_color+1
+  sta @onb_hdma_bar+5
+  lda @onb_bar_color+2
+  sta @onb_hdma_bar+8
+  lda @onb_bar_color+3
+  sta @onb_hdma_bar+11
+  lda #$01 : sta $4350      ; ch5: 2 regs -> $2131/$2132
+  lda #$31 : sta $4351
+  ldx #!onb_hdma_bar : stx $4352
+  lda #^onb_hdma_bar : sta $4354
+  ; window 1 = the bar's columns (NMI_ROUTINE's bar_xl/bar_wl conversion)
+  lda #ONB_BAR_WL : sta $2126
+  lda #ONB_BAR_WR : sta $2127
+  lda #$20 : sta @onb_hdma_en
+onb_bh_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_build_oam -- hide every sprite, then show the card's demo picture for the
+;   focused answer: uploaded whole into slot 0 right here (forced blank). Later
+;   pictures stream through the NMI (onb_demo_step). .as/.xl in.
+onb_build_oam:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+  stx $2102
+  lda #$f0
+  ldx #$0000
+- sta $2104               ; x, y = 240 (off screen), tile, attr for all 128
+  sta $2104
+  stz $2104
+  stz $2104
+  inx
+  cpx #128
+  bne -
+  ldx #$0000
+- stz $2104               ; high table: small, x bit 8 clear
+  inx
+  cpx #32
+  bne -
+  lda #$00
+  sta @onb_demo_busy
+  lda #$ff
+  sta @onb_demo_cur
+  sta @onb_demo_want
+  lda @onb_view
+  cmp #2
+  bne onb_bo_out
+  jsr onb_demo_want_sel
+  lda @onb_demo_want
+  cmp #$ff
+  beq onb_bo_out
+  jsr onb_demo_point      ; onb_demo_src / onb_demo_pal for onb_demo_want
+  ldx #ONB_DEMO_VRAM0 : stx $2116
+  lda #$01 : sta $4370
+  lda #$18 : sta $4371
+  ldx onb_demo_src : stx $4372   ; DB = 0: low WRAM mirror
+  lda @onb_demo_src+2 : sta $4374
+  ldx #ONB_DEMO_BYTES : stx $4375
+  lda #$80 : sta $420b
+  lda #$00
+  sta @onb_demo_vis
+  jsr onb_demo_show       ; palette + OAM for slot 0
+  lda @onb_demo_want
+  sta @onb_demo_cur
+onb_bo_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_demo_want_sel: onb_demo_want = the picture for (onb_card, onb_sel) from
+;   onb_demo_map (16 rows per card, $ff = none). .as/.xl in.
+onb_demo_want_sel:
+  .as : .xl
+  lda @onb_card
+  rep #$20 : .al
+  and #$00ff
+  asl
+  asl
+  asl
+  asl                     ; 16 rows per card
+  sta @onb_tmp
+  sep #$20 : .as
+  lda @onb_sel
+  rep #$20 : .al
+  and #$000f
+  clc
+  adc @onb_tmp
+  tax
+  sep #$20 : .as
+  lda @onb_demo_map, x
+  sta @onb_demo_want
+  rts
+
+; onb_demo_point: onb_demo_src / onb_demo_pal <- onb_demo_tbl[onb_demo_want]
+;   (6 bytes per picture). .as/.xl in.
+onb_demo_point:
+  .as : .xl
+  lda @onb_demo_want
+  rep #$20 : .al
+  and #$00ff
+  sta @onb_tmp
+  asl
+  clc
+  adc @onb_tmp
+  asl                     ; *6
+  tax
+  lda @onb_demo_tbl, x
+  sta @onb_demo_src
+  lda @onb_demo_tbl+3, x
+  sta @onb_demo_pal
+  sep #$20 : .as
+  lda @onb_demo_tbl+2, x
+  sta @onb_demo_src+2
+  lda @onb_demo_tbl+5, x
+  sta @onb_demo_pal+2
+  rts
+
+; onb_demo_show: make slot onb_demo_vis the visible picture -- its 4 palettes (OBJ
+;   palettes 0-3 for slot 0, 4-7 for slot 1) and its 16 OAM entries for that slot,
+;   both straight from the picture's data (gen_onb_demo.py: 128 bytes of palettes,
+;   then 64 bytes of OAM per slot). VBlank or forced blank only. .as/.xl in.
+onb_demo_show:
+  .as : .xl
+  lda @onb_demo_vis
+  beq +
+  lda #$40
++ ora #$80                ; CGRAM 128 (slot 0) / 192 (slot 1)
+  sta $2121
+  lda #$00 : sta $4370    ; -> $2122, 128 bytes
+  lda #$22 : sta $4371
+  ldx onb_demo_pal : stx $4372   ; DB = 0: low WRAM mirror
+  lda @onb_demo_pal+2 : sta $4374
+  ldx #$0080 : stx $4375
+  lda #$80 : sta $420b
+  ldx #$0000
+  stx $2102
+  lda #$04 : sta $4371    ; -> $2104, the 16 OAM entries for the slot
+  lda @onb_demo_vis
+  rep #$20 : .al
+  and #$0001
+  beq +
+  lda #$0040              ; slot 1's table follows slot 0's
++ clc
+  adc #$0080
+  adc @onb_demo_pal
+  sta $4372
+  sep #$20 : .as
+  ldx #64 : stx $4375
+  lda #$80 : sta $420b
+  ldx #$0100              ; high table: sprites 0..15 large
+  stx $2102
+  lda #$aa : sta $2104
+  sta $2104
+  sta $2104
+  sta $2104
+  rts
+
+; onb_demo_hide: the 16 demo sprites off screen. VBlank or forced blank. .as/.xl in.
+onb_demo_hide:
+  .as : .xl
+  ldx #$0000
+  stx $2102
+  ldx #$0000
+- lda #$f0                ; x = 240, y = 224: a 32x32 at y 240 would wrap onto lines 0..15
+  sta $2104
+  lda #$e0
+  sta $2104
+  stz $2104
+  stz $2104
+  inx
+  cpx #16
+  bne -
+  rts
+
+; onb_demo_kick: main loop, once per frame. When the focused answer wants another
+;   picture and the NMI is not already streaming one, point the NMI at it: the
+;   hidden slot gets it in ONB_DEMO_CHUNK pieces, then the slots swap (onb_demo_step).
+;   "No picture" is one NMI hiding the sprites. .as/.xl in.
+onb_demo_kick:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_demo_busy
+  bne onb_dk_out
+  lda @onb_demo_want
+  cmp @onb_demo_cur
+  beq onb_dk_out
+  cmp #$ff
+  bne +
+  lda #$02                ; hide
+  sta @onb_demo_busy
+  bra onb_dk_out
++ jsr onb_demo_point
+  rep #$20 : .al
+  lda #$0000
+  sta @onb_demo_off
+  sep #$20 : .as
+  lda @onb_demo_want
+  sta @onb_demo_load
+  lda #$01                ; last: the NMI reads everything above once this is set
+  sta @onb_demo_busy
+onb_dk_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_demo_step: NMI, while onb_demo_busy. One chunk of the picture into the hidden
+;   slot, and on the last one the swap; or the hide. DB = 0. .as/.xl in.
+onb_demo_step:
+  .as : .xl
+  lda @onb_demo_busy
+  cmp #$02
+  bne onb_ds_load
+  jsr onb_demo_hide
+  lda #$ff
+  sta @onb_demo_cur
+  lda #$00
+  sta @onb_demo_busy
+  rts
+onb_ds_load:
+  .as : .xl
+  rep #$20 : .al
+  lda @onb_demo_off
+  lsr                     ; bytes -> VRAM words
+  clc
+  adc #ONB_DEMO_VRAM0
+  tax
+  sep #$20 : .as
+  lda @onb_demo_vis
+  bne +                   ; slot 1 on screen -> load slot 0
+  rep #$20 : .al
+  txa
+  clc
+  adc #ONB_DEMO_SLOT_WORDS  ; slot 0 on screen -> load slot 1
+  tax
++ stx $2116
+  rep #$20 : .al
+  lda @onb_demo_src
+  clc
+  adc @onb_demo_off
+  sta $4372
+  lda #ONB_DEMO_CHUNK
+  sta $4375
+  sep #$20 : .as
+  lda @onb_demo_src+2 : sta $4374
+  lda #$01 : sta $4370
+  lda #$18 : sta $4371
+  lda #$80 : sta $420b
+  rep #$20 : .al
+  lda @onb_demo_off
+  clc
+  adc #ONB_DEMO_CHUNK
+  sta @onb_demo_off
+  cmp #ONB_DEMO_BYTES
+  sep #$20 : .as
+  bcc onb_ds_out
+  lda @onb_demo_vis
+  eor #$01
+  sta @onb_demo_vis
+  jsr onb_demo_show
+  lda @onb_demo_load
+  sta @onb_demo_cur
+  lda #$00
+  sta @onb_demo_busy
+onb_ds_out:
+  .as : .xl
+  rts
+
+; ===========================================================================
+; onb_build_body -- (re)build the mode-5 body text for the current card into the
+; WRAM tile buffers (no DMA; the NMI / onb_dma_body push it to VRAM). Clears the
+; body region, draws the footer hint, then dispatches to the card's draw routine
+; for the title/paragraph/options.
+; ===========================================================================
+onb_build_body:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_view             ; dispatch by view: 2 card / 3 all set
+  cmp #2
+  beq onb_bb_card
+onb_bb_alldone:
+  .as : .xl
+  jsr onb_render_done
+  plp
+  rts
+onb_bb_card:
+  jsr onb_clear_body_buf
+  jsr onb_feat_ptr          ; onb_descptr -> current feature descriptor (reused below)
+
+  ; ================= header =================
+  ; feature name, white, at the left edge
+  lda #ONB_NAME_X : sta @onb_print_x
+  lda #ONB_HDR_ROW : sta @onb_print_y
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  lda #44 : sta @onb_print_count
+  ldy #ONB_FD_NAME : jsr onb_emit_loc
+  ; N-of-N (dim), right-aligned on the header row
+  jsr onb_draw_nn
+  ; "and more": the text below the header is the focused item's
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_MORE
+  bne +
+  lda @onb_sel
+  clc
+  adc #ONB_MORE_FIRST
+  jsr onb_feat_ptr_idx
++
+  ; amber rule under the header
+  lda #ONB_RULE_X : sta @onb_print_x
+  lda #ONB_RULE_ROW : sta @onb_print_y
+  lda #ONB_PAL_AMBER : sta @onb_print_pal
+  lda #62 : sta @onb_print_count   ; cols 1..62: out to the counter's right edge
+  jsr onb_hrule
+
+  ; ================= right: the demo picture is OBJ (onb_build_oam) =================
+
+  ; ================= left: the paragraph, then the answers =================
+  lda #ONB_COL_X : sta @onb_print_x
+  lda #ONB_TEXT_ROW : sta @onb_print_y
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  ldy #ONB_FD_TEXT : jsr onb_emit_para
+  jsr onb_list_layout       ; the list's row, visible rows and scroll from the text
+  jsr onb_draw_option_value
+  jsr onb_bar_place         ; the bar follows the list wherever it landed
+
+  ; ================= footer + progress bar =================
+  jsr onb_draw_progress
+  jsr onb_draw_footer
+  plp
+  rts
+
+; ===========================================================================
+; ================  GENERIC FEATURE RENDER HELPERS (redesign)  ===============
+; The cards are rendered generically by onb_build_body from onb_feat_table.
+; These helpers assume onb_descptr already points at the current feature descriptor
+; (set by onb_build_body via onb_feat_ptr) and that onb_print_x/_y/_pal/_count are
+; preset by the caller. Every routine declares .as/.xl on entry (directive leak).
+; ===========================================================================
+
+; onb_emit_loc: Y = descriptor field offset (word ptr into the $C1 strtab). Prints
+;   the localized string at the preset print_x/y/pal/count (resolved by onb_cur_lang).
+onb_emit_loc:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda [onb_descptr], y
+  sta @onb_print_src
+  sep #$20 : .as
+  lda #^onb_strtab_lo
+  sta @onb_print_bank
+  jsr onb_hiprint
+  plp
+  rts
+
+; onb_emit_para: Y = descriptor field offset of a paragraph (gen_onb_lang.py wraps it
+;   and separates its lines with byte 1, where onb_hiprint stops). Prints one line per
+;   row from onb_print_y down, at onb_print_x, ONB_TEXT_W cells each, in onb_print_pal;
+;   onb_para_n = the rows it took.
+onb_emit_para:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda [onb_descptr], y
+  sta @onb_print_src
+  sep #$20 : .as
+  lda #^onb_strtab_lo
+  sta @onb_print_bank
+  lda @onb_print_x
+  sta @onb_para_x
+  lda #$00
+  sta @onb_para_n
+onb_ep_line:
+  .as : .xl
+  lda @onb_para_x : sta @onb_print_x
+  lda #ONB_TEXT_W : sta @onb_print_count
+  jsr onb_hiprint           ; leaves onb_print_ptr on the byte that stopped it
+  lda @onb_para_n
+  inc
+  sta @onb_para_n
+  lda [onb_print_ptr]       ; 0 = the end, 1 = another line
+  beq onb_ep_out
+  rep #$20 : .al
+  lda @onb_print_ptr
+  inc
+  sta @onb_print_src        ; in the string pool: onb_resolve_str passes it through
+  sep #$20 : .as
+  lda @onb_print_ptr+2
+  sta @onb_print_bank
+  lda @onb_print_y
+  inc
+  sta @onb_print_y
+  bra onb_ep_line
+onb_ep_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_list_layout: after the paragraph -- the answer box goes one blank row below it:
+;   onb_list_row = its first answer's row, onb_list_vis = the answers that fit above
+;   ONB_LIST_LAST (all of them, or a scrolled window), onb_list_top kept around the
+;   bar (onb_list_follow). .as/.xl in.
+onb_list_layout:
+  .as : .xl
+  lda @onb_para_n
+  clc
+  adc #ONB_TEXT_ROW+2
+  sta @onb_list_row
+  lda #ONB_LIST_LAST+1
+  sec
+  sbc @onb_list_row
+  cmp @onb_nopts
+  bcc +
+  lda @onb_nopts
++ sta @onb_list_vis
+  jsr onb_list_follow
+  rts
+
+; onb_list_follow: keep the bar (onb_sel) inside the visible rows. Carry SET when
+;   onb_list_top moved (the list has to be redrawn). .as/.xl in.
+onb_list_follow:
+  .as : .xl
+  lda @onb_list_top
+  sta @onb_list_old
+  lda @onb_nopts            ; top <= nopts - vis (a stale top from another card too)
+  sec
+  sbc @onb_list_vis
+  cmp @onb_list_top
+  bcs +
+  sta @onb_list_top
++ lda @onb_sel              ; sel < top: scroll up to it
+  cmp @onb_list_top
+  bcs +
+  sta @onb_list_top
++ lda @onb_list_top         ; sel >= top + vis: scroll down to it
+  clc
+  adc @onb_list_vis
+  dec
+  cmp @onb_sel
+  bcs +
+  lda @onb_sel
+  sec
+  sbc @onb_list_vis
+  inc
+  sta @onb_list_top
++ lda @onb_list_top
+  cmp @onb_list_old
+  clc
+  beq +
+  sec
++ rts
+
+; onb_emit_neu: Y = descriptor field offset (word ptr into $C0 neutral data). Prints
+;   as-is (outside the strtab range -> onb_resolve_str passes it through).
+onb_emit_neu:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  rep #$20 : .al
+  lda [onb_descptr], y
+  sta @onb_print_src
+  sep #$20 : .as
+  lda #^onb_feat_table
+  sta @onb_print_bank
+  jsr onb_hiprint
+  plp
+  rts
+
+; onb_draw_nn: build "N/NN" (among the cards shown now) and print it right-aligned at
+;   ONB_HDR_RIGHT on ONB_HDR_ROW, dim. Digits/'/' are plain font glyphs.
+onb_draw_nn:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr onb_count_visible
+  ldx #$0000
+  lda @onb_vis_pos
+  jsr onb_itoa_append
+  lda #$2f                   ; '/'
+  sta @onb_stringbuf, x
+  inx
+  lda @onb_vis_total
+  jsr onb_itoa_append
+  lda #$00
+  sta @onb_stringbuf, x
+  txa
+  sta @onb_tmp
+  lda #ONB_HDR_RIGHT
+  sec
+  sbc @onb_tmp
+  sta @onb_print_x
+  lda #ONB_HDR_ROW : sta @onb_print_y
+  lda #ONB_PAL_DIM : sta @onb_print_pal
+  lda #8 : sta @onb_print_count
+  ldx #!onb_stringbuf : lda #^onb_stringbuf
+  jsr onb_puts
+  plp
+  rts
+
+; onb_hrule: (.as in) draw a horizontal line (top-edge glyph 24) of onb_print_count cells at
+;   (onb_print_x, onb_print_y) in onb_print_pal. Uses onb_stringbuf.
+onb_hrule:
+  .as : .xl
+  lda #24                    ; N-edge glyph = horizontal line
+  ; fall through
+; onb_hrule_glyph: the same with glyph A.
+onb_hrule_glyph:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  sta @onb_hr_glyph
+  lda @onb_print_count
+  sta @onb_tmp               ; remaining
+  ldx #$0000
+onb_hr_fill:
+  lda @onb_tmp
+  beq onb_hr_done
+  dec : sta @onb_tmp
+  lda @onb_hr_glyph
+  sta @onb_stringbuf, x
+  inx
+  bra onb_hr_fill
+onb_hr_done:
+  lda #$00
+  sta @onb_stringbuf, x
+  ldx #!onb_stringbuf : lda #^onb_stringbuf
+  jsr onb_puts
+  plp
+  rts
+
+; onb_draw_progress: a progress bar on ONB_PROG_ROW, ONB_PROG_W cells centred: the
+;   cards seen so far (this one included) as the header rule's amber line (glyph 24),
+;   the rest as the same line in grey (glyph 243, utils/fontedit.py addtourglyphs:
+;   the rule's pixels, half-tone body) -- one line, two colours, same rows.
+onb_draw_progress:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr onb_count_visible
+  lda @onb_vis_pos          ; filled = pos * W / total
+  sta $4202
+  lda #ONB_PROG_W
+  sta $4203
+  nop : nop : nop : nop
+  ldx $4216
+  stx $4204
+  lda @onb_vis_total
+  sta $4206
+  nop : nop : nop : nop
+  nop : nop : nop : nop
+  lda $4214
+  sta @onb_tmp+1
+  lda #ONB_PROG_X : sta @onb_print_x
+  lda #ONB_PROG_ROW : sta @onb_print_y
+  lda #ONB_PAL_AMBER : sta @onb_print_pal
+  lda @onb_tmp+1
+  sta @onb_print_count
+  jsr onb_hrule             ; the done part (glyph 24)
+  lda @onb_tmp+1
+  clc
+  adc #ONB_PROG_X
+  sta @onb_print_x
+  lda #ONB_PROG_W
+  sec
+  sbc @onb_tmp+1
+  beq +
+  sta @onb_print_count
+  lda #ONB_PAL_WHITE : sta @onb_print_pal   ; its half tone is the grey
+  lda #243
+  jsr onb_hrule_glyph       ; the rest
++ plp
+  rts
+
+; onb_draw_footer: the input hints of the current view + the language code.
+onb_draw_footer:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_view
+  cmp #2
+  beq onb_ftr_card
+onb_ftr_done:
+  .as : .xl
+  lda #1
+  ldx #!onb_text_keya
+  ldy #!onb_ui_menu
+  jsr onb_ftr_item
+  lda #14
+  ldx #!onb_text_keyb
+  ldy #!onb_ui_back
+  jsr onb_ftr_item
+  plp
+  rts
+onb_ftr_card:
+  .as : .xl
+  jsr onb_feat_optkind      ; a card with nothing to choose has no up/down hint, and
+  cmp #ONB_OPT_INFO         ; the others move left into its place (left-aligned like
+  beq onb_ftr_info          ; every other footer, never a hole at the start)
+  lda #1
+  ldx #!onb_text_updown
+  ldy #!onb_ui_pick
+  jsr onb_ftr_item
+  lda #13                   ; A (or Right): keep the focused answer and go on
+  ldx #!onb_text_keya
+  ldy #!onb_ui_next
+  jsr onb_ftr_item
+  lda #25
+  ldx #!onb_text_keyb
+  ldy #!onb_ui_back
+  jsr onb_ftr_item
+  lda #38
+  ldx #!onb_text_startbtn
+  ldy #!onb_ui_exit
+  jsr onb_ftr_item
+  plp                       ; no language code on a card: the hints need the row
+  rts
+onb_ftr_info:
+  .as : .xl
+  lda #1
+  ldx #!onb_text_keya
+  ldy #!onb_ui_next
+  jsr onb_ftr_item
+  lda #13
+  ldx #!onb_text_keyb
+  ldy #!onb_ui_back
+  jsr onb_ftr_item
+  lda #26
+  ldx #!onb_text_startbtn
+  ldy #!onb_ui_exit
+  jsr onb_ftr_item
+  plp
+  rts
+; onb_ftr_item: one "KEY WORD" footer hint. A = column of the key, X = key string
+;   (neutral, bank $C0), Y = the localized word (a strtab row). The word starts one
+;   blank after however long the key printed. .as/.xl in.
+onb_ftr_item:
+  .as : .xl
+  sta @onb_print_x
+  phy
+  lda #ONB_FOOT_ROW : sta @onb_print_y
+  lda #ONB_PAL_DIM : sta @onb_print_pal
+  lda #6 : sta @onb_print_count
+  lda #^onb_text_keya
+  jsr onb_puts
+  lda @onb_print_x
+  sec                       ; + 1: one blank after the key
+  adc @onb_print_done
+  sta @onb_print_x
+  plx
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  lda #10 : sta @onb_print_count
+  lda #^onb_strtab_lo
+  jmp onb_puts
+
+; ===========================================================================
+; onb_puts_center -- print a string centered on the 64 half-column screen.
+; in: X = ptr, A = bank; onb_print_y/_pal/_count preset. Resolves (i18n) to measure
+; the true length, then sets print_x = (64 - len)/2.
+; ===========================================================================
+onb_puts_center:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stx onb_print_src
+  sta @onb_print_bank
+  jsr onb_resolve_str
+  jsr onb_strlen
+  lda #64
+  sec
+  sbc @onb_kv_len
+  lsr
+  sta @onb_print_x
+  jsr onb_hiprint
+  plp
+  rts
+
+; ===========================================================================
+; onb_render_done -- view 3, after the last card: "all set", where the answers go
+; and how to change them later, then the footer. .as/.xl in.
+; ===========================================================================
+onb_render_done:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr onb_clear_body_buf
+  lda #9 : sta @onb_print_y
+  lda #ONB_PAL_AMBER : sta @onb_print_pal
+  lda #20 : sta @onb_print_count
+  ldx #!onb_ui_done_title : lda #^onb_ui_done_title : jsr onb_puts_center
+  lda #13 : sta @onb_print_y
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  lda #44 : sta @onb_print_count
+  ldx #!onb_ui_done_l1 : lda #^onb_ui_done_l1 : jsr onb_puts_center
+  lda #15 : sta @onb_print_y
+  lda #ONB_PAL_DIM : sta @onb_print_pal
+  lda #44 : sta @onb_print_count
+  ldx #!onb_ui_done_l2 : lda #^onb_ui_done_l2 : jsr onb_puts_center
+  lda #19 : sta @onb_print_y
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  lda #24 : sta @onb_print_count
+  ldx #!onb_ui_done_go : lda #^onb_ui_done_go : jsr onb_puts_center
+  jsr onb_done_key
+  jsr onb_draw_footer
+  plp
+  rts
+
+; onb_done_key: paint the key of "PRESS A FOR THE MENU" green, like every key hint. The
+;   line was just centred (onb_print_x = its first column); the key is the lone "A" of the
+;   translated string -- a word of its own, followed by a blank, ':' or the end -- so no
+;   language needs markup and the word order does not matter. .as/.xl in and out.
+onb_done_key:
+  php
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  lda @onb_print_x
+  pha                         ; the line's first column
+  rep #$20 : .al
+  lda #!onb_ui_done_go
+  sta @onb_print_src
+  sep #$20 : .as
+  lda #^onb_ui_done_go
+  sta @onb_print_bank
+  jsr onb_resolve_str
+  rep #$20 : .al
+  lda @onb_print_src
+  sta @onb_print_ptr
+  sep #$20 : .as
+  lda @onb_print_bank
+  sta @onb_print_ptr+2
+  ldy #$0000
+odk_loop:
+  .as : .xl
+  lda [onb_print_ptr], y
+  cmp #$02                    ; char 0 or 1 ends the string
+  bcc odk_none
+  cmp #$41                    ; 'A'
+  bne odk_next
+  cpy #$0000
+  beq odk_after               ; first char: nothing before it
+  dey
+  lda [onb_print_ptr], y
+  iny
+  cmp #$20
+  bne odk_next
+odk_after:
+  .as : .xl
+  iny
+  lda [onb_print_ptr], y
+  dey
+  cmp #$20
+  beq odk_found
+  cmp #$3a                    ; ':'
+  beq odk_found
+  cmp #$02
+  bcc odk_found
+odk_next:
+  .as : .xl
+  iny
+  cpy #$0040
+  bne odk_loop
+odk_none:
+  .as : .xl
+  pla
+  pld
+  plp
+  rts
+odk_found:
+  .as : .xl
+  tya
+  clc
+  adc $01, s                  ; column = first column + index
+  sta @onb_print_x
+  pla
+  rep #$20 : .al
+  tya
+  clc
+  adc @onb_print_ptr
+  sta @onb_print_src
+  sep #$20 : .as
+  lda @onb_print_ptr+2
+  sta @onb_print_bank
+  lda #ONB_PAL_DIM            ; the green of the footer keys
+  sta @onb_print_pal
+  lda #1
+  sta @onb_print_count
+  jsr onb_hiprint
+  pld
+  plp
+  rts
+
+; onb_draw_option_value: the card's answers as a menu window -- the question
+;   ("ENABLE?" on a yes/no card, "CHOOSE:" otherwise) as its title, one row per
+;   answer; onb_build_hdma lays the menu's bar over row onb_sel. Info cards:
+;   nothing. .as/.xl in.
+onb_draw_option_value:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_INFO
+  bne onb_dov_go
+  plp
+  rts
+onb_dov_go:
+  .as : .xl
+  sta @onb_tmp+3            ; kind (the value helpers reuse onb_tmp..+2)
+  ; a menu window, one row per answer, the question in the top border like a menu
+  ; title (window_tl, the text, window_tr: draw_window's order)
+  lda #ONB_COL_X : sta @onb_window_x
+  lda @onb_list_row
+  dec
+  sta @onb_window_y
+  lda #ONB_LIST_WIN_W : sta @onb_window_w
+  lda @onb_list_vis
+  inc
+  inc
+  sta @onb_window_h
+  jsr onb_draw_window
+  lda #ONB_LIST_TITLE_X : sta @onb_print_x
+  lda @onb_list_row
+  dec
+  sta @onb_print_y
+  lda #ONB_PAL_CYAN : sta @onb_print_pal
+  lda #1 : sta @onb_print_count
+  ldx #!onb_text_wtl : lda #^onb_text_wtl : jsr onb_puts
+  lda #ONB_LIST_TITLE_X+1 : sta @onb_print_x
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  lda #24 : sta @onb_print_count
+  lda @onb_tmp+3
+  ldx #!onb_ui_choose
+  cmp #ONB_OPT_ONOFF
+  bne +
+  ldx #!onb_ui_enable
++ cmp #ONB_OPT_MORE
+  bne +
+  ldx #!onb_ui_more
++ lda #^onb_strtab_lo
+  jsr onb_puts
+  lda @onb_print_done
+  clc
+  adc #ONB_LIST_TITLE_X+1
+  sta @onb_print_x
+  lda #ONB_PAL_CYAN : sta @onb_print_pal
+  lda #1 : sta @onb_print_count
+  ldx #!onb_text_wtr : lda #^onb_text_wtr : jsr onb_puts
+  ; the visible rows: answers onb_list_top .. onb_list_top + onb_list_vis - 1
+  lda @onb_list_top
+  sta @onb_row
+onb_dov_row:
+  .as : .xl
+  lda @onb_row
+  sec
+  sbc @onb_list_top
+  cmp @onb_list_vis
+  bcc +
+  jsr onb_draw_scrollbar
+  plp
+  rts
++ jsr onb_row_label         ; X = addr, A = bank of row onb_row's label
+  pha
+  lda @onb_row
+  sec
+  sbc @onb_list_top
+  clc
+  adc @onb_list_row
+  sta @onb_print_y
+  lda #ONB_LIST_LABEL_X : sta @onb_print_x
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  lda #24 : sta @onb_print_count
+  pla
+  jsr onb_puts
+  lda @onb_row
+  inc
+  sta @onb_row
+  bra onb_dov_row
+
+; onb_draw_scrollbar: when the answers do not all fit, the menu's scroll bar in the
+;   box's last inner column: the track (glyph 16) on every visible row, the thumb
+;   (glyph 17) where the bar is among all the answers -- row sel*(vis-1)/(nopts-1),
+;   so it sits at the top on the first answer and at the bottom on the last.
+;   .as/.xl in.
+onb_draw_scrollbar:
+  .as : .xl
+  lda @onb_list_vis
+  cmp @onb_nopts
+  bcc +
+  rts
++ lda @onb_sel              ; thumb = sel * (vis-1) / (nopts-1), hardware mul/div
+  sta $4202
+  lda @onb_list_vis
+  dec
+  sta $4203
+  nop : nop : nop : nop     ; 8 cycles for the product
+  ldx $4216
+  stx $4204
+  lda @onb_nopts
+  dec
+  sta $4206
+  nop : nop : nop : nop     ; 16 cycles for the quotient
+  nop : nop : nop : nop
+  lda $4214
+  sta @onb_sb_thumb
+  lda #$00
+  sta @onb_tmp
+onb_sb_row:
+  .as : .xl
+  lda @onb_tmp
+  cmp @onb_list_vis
+  bcc +
+  rts
++ clc
+  adc @onb_list_row
+  sta @onb_print_y
+  lda #ONB_SB_X : sta @onb_print_x
+  lda #1 : sta @onb_print_count
+  lda @onb_tmp
+  ldx #!onb_text_sbtrack
+  ldy #ONB_PAL_DIM
+  cmp @onb_sb_thumb
+  bne +
+  ldx #!onb_text_sbthumb
+  ldy #ONB_PAL_WHITE
++ tya
+  sta @onb_print_pal
+  lda #^onb_text_sbtrack
+  jsr onb_puts
+  lda @onb_tmp
+  inc
+  sta @onb_tmp
+  bra onb_sb_row
+
+; onb_row_label: X = addr, A = bank of the label of answer row onb_row for the
+;   kind in onb_tmp+3. .as/.xl in (keeps onb_tmp+3 and onb_row).
+onb_row_label:
+  .as : .xl
+  lda @onb_tmp+3
+  cmp #ONB_OPT_LANG
+  bne +
+  lda @onb_row
+  rep #$20 : .al
+  and #$0007
+  asl
+  tax
+  lda @onb_langname_tbl, x
+  tax
+  sep #$20 : .as
+  lda #^onb_langname_tbl
+  rts
++ cmp #ONB_OPT_MORE
+  bne +
+  lda @onb_row              ; "and more": the item's name
+  clc
+  adc #ONB_MORE_FIRST
+  jsr onb_feat_ptr_idx
+  rep #$20 : .al
+  ldy #ONB_FD_NAME
+  lda [onb_descptr], y
+  tax
+  sep #$20 : .as
+  lda #^onb_strtab_lo
+  rts
++ cmp #ONB_OPT_ONOFF
+  bne +
+  lda @onb_row
+  eor #$01                  ; row 0 = Yes
+  jmp onb_yesno_value_ptr
++ cmp #ONB_OPT_COVERS
+  bne +
+  lda @onb_row
+  jmp onb_covers_value_ptr
++ cmp #ONB_OPT_RESET
+  bne +
+  lda @onb_row
+  jmp onb_reset_value_ptr
++ lda @onb_row
+  jmp onb_gi_value_ptr
+
+; onb_gi_value_ptr: A = show_game_info (0/1/2). X=addr, A=bank of Off / On / Context.
+;   .as/.xl in/out.
+onb_gi_value_ptr:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  cmp #$01
+  beq onb_gvp_on
+  cmp #$02
+  beq onb_gvp_ctx
+  ldx #!onb_text_off : lda #^onb_text_off
+  bra onb_gvp_out
+onb_gvp_on:
+  .as : .xl
+  ldx #!onb_text_on : lda #^onb_text_on
+  bra onb_gvp_out
+onb_gvp_ctx:
+  .as : .xl
+  ldx #!onb_text_gi_ctx : lda #^onb_text_gi_ctx
+onb_gvp_out:
+  .as : .xl
+  stx onb_tmp
+  sta @onb_tmp+2
+  plp
+  ldx onb_tmp
+  lda @onb_tmp+2
+  rts
+
+; ===========================================================================
+; Small reusable helpers
+; ===========================================================================
+
+; ===========================================================================
+; onb_draw_window -- draw a menu-style bordered dialog box (blue border, palette 3)
+; at (onb_window_x, onb_window_y) size (onb_window_w x onb_window_h). Interior is
+; filled with spaces (transparent -> the menu gradient shows through); the card text
+; is drawn on top afterwards. Uses onb_hiprint + the SAME font border glyphs (20-29)
+; the menu's ui.a65 draw_window uses, in the SAME mode-5 hires -> the box is visually
+; identical to the menu's dialogs. .as/.xl in.
+;   glyphs: 20 NW  21 NE  22 SW  23 SE  24 N-edge  25 S-edge  26 W-edge  27 E-edge
+; ===========================================================================
+onb_draw_window:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ; --- top border row: NW, N-edge x (w-2), NE ---
+  lda #20 : sta @onb_dw_l
+  lda #24 : sta @onb_dw_m
+  lda #21 : sta @onb_dw_r
+  jsr onb_dw_buildrow
+  lda @onb_window_y : sta @onb_print_y
+  jsr onb_dw_emit
+  ; --- interior rows: W-edge, space x (w-2), E-edge  (h-2 rows) ---
+  lda #26 : sta @onb_dw_l
+  lda #$20 : sta @onb_dw_m
+  lda #27 : sta @onb_dw_r
+  jsr onb_dw_buildrow
+  lda @onb_window_h
+  sec : sbc #$02
+  sta @onb_dw_cnt2
+onb_dw_midloop:
+  lda @onb_dw_cnt2
+  beq onb_dw_bottom
+  dec : sta @onb_dw_cnt2
+  lda @onb_print_y : inc : sta @onb_print_y   ; (INC has no long mode -> load/inc/store)
+  jsr onb_dw_emit
+  bra onb_dw_midloop
+onb_dw_bottom:
+  ; --- bottom border row: SW, S-edge x (w-2), SE ---
+  lda #22 : sta @onb_dw_l
+  lda #25 : sta @onb_dw_m
+  lda #23 : sta @onb_dw_r
+  jsr onb_dw_buildrow
+  lda @onb_print_y : inc : sta @onb_print_y
+  jsr onb_dw_emit
+  plp
+  rts
+
+; onb_dw_buildrow -- onb_stringbuf = [onb_dw_l, onb_dw_m x (onb_window_w-2), onb_dw_r, 0]. .as/.xl in.
+onb_dw_buildrow:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #$0000
+  lda @onb_dw_l : sta @onb_stringbuf, x
+  inx
+  lda @onb_window_w
+  sec : sbc #$02
+  sta @onb_dw_cnt
+onb_dwb_fill:
+  lda @onb_dw_cnt
+  beq onb_dwb_done
+  dec : sta @onb_dw_cnt
+  lda @onb_dw_m : sta @onb_stringbuf, x
+  inx
+  bra onb_dwb_fill
+onb_dwb_done:
+  lda @onb_dw_r : sta @onb_stringbuf, x
+  inx
+  lda #$00 : sta @onb_stringbuf, x         ; NUL terminate
+  plp
+  rts
+
+; onb_dw_emit -- hiprint onb_stringbuf as one box row at (onb_window_x, onb_print_y), pal 3. .as/.xl in.
+onb_dw_emit:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_window_x : sta @onb_print_x
+  lda #$03 : sta @onb_print_pal
+  lda @onb_window_w : sta @onb_print_count
+  ldx #!onb_stringbuf : lda #^onb_stringbuf
+  jsr onb_puts
+  plp
+  rts
+
+; onb_itoa_append -- append the decimal ASCII of A (0..99) to onb_stringbuf at index
+; X, advancing X past what it wrote. Leading zero suppressed for values < 10.
+; .as (A 8-bit) / .xl (X 16-bit) in; both preserved via php/plp.
+onb_itoa_append:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldy #$0000
+onb_ita_tens:
+  cmp #10
+  bcc onb_ita_ones
+  sec
+  sbc #10
+  iny
+  bra onb_ita_tens
+onb_ita_ones:
+  pha                        ; save ones digit
+  tya                        ; tens count (0..9)
+  beq onb_ita_skiptens       ; suppress the leading zero for single-digit values
+  clc : adc #$30             ; '0'
+  sta @onb_stringbuf, x
+  inx
+onb_ita_skiptens:
+  pla                        ; ones digit
+  clc : adc #$30             ; '0'
+  sta @onb_stringbuf, x
+  inx
+  plp
+  rts
+
+; onb_covers_value_ptr: A = show_covers value (0/1/2). On return X=addr, A=bank of
+; the matching label (Off/Large/Small). .as/.xl in/out.
+onb_covers_value_ptr:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  cmp #$01
+  beq onb_cvp_large
+  cmp #$02
+  beq onb_cvp_small
+  ldx #!onb_text_off : lda #^onb_text_off
+  bra onb_cvp_out
+onb_cvp_large:
+  ldx #!onb_text_large : lda #^onb_text_large
+  bra onb_cvp_out
+onb_cvp_small:
+  ldx #!onb_text_small : lda #^onb_text_small
+onb_cvp_out:
+  ; stash X/A across plp
+  stx onb_tmp
+  sta @onb_tmp+2
+  plp
+  ldx onb_tmp
+  lda @onb_tmp+2
+  rts
+
+; onb_reset_value_ptr: A = enable_rst_to_menu (0..4). X=addr, A=bank of Off / To
+;   menu / To folder / To game / By duration. .as/.xl in/out.
+onb_reset_value_ptr:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  cmp #$01
+  beq onb_rvp_menu
+  cmp #$02
+  beq onb_rvp_folder
+  cmp #$03
+  beq onb_rvp_game
+  cmp #$04
+  beq onb_rvp_hold
+  ldx #!onb_text_off : lda #^onb_text_off
+  bra onb_rvp_out
+onb_rvp_menu:
+  .as : .xl
+  ldx #!onb_text_rst_menu : lda #^onb_text_rst_menu
+  bra onb_rvp_out
+onb_rvp_folder:
+  .as : .xl
+  ldx #!onb_text_rst_folder : lda #^onb_text_rst_folder
+  bra onb_rvp_out
+onb_rvp_game:
+  .as : .xl
+  ldx #!onb_text_rst_game : lda #^onb_text_rst_game
+  bra onb_rvp_out
+onb_rvp_hold:
+  .as : .xl
+  ldx #!onb_text_rst_hold : lda #^onb_text_rst_hold
+onb_rvp_out:
+  .as : .xl
+  stx onb_tmp
+  sta @onb_tmp+2
+  plp
+  ldx onb_tmp
+  lda @onb_tmp+2
+  rts
+
+; onb_yesno_value_ptr: A = bool. X=addr,A=bank of "No"/"Yes". .as/.xl in/out.
+onb_yesno_value_ptr:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  cmp #$00
+  beq onb_ynp_no
+  ldx #!onb_text_yes : lda #^onb_text_yes
+  bra onb_ynp_out
+onb_ynp_no:
+  .as : .xl
+  ldx #!onb_text_no : lda #^onb_text_no
+onb_ynp_out:
+  .as : .xl
+  stx onb_tmp
+  sta @onb_tmp+2
+  plp
+  ldx onb_tmp
+  lda @onb_tmp+2
+  rts
+
+; onb_strlen -- length of the string at onb_print_src / onb_print_bank (chars 0 and 1
+; terminate, like hiprint). out: onb_kv_len. DP=0 / DB=$7e setup mirrors onb_resolve_str
+; so the onb_* pointer vars resolve the same proven way.
+onb_strlen:
+  php
+  phd
+  phb
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  lda #$7e
+  pha
+  plb
+  rep #$20 : .al
+  lda @onb_print_src
+  sta @onb_print_ptr
+  sep #$20 : .as
+  lda @onb_print_bank
+  sta @onb_print_ptr+2
+  rep #$10 : .xl
+  ldy #$0000
+onb_sl_loop:
+  lda [onb_print_ptr], y
+  cmp #$02                      ; char 0 or 1 ends the run
+  bcc onb_sl_done
+  iny
+  cpy #$0040                    ; defensive cap
+  bne onb_sl_loop
+onb_sl_done:
+  tya
+  sta @onb_kv_len
+  plb
+  pld
+  plp
+  rts
+
+; ===========================================================================
+; Brightness fade helpers (NMI does the per-frame ramp toward onb_tgt_bright).
+; ===========================================================================
+; onb_fade_out: ramp tgt to 0 and spin until cur reaches 0. .as/.xl in.
+onb_fade_out:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00 : sta @onb_tgt_bright
+- jsr onb_waitnmi
+  lda @onb_cur_bright
+  bne -
+  plp
+  rts
+; onb_fade_in: ramp tgt to CFG brightness, spin until cur reaches it. .as/.xl in.
+onb_fade_in:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CFG_BRIGHTNESS_LIMIT
+  and #$0f                ; clamp to a valid $2100 brightness (open-bus $ff -> $0f)
+  bne +
+  lda #$0f                ; 0 (black/unset) -> full
++ sta @onb_tgt_bright
+- jsr onb_waitnmi
+  lda @onb_cur_bright
+  cmp @onb_tgt_bright
+  bne -
+  plp
+  rts
+
+; onb_waitnmi: spin until the NMI sets isr_done, then clear it. NMI must be on.
+onb_waitnmi:
+  php
+  sep #$20 : .as
+- lda @isr_done
+  beq -
+  lda #$00
+  sta @isr_done
+  plp
+  rts
+
+; ===========================================================================
+; Input: onb_syncread -- one debounced joypad sample (like gameinfo's gin_syncread
+; + the menu's read_pad). Sync to the NMI's isr_done, wait for the hardware
+; auto-joypad ($4212 bit0) to finish, then read the latched pads with edge +
+; auto-repeat. We carry our OWN read_pad (onb_read_pad) so the onboarding ROM is
+; self-contained.
+; ===========================================================================
+onb_syncread:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+- lda @isr_done
+  beq -
+  lda #$00
+  sta @isr_done
+- lda $4212             ; wait for auto-read to finish (A latched last)
+  lsr
+  bcs -
+  jsr onb_read_pad
+  plp
+  rts
+
+; onb_read_pad -- edge detect + d-pad auto-repeat, condensed from snes/pad.a65.
+; Produces onb_pad_* (a/b/x/y/l/r/start/select/up/down/left/right) = button just
+; pressed (edge), with auto-repeat on the directionals. .as/.xl handled inside.
+onb_read_pad:
+  php
+  rep #$30 : .al : .xl
+  ; zero the edge outputs
+  sep #$20 : .as
+  lda #$00
+  sta @onb_pad_a
+  sta @onb_pad_b
+  sta @onb_pad_x
+  sta @onb_pad_y
+  sta @onb_pad_l
+  sta @onb_pad_r
+  sta @onb_pad_start
+  sta @onb_pad_select
+  sta @onb_pad_up
+  sta @onb_pad_down
+  sta @onb_pad_left
+  sta @onb_pad_right
+  rep #$20 : .al
+  ldx onb_pad_mem      ; previous frame's held buttons
+  ; Both controllers, merged like the menu's read_pad (snes/pad.a65): the low nibble of
+  ; $4218/$421a is the controller ID and is 0 only for a standard pad; a non-zero one keeps
+  ; just that nibble, which carries no button bits, so a mouse adds no phantom presses.
+  lda $4218             ; controller 1 (byetUDLRaxlriiii layout in high byte)
+  and #$000f
+  bne +
+  lda $4218
++ sta @onb_pad_mem
+  lda $421a             ; controller 2
+  and #$000f
+  bne +
+  lda $421a
++ ora @onb_pad_mem
+  sta @onb_pad_mem
+  ; auto-repeat for the directionals (UDLR = bits $0f00 of $4218 high byte)
+  and #$0f00
+  bne onb_rp_count
+  lda #$00
+  sta @onb_pad_delay
+onb_rp_cont1:
+  txa                   ; previous held
+  eor @onb_pad_mem
+  and @onb_pad_mem      ; edge = newly pressed
+  sta @onb_pad_trig
+  lda #$0010
+  cmp @onb_pad_delay
+  bne onb_rp_cont2
+  ; auto-repeat fires: clear held so the next frame re-triggers, reset delay
+  lda #$0000
+  sta @onb_pad_mem
+  lda #$000d
+  sta @onb_pad_delay
+onb_rp_cont2:
+  ; decode onb_pad_trig (high byte BYsS udlr, low byte axlr....) into the flags.
+  ; Layout matches $4218: bit15 B, 14 Y, 13 select, 12 start, 11 up, 10 down,
+  ; 9 left, 8 right, 7 A, 6 X, 5 L, 4 R.
+  sep #$20 : .as
+  lda @onb_pad_trig     ; low byte first: A X L R
+  rol
+  rol onb_pad_a
+  rol
+  rol onb_pad_x
+  rol
+  rol onb_pad_l
+  rol
+  rol onb_pad_r
+  lda @onb_pad_trig+1   ; high byte: B Y select start up down left right
+  rol
+  rol onb_pad_b
+  rol
+  rol onb_pad_y
+  rol
+  rol onb_pad_select
+  rol
+  rol onb_pad_start
+  rol
+  rol onb_pad_up
+  rol
+  rol onb_pad_down
+  rol
+  rol onb_pad_left
+  rol
+  rol onb_pad_right
+  plp
+  rts
+onb_rp_count:
+  .al : .xl               ; reached with A 16-bit (the bne above), assembled after .as code
+  lda @onb_pad_delay
+  inc
+  sta @onb_pad_delay
+  bra onb_rp_cont1
+
+; ===========================================================================
+; onb_puts -- thin wrapper around onb_hiprint (the onboarding's own copy of the
+; menu's hiprint). Inputs: X = string addr, A = string bank; onb_print_x/_y/
+; _pal/_count already set. Sets print_src/print_bank then calls hiprint. .as/.xl.
+; (onb_hiprint lives in onb_ui.a65 -- a trimmed clone of ui.a65's hiprint +
+; resolve_str for i18n.)
+; ===========================================================================
+onb_puts:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stx onb_print_src
+  sta @onb_print_bank
+  jsr onb_hiprint
+  plp
+  rts
+
+; ===========================================================================
+; Boot init helpers (clones of the menu's, trimmed)
+; ===========================================================================
+
+; onb_clear_vars -- zero every WRAM gate var (clear_wram leaves $55). snescom has
+; no long stz so each is `lda #$00 : sta @var`. Add new gate vars here.
+onb_clear_vars:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  sta @onb_card
+  sta @onb_focus
+  sta @onb_screen_static
+  sta @onb_cur_bright
+  sta @onb_tgt_bright
+  sta @isr_done
+  sta @onb_val_dir
+  sta @onb_view
+  sta @onb_sel
+  sta @onb_nopts
+  sta @onb_demo_busy
+  sta @onb_music_on        ; a boot is a reset: the S-SMP is at IPL
+  sta @onb_sfx_pending     ; no "menu sounds" preview (a music reset never has one open)
+  sta @onb_music_none      ; the card's music not looked for yet
+  sta @onb_wel_on          ; the NMI is the tour's until the welcome clip says otherwise
+  sta @onb_apu_stub
+  sta @onb_pad_a
+  sta @onb_pad_b
+  sta @onb_pad_start
+  rep #$20 : .al
+  lda #$0000
+  sta @onb_pad_mem
+  sta @onb_pad_delay
+  sta @onb_pad_trig
+  sep #$20 : .as
+  plp
+  rts
+
+; onb_wait_mcu_ready -- the menu's wait_mcu_ready: clear MCU_CMD, then wait until the
+; firmware's menu loop shows MCU_CMD_RDY in SNES_CMD. Bounded at ~1.5 s (8 x 65536 polls):
+; the firmware spends 100 ms on the CIC alone, more than the menu's single pass allows for.
+; A timeout only skips what the boot asks for (the clip, the music upload), never hangs.
+onb_wait_mcu_ready:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  sta @MCU_CMD
+  ldy #$0008
+owm_pass:
+  ldx #$0000
+- lda @SNES_CMD
+  cmp #$55
+  beq owm_out
+  dex
+  bne -
+  dey
+  bne owm_pass
+owm_out:
+  plp
+  rts
+
+; onb_store_wram -- copy the WRAM-wait trampoline into WRAM. MUST run AFTER
+; onb_setup_gfx (setup_gfx clears that WRAM region). The trampoline lets us spin
+; for the MCU while ROM is unavailable (FPGA reconfig during a reload command).
+onb_store_wram:
+  php
+  rep #$30 : .al : .xl
+  lda #$0008             ; 9-byte trampoline; MVN copies A+1 (computed expr halted CPU)
+  ldx #!onb_wram_wait_mcu_src
+  ldy #!ONB_WRAM_WAIT_MCU
+  phb
+  mvn $7e, $c0
+  plb
+  plp
+  rts
+
+; The WRAM-wait body (copied to ONB_WRAM_WAIT_MCU). Spins until SNES_CMD == $55.
+onb_wram_wait_mcu_src:
+  .as
+- lda @SNES_CMD
+  cmp #$55
+  bne -
+  rtl
+onb_wram_wait_mcu_end:
+
+; onb_trampoline -- jsl target that does an indirect long jump through onb_callptr.
+; Used by onb_card_call_draw to dispatch a card's draw routine (which ends in rtl).
+onb_trampoline:
+  jml [onb_callptr]
+
+; ===========================================================================
+; PPU init / setup_gfx -- condensed clones of the menu's (main.a65). Fonts into
+; VRAM (BG1 base $0000, BG2 base $4000), tilemaps + palette, window stack init.
+; ===========================================================================
+onb_snes_init:
+  ; Port of snes/main.a65 snes_init: PPU + CPU regs to a known state.
+  ; COVER_OBSEL -> $00 (the onboarding uses no OBJ/sprites).
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz $4200
+  lda #$ff
+  sta $4201
+  stz $4202
+  stz $4203
+  stz $4204
+  stz $4205
+  stz $4206
+  stz $4207
+  stz $4208
+  stz $4209
+  stz $420a
+  stz $420b
+  stz $420c
+  lda #$8f
+  sta $2100     ; INIDISP: force blank
+  lda #$00      ; OBSEL: no OBJ
+  sta $2101
+  stz $2102
+  stz $2103
+  stz $2105
+  stz $2106
+  stz $2107
+  stz $2108
+  stz $2109
+  stz $210a
+  stz $210b
+  stz $210c
+  stz $210d
+  stz $210d
+  stz $210e
+  stz $210e
+  stz $210f
+  stz $210f
+  lda #$05
+  sta $2110
+  stz $2110
+  stz $2111
+  stz $2111
+  stz $2112
+  stz $2112
+  stz $2113
+  stz $2113
+  stz $2114
+  stz $2114
+  lda #$80
+  sta $2115
+  stz $2116
+  stz $2117
+  stz $211a
+  stz $211b
+  lda #$01
+  sta $211b
+  stz $211c
+  stz $211c
+  stz $211d
+  stz $211d
+  stz $211e
+  sta $211e
+  stz $211f
+  stz $211f
+  stz $2120
+  stz $2120
+  stz $2121
+  stz $2123
+  stz $2124
+  stz $2125
+  stz $2126
+  stz $2127
+  stz $2128
+  stz $2129
+  stz $212a
+  stz $212b
+  stz $212c
+  stz $212d
+  stz $212e
+  stz $212f
+  lda #$30
+  sta $2130
+  stz $2131
+  lda #$e0
+  sta $2132
+  stz $2133
+  rts
+
+onb_setup_gfx:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz $4200
+  stz $420b
+  stz $420c
+  ; clear BG1/BG2 tilemaps
+  ldx #BG1_TILE_BASE : stx $2116
+  DMA7(#$09, #$1000, #^onb_zero, #!onb_zero, #$18)
+  ldx #BG2_TILE_BASE : stx $2116
+  DMA7(#$09, #$1000, #^onb_zero, #!onb_zero, #$18)
+  ; build the fonts into VRAM (BG1 base $0000, BG2 base $4000) -- onb_genfonts is
+  ; the port of the menu's genfonts (main.a65), driven by onb_font (onb_font.a65).
+  jsr onb_genfonts
+  ; OBJ name base; both demo slots start blank.
+  lda #ONB_OBSEL
+  sta $2101
+  ldx #ONB_DEMO_VRAM0 : stx $2116     ; both demo slots blank (a picture fills 14 of 16 rows)
+  DMA7(#$09, #$4000, #^onb_zero, #!onb_zero, #$18)
+  ; init window stack head (if onb_ui.a65's draw_window is used by any card).
+  ldx #$ffff
+  stx onb_window_stack_head
+  plp
+  rts
+
+; onb_genfonts -- port of snes/main.a65 genfonts: clear the VRAM font areas, then
+; DMA the menu font (font.o65, linked) into 4bpp tiles at BG1 base $0000 + BG2
+; base $4000. Same font format as the menu (font.o65 is REUSED -- see the Makefile
+; ONB_O65). Without this, hiprint draws blank glyphs.
+onb_genfonts:
+  php
+  rep #$10 : .xl
+  sep #$20 : .as
+  ; clear VRAM font areas
+  ldx #$0000
+  stx $2116
+  DMA7(#$09, #$4000, #^onb_zero, #!onb_zero, #$18)
+  ldx #$4000
+  stx $2116
+  DMA7(#$09, #$2000, #^onb_zero, #!onb_zero, #$18)
+  sep #$10 : .xs
+  rep #$20 : .al
+  stz $2116
+  stz $2117
+  ldx #$01
+  stx $4370
+  ldx #^font
+  stx $4374
+  lda #!font
+  sta $4372
+  lda #$0010
+  sta $4375
+  ldx #$18
+  stx $4371
+  lda #$0000
+- sta $2116
+  ldx #$10
+  stx $4375
+  ldx #$80
+  stx $420b
+  clc
+  adc #$20
+  cmp #$2000
+  bne -
+  ldx #^font
+  stx $4374
+  lda #!font
+  sta $4372
+  lda #$4000
+- sta $2116
+  ldx #$10
+  stx $4375
+  ldx #$80
+  stx $420b
+  clc
+  adc #$10
+  cmp #$5000
+  bne -
+  plp
+  rts
+
+; ===========================================================================
+; Misc small clones
+; ===========================================================================
+onb_waitblank:
+  php
+  sep #$30 : .as : .xs
+- lda @$004212
+  bmi -
+- lda @$004212
+  bpl -
+  plp
+  rts
+
+; onb_clear_body_buf -- zero the WHOLE screen (rows 0..27) of both BG tile buffers so
+; a card rebuild starts blank. The buffers ($7EA000/$7EB000) are not part of any $55
+; WRAM fill, so clear them explicitly. 28 rows * 64 bytes = 1792 B (896 words) each.
+; DB := $7E so the absolute,X stores reach $7Exxxx (STZ has no long mode).
+onb_clear_body_buf:
+  php
+  phb
+  sep #$20 : .as          ; 8-bit A so the DB-set pha/plb push/pull 1 byte each.
+  lda #$7e
+  pha
+  plb                     ; DB = $7E
+  rep #$30 : .al : .xl    ; 16-bit A/X for the clear loop (stz writes 2 bytes/step)
+  ldx #(28*64-2)          ; 28 rows (0..27) = whole mode-5 screen
+- stz !BG1_TILE_BUF, x
+  stz !BG2_TILE_BUF, x
+  dex
+  dex
+  bpl -
+  plb                     ; restore caller's DB (the phb above)
+  plp
+  rts
+
+; onb_dma_body -- DMA the whole screen (rows 0..27) of both BG buffers to VRAM (forced
+; blank). Mirrors gameinfo's gi_dma_body. .xl in.
+onb_dma_body:
+  php
+  rep #$10 : .xl
+  ldx #BG1_TILE_BASE : stx $2116
+  DMA7(#$01, #28*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF, #$18)
+  ldx #BG2_TILE_BASE : stx $2116
+  DMA7(#$01, #28*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF, #$18)
+  plp
+  rts

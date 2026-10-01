@@ -34,4 +34,10 @@ void menucmd_export_boot_nav(uint8_t firstboot);
    SAVE_CFG handler (main.c) reloads too, when a font-edge toggle moved. */
 void browser_pos_save(const char *path);
 
+/* 1 = the next menu load boots ONBOARDING_FILENAME (the first-boot tour ROM). */
+extern uint8_t onboarding_pending;
+/* 1 = the next menu load hands the console over without a reset (the tour asked for it
+   with CMD_ONBOARDING_DONE; see SNESCMD_MENU_HANDOFF). */
+extern uint8_t menu_handoff;
+
 #endif

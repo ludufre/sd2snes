@@ -158,6 +158,8 @@ snes/const_lang_str.a65
 snes/const_lang_tab.a65
 # generated in-game HELP tab i18n tables (snes/utils/gen_igmenu_lang.py)
 snes/igmenu_lang.i65
+# generated onboarding tour string pool (snes/utils/gen_onb_lang.py)
+snes/onboarding/onb_const_lang.a65
 
 __pycache__
 *.sample

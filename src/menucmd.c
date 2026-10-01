@@ -5,6 +5,7 @@
 #include "uart.h"
 #include "ff.h"
 #include "fileops.h"
+#include "diskio.h"   /* ff_sd_offload / sd_offload_tgt: the welcome clip streams with SD DMA */
 #include "fpga.h"
 #include "fpga_spi.h"
 #include "filetypes.h"
@@ -305,6 +306,12 @@ static void delete_srm_from(sel_src_t s) {
    sitting in (FILESEL_CWD, which the menu keeps at SRAM_MENU_FILEPATH_ADDR) with no item
    pre-selected. Never reuse SRAM_LASTGAME_DIR/FILE for this: those are rewritten on every
    menu boot by cfg_dump_listed_games_for_snes. */
+/* Set by SNES_CMD_LOAD_ONBOARDING: the next menu load (main.c) boots the tour ROM
+   instead of the menu.  Cleared by SNES_CMD_ONBOARDING_DONE; a power cycle mid-tour
+   also clears it, and the gate asks again because the flag was never saved. */
+uint8_t onboarding_pending;
+uint8_t menu_handoff;
+
 NO_INLINE void browser_pos_save(const char *path) {
   char dir[256];
   const char *slash = path ? strrchr(path, '/') : NULL;
@@ -492,6 +499,32 @@ static int cmd_keeps_fmv(uint8_t cmd) {
    DAC clip) so the DAC frees up for the browser's nav SFX. No-op if no FMV is active.
    (Returning to the Favorites/Recents list issues NO command -> the idle watchdog in snes.c
    covers it.) */
+/* The first-boot tour's welcome clip: the video into PSRAM for the tour to play
+   (snes/onboarding/onb_welcome.a65), the jingle stays on the card (SNES_CMD_ONB_WELCOME).
+   SD DMA straight into PSRAM, like a ROM load: the tour waits in WRAM meanwhile.  The
+   magic is zeroed first and again on a read error, so a missing, oversized or broken
+   file leaves no clip behind and the tour skips it. */
+#define ONB_WELCOME_STAGE  1
+#define ONB_WELCOME_PLAY   2
+#define ONB_WELCOME_FMV    "/sd2snes/welcome.fmv"
+#define ONB_WELCOME_PCM    "/sd2snes/welcome.pcm"
+
+static void onboarding_stage_welcome(void) {
+  sram_writelong(0, SRAM_ONB_WELCOME_ADDR);
+  file_open((uint8_t*)ONB_WELCOME_FMV, FA_READ);
+  if(file_res) return;
+  if(file_handle.fsize >= 16 && file_handle.fsize <= SRAM_ONB_WELCOME_MAX) {
+    set_mcu_addr(SRAM_ONB_WELCOME_ADDR);
+    for(;;) {
+      ff_sd_offload = 1;
+      sd_offload_tgt = 0;
+      if(!file_read() || file_res) break;
+    }
+    if(file_res) sram_writelong(0, SRAM_ONB_WELCOME_ADDR);
+  }
+  file_close();
+}
+
 void menucmd_fmv_gate(uint8_t cmd) {
   /* The PCM player owns the DAC through the same menu_music_* engine, and it issues
      commands this gate does not know (play, pause, resume).  Without this guard the gate
@@ -939,6 +972,54 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
          viewer's bounded "spin until MCU_CMD == 0" waits for.  So: return 0. */
       game_cmd_serve(cmd);
       return 0;
+    case SNES_CMD_LOAD_ONBOARDING:
+      /* First-boot gate said yes: boot the tour ROM in place of the menu.  It goes
+         through the outer loop's menu load (mapper 7 at SRAM_MENU_ADDR), which is
+         what gives the tour the $2A00 command window and the CFG block it writes
+         its choices into -- a game load maps neither.  f_stat first, like
+         RESTORE_CLASSIC: on a miss stage the popup text (the Settings entry shows
+         it) and NACK; the first-boot gate ignores the popup and takes the "no"
+         path, so the question is not asked on every boot. */
+      if(f_stat((const TCHAR*)ONBOARDING_FILENAME, NULL) != FR_OK) {
+        printf("onboarding: %s not found on card\n", ONBOARDING_FILENAME);
+        snes_menu_errmsg(MENU_ERR_SUPPLFILE, (void*)path_leaf(ONBOARDING_FILENAME));
+        snescmd_writebyte(0xaa, SNESCMD_SNES_CMD);
+        return 0;
+      }
+      onboarding_pending = 1;
+      *menu_reload = 1;
+      return cmd;
+    case SNES_CMD_ONB_WELCOME:
+      /* The tour's welcome clip (snes/onboarding/onb_welcome.a65).  The jingle streams
+         from the card like the info screen's FMV soundtrack, not through the FPGA sfxdma
+         engine: that one's runaway watchdog ends a one-shot after ~0.4 s.  The DAC is
+         claimed so neither FMV watchdog stops it; its loop region is silence, so it goes
+         quiet by itself and STOP releases the DAC. */
+      switch(snes_get_mcu_param() & 0xff) {
+        case ONB_WELCOME_STAGE:
+          onboarding_stage_welcome();
+          break;
+        case ONB_WELCOME_PLAY:
+          menu_music_lock(1);
+          if(menu_music_play(ONB_WELCOME_PCM) != 0xA0) menu_music_lock(0);
+          break;
+        default:
+          menu_music_stop();
+          menu_music_lock(0);
+          break;
+      }
+      return 0;
+    case SNES_CMD_ONBOARDING_DONE:
+      /* The tour ended.  It ran as the menu, so this arrives here; its option
+         changes, and the tour version now seen, are already in the CFG block.
+         MCU_PARAM 1 = it waits in WRAM for the menu: load it without resetting
+         the console, so the S-SMP keeps playing the menu music. */
+      menu_handoff = (snes_get_mcu_param() & 0xff) == 1;
+      cfg_get_from_menu();
+      cfg_save();
+      onboarding_pending = 0;
+      *menu_reload = 1;
+      return cmd;
     case SNES_CMD_SET_THEME:
       /* a .thm was picked in the browser (any visible folder). MCU_PARAM was
          set up like LOADROM (cwd + selected entry) so get_selected_name

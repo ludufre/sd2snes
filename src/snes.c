@@ -26,6 +26,7 @@
 
 #include <string.h>
 #include <stdarg.h>
+#include <stddef.h>   /* offsetof: the menu's live CFG byte for the SFX gate */
 #include "bits.h"
 #include "config.h"
 #include "uart.h"
@@ -630,11 +631,17 @@ uint8_t menu_main_loop() {
         fx = fpga_read_snescmd();
         if(fx) {
           snescmd_writebyte(0, SNESCMD_SFX_MAILBOX);
-          /* "Menu sounds" toggle (CFG_ENABLE_MENU_SFX): gate HERE so flipping
-             the option takes effect instantly, no reload needed. While FMV audio loops
-             on the DAC the nav blips are suppressed (single DAC) - the mailbox is still
-             drained so none queue up for when the clip stops. */
-          if(fx <= 4 && CFG.enable_menu_sfx && !menu_music_active()) menu_sfx_play(menu_sfx_files[fx - 1]);
+          /* "Menu sounds" toggle (CFG_ENABLE_MENU_SFX): gate HERE, on the menu's own
+             copy of the CFG block (BSRAM) rather than ours, which only catches up on
+             SAVE_CFG -- so flipping the option takes effect at once, also in the
+             onboarding tour, which previews the answer before it is saved. While FMV
+             audio loops on the DAC the nav blips are suppressed (single DAC) - the
+             mailbox is still drained so none queue up for when the clip stops. */
+          if(fx <= 4 && sram_readbyte(SRAM_MENU_CFG_ADDR + offsetof(cfg_t, enable_menu_sfx))
+             && !menu_music_active()) {
+            printf("sfx %u\n", fx);
+            menu_sfx_play(menu_sfx_files[fx - 1]);
+          }
         }
       }
     }
