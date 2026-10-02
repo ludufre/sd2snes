@@ -1028,7 +1028,7 @@ clr_autoboot_at_boot:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   plp
   rts

@@ -322,7 +322,7 @@ mt_run_wait:
   lda @SNES_CMD
   cmp #$55
   bne mt_run_wait
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   ; Still executing => the test did NOT start (missing fpga_test, or no handler at all).
   ; A run that started never reaches this instruction: the CPU is in reset until the menu

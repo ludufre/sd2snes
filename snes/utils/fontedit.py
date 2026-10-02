@@ -14,6 +14,7 @@ Usage:
     python3 fontedit.py additalian         Insert Italian chars (ì ò È Ì Ò Ù)
     python3 fontedit.py addgerman          Insert German chars (ä ö ß Ä Ö)
     python3 fontedit.py addtourglyphs      Insert the onboarding tour's glyphs (241-243)
+    python3 fontedit.py addbrowsericons    Insert the browser's file-type icons
     python3 fontedit.py fixcircumflex      Redraw the 8 circumflex tiles
     python3 fontedit.py addrussian         Insert Cyrillic (codes 177-223)
     python3 fontedit.py clearkatakana      Blank the leftover katakana (161-176)
@@ -87,16 +88,16 @@ in the outer corners and along the bottom row, which stays empty so stacked
 menu rows do not touch. Copying an existing letter and reshaping its strokes
 keeps a new script consistent far more easily than drawing one from scratch.
 
-`import` defaults to --only 160-176,244-255 -- every slot still free: the tail
-of the table (241-243 are the tour's arrows and progress line, TOUR_GLYPHS)
-plus what Cyrillic left of the dead katakana block (see
-RECYCLABLE_CODES: it is JIS X 0201 left over from the CP932 era, unreachable
-since 2010). A full-sheet write is not the default because it would silently
+`import` defaults to --only 176,250-255 -- every slot still free: the tail
+of the table (241-243 are the tour's arrows and progress line, TOUR_GLYPHS;
+244-249 and 160-175 the browser's file-type icons, BROWSER_ICONS) plus the one
+slot left of the dead katakana block (see RECYCLABLE_CODES: it is JIS X 0201
+left over from the CP932 era, unreachable since 2010). A full-sheet write is not the default because it would silently
 repaint the hand-made Spanish glyphs and the window art whenever an editor
 shifted a colour. Widen it deliberately (--only 130-159, --all) once the diff
 printed by --dry-run looks right.
 
-32 slots are left; `freeslots` prints the current tally.
+7 slots are left; `freeslots` prints the current tally.
 """
 
 import re
@@ -727,6 +728,131 @@ def add_tour_glyphs():
         print(render_ascii(tile_to_pixels(new_tiles[code])))
 
 
+# The browser's file-type icons: two tiles each (16x8 hires pixels, about square on the
+# screen), drawn at 8 logical columns that are doubled horizontally (the font's own strokes
+# are 2 hires pixels wide). Row 7 stays empty like every glyph. The menu prints the pair
+# ahead of each name (snes/diricon.a65) in a palette per type, so one shape can serve two
+# types (Game Boy and Game Boy Color differ only in colour). Legend = ART_COLORS.
+BROWSER_ICONS = {
+    "folder": (160, [
+        ".xxx....",
+        "x###xxx.",
+        "x######x",
+        "xxxxxxxx",
+        "xxxxxxxx",
+        "xxxxxxxx",
+        "XXXXXXXX",
+        "........"]),
+    "parent": (162, [
+        "..x.....",
+        ".xx.....",
+        "xxxxxxx.",
+        ".xx...x.",
+        "..x...x.",
+        "......x.",
+        "......x.",
+        "........"]),
+    "snes": (164, [
+        "........",
+        ".xxxxxx.",
+        "x#xxxxXx",
+        "###xxXxX",
+        "x#xxxxXx",
+        ".xxxxxx.",
+        "........",
+        "........"]),
+    "nes": (166, [
+        "........",
+        "xxxxxxxx",
+        "x#xxxxxx",
+        "###xXxXx",
+        "x#xxxxxx",
+        "xxxxxxxx",
+        "........",
+        "........"]),
+    "sms": (168, [
+        "........",
+        "xxxxxxxx",
+        "x#xxxxxx",
+        "###xxXXx",
+        "x#xxxxxx",
+        "xxxxxxxx",
+        "........",
+        "........"]),
+    "gb": (170, [
+        "xxxxxxx.",
+        "x#####x.",
+        "x#####x.",
+        "xxxxxxx.",
+        "x#xxXxx.",
+        "###Xxxx.",
+        "x#xxxx..",
+        "........"]),
+    "a26": (172, [
+        "..xx....",
+        "..xx....",
+        "...#....",
+        "...#....",
+        "xxxxxxx.",
+        "x#xxxxx.",
+        "xxxxxxx.",
+        "........"]),
+    "spc": (174, [
+        "..xxxxxx",
+        "..xxxxxx",
+        "..x....x",
+        "..x....x",
+        "xxx..xxx",
+        "xxx..xxx",
+        "........",
+        "........"]),
+    "pcm": (244, [
+        "....x...",
+        "..x.x...",
+        "x.x.x.x.",
+        "xxxxxxxx",
+        "x.x.x.x.",
+        "..x.x...",
+        "....x...",
+        "........"]),
+    "theme": (246, [
+        ".xxxxx..",
+        "xxXxxxx.",
+        "xxxxxxXx",
+        "x##xxxxx",
+        "x##xxXxx",
+        "xxxxxxx.",
+        ".xxxxx..",
+        "........"]),
+    "file": (248, [
+        "xxxxx...",
+        "x###xx..",
+        "x#####x.",
+        "x#xxx#x.",
+        "x#####x.",
+        "x#xxx#x.",
+        "xxxxxxx.",
+        "........"]),
+}
+
+
+def browser_icon_tiles(art):
+    """8x8 logical art -> (left tile, right tile), each column doubled."""
+    px = [[ART_COLORS[ch] for ch in row for _ in range(2)] for row in art]
+    left = pixels_to_tile([row[:8] for row in px])
+    right = pixels_to_tile([row[8:] for row in px])
+    return left, right
+
+
+def add_browser_icons():
+    header, tiles = load_font()
+    new_tiles = dict(enumerate(tiles))
+    for name, (code, art) in BROWSER_ICONS.items():
+        new_tiles[code], new_tiles[code + 1] = browser_icon_tiles(art)
+    write_font(header, new_tiles)
+    print(f"Updated {FONT}: {len(BROWSER_ICONS)} browser icons")
+
+
 def add_scrollbar():
     header, tiles = load_font()
     new_tiles = dict(enumerate(tiles))  # code -> tile
@@ -828,13 +954,15 @@ RESERVED_CODES = set(range(0, 33))
 # Cyrillic took 178-223 and `clearkatakana` blanked the rest, so nothing is
 # left in the "dead glyph still sitting there" state -- an empty 162-175 now
 # reports as plain free. Kept as the record of where those slots came from.
-RECYCLABLE_CODES = set(range(162, 176))
+# The browser's icons took 160-175, so they are not recyclable any more.
+RECYCLABLE_CODES = set(range(162, 176)) - {code + k for code, _ in BROWSER_ICONS.values()
+                                           for k in (0, 1)}
 
-# What a sheet import may write unasked: every free slot, i.e. the tail plus
-# what is left of the katakana block. Everything else -- the hand-made Spanish
+# What a sheet import may write unasked: every free slot, i.e. the tail and the
+# last slot of the katakana block (176). Everything else -- the hand-made Spanish
 # glyphs, the window art -- needs an explicit --only/--all, so an editor
 # shifting a colour cannot quietly repaint them.
-DEFAULT_IMPORT_RANGE = "160-176,244-255"
+DEFAULT_IMPORT_RANGE = "176,250-255"
 
 DEFAULT_SHEET = "font_sheet.png"
 DEFAULT_GUIDE = "font_guide.png"
@@ -1170,6 +1298,8 @@ def main():
         add_scrollbar()
     elif cmd == "addtourglyphs":
         add_tour_glyphs()
+    elif cmd == "addbrowsericons":
+        add_browser_icons()
     elif cmd == "addprogressbar":
         add_progressbar()
     elif cmd == "export":

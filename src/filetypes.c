@@ -39,6 +39,7 @@
 #include "msu1.h"   /* menu_sfx_pump: keep a playing effect fed during dir scans */
 
 #include "timer.h"
+#include "scratch.h"
 
 extern cfg_t CFG;
 
@@ -114,6 +115,10 @@ static uint8_t path_is_sysdir(const uint8_t *path) {
   return p[n] == 0 || p[n] == '/';
 }
 
+/* scan_dir's MSU-1 folder probe builds "<dir>/<subfolder>" here (the LEAF scratch) */
+typedef struct { char path[512]; } scan_probe_t;
+SCRATCH_FITS(scan_probe_t, SCRATCH_LEAF_BYTES);
+
 uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYPE *filetypes, uint16_t *msu_rom) {
   DIR dir;
   FRESULT res;
@@ -126,6 +131,11 @@ uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYP
   uint16_t rom_seen = 0;
   uint8_t msu_seen = 0;
   const uint8_t in_sysdir = path_is_sysdir(path);
+  /* Each subfolder that may open as its MSU-1 game gets 'M' in the first byte of its size
+     string (the menu prints its own " <dir>" mark for a folder, never this string): the browser draws a game
+     icon there instead of a folder.  A bare walk per subfolder, stopping at its second ROM;
+     the same probe as SNES_CMD_MSU_PROBE, so a "yes" is optimistic (no stem check). */
+  const uint8_t probe = CFG.open_msu_folders && scratch_leaf_take(SCR_DIRSCAN);
 
   fno.lfsize = 255;
   fno.lfname = (TCHAR*)file_lfn;
@@ -226,6 +236,18 @@ printf("start\n");
             sram_writeblock(fn, file_tbl_off+6, fnlen+1);
             /* link file string entry in directory table */
             sram_writelong((file_tbl_off-SRAM_MENU_ADDR) | ((uint32_t)type << 24), ptr_tbl_off);
+            if(probe && type == TYPE_SUBDIR) {
+              char *p = SCRATCH_LEAF(scan_probe_t)->path;
+              size_t pl = strlen((const char*)path);
+              if(pl + fnlen + 2 <= sizeof(scan_probe_t)) {
+                memcpy(p, path, pl);
+                if(!pl || p[pl-1] != '/') p[pl++] = '/';
+                memcpy(p + pl, fn, fnlen - 1);          /* without the trailing '/' */
+                p[pl + fnlen - 1] = 0;
+                /* the probe reuses file_lfn: fn is already written out above */
+                if(dir_may_open_as_msu((const uint8_t*)p)) sram_writebyte('M', file_tbl_off);
+              }
+            }
             file_tbl_off += fnlen+7;
             ptr_tbl_off += 4;
             numentries++;
@@ -247,6 +269,7 @@ dir_full:
 printf("end\n");
 printf("%d entries, time: %d\n", numentries, getticks()-ticks);
   f_closedir(&dir);
+  if(probe) scratch_leaf_drop();
   *msu_rom = (CFG.open_msu_folders && rom_seen == 1 && msu_seen)
            ? scan_dir_msu_rom(path, base_addr, numentries) : DIR_NO_MSU_ROM;
   return numentries;

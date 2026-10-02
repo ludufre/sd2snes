@@ -327,7 +327,7 @@ ce_send:
 - lda @SNES_CMD
   cmp #$55
   bne -
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   ; one frame so the MCU's PSRAM writes have settled before they are read back
   stz isr_done

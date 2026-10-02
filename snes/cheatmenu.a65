@@ -223,7 +223,7 @@ cheatmenu_load_send:
 - lda @SNES_CMD
   cmp #$55
   bne -
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   jsr pop_window
 ; Wait one vblank so cheat_yaml_load's PSRAM writes have time to
@@ -275,7 +275,7 @@ cheatmenu_save_send:
 - lda @SNES_CMD
   cmp #$55
   bne -
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   jsr pop_window
   plp
@@ -1083,7 +1083,7 @@ cheatmenu_toggle_selected:
 - lda @SNES_CMD
   cmp #$55
   bne -
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   plp
   rts

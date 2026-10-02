@@ -812,7 +812,7 @@ psp_wait:
     beq psp_done
     bra psp_wait
 psp_done:
-    lda #$55
+    lda #$00
     sta @MCU_CMD
     plb                         ; DBR back to $7E BEFORE touching a WRAM var --
     stz patchsel_dirty          ; this is absolute, so it follows the data bank
@@ -1051,7 +1051,7 @@ pcr_chk_wait:
     lda @SNES_CMD
     cmp #$55
     bne pcr_chk_wait
-    lda #$55
+    lda #$00
     sta @MCU_CMD
     lda @EXPORT_RESULT
     beq pcr_do_export           ; PATCH_EXPORT_NONE: the name is free, go ahead

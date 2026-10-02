@@ -1,0 +1,244 @@
+; The browser's file-type icons.
+;
+; print_direntry calls dirent_icon for every row it draws: the icon goes in the two cells at
+; cursor_x and the name starts one blank after it. The type comes from the directory entry;
+; a ROM is told apart by its extension (.gb/.gbc/.sms/.a26 share TYPE_ROM with the SNES
+; formats), and a folder that opens as its MSU-1 game by the 'M' scan_dir leaves in it. The glyphs are two font tiles each (utils/fontedit.py BROWSER_ICONS) and the
+; colour is the row's print palette, so one shape can serve two types.
+
+.link page $c1
+#include "memmap.i65"
+.link page $c1
+
+; icon ids: index into di_pal and (x2) into di_str
+#define DI_NONE    0
+#define DI_FOLDER  1
+#define DI_PARENT  2
+#define DI_SNES    3
+#define DI_NES     4
+#define DI_SMS     5
+#define DI_GB      6
+#define DI_GBC     7
+#define DI_A26     8
+#define DI_SPC     9
+#define DI_PCM     10
+#define DI_THEME   11
+#define DI_FILE    12
+#define DI_MSU     13
+
+
+; dirent_icon: print the icon of the current entry (dirent_type, name at dirent_addr+6 in
+;   dirent_bank) at cursor_x / print_y. Uses print_ptr as scratch before hiprint does.
+dirent_icon:
+  php
+  phd
+  phb
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  lda #$7e
+  pha
+  plb
+  lda dirent_type
+  bit #TYPE_PARENT
+  bne di_parent
+  bit #TYPE_SUBDIR
+  bne di_folder
+  cmp #TYPE_NES
+  beq di_nes
+  cmp #TYPE_SPC
+  beq di_spc
+  cmp #TYPE_PCM
+  beq di_pcm
+  cmp #TYPE_SKIN
+  beq di_theme
+  cmp #TYPE_FILE
+  beq di_file
+  cmp #TYPE_DATA
+  beq di_file
+  cmp #TYPE_ROM
+  beq di_rom
+  ldx #DI_NONE
+  bra di_print
+di_parent:
+  .as : .xl
+  ldx #DI_PARENT
+  bra di_print
+di_folder:                  ; a folder that opens as its MSU-1 game: the firmware put 'M'
+  .as : .xl                 ; in the first byte of its size string (scan_dir)
+  rep #$20 : .al
+  lda dirent_addr
+  sta print_ptr
+  sep #$20 : .as
+  lda dirent_bank
+  sta print_ptr+2
+  lda [print_ptr]
+  ldx #DI_MSU
+  cmp #$4d ; 'M'
+  beq di_print
+  ldx #DI_FOLDER
+  bra di_print
+di_nes:
+  .as : .xl
+  ldx #DI_NES
+  bra di_print
+di_spc:
+  .as : .xl
+  ldx #DI_SPC
+  bra di_print
+di_pcm:
+  .as : .xl
+  ldx #DI_PCM
+  bra di_print
+di_theme:
+  .as : .xl
+  ldx #DI_THEME
+  bra di_print
+di_file:
+  .as : .xl
+  ldx #DI_FILE
+  bra di_print
+di_rom:
+  .as : .xl
+  jsr di_rom_kind
+di_print:
+  .as : .xl
+  lda @di_pal, x
+  sta print_pal
+  rep #$20 : .al
+  txa
+  asl
+  clc
+  adc #!di_str
+  sta print_src
+  sep #$20 : .as
+  lda #^di_str
+  sta print_bank
+  lda cursor_x
+  sta print_x
+  lda #2
+  sta print_count
+  jsl @gi_call_hiprint
+  plb
+  pld
+  plp
+  rtl
+
+; di_rom_kind: X = the icon of the ROM whose name is at dirent_addr+6: the extension after
+;   the LAST dot decides (upper-cased with and #$df, so '2'/'6' compare as $12/$16).
+di_rom_kind:
+  .as : .xl
+  rep #$20 : .al
+  lda dirent_addr
+  clc
+  adc #$0006
+  sta print_ptr
+  sep #$20 : .as
+  lda dirent_bank
+  sta print_ptr+2
+  ldy #$0000
+- lda [print_ptr], y        ; Y = the name's length
+  beq +
+  iny
+  bra -
++
+di_rk_dot:                  ; back to the last dot
+  .as : .xl
+  cpy #$0000
+  beq di_rk_snes
+  dey
+  lda [print_ptr], y
+  cmp #$2e ; '.'
+  bne di_rk_dot
+  iny
+  lda [print_ptr], y
+  and #$df
+  cmp #$47 ; 'G'
+  beq di_rk_g
+  cmp #$53 ; 'S'
+  beq di_rk_s
+  cmp #$41 ; 'A'
+  beq di_rk_a
+di_rk_snes:
+  .as : .xl
+  ldx #DI_SNES
+  rts
+di_rk_g:                    ; .gb / .gbc
+  .as : .xl
+  iny
+  lda [print_ptr], y
+  and #$df
+  cmp #$42 ; 'B'
+  bne di_rk_snes
+  iny
+  lda [print_ptr], y
+  beq di_rk_gb
+  and #$df
+  cmp #$43 ; 'C'
+  bne di_rk_snes
+  iny
+  lda [print_ptr], y
+  bne di_rk_snes
+  ldx #DI_GBC
+  rts
+di_rk_gb:
+  .as : .xl
+  ldx #DI_GB
+  rts
+di_rk_s:                    ; .sms (.sfc/.smc/.swc/.sgb/.st are SNES)
+  .as : .xl
+  iny
+  lda [print_ptr], y
+  and #$df
+  cmp #$4d ; 'M'
+  bne di_rk_snes
+  iny
+  lda [print_ptr], y
+  and #$df
+  cmp #$53 ; 'S'
+  bne di_rk_snes
+  iny
+  lda [print_ptr], y
+  bne di_rk_snes
+  ldx #DI_SMS
+  rts
+di_rk_a:                    ; .a26
+  .as : .xl
+  iny
+  lda [print_ptr], y
+  and #$df
+  cmp #$12
+  bne di_rk_snes
+  iny
+  lda [print_ptr], y
+  and #$df
+  cmp #$16
+  bne di_rk_snes
+  iny
+  lda [print_ptr], y
+  bne di_rk_snes
+  ldx #DI_A26
+  rts
+
+; the print palette per icon: 0 white, 1 yellow, 2 green, 3 blue, 6 grey. Hires splits
+; the two glyphs between BG2 and BG1, and only these palettes are the same colours on both
+; (BG1's 5 and 7 come out dark)
+di_pal  .byt 0, 1, 1, 0, 6, 3, 6, 3, 1, 2, 2, 0, 6, 1
+
+; the two glyphs per icon (utils/fontedit.py BROWSER_ICONS), two bytes each, no terminator:
+; print_count = 2 stops hiprint
+di_str  .byt 32, 32
+        .byt 160, 161
+        .byt 162, 163
+        .byt 164, 165
+        .byt 166, 167
+        .byt 168, 169
+        .byt 170, 171
+        .byt 170, 171
+        .byt 172, 173
+        .byt 174, 175
+        .byt 244, 245
+        .byt 246, 247
+        .byt 248, 249
+        .byt 164, 165   ; MSU-1 folder: the SNES pad, in the folders' yellow

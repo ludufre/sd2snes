@@ -264,6 +264,7 @@ print_direntry:
   sta print_y
   inc
   sta cursor_y
+  jsl @dirent_icon      ; the type's icon in the two cells at cursor_x (diricon.a65)
 
   lda dirent_bank
   ldx dirent_addr
@@ -314,11 +315,13 @@ dirent_type_cont
   plb
 
   lda cursor_x
+  clc
+  adc #3                ; the name starts one blank after the icon
   sta print_x
 
   sep #$20 : .as
   ldx fd_fnoff
-  lda #54
+  lda #51
   sta print_count
   stx print_src
   lda dirent_bank
@@ -326,13 +329,14 @@ dirent_type_cont
   jsr hiprint
   lda cursor_x
   clc
+  adc #3
   adc print_done
   sta print_x
 
   lda print_over
   ldy direntry_fits_idx
   sta !direntry_fits, y
-  lda #54
+  lda #51
   sec
   sbc print_done
   sta print_count
@@ -343,10 +347,9 @@ dirent_type_cont
   jsr hiprint
 
   sep #$20 : .as
-  lda dirent_type
-  and #$f0
-  cmp #$80
-  bne dirent_is_file_2
+  lda dirent_type       ; a folder always shows the fixed mark: the first byte of its own
+  and #TYPE_SUBDIR|TYPE_PARENT ; size string carries scan_dir's MSU-1 game marker
+  beq dirent_is_file_2
   lda #^text_dirmark
   ldx #!text_dirmark
   sta print_bank
@@ -745,7 +748,7 @@ select_theme:
   beq +
   bra -
 + jsr menu_reload_unblank
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   rts
 
@@ -775,7 +778,7 @@ restore_theme:
   beq +
   bra -
 + jsr menu_reload_unblank    ; only reached on a NACK: menu stays live
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   plb
   plp
@@ -806,7 +809,7 @@ restore_classic_theme:
   beq +
   bra -
 + jsr menu_reload_unblank    ; only reached when the MCU NACKed (classic.thm missing):
-  lda #$55                   ; the menu is still live, so bring the screen back and
+  lda #$00                   ; the menu is still live, so bring the screen back and
   sta @MCU_CMD               ; show the error
   jsr show_error_msg         ; MCU staged code+filename at MCU_ERR_CODE/MCU_ERR_MSG
   plb
@@ -1296,8 +1299,8 @@ filesel_key_y:
                              ; context menu's selection bar sits over the list for the
                              ; whole (blocking) gameinfo query. Same idiom as
                              ; select_last_file_play / select_favorite_file_play.
-  jsr gameinfo_show_forced
-+ rts
+  jmp gameinfo_show_forced   ; (a B-return leaves an MSU-1 folder through gisf_back)
++ jmp gisf_back              ; Y on an MSU-1 folder entered it (ctx_is_dir): back out
 
 open_context_menu:
   jsr cover_sync_before_cmd
@@ -1353,6 +1356,14 @@ ctx_is_file
 ctx_is_parent
   bra open_context_menu_cont
 ctx_is_dir
+; fork: a folder that opens as its MSU-1 game gets its ROM's context menu -- with
+; OpenMsuFolders on, the user can never stand on that ROM to press Y. gnav_msu_dir probes
+; (a plain folder costs no READDIR) and enters it, cursor on the ROM, msu_inside raised;
+; filesel_key_y backs out afterwards (gisf_back).
+  jsr gnav_msu_dir
+  bcc open_context_menu_cont
+  jsr cover_fill_param_for_current_sel ; MCU_PARAM exactly as ctx_is_file packs it
+  jsr filesel_contextmenu_file
   bra open_context_menu_cont
 ctx_is_spc
 ; set up MCU_PARAM with the SPC file path (same layout as ctx_is_file)
@@ -1445,7 +1456,7 @@ delete_file_go:
   bra -
 delete_file_ack:
   pha               ; save ACK/NACK value
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   jsr pop_window
   pla               ; restore ACK/NACK value
@@ -1507,7 +1518,7 @@ delete_srm_go:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   jsr pop_window
   plb
@@ -1560,7 +1571,7 @@ delete_favorite_file:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   lda #$01
   sta listsel_dirty            ; entry removed -> redraw the favorites list
@@ -1615,7 +1626,7 @@ delete_favorite_srm:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   jsr pop_window
   plb
@@ -1667,7 +1678,7 @@ delete_recent_file:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   lda #$01
   sta listsel_dirty            ; entry removed -> redraw the recents list
@@ -1721,7 +1732,7 @@ delete_recent_srm:
   cmp #$aa
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   jsr pop_window
   plb
@@ -3108,7 +3119,7 @@ add_selected_file_to_favorites:
 ; failure
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   jsr pop_window
   jsr favorites_full_msg     ; show "list full" popup if the MCU refused the add
@@ -3139,7 +3150,7 @@ add_recent_file_to_favorites:
   ; failure
   beq +
   bra -
-  + lda #$55
+  + lda #$00
   sta @MCU_CMD
 ;  sta listsel_dirty
   jsr pop_window
@@ -3194,7 +3205,7 @@ remove_selected_recent_file:
   ; failure
   beq +
   bra -
-  + lda #$55
+  + lda #$00
   sta @MCU_CMD
   lda #$01
   sta listsel_dirty
@@ -3226,7 +3237,7 @@ remove_selected_favorite_file:
   ; failure
   beq +
   bra -
-  + lda #$55
+  + lda #$00
   sta @MCU_CMD
   lda #$01
   sta listsel_dirty
@@ -3258,7 +3269,7 @@ set_selected_as_autoboot_rom:
 ; failure
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   jsr pop_window
   plb
@@ -3286,7 +3297,7 @@ set_recent_as_autoboot_rom:
 ; failure
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   jsr pop_window
   plb
@@ -3316,7 +3327,7 @@ set_favorite_as_autoboot_rom:
 ; failure
   beq +
   bra -
-+ lda #$55
++ lda #$00
   sta @MCU_CMD
   jsr pop_window
   plb
@@ -3350,7 +3361,7 @@ set_selected_spc_as_bgm:
   beq +
   bra -
 + jsr menu_reload_unblank    ; only reached on a NACK: menu stays live
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   plb
   plp
@@ -3379,7 +3390,7 @@ restore_music:
   beq +
   bra -
 + jsr menu_reload_unblank    ; only reached on a NACK: menu stays live
-  lda #$55
+  lda #$00
   sta @MCU_CMD
   plb
   plp
