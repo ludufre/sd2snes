@@ -859,6 +859,21 @@ menu_enttab_ingame:
  .byt  ^(mfunc_isenabled_hooks-1)
 
  .byt  MTYPE_VALUE
+ .word !mtext_ingame_pad2
+ .byt  ^mtext_ingame_pad2
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_ENABLE_INGAME_PAD2
+ .byt  ^CFG_ENABLE_INGAME_PAD2
+ .word !mdesc_ingame_pad2
+ .byt  ^mdesc_ingame_pad2
+ .byt  0,0,0
+ .byt  0,0,0
+ .word !(mfunc_isenabled_pad2-1)
+ .byt  ^(mfunc_isenabled_pad2-1)
+
+ .byt  MTYPE_VALUE
  .word !mtext_ingame_cheat_overlay
  .byt  ^mtext_ingame_cheat_overlay
  .word !kv_onoff
@@ -1230,6 +1245,22 @@ mfunc_isenabled_hooks:
   lda @CFG_ENABLE_INGAME_HOOK
   eor #$ff
   ror
+  rtl
+
+; Controller-2 hooks: a child of "In-game buttons", which is itself a child of the
+; hook toggle, so it greys out when EITHER is off. Two flags mean the eor/ror trick
+; above does not fit -- it encodes ONE 0/1 byte into the carry.
+; Carry set = drawn disabled.
+mfunc_isenabled_pad2:
+  .as
+  lda @CFG_ENABLE_INGAME_HOOK
+  beq mfunc_isenabled_pad2_off
+  lda @CFG_ENABLE_INGAME_BUTTONS
+  beq mfunc_isenabled_pad2_off
+  clc
+  rtl
+mfunc_isenabled_pad2_off:
+  sec
   rtl
 
 ; Game Info sub-option greying. ShowGameInfo is now 0/1/2 (off / on / context), so

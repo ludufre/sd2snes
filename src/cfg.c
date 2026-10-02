@@ -88,6 +88,7 @@ _Static_assert(offsetof(cfg_t, open_msu_folders) == 0x1cf, "cfg_t.open_msu_folde
 _Static_assert(offsetof(cfg_t, show_sd2snes_folder) == 0x1d0, "cfg_t.show_sd2snes_folder must stay at CFG_ADDR+$1D0");
 _Static_assert(offsetof(cfg_t, gbc_mode) == 0x1d1, "cfg_t.gbc_mode must stay at CFG_ADDR+$1D1");
 _Static_assert(offsetof(cfg_t, gbc_sync) == 0x1d2, "cfg_t.gbc_sync must stay at CFG_ADDR+$1D2");
+_Static_assert(offsetof(cfg_t, enable_ingame_pad2) == 0x1d3, "cfg_t.enable_ingame_pad2 must stay at CFG_ADDR+$1D3");
 _Static_assert(offsetof(cfg_t, gbc_stretch) == 0x1d4, "cfg_t.gbc_stretch must stay at CFG_ADDR+$1D4");
 
 const cfg_t CFG_DEFAULT = {
@@ -160,6 +161,7 @@ const cfg_t CFG_DEFAULT = {
   .show_sd2snes_folder = 0,
   .gbc_mode = 0,             /* Auto: .gbc / $0143 bit 7 -> GBC core */
   .gbc_sync = 0,             /* Genlock */
+  .enable_ingame_pad2 = 0,   /* in-game gestures stay controller-1 only */
   .gbc_stretch = 0           /* hi-colour screens stay 160x144 */
 };
 
@@ -330,6 +332,7 @@ static const cfg_item_t cfg_items[] = {
      firmware knows how to load, so clamp back to Auto. */
   CFGI(CFG_GBC_MODE,                    gbc_mode,                   CK_NUM,     0x20),
   CFGI(CFG_GBC_SYNC,                    gbc_sync,                   CK_BOOL,    0),
+  CFGI(CFG_ENABLE_INGAME_PAD2,          enable_ingame_pad2,         CK_BOOL,    0),
   CFGI(CFG_GBC_STRETCH,                 gbc_stretch,                CK_BOOL,    0)
 };
 #undef CFGI

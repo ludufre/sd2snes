@@ -166,6 +166,7 @@
 #define SNESCMD_NMI_TMP_KILL_NMIHOOK (0x2baa)
 #define SNESCMD_COMBO_VERSION        (0x2bb0)
 #define SNESCMD_MAP                  (0x2bb2)
+#define SNESCMD_NMI_PAD              (0x2bf0) /* word the nmihook stub writes the pad to. The FPGA latches both halves and compares the WORD against the six hard-wired gestures (verilog/<core>/cheat.v), so this is the only channel a gesture can arrive on. Lockstep with NMI_PAD in snes/memmap.i65. */
 #define SNESCMD_NMI_ENABLE_BUTTONS   (0x2bfc)
 #define SNESCMD_NMI_DISABLE_WRAM     (0x2bfe)
 #define SNESCMD_NMI_WRAM_PATCH_COUNT (0x2bff)
@@ -179,6 +180,7 @@
 #define ASM_EOR_IMM      (0x49)
 #define ASM_RTS          (0x60)
 #define ASM_RTL          (0x6b)
+#define ASM_JSL          (0x22)
 
 #define SNES_BUTTON_LRET (0x3030)
 #define SNES_BUTTON_LREX (0x2070)

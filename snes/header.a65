@@ -22,8 +22,26 @@
 ; SI2 block, (b) understands the $02-prefixed CHEAT_TITLE, (c) tolerates an empty
 ; cheat description and (d) an empty CHEAT_NAMES entry. A menu without the marker has
 ; the start of RESET here (sei/clc = $78/$18), which can never match 'S','2'.
-; Only the reset VECTOR ($C0FFFC) references RESET, so shifting it by 4 bytes is safe.
-  .byt $53, $32, $01, $00
+; Only the reset VECTOR ($C0FFFC) references RESET, so shifting it (4 bytes for the
+; marker, 3 more for the hx_pad address below) is safe.
+  .byt $53, $32, $01, $01        ; magic, sysinfo caps version, feature bits
+; $C0FF05 is the marker's 4th byte: a FEATURE BITMASK, not padding. Bit 0 (=
+; MENU_CAP_FEAT_HXPAD) means "the three bytes at $C0FF06 are the address of hx_pad".
+; It has to be an explicit bit: a menu built before this change has the first bytes
+; of RESET there (sei/clc/xce...), which read back as a perfectly plausible $C1
+; address, so "non-zero" proves nothing.
+; $C0FF06-08: far address of hx_pad (snes/hookxlate.a65, bank $C1). The firmware
+; patches `jsl @hx_pad` over the stub's `sta @NMI_PAD` at $2A18 when
+; EnableIngamePad2 is on -- see snescmd_prepare_nmihook (src/snes.c).
+  .word hx_pad
+  .byt $c1                     ; NOT ^hx_pad: snescom rejects a segment-type extern in
+                               ; IPS output ("Segment-type externs aren't supported")
+                               ; and this object IS the .ips. This file also cannot
+                               ; include memmap.i65 (it assembles to a fixed address,
+                               ; not a .link page), so both bytes above are literals:
+                               ; $01 = MENU_CAP_FEAT_HXPAD, $c1 = MENU_HXPAD_BANK.
+                               ; Keep them in lockstep with snes/memmap.i65 and
+                               ; src/memmap.h.
 RESET:
   sei
   clc

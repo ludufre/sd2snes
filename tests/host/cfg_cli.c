@@ -429,6 +429,7 @@ static void cfg_make_allchanged(void) {
   CFG.cc_time_limit = 15;                        /* 18 minutes */
   CFG.gbc_mode = 2;                              /* Prefer GBC; survives the >2 clamp */
   CFG.gbc_sync = 1;                              /* Exact */
+  CFG.enable_ingame_pad2 = 1;                    /* in-game gestures also from port 2 */
   CFG.gbc_stretch = 1;                           /* hi-colour screens at 256x192 */
 }
 

@@ -883,10 +883,63 @@ uint16_t snescmd_readstrn(void *buf, uint16_t addr, uint16_t size) {
 }
 
 #define BRAM_SIZE (256 - (SNESCMD_INGAME_HOOK - SNESCMD_MCU_CMD))
+
+/* Offset of the stub's `sta @NMI_PAD` inside the hook image, and the four bytes it
+   must contain. The stub opens php / rep #$20 / pha / lda @$004218 / sta @NMI_PAD,
+   so the store starts at byte 8. It is checked, not assumed: the FPGA fills branch
+   offsets that are relative to fixed addresses in this stub, so if a future edit ever
+   moves the store, patching blind would corrupt the hook for every game. */
+#define HOOK_PADSTORE_OFF (8)
+
+/* EnableIngamePad2: replace that store with `jsl @hx_pad` (also four bytes, so
+   nothing in the stub moves) and the in-game gestures start listening to the
+   controller in port 2 as well -- see snes/hookxlate.a65 for the arbitration rules.
+   Off (the default) leaves the image byte-for-byte as it has always been, so the
+   extra ~30 cycles per hook entry are paid only by someone who asked for them.
+   The menu publishes hx_pad's far address in its header; the capability BIT is what
+   says so, since an older menu has RESET's own opcodes at that address and they read
+   back as a plausible bank-$C1 pointer. */
+static void snescmd_patch_pad2(uint8_t *bram) {
+  uint8_t caps[4];
+  uint8_t far[3];
+  uint8_t *st = bram + HOOK_PADSTORE_OFF;
+
+  if(!CFG.enable_ingame_pad2) return;
+  if(st[0] != ASM_STA_ABSLONG
+     || st[1] != (SNESCMD_NMI_PAD & 0xff)
+     || st[2] != (SNESCMD_NMI_PAD >> 8)
+     || st[3] != 0x00) {
+    printf("pad2: nmihook layout changed, not patching\n");
+    return;
+  }
+  sram_readblock(caps, SRAM_MENU_ADDR + MENU_ADDR_SYSINFO_CAPS, sizeof(caps));
+  if(caps[0] != MENU_CAP_MAGIC0 || caps[1] != MENU_CAP_MAGIC1
+     || !(caps[3] & MENU_CAP_FEAT_HXPAD)) {
+    printf("pad2: menu does not publish hx_pad\n");
+    return;
+  }
+  sram_readblock(far, SRAM_MENU_ADDR + MENU_ADDR_HXPAD, sizeof(far));
+  if(far[2] != MENU_HXPAD_BANK) {
+    printf("pad2: hx_pad in bank %02x, expected %02x\n", far[2], MENU_HXPAD_BANK);
+    return;
+  }
+  st[0] = ASM_JSL;
+  st[1] = far[0];
+  st[2] = far[1];
+  st[3] = far[2];
+}
+
 void snescmd_prepare_nmihook() {
   uint16_t bram_src = sram_readshort(SRAM_MENU_ADDR + MENU_ADDR_BRAM_SRC);
   uint8_t bram[BRAM_SIZE];
   sram_readblock(bram, SRAM_MENU_ADDR + bram_src, BRAM_SIZE);
+  snescmd_patch_pad2(bram);
+  /* Which port the stub published is per-frame state, and this region survives a
+     reset: clear it here, with the fresh stub, so a game that starts with the feature
+     off can never inherit a 1 from the previous one and send the savestate matcher
+     to $421A. */
+  sram_writeshort(0, SRAM_HX_PAD_SRC_ADDR);
+  sram_writeshort(0, SRAM_HX_PAD2_ADDR);
 //  snescmd_writeblock(bram, SNESCMD_HOOKS, 40);
   snescmd_writeblock(bram, SNESCMD_INGAME_HOOK, BRAM_SIZE);
 }

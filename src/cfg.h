@@ -87,6 +87,7 @@
 #define CFG_SHOW_SD2SNES_FOLDER          ("ShowSd2snesFolder")
 #define CFG_GBC_MODE                     ("GbcMode")
 #define CFG_GBC_SYNC                     ("GbcSync")
+#define CFG_ENABLE_INGAME_PAD2           ("EnableIngamePad2")
 #define CFG_GBC_STRETCH                  ("GbcStretch")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
@@ -229,7 +230,14 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      as one frame of lag, never as a torn image). Shipped to the core as CHIPFEAT $EF bit 5
      before it leaves reset (GBC-CORE-CONTRACT.md sec. 2). YAML GbcSync + menu "Game Boy Color
      sync" (SGB menu). Default 0. */
-  uint8_t  cfg_rsvd_1d3;            /* CFG @ $1D3: reserved */
+  uint8_t  enable_ingame_pad2;      /* CFG @ $1D3: also accept the in-game button gestures from the
+     controller in PORT 2 (EnableIngamePad2). Default OFF. The six gestures are decoded inside the
+     FPGA from the word the nmihook stub writes to NMI_PAD, and that stub only ever read $4218, so
+     port 2 was invisible to every hook. With this on, snescmd_prepare_nmihook patches the stub's
+     `sta @NMI_PAD` into `jsl @hx_pad` (snes/hookxlate.a65), which arbitrates between the two ports
+     -- it never ORs them, since the FPGA compares the word EXACTLY and a merge would let a gesture
+     emerge from two players at once. Off leaves the stub byte-for-byte as it has always been, so
+     the ~30 extra cycles per hook entry are paid only by someone who asked for this. */
   uint8_t  gbc_stretch;             /* CFG @ $1D4: stretch the GBC core's framebuffer screens
      (the hi-colour mode, wire $03) to 256x192 instead of showing them 160x144 in the middle of
      the screen. 0 = off, 1 = on. Only those screens change: the normal tile path stays 160x144

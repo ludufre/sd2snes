@@ -545,6 +545,19 @@ ss_input:
 ; the handler entry: see the banner up there for why the carry was not a usable
 ; channel.  A is 16 bits, so the load also picks up $4213 in the high byte; the
 ; lsr shifts it out of the way and it is discarded with A on the next load.
+;   PORT 2 SHORT-CIRCUIT (EnableIngamePad2).  Everything below arbitrates over the
+; LIVE $4218, so a frame the stub decided belongs to controller 2 would have its word
+; thrown away right here and save/load/slot/overlay would stay port-1 only.  When
+; hx_pad (snes/hookxlate.a65) publishes HX_PAD_SRC != 0 it has already picked the
+; winning port for this frame, and what it stored in NMI_PAD IS that port's word, so
+; take it and skip the fill arbitration entirely.  Costs 9 cycles on the hot path and
+; leaves the arbitration below -- the part every timing-sensitive game pays for --
+; untouched.  A partial sample simply fails to match a gesture and the next frame
+; retries, exactly as it does for controller 1.  HX_PAD_SRC is zero whenever the
+; feature is off (the firmware zeroes it at game load and never patches the stub),
+; so this is dead weight, not behaviour, for everyone else.
+	lda @HX_PAD_SRC
+	bne ss_pad_from_stub
 	lda @$004212
 	lsr                          ; C = the auto-joypad window is running now
 	bcs ss_pad_filling

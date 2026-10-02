@@ -1,0 +1,99 @@
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include, so re-declare $c1 AFTER it (the
+; last '.link page' wins and they emit no bytes) so every byte of this object lands
+; in bank $C1 -- same trap savestate_cx4.a65 documents.
+.link page $c1
+
+; ======================================================================
+;  hx_pad -- controller 2 support for the in-game hooks.
+;
+;  WHAT IT REPLACES.  The nmihook stub ($2A10, snes/nmihook.a65) opens with
+;
+;      lda @$004218        ; $2A14, 4 bytes
+;      sta @NMI_PAD        ; $2A18, 4 bytes
+;
+;  and the FPGA latches every write to NMI_PAD ($2BF0/$2BF1) and compares the WORD
+;  against the six hard-wired gestures (verilog/<core>/cheat.v). The firmware patches the
+;  store into `jsl @hx_pad` (also 4 bytes, so the stub's layout -- the branch offsets
+;  the FPGA fills in -- does not move) when EnableIngamePad2 is on, and leaves the
+;  stub byte-for-byte untouched when it is off. Nothing here runs for a user who
+;  did not ask for it.
+;
+;  WHY IT ARBITRATES INSTEAD OF MERGING.  Both consumers of NMI_PAD read it as a
+;  whole: the FPGA compares it EXACTLY, and the savestate matcher asks "are all of
+;  the combo's bits held" and ignores the rest. So `pad1 | pad2` lets a gesture
+;  EMERGE from two players at once -- P1 holding L+R in a racing game plus P2
+;  pressing Select+Start is $3030, the reset gesture, that neither of them made.
+;  One port therefore owns each frame, and the other is simply not published.
+;  The in-game overlay keeps merging both pads (igmenu.a65) -- there the game is
+;  already frozen and the worst case is a wrong menu row.
+;
+;  THE RULE.  Port 2 takes the frame when it holds something AND port 1 is either
+;  not a standard pad, idle, or not holding L+R itself. The ID-nibble test is the
+;  one read_pad (pad.a65) and the overlay already use: a non-zero low nibble means a
+;  non-standard controller whose bits are not buttons. That is what makes a MOUSE in
+;  port 1 hand the hooks to port 2 -- and today a mouse kills them outright, since
+;  all six gestures have a zero nibble and its word can never match one.
+;
+;  BANK.  This object is linked into $C1 and the menu header stamps that bank as a
+;  LITERAL (MENU_HXPAD_BANK) next to hx_pad's address, because header.a65 assembles to
+;  IPS and snescom refuses `^label` there. Moving this file to another bank therefore
+;  needs MENU_HXPAD_BANK changed in snes/memmap.i65 AND src/memmap.h -- the link stays
+;  silent otherwise and the firmware jsl's into the wrong bank (the firmware does
+;  compare the two and refuses to patch, so the failure is a dead feature, not a hang).
+;
+;  CONTEXT.  A is 16-bit on entry (the stub's rep #$20) and carries the raw $4218.
+;  X and Y belong to the GAME and are of unknown width: do not touch them, and use
+;  no indexed addressing. DB/DP are the game's too, so every access is long (@) or
+;  immediate. A is free (every branch1 target reloads it) and the stub's next
+;  instruction is `sep #$20`, so the return width does not matter.
+; ======================================================================
+hx_pad:
+	.al
+	sta @NMI_PAD                 ; default: controller 1, byte-for-byte the old store
+; --- take a sample of port 2 that is not mid-fill --------------------------
+; MEASURED IN HARDWARE: reading $421A right here loses the value in ~3 frames out
+; of 4. The stub's own `lda $4218` sits in the narrow window before the auto-joypad
+; fill opens (~48 cycles into vblank); the jsl plus this load push us ~14 cycles
+; later, which lands INSIDE the fill, and a register being shifted reads back as
+; $0000 -- so the gesture was thrown away on most frames and never fired.
+;   $4212 bit0 says the fill is running right now (same bit ss_input arbitrates on).
+; When it is, keep the last sample taken outside a fill: a gesture is HELD for many
+; frames, so one clean frame in four is all the FPGA's exact compare needs, and the
+; saved word costs nothing on the frames it is not used. A is 16-bit, so the load
+; also picks up $4213; the lsr shifts it out of the way.
+	lda @$004212
+	lsr
+	bcs hx_have                  ; fill running -> reuse the saved sample
+	lda @$00421A
+	sta @HX_PAD2                 ; clean sample: this one can be trusted
+hx_have:
+; Everything below reads port 2 from HX_PAD2 (BSRAM, stable) rather than from the
+; register, so no branch can pick up a half-shifted word.
+	lda @HX_PAD2
+	beq hx_port1                 ; nothing held on port 2 (also: nothing plugged in)
+	and #$000F
+	bne hx_port1                 ; not a standard pad on port 2 -> its bits are not buttons
+	lda @NMI_PAD
+	and #$000F
+	bne hx_port2                 ; port 1 is not a standard pad (mouse) -> port 2 owns it
+	lda @NMI_PAD
+	beq hx_port2                 ; port 1 idle -> port 2 owns it
+	and #$0030
+	cmp #$0030
+	beq hx_port1                 ; port 1 is holding L+R: it is gesturing, it owns it
+	lda @HX_PAD2                 ; port 1 is busy but not gesturing, so port 2 only
+	and #$0030                   ;   takes the frame for a gesture of its own
+	cmp #$0030
+	bne hx_port1
+hx_port2:
+	lda @HX_PAD2
+	sta @NMI_PAD
+	lda #$0001
+	sta @HX_PAD_SRC              ; tell ss_input to use this word, not the live $4218
+	rtl
+hx_port1:
+	lda #$0000
+	sta @HX_PAD_SRC
+	rtl
