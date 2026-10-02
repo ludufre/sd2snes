@@ -347,6 +347,7 @@ typedef struct {
   uint32_t  base_addr;
   uint8_t   flags;
   uint8_t   is_menu;
+  uint8_t   is_sfrom;       /* the image is embedded in an SFROM container */
   uint16_t  fpga_features_preload;
   uint32_t  rammask;
 } load_ctx_t;
@@ -1151,6 +1152,7 @@ static uint32_t load_open(load_ctx_t *c) {
     }
     c->file_offset = rom_off;
     c->filesize    = rom_size;
+    c->is_sfrom    = 1;
     printf("SFROM: rom offset=%lx size=%lx\n", rom_off, rom_size);
   }
 
@@ -1279,7 +1281,9 @@ static uint32_t load_stage_consoles(load_ctx_t *c) {
    correct what the header of its player faked.  0 = aborted (NACKed). */
 static uint32_t load_identify(load_ctx_t *c) {
   uint8_t flags = c->flags;
-
+  /* a console block may have swapped the open file for its player; an SFROM keeps
+     the span load_open took from the container */
+  if(!c->is_sfrom) c->filesize = file_handle.fsize;
   smc_set_file_span(c->filesize);
   /* game loads only: CRC-scan 1/2/3 MB images for protected bootlegs (bootleg.c) */
   bootleg_scan = !c->is_menu && !(flags & LOADROM_WITH_COMBO)

@@ -51,7 +51,7 @@ the normal base core.
 ## Layout
 - `verilog/sd2snes_bootleg/` – the core.  Put it next to `sd2snes_base`; `CORE = bootleg`
   builds `fpga_bootleg.bit` (mk2) / `fpga_bootleg.bi3` (mk3); copy those to `/sd2snes/`.
-- `src/` – changed firmware files (full copies). 
+- `src/bootleg.c`, `src/bootleg.h` – the CRC table and the rom properties fix-up; called from `smc.c` and `memory.c`.
 - `src/utils/bootleg_fp.py` – prints table rows (CRC + 64 KB fingerprint) for ROM files;
   `--fix OUTDIR` converts doubled-bank overdumps to the clean image.
 - `src/utils/repair_dbz_sound.py` – restores Dragon Ball Z - Final Bout's missing sound banks.

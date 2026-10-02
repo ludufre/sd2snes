@@ -191,8 +191,10 @@ void smc_id(snes_romprops_t* props, uint32_t file_offset) {
      byte-identical across the known dump. Needs its own FPGA core
      (sd2snes_col20) because the bank-select register at $808000 is live,
      write-triggered state the base LoROM decode has no room for -- see
-     verilog/sd2snes_col20/col20.v. */
-  {
+     verilog/sd2snes_col20/col20.v.
+     Only a 1 MB image can be this cart, and in SDRAM mode the header has to
+     lie inside what was materialized (the BPS probe stages 64 KB). */
+  if(SMC_FSIZE() == 0x100000 && (!smc_src_active || smc_src_valid >= 0x37fe0)) {
     static const uint8_t col20_bank6_hdr[32] = {
       0x53, 0x70, 0x61, 0x72, 0x74, 0x61, 0x6e, 0x20,   /* "Spartan " */
       0x58, 0x20, 0x53, 0x66, 0x63, 0x20, 0x20, 0x20,   /* "X Sfc   " */
