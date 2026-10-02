@@ -97,7 +97,33 @@ CAE6: # might and magic 3 (US)
 311B: 7E004C,2140 # animaniacs (JP)
 64E9: 7E174B,2142 # ultimate mortal kombat 3 (US)
 9A43: 7E04F4,2141;02816A,81 # puzzle bubble (US)
-45C0: 7E17DC,2140 # killer instinct (US)
+45C0: # killer instinct (US) - assembled from ciclone tools/ssfix/ki_45c0.s (tools/ss65.py)
+      #  The state restores WRAM but not the APU. The game keeps in WRAM which song ($17DA) and which
+      #  sample pack ($B0) the APU holds and sends every command with a counter handshake ($17DC against
+      #  $2140, no timeout): after a load in another scene the APU has other data, a command is never
+      #  answered and the game spins forever with NMI off. Copying the port alone is not enough, and it
+      #  must wait for the port to settle: a command sent just before the hook is echoed a moment later.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) it also asks for the loaded scene's song again through
+      #  the game's own pending-song word ($AA): the NMI epilogue at $80:F253 uploads it and clears $B0.
+  - @08C210E220DA5AA02000AF40210088F00CA20040CF402100D0F0CAD0F78FDC177EAF1310FEF00CC220AFDA177E8FAA007EE2207AFA28
+757A: # killer instinct (US) (Rev 1) - assembled from ciclone tools/ssfix/ki_757a.s (tools/ss65.py)
+      #  The state restores WRAM but not the APU. The game keeps in WRAM which song ($17DC) and which
+      #  sample pack ($B0) the APU holds and sends every command with a counter handshake ($17DE against
+      #  $2140, no timeout): after a load in another scene the APU has other data, a command is never
+      #  answered and the game spins forever with NMI off. Copying the port alone is not enough, and it
+      #  must wait for the port to settle: a command sent just before the hook is echoed a moment later.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) it also asks for the loaded scene's song again through
+      #  the game's own pending-song word ($AA): the NMI epilogue near $80:F209 uploads it and clears $B0.
+  - @08C210E220DA5AA02000AF40210088F00CA20040CF402100D0F0CAD0F78FDE177EAF1310FEF00CC220AFDC177E8FAA007EE2207AFA28
+850A: # killer instinct (EU) - assembled from ciclone tools/ssfix/ki_850a.s (tools/ss65.py)
+      #  The state restores WRAM but not the APU. The game keeps in WRAM which song ($17DC) and which
+      #  sample pack ($B1) the APU holds and sends every command with a counter handshake ($17DE against
+      #  $2140, no timeout): after a load in another scene the APU has other data, a command is never
+      #  answered and the game spins forever with NMI off. Copying the port alone is not enough, and it
+      #  must wait for the port to settle: a command sent just before the hook is echoed a moment later.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) it also asks for the loaded scene's song again through
+      #  the game's own pending-song word ($AB): the NMI epilogue near $80:F225 uploads it and clears $B1.
+  - @08C210E220DA5AA02000AF40210088F00CA20040CF402100D0F0CAD0F78FDE177EAF1310FEF00CC220AFDC177E8FAB007EE2207AFA28
 5327: 7E0462,2140 # top gear 3000 (US)
 9CFC: 7E004C,2140 # batman returns (JP)
 13B8: @AF402100CF402100D0F6498029808F4A0000 # Star Ocean (uncompressed+DeJap)
@@ -194,3 +220,72 @@ FF49: 0000D4,2143 # Wings 2 - Aces High (US)
 1B63: 000200,2143 # Wolf Child (US)
 788C: 001E84,2140 # Chrono Trigger (US)
 3BB4: 7E1D15,2141 # super mario rpg (US) - resync the sound dispatcher's expected-echo counter (DP $1D00+$15) with the live APU port so the CMP/BNE wait at CODE_C4003E can't deadlock after a load
+A0DA: # super mario world (US) - assembled from ciclone tools/ssfix/smw_a0da.s (tools/ss65.py)
+      #  The state restores WRAM but not the APU, and SMW swaps the APU's music bank on every
+      #  level <-> overworld change, so a load in another area left the wrong bank and a
+      #  silent or wrong song. On LOAD only (CS_SA1_LOAD $FE1013 = 1; the fixes also run after a save):
+      #  mode $14 (level) -> the game's own $00:8134 (level bank) + music $0DDA; mode $0E (overworld) ->
+      #  $00:810E (overworld bank) + $04:8D8A[submap $1F11,$0DB3]; then $11 (pause sound) if $13D4 says
+      #  paused. The RTS routines are reached through the $6B byte at $00:804D used as an RTL trampoline.
+  - @AF1310FED0038254008B0B08E230A90048ABF400002BAD0001C914F007C90EF0168236004B620600F44C805C348100ADDA0D8DFB1D80194B620600F44C805C0E
+  - @8100AEB30DBD111FAABF8A8D048DFB1DADD413F005A9118DF91D282BAB
+B28C: # dkc3 v1.0 (US) - assembled from ciclone tools/ssfix/dkc3_b28c.s (tools/ss65.py)
+      #  Rare's driver holds ONE song in the APU (every scene uploads its own: JSL $B28009, A = song)
+      #  and the state does not carry the APU, so a load in another scene kept the other scene's song.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) replay the loaded scene's song, $0008 (what $B2807D keeps
+      #  of the last request; = $0765&$3F in a level). Not from here: the song tables are long reads
+      #  from $ED/$EE, which the hook's $C0-$FF window turns into PSRAM. So it plants a one-shot NMI
+      #  routine at $0110 (the never-used bottom of the stack page) and points the game's NMI dispatch
+      #  ($004A) at it; the first NMI after the hook restores $004A, uploads with NMI off, waits for
+      #  vblank and goes on. Must come AFTER "000006,2140" above (the sends wait for $2140 == $0006).
+  - @AF1310FED003825B008B0B08C230F400002BAF08007EC90001B04629FF00F04148E220A97E48ABC220623A00FAA00000BF0000FE991001E8E8C8C8C0350090F0
+  - @688D2201AF4A007E8D1101E220AF8050F48D3B01297F8D1A01C220A910018D4A00282BAB8035A900008F4A0000E220A9008F004200C220A90000220980B2E220
+  - @AF12420030FAAF12420010FAAF104200A9008F004200C2206C4A00
+1202: # dkc2 v1.0/v1.1 (US) - assembled from ciclone tools/ssfix/dkc2_1202.s (tools/ss65.py)
+      #  Rare's driver holds ONE song in the APU (every scene uploads its own: JSL $B5800C, A = song)
+      #  and the state does not carry the APU, so a load in another scene kept the other scene's song.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) replay the loaded scene's song, $001C (the game's own
+      #  "current song": callers skip the call when it already matches). Not from here: the hook's
+      #  $C0-$FF window hides the ROM the upload reads, so -- as dkc3_b28c.s -- it plants a one-shot NMI
+      #  routine at $0110 (the never-used bottom of the stack page) and points the game's NMI dispatch
+      #  ($0020) at it; the first NMI after the hook restores $0020, uploads with NMI off, waits for
+      #  vblank and goes on. Must come AFTER "000000,2140" above (the sends wait for $2140 == $0000).
+  - @AF1310FED003825B008B0B08C230F400002BAF1C007EC90001B04629FF00F04148E220A97E48ABC220623A00FAA00000BF0000FE991001E8E8C8C8C0350090F0
+  - @688D2201AF20007E8D1101E220AF8050F48D3B01297F8D1A01C220A910018D2000282BAB8035A900008F200000E220A9008F004200C220A90000220C80B5E220
+  - @AF12420030FAAF12420010FAAF104200A9008F004200C2206C2000
+9860: # dkc2 v1.0/v1.1 (US) - assembled from ciclone tools/ssfix/dkc2_1202.s (tools/ss65.py)
+      #  Rare's driver holds ONE song in the APU (every scene uploads its own: JSL $B5800C, A = song)
+      #  and the state does not carry the APU, so a load in another scene kept the other scene's song.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) replay the loaded scene's song, $001C (the game's own
+      #  "current song": callers skip the call when it already matches). Not from here: the hook's
+      #  $C0-$FF window hides the ROM the upload reads, so -- as dkc3_b28c.s -- it plants a one-shot NMI
+      #  routine at $0110 (the never-used bottom of the stack page) and points the game's NMI dispatch
+      #  ($0020) at it; the first NMI after the hook restores $0020, uploads with NMI off, waits for
+      #  vblank and goes on. Must come AFTER "000000,2140" above (the sends wait for $2140 == $0000).
+  - @AF1310FED003825B008B0B08C230F400002BAF1C007EC90001B04629FF00F04148E220A97E48ABC220623A00FAA00000BF0000FE991001E8E8C8C8C0350090F0
+  - @688D2201AF20007E8D1101E220AF8050F48D3B01297F8D1A01C220A910018D2000282BAB8035A900008F200000E220A9008F004200C220A90000220C80B5E220
+  - @AF12420030FAAF12420010FAAF104200A9008F004200C2206C2000
+EF80: # dkc1 v1.0/v1.1 (US) - assembled from ciclone tools/ssfix/dkc1_ef80.s (tools/ss65.py)
+      #  The driver holds ONE song in the APU (every scene uploads its own through $B99036, A = song)
+      #  and the state does not carry the APU, so a load in another scene kept the other scene's song.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) replay the loaded scene's song, $0523 (the song the
+      #  game started; $FF = stopped: then nothing). As dkc3_b28c.s it runs from a one-shot NMI
+      #  routine planted at $0110 (the never-used bottom of the stack page) through the game's NMI
+      #  dispatch ($001C), outside the hook, with NMI off during the upload. $0521 (the song the game
+      #  believes is in the APU) is invalidated first, or $B99036 would skip the upload. Must come
+      #  AFTER "000000,2140" above (the sends wait for $2140 to echo $00).
+  - @AF1310FED0038256008B0B08C230F400002BAF23057EC9FF00B04148E220A97E48ABC220623A00FAA00000BF0000FE991001E8E8C8C8C0450090F0688D3001AF
+  - @1C007E8D1101E220AF8050F48D4901297F8D2201C220A910018D1C00282BAB8045A900008F1C00008B0BF400002B4BABE220A9008F004200C220A9FFFF8D2105
+  - @A90000223690B9E220AF12420030FAAF12420010FAAF104200A9008F004200C2302BAB6C1C00
+D17C: # dkc1 v1.0/v1.1 (US) - assembled from ciclone tools/ssfix/dkc1_ef80.s (tools/ss65.py)
+      #  The driver holds ONE song in the APU (every scene uploads its own through $B99036, A = song)
+      #  and the state does not carry the APU, so a load in another scene kept the other scene's song.
+      #  On LOAD only (CS_SA1_LOAD $FE1013 = 1) replay the loaded scene's song, $0523 (the song the
+      #  game started; $FF = stopped: then nothing). As dkc3_b28c.s it runs from a one-shot NMI
+      #  routine planted at $0110 (the never-used bottom of the stack page) through the game's NMI
+      #  dispatch ($001C), outside the hook, with NMI off during the upload. $0521 (the song the game
+      #  believes is in the APU) is invalidated first, or $B99036 would skip the upload. Must come
+      #  AFTER "000000,2140" above (the sends wait for $2140 to echo $00).
+  - @AF1310FED0038256008B0B08C230F400002BAF23057EC9FF00B04148E220A97E48ABC220623A00FAA00000BF0000FE991001E8E8C8C8C0450090F0688D3001AF
+  - @1C007E8D1101E220AF8050F48D4901297F8D2201C220A910018D1C00282BAB8045A900008F1C00008B0BF400002B4BABE220A9008F004200C220A9FFFF8D2105
+  - @A90000223690B9E220AF12420030FAAF12420010FAAF104200A9008F004200C2302BAB6C1C00
