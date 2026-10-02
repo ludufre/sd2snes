@@ -349,6 +349,7 @@ kv_language:
 .word $0004, !text_lang_fr : .byt ^text_lang_fr
 .word $0005, !text_lang_it : .byt ^text_lang_it
 .word $0006, !text_lang_ru : .byt ^text_lang_ru
+.word $0007, !text_lang_nl : .byt ^text_lang_nl
 .word $ffff
 
 kv_bsx_timesource:

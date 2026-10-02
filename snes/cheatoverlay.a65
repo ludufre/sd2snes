@@ -295,16 +295,16 @@ ss_ovl_clr1:
 	bne ss_ovl_clr1
 	sep #$20 : .as
 
-	; --- the list palette base MUST be set before the FIRST flush: ss_ovl_draw_title below (and
-	;     every subsequent draw) uses the shared ovl_flush_abs -> `ora @ovl_pal`. $F4 PSRAM is stale
-	;     (clear_wram does not zero it), so a stale value would tint the title/list. The $C0 fail-safe
-	;     list is ALWAYS focused = palette 0. ---
+	; --- the list palette base MUST be set before the FIRST flush: every list draw below
+	;     uses the shared ovl_flush_abs -> `ora @ovl_pal`. $F4 PSRAM is stale
+	;     (clear_wram does not zero it), so a stale value would tint the title/list. The list is
+	;     pre-drawn here FOCUSED = palette 0; the $C8 shell re-drives ovl_pal from its focus state. ---
 	rep #$20 : .al
 	lda #$2000 : sta @ovl_pal
 	sep #$20 : .as
-	; --- the localized "(no name)" the shared list draws for a cheat with an empty
-	;     name MUST be staged before the first list paint (cheatlist.i65 only reads
-	;     OVL_NONAME_BUF, and $F4 PSRAM comes up stale). ---
+	; --- the localized "(no name)" and ON/OFF tokens the shared list draws MUST be staged
+	;     before the first list paint (cheatlist.i65 only reads OVL_NONAME_BUF/OVL_FLAG_BUF,
+	;     and $F4 PSRAM comes up stale). Runs on EVERY overlay open, ahead of the $C8 shell. ---
 	jsl @ovl_fill_noname
 
 	; --- init overlay state ---
@@ -366,14 +366,15 @@ ss_ovl_pos_done:
 	lda #$00 : sta @ovl_dirty
 	; Cursor ownership, cleared UNCONDITIONALLY and BEFORE the first list paint
 	; (ss_ovl_draw_rows below) -- ss_ovl_draw_full_row (cheatlist.i65) reads it.
-	; The fail-safe list needs to see 0 (it draws its own '>'), and PSRAM $F4 is
-	; not auto-cleared, so cold-boot garbage or a 1 left by a previous shell
-	; session would hide the cursor on the very first paint.
+	; The pre-drawn list needs to see 0 (it draws its own '>'; the $C8 shell sets 1
+	; when its selection bar takes over), and PSRAM $F4 is not auto-cleared, so
+	; cold-boot garbage or a 1 left by a previous shell session would hide the
+	; cursor on the very first paint.
 	sta @OVL_CUR_OFF                       ; A is still #$00 (snescom has no long stz)
 
 	; --- ensure the name window is resident BEFORE the first draw. ss_ovl_mq_reset calls
 	;     ovl_ensure_window, which slides the 64-name window; the window-relative name reads in
-	;     ss_ovl_draw_rows depend on CHEAT_WIN_BASE being current (on a fail-safe reopen after
+	;     ss_ovl_draw_rows depend on CHEAT_WIN_BASE being current (on a reopen after
 	;     scrolling past 64 it can be nonzero). Mirrors cheats_enter's order in the igmenu shell. ---
 	jsr ss_ovl_mq_reset                    ; slide the window + measure the first name for the marquee
 	; --- pre-draw the list for the shell to open on top of. The empty-list message is
@@ -412,8 +413,8 @@ ss_ovl_init_drawn:
 	lda #$4a : sta @$002122 : lda #$29 : sta @$002122   ; CGRAM 19 = dim grey
 	; palette 3 = the WINDOW-FRAME colour the scrollbar cell wears (ovl_sb_recolor stamps that
 	; one cell as $2C00 so it matches the menu's own scrollbars, which hiprint in palette 3).
-	; The $C8 shell themes this slot (igt_pal_apply); this fail-safe path hardcodes it like the
-	; two palettes above, with the menu's baked pal3 bevel. BG2 2bpp pal3 = CGRAM 12-15, and the
+	; The $C8 shell themes this slot (igt_pal_apply); this pre-draw hardcodes it like the
+	; two palettes above, with the menu's baked pal3 bevel, until the shell takes over. BG2 2bpp pal3 = CGRAM 12-15, and the
 	; bar sits on an EVEN column (BG2 only), so entry 12 (colour 0) stays transparent = backdrop.
 	lda #$0d : sta @$002121                              ; CGADD = 13 (BG2 palette 3, colour 1)
 	lda #$b1 : sta @$002122 : lda #$7f : sta @$002122   ; CGRAM 13 = light cyan (track glyph)

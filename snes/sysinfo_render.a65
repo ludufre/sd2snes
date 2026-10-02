@@ -19,7 +19,7 @@
 ;   si_render_reset  - clear the "no magic yet" grace counter (screen entry)
 ;   si_render_all    - draw the whole screen from SYSINFO_BLK
 ;   cm_compose_title - build the cheat-menu window title into cm_title_buf
-;   ovl_fill_noname  - stage the localized "(no name)" for the IN-GAME cheat list
+;   ovl_fill_noname  - stage the localized "(no name)" and ON/OFF for the IN-GAME cheat list
 .link page $c1
 #include "memmap.i65"
 ; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (last
@@ -875,14 +875,15 @@ cm_put_full:
 
 ; ======================================================================
 ;  ovl_fill_noname -- stage the localized "(no name)" placeholder into
-;  OVL_NONAME_BUF for the in-game cheat list (cheatlist.i65 only reads it).
+;  OVL_NONAME_BUF, and the per-row ON/OFF tokens into OVL_FLAG_BUF, for the in-game
+;  cheat list (cheatlist.i65 only reads them).
 ;
 ;  This runs IN GAME, so it must not touch WRAM: $7E belongs to the running game.
 ;  That rules out resolve_str (which works through print_src/print_bank in WRAM), so
 ;  the dispatch table is indexed here by hand, exactly the way resolve_str does it.
 ;  Registers only: X is the destination index (long,X reaches PSRAM from any DB) and Y
 ;  walks the source under DB = the source bank -- which for a dispatch table entry is
-;  the POOL bank (^strpool_lo, $C2), not the table's own ($C1).
+;  that language's POOL bank (strpool_bank[lang]), not the table's own ($C1).
 ;  jsl from cheatoverlay.a65's init, before the first list paint.
 ; ======================================================================
 ovl_fill_noname:
@@ -892,37 +893,7 @@ ovl_fill_noname:
   ldy #!text_cheat_noname
   sep #$20 : .as
   lda #^text_cheat_noname
-  cmp #^strtab_lo
-  bne ovl_fnn_have
-  ; a dispatch table: pick the column for CFG.language, clamped to the columns the
-  ; build actually emitted (past the last one means English, like resolve_str)
-  lda @CFG_LANGUAGE
-  cmp @strtab_nlang
-  bcc ovl_fnn_lang_ok
-  lda #$00
-ovl_fnn_lang_ok:
-  rep #$30 : .al : .xl
-  and #$00ff
-  asl
-  clc
-  adc #!text_cheat_noname
-  tax
-  sep #$20 : .as
-  lda #^strtab_lo
-  pha
-  plb
-  rep #$20 : .al
-  lda !0, x
-  tay
-  sep #$20 : .as
-  lda #^strpool_lo         ; the string the entry names lives in the POOL bank ($C2),
-  pha                      ; NOT in the table's bank ($C1) -- the copy below is
-  plb                      ; DB-relative, so DB has to move before it runs
-  bra ovl_fnn_copy_init
-ovl_fnn_have:
-  pha
-  plb
-ovl_fnn_copy_init:
+  jsr ovl_resolve_str
   ldx #$0000
 ovl_fnn_copy:
   lda !0, y
@@ -935,10 +906,85 @@ ovl_fnn_copy:
 ovl_fnn_term:
   lda #$00
   sta @OVL_NONAME_BUF, x
+  ; the ON/OFF token each row shows, into OVL_FLAG_BUF (cheatlist.i65 only reads it)
+  rep #$30 : .al : .xl
+  ldy #!text_cheat_flag_on
+  sep #$20 : .as
+  lda #^text_cheat_flag_on
+  jsr ovl_resolve_str
+  ldx #OVL_FLAG_ON
+  jsr ovl_fill_tok
+  rep #$30 : .al : .xl
+  ldy #!text_cheat_flag_off
+  sep #$20 : .as
+  lda #^text_cheat_flag_off
+  jsr ovl_resolve_str
+  ldx #OVL_FLAG_OFF
+  jsr ovl_fill_tok
   plb
   plp
   .as : .xl
   rtl
+
+; ---- resolve a pool string for CFG.language without touching WRAM (see above).
+;      In: A(8) = ^label, Y(16) = !label. Out: DB = the bank of the string, Y = its offset.
+;      A dispatch table's entries are one word per language, so the column is the label
+;      plus 2*lang -- added with iny pairs (at most 7), which needs no scratch memory. ----
+ovl_resolve_str:
+  cmp #^strtab_lo
+  bne ovl_rs_plain
+  lda @CFG_LANGUAGE
+  cmp @strtab_nlang
+  bcc ovl_rs_lang
+  lda #$00                 ; past the last column the build emitted -> English
+ovl_rs_lang:
+  pha                      ; keep the column: it also picks the pool bank below
+  cmp #$00
+  beq ovl_rs_col
+ovl_rs_step:
+  iny
+  iny
+  dec
+  bne ovl_rs_step
+ovl_rs_col:
+  tyx                      ; X = this language's table entry
+  lda #^strtab_lo
+  pha
+  plb
+  rep #$20 : .al
+  lda !0, x
+  tay
+  sep #$20 : .as
+  pla                      ; the column, pulled as ONE byte (it was pushed under .as)
+  rep #$20 : .al
+  and #$00ff               ; B still holds the table word's high byte
+  tax
+  sep #$20 : .as
+  lda @strpool_bank, x     ; the string the entry names lives in this language's POOL
+  pha                      ; bank, NOT in the table's bank ($C1)
+  plb
+  rts
+ovl_rs_plain:
+  pha                      ; a plain string (every language equal): read it where it is
+  plb
+  rts
+
+; ---- copy one ON/OFF token into OVL_FLAG_BUF. DB/Y = source (ovl_resolve_str),
+;      X = slot offset (OVL_FLAG_ON/OFF). At most OVL_FLAG_W chars + NUL. ----
+ovl_fill_tok:
+  lda !0, y
+  beq ovl_ft_term
+  sta @OVL_FLAG_BUF, x
+  iny
+  inx
+  txa
+  and #$07
+  cmp #OVL_FLAG_W
+  bne ovl_fill_tok
+ovl_ft_term:
+  lda #$00
+  sta @OVL_FLAG_BUF, x
+  rts
 
 ; ======================================================================
 ;  Tables.  Data only -- never fallen into (every routine above returns).

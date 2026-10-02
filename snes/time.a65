@@ -5,11 +5,11 @@
 #include "stack.i65"
 
 ; Date format per menu language, indexed by cur_lang (EN, BR, ES, DE, FR, IT,
-; RU). Low 7 bits = the separator; bit 7 set = day-month-year, clear =
+; RU, NL). Low 7 bits = the separator; bit 7 set = day-month-year, clear =
 ; month-day-year (the US order English uses). A new language needs its byte
 ; here.
 time_date_sep
-  .byt $2f, $af, $af, $ae, $af, $af, $ae
+  .byt $2f, $af, $af, $ae, $af, $af, $ae, $ad
 
 timebox_data
 ; string offset, selection width, bcdtime offset

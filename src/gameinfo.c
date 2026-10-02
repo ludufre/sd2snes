@@ -189,14 +189,14 @@ static void gi_field(const char *key, char *field, int size) {
 /* The `.yml` key that carries the description in the MENU language. English (CFG.language 0) is
  * the canonical `description:`; every other language rides a sibling `description_<code>:` key
  * written next to it. The index order MUST match cfg.h (0: English, 1: Portugues BR, 2: Spanish,
- * 3: German, 4: French, 5: Italian, 6: Russian) and the codes the info generator emits. NULL = use the plain
+ * 3: German, 4: French, 5: Italian, 6: Russian, 7: Dutch) and the codes the info generator emits. NULL = use the plain
  * `description:` (English, and any out-of-range value -- cfg_load clamps, but never trust it here).
  * A missing/empty localized key falls back to English, so a card written before this existed (or a
  * game with no translation) keeps working unchanged. */
 static const char *gi_desc_lang_key(void) {
   static const char *const keys[] = {
     NULL, "description_pt", "description_es", "description_de", "description_fr", "description_it",
-    "description_ru",
+    "description_ru", "description_nl",
   };
   return (CFG.language < sizeof(keys) / sizeof(keys[0])) ? keys[CFG.language] : NULL;
 }

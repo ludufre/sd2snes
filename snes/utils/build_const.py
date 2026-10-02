@@ -273,7 +273,7 @@ def main():
     #                   (cheatmenu.a65); hiprint truncates past that
     # First matching prefix wins, so text_mtl_ (whole lines) must precede text_mt_
     # (fragments printed AFTER a "U501: " chip prefix, hence 8 columns less).
-    WIDTH_LIMITS = (("text_si_", 40), ("text_cheat_noname", 42),
+    WIDTH_LIMITS = (("text_si_", 40), ("text_cheat_noname", 42), ("text_cheat_flag_", 4),
                     ("text_no_", 22), ("cheat_tab_head", 48),
                     ("text_mtl_", 40), ("text_mt_", 32), ("text_pcm_", 40),
                     ("mtext_", 40),
@@ -349,15 +349,26 @@ def main():
 
     # Intern identical strings so a label whose translations coincide (e.g. an
     # untranslated language that falls back to English) stores each unique byte
-    # sequence only once. This keeps the menu inside one 64K bank.
-    pool = {}        # `.byt` args -> shared label
-    pool_order = []  # preserve emission order
+    # sequence only once.
+    # TWO pools, chosen per LANGUAGE: one bank cannot hold eight columns. Each
+    # column's strings live entirely in one pool, so the reader needs one bank byte
+    # per language (strpool_bank, emitted with the tables) instead of one per entry.
+    # Pool A = the const_lang_str object ($C2), pool B = appended to const_lang_tab
+    # ($C1, which has tens of KB free). The biggest columns go to pool B. A string
+    # shared by columns in different pools is stored once in EACH pool.
+    POOL_B_LANGS = ("ru", "nl")
+    pools = ({}, {})          # `.byt` args -> shared label, one dict per pool
+    pool_orders = ([], [])    # preserve emission order
+    pool_prefix = ("strpool_", "strpoolb_")
 
-    def intern(args):
+    def intern(args, which):
+        pool = pools[which]
         if args not in pool:
-            pool[args] = f"strpool_{len(pool)}"
-            pool_order.append(args)
+            pool[args] = f"{pool_prefix[which]}{len(pool)}"
+            pool_orders[which].append(args)
         return pool[args]
+
+    col_pool = [0] + [1 if code in POOL_B_LANGS else 0 for code, _ in langs]
 
     tabledefs = []
     plaindefs = []   # labels whose languages coincide -> plain string, no table
@@ -379,7 +390,7 @@ def main():
         if all(n == en_norm for n in norms):
             plaindefs.append((label, en))
             continue
-        tabledefs.append((label, [intern(args) for args in strings]))
+        tabledefs.append((label, [intern(args, col_pool[c]) for c, args in enumerate(strings)]))
 
     if plaindefs:
         out += ["", "; ==== language-neutral labels (same in all langs): no table ===="]
@@ -391,15 +402,15 @@ def main():
     # the pool -> <out>_str.a65 at $C2, the tables -> <out>_tab.a65 at $C1 (tens of KB
     # free). menudata reaches each dispatch table via ^label, so the split is
     # transparent there, but resolve_str (ui.a65) and ovl_fill_noname
-    # (sysinfo_render.a65) MUST use ^strtab_lo for the table and ^strpool_lo for the
-    # string it names -- getting one of the two wrong assembles clean and renders junk.
+    # (sysinfo_render.a65) MUST use ^strtab_lo for the table and strpool_bank[lang] for
+    # the string it names -- getting one of the two wrong assembles clean and renders junk.
     strout = [".link page $c2", "",
-              "; ==== interned language string pool (deduplicated) ====",
-              "; strpool_lo: the bank of THIS label is the bank of every pooled string",
-              "; (^strpool_lo in resolve_str / ovl_fill_noname).",
+              "; ==== interned language string pool A (deduplicated) ====",
+              "; strpool_lo: the bank of THIS label is the bank of every string of the",
+              "; columns strpool_bank maps here (resolve_str / ovl_fill_noname).",
               "strpool_lo"]
-    for args in pool_order:
-        strout.append(f"{pool[args]} .byt {args}")
+    for args in pool_orders[0]:
+        strout.append(f"{pools[0][args]} .byt {args}")
 
     # Number of language COLUMNS actually present. Trailing columns whose every
     # entry just repeats English (e.g. an unfilled scaffold) are dropped
@@ -419,16 +430,24 @@ def main():
     tabout = [".link page $c1", "",
               f"; ==== dispatch tables: resolve_str range [strtab_lo, strtab_hi) ====",
               f"; each table = {nlang} x 16-bit address ({lang_names})[:{nlang}]; NO bank byte:",
-              "; the pool is a DIFFERENT bank ($C2), so a reader takes the table with",
-              "; ^strtab_lo and the string it names with ^strpool_lo.",
+              "; the strings live in a pool of ANOTHER object, so a reader takes the table",
+              "; with ^strtab_lo and the string it names with strpool_bank[lang].",
               "; cur_lang >= strtab_nlang -> EN."]
     tabout.append(f"strtab_nlang .byt {nlang}")
+    tabout.append("; bank of each language's pool, indexed by the (clamped) language")
+    tabout.append("strpool_bank .byt " + ", ".join(
+        "^strpoolb_lo" if col_pool[c] else "^strpool_lo" for c in range(nlang)))
     tabout.append("strtab_lo")
     for label, labels in tabledefs:
         cols = labels[:nlang]
         # `label .word ...` (no colon) matches the proven `label .byt ...` style.
         tabout.append(f"{label} " + " : ".join(f".word !{c}" for c in cols))
     tabout.append("strtab_hi")
+    # Pool B sits AFTER strtab_hi: resolve_str treats [strtab_lo, strtab_hi) as tables.
+    tabout += ["", "; ==== interned language string pool B (" +
+               ", ".join(POOL_B_LANGS) + ") ====", "strpoolb_lo"]
+    for args in pool_orders[1]:
+        tabout.append(f"{pools[1][args]} .byt {args}")
 
     out_path.write_text("\n".join(out) + "\n")
     str_path = out_path.with_name(out_path.stem + "_str" + out_path.suffix)
@@ -436,7 +455,8 @@ def main():
     tab_path = out_path.with_name(out_path.stem + "_tab" + out_path.suffix)
     tab_path.write_text("\n".join(tabout) + "\n")
     print(f"generated {out_path} + {str_path} + {tab_path}: {len(order)} localized labels "
-          f"({len(pool_order)} pooled strings in bank $C2, "
+          f"({len(pool_orders[0])} pooled strings in bank $C2, "
+          f"{len(pool_orders[1])} in bank $C1, "
           f"{len(tabledefs)} dispatch tables in bank $C1), {nlang} language column(s)")
 
 

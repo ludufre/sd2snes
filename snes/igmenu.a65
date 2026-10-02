@@ -962,6 +962,8 @@ ce_done:
 ;      offset 0 of the table whatever follows it), line 1 goes through ch_copy. ----
 #define IGM_CH_NONAME   0
 #define IGM_CH_NONE     1
+#define IGM_CH_FLAG_ON  2       ; per-row ON token, staged into OVL_FLAG_BUF by igm_fill_noname
+#define IGM_CH_FLAG_OFF 3       ; per-row OFF token, same
 
 ; ---- "no cheats" message, centered on row 13. LOCALIZED: the text comes out of
 ;      igm_cheats_tbl (bank $C8) like every other tab's.
@@ -1314,7 +1316,8 @@ igm_fill_noname:
 ifn_lang_ok:
 	rep #$30 : .al : .xl
 	and #$00ff
-	asl                                        ; igm_cheats_tbl has ONE line -> lang*2
+	asl                                        ; line 0 of igm_cheats_tbl -> lang*2
+	pha                                        ; keep lang*2 for the ON/OFF tokens below
 	tax
 	lda @igm_cheats_tbl, x                      ; A = string offset within bank $C8
 	tax
@@ -1331,8 +1334,43 @@ ifn_copy:
 ifn_done:
 	lda #$00
 	sta OVL_NONAME_A, y
+	; the ON/OFF token each row shows, into OVL_FLAG_BUF (cheatlist.i65 only reads it).
+	; Row stride is IGM_LANG_STRIDE words, so line L of this language is at L*16 + lang*2.
+	rep #$30 : .al : .xl
+	pla                                        ; lang*2
+	pha
+	clc : adc #(IGM_CH_FLAG_ON*16)
+	ldy #OVL_FLAG_ON
+	jsr igm_fill_tok
+	pla                                        ; lang*2 (stack balanced again)
+	clc : adc #(IGM_CH_FLAG_OFF*16)
+	ldy #OVL_FLAG_OFF
+	jsr igm_fill_tok
 	plb
 	plp
+	rts
+
+; ---- copy one ON/OFF token into OVL_FLAG_BUF. A(16) = byte index into igm_cheats_tbl,
+;      Y(16) = slot offset (OVL_FLAG_ON/OFF); DBR=$F4. At most OVL_FLAG_W chars + NUL. ----
+igm_fill_tok:
+	tax
+	lda @igm_cheats_tbl, x                      ; A = string offset within bank $C8
+	tax
+	sep #$20 : .as
+ift_copy:
+	lda @$c80000, x                             ; long,X source byte (bank $C8)
+	beq ift_done
+	sta OVL_FLAG_A, y                          ; abs,Y (DBR=$F4)
+	inx
+	iny
+	tya
+	and #$07
+	cmp #OVL_FLAG_W
+	bne ift_copy
+ift_done:
+	lda #$00
+	sta OVL_FLAG_A, y
+	rep #$30 : .al : .xl
 	rts
 
 cheats_tick:

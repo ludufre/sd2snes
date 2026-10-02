@@ -178,12 +178,15 @@ MANUAL_LABELS = [
 CHEATS_LABELS = [
     "text_igm_cheat_noname",  # 0 placeholder for a cheat whose YAML carries no name
     "text_igm_ch_none",       # 1 centered message when the ROM has no cheats at all
+    "text_igm_cheat_on",      # 2 per-row ON token, staged into OVL_FLAG_BUF (memmap.i65)
+    "text_igm_cheat_off",     # 3 per-row OFF token, same
 ]
 
 # The placeholder is copied into OVL_NONAME_BUF (32 B, see memmap.i65) and drawn in the
 # list's name column; cap it well inside both. The empty-list message is centered on a
 # 64-column row by ch_draw_centered, so it only needs to stay well short of that.
-CHEATS_LABEL_MAX = {"text_igm_cheat_noname": 24, "text_igm_ch_none": 40}
+CHEATS_LABEL_MAX = {"text_igm_cheat_noname": 24, "text_igm_ch_none": 40,
+                    "text_igm_cheat_on": 4, "text_igm_cheat_off": 4}   # OVL_FLAG_W cells
 
 # Shell chrome shared by every tab, IN INDEX ORDER. Lockstep with the IGM_SH_* indices
 # in snes/igmenu.a65. These were hard-coded ASCII in igmenu.a65 until the Russian

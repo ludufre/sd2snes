@@ -1,8 +1,10 @@
 // cheatlist.i65 -- shared in-game cheat-list layout + render/input routines,
-// extracted from cheatoverlay.a65 so BOTH the $C0 single-tab fail-safe overlay
-// AND the $C8 igmenu tab shell can #include the SAME source (SEPARATE links, no
-// cross-bank symbol coupling). This file has NO .link directive -- it inherits the
-// including file's bank ($C0 for cheatoverlay.a65, $C8 for igmenu.a65).
+// extracted from cheatoverlay.a65 so BOTH the overlay host (cheatoverlay.a65, which
+// snapshots the PPU and pre-draws the list before handing over) AND the $C8 igmenu tab
+// shell can #include the SAME source (SEPARATE links, no cross-bank symbol coupling).
+// There is no single-tab fallback any more: without a verified igmenu.bin the combo
+// does nothing. This file has NO .link directive -- it inherits the including file's
+// bank ($C1 for cheatoverlay.a65, $C8 for igmenu.a65).
 //
 // EXTRACTION GUARD (durable): every routine here is self-contained -- it addresses
 // $F4 scratch / VRAM / CHEAT_NAMES / CHEAT_FLAGS via @long (bank-agnostic) and only
@@ -26,8 +28,9 @@
 #define OVL_CURSOR_COL  2        // '>' logical column (even -> BG2)
 #define OVL_NAME_COL    3        // name start logical column
 #define OVL_NAME_MAX    53       // name chars shown (cols 3..55 -- one block further left
-                                 //   since the '>' cursor retired; gap 56-57, flag at 58)
-#define OVL_FLAG_COL    58       // "ON "/"OFF" at logical cols 58..60
+                                 //   since the '>' cursor retired; gap 56, flag at 57)
+#define OVL_FLAG_COL    57       // localized ON/OFF token at logical cols 57..60 (up to
+                                 //   OVL_FLAG_W chars, memmap.i65), read from OVL_FLAG_BUF
 #define OVL_SB_COL      62       // scrollbar cell (even -> BG2 entry 31), right of the flag.
                                  // Same column ig_draw_window (igmenu.a65) uses for a frame's
                                  // RIGHT border -- no clash only because the Cheats tab never
@@ -57,9 +60,9 @@
 #define ovl_win_tmp  $F48116     // scratch: tentative new base while sliding the name window
 #define ovl_pal      $F48118     // list tilemap palette base: $2000 = FOCUSED (palette 0, normal),
                                  //   $2400 = GREYED (palette 1) when the tab bar has focus. Also
-                                 //   gates the cursor '>' (drawn only when == $2000). The $C0
-                                 //   fail-safe overlay keeps it $2000 (always focused); the $C8
-                                 //   igmenu shell drives it from the two-level focus state.
+                                 //   gates the cursor '>' (drawn only when == $2000). The host's
+                                 //   pre-draw sets $2000 (focused); the $C8 igmenu shell
+                                 //   drives it from the two-level focus state.
 // NOTE: nothing in the overlay may trigger a savestate
 // stage while it is open. load_backup_state reads the .state into $F00000 and it is
 // 0x50000 bytes long, i.e. $F00000..$F4FFFF -- which swallows EVERY overlay backup
@@ -110,7 +113,7 @@
 #define ovl_sb_pos   $F482E2     // first thumb cell (screen row, inclusive)
 #define ovl_sb_end   $F482E4     // one past the last thumb cell (= pos + thumb)
 #define ovl_sb_thumb $F482E6     // thumb height in cells (>= 1)
-// OVL_CUR_OFF ($F482E8, 1B) gates the '>' cursor below: 0 = draw it (the $C0 fail-safe path),
+// OVL_CUR_OFF ($F482E8, 1B) gates the '>' cursor below: 0 = draw it (the host's pre-draw),
 // 1 = the $C8 shell suppresses it because the selection BAR marks the row. It is NOT defined
 // here -- it is a SHARED address, defined once in memmap.i65 (which both includers pull in
 // before this file) and zeroed by the overlay dispatch on every open. Defining it locally too
@@ -521,20 +524,27 @@ ss_ovl_dfr_name:
 	cpy #(OVL_NAME_COL+OVL_NAME_MAX)
 	bne ss_ovl_dfr_name
 ss_ovl_dfr_name_done:
-	// flag "ON "/"OFF" at OVL_FLAG_COL from the BSRAM mirror
+	// flag at OVL_FLAG_COL from the BSRAM mirror: the localized ON or OFF token the HOST
+	// staged in OVL_FLAG_BUF, copied up to its NUL -- the rest stays ovl_row_clear's space
 	rep #$30 : .al : .xl
 	lda @ovl_idx : tax
 	sep #$20 : .as
 	lda @CHEAT_FLAGS, x
-	bmi ss_ovl_dfr_on
-	lda #$4f : sta OVL_RB+OVL_FLAG_COL      // O
-	lda #$46 : sta OVL_RB+OVL_FLAG_COL+1    // F
-	lda #$46 : sta OVL_RB+OVL_FLAG_COL+2    // F
-	bra ss_ovl_dfr_flush
-ss_ovl_dfr_on:
-	lda #$4f : sta OVL_RB+OVL_FLAG_COL      // O
-	lda #$4e : sta OVL_RB+OVL_FLAG_COL+1    // N
-	lda #$20 : sta OVL_RB+OVL_FLAG_COL+2    // (space)
+	bpl ss_ovl_dfr_tok_off
+	ldx #OVL_FLAG_ON                        // ON token slot
+	bra ss_ovl_dfr_tok
+ss_ovl_dfr_tok_off:
+	ldx #OVL_FLAG_OFF                       // OFF token slot
+ss_ovl_dfr_tok:
+	ldy #OVL_FLAG_COL
+ss_ovl_dfr_tok_l:
+	lda @OVL_FLAG_BUF, x
+	beq ss_ovl_dfr_flush
+	sta OVL_RB, y                           // abs,Y (DBR=$F4)
+	inx
+	iny
+	cpy #(OVL_FLAG_COL+OVL_FLAG_W)
+	bne ss_ovl_dfr_tok_l
 ss_ovl_dfr_flush:
 	rep #$30 : .al : .xl
 	// scrollbar cell at OVL_SB_COL: glyph 17 (thumb) when pos <= row < end, else 16 (track).
@@ -584,8 +594,8 @@ ss_ovl_dfr_done:
 //      tilemap entry each straight to VRAM (long, DBR-agnostic). Entry values are
 //      pre-shifted: glyph G -> (G<<1)|$2000 ('>' $3e->$207c, space $20->$2040,
 //      O $4f->$209e, N $4e->$209c, F $46->$208c). The cursor sits at OVL_CURSOR_COL
-//      (=2, even -> BG2 entry 1) the flag at OVL_FLAG_COL (=58: cols 58,59,60 ->
-//      BG2 entry 29, BG1 entry 29, BG2 entry 30). ----
+//      (=2, even -> BG2 entry 1); the flag's OVL_FLAG_W cells from OVL_FLAG_COL (=57: cols
+//      57..60 -> BG1 e28, BG2 e29, BG1 e29, BG2 e30) are picked per column by parity. ----
 ss_ovl_draw_cursor:                            // Y = screen row -> draw '>'
 	php
 	rep #$30 : .al : .xl
@@ -610,7 +620,7 @@ ss_ovl_erase_cursor:                           // Y = screen row -> erase cursor
 	plp
 	rts
 
-ss_ovl_draw_flag:                              // Y = screen row -> redraw ON/OFF
+ss_ovl_draw_flag:                              // Y = screen row -> redraw the ON/OFF token
 	php
 	rep #$30 : .al : .xl
 	tya
@@ -622,34 +632,52 @@ ss_ovl_draw_flag:                              // Y = screen row -> redraw ON/OF
 	tax
 	sep #$20 : .as
 	lda @CHEAT_FLAGS, x                      // sign bit set = ON
-	rep #$30 : .al : .xl
-	bmi ss_ovl_dflag_on
-	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+29) : sta @$002116
-	lda #$209e : sta @$002118               // O (col 58 -> BG2 e29)
-	lda @ovl_rowoff : clc : adc #(OVL_BG1_MAP+29) : sta @$002116
-	lda #$208c : sta @$002118               // F (col 59 -> BG1 e29)
-	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+30) : sta @$002116
-	lda #$208c : sta @$002118               // F (col 60 -> BG2 e30)
-	plp
-	rts
-ss_ovl_dflag_on:
-	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+29) : sta @$002116
-	lda #$209e : sta @$002118               // O
-	lda @ovl_rowoff : clc : adc #(OVL_BG1_MAP+29) : sta @$002116
-	lda #$209c : sta @$002118               // N
-	lda @ovl_rowoff : clc : adc #(OVL_BG2_MAP+30) : sta @$002116
-	lda #$2040 : sta @$002118               // (space)
+	bmi ss_odf_on
+	ldx #OVL_FLAG_OFF
+	bra ss_odf_go
+ss_odf_on:
+	ldx #OVL_FLAG_ON
+ss_odf_go:
+	ldy #OVL_FLAG_COL                        // Y = logical column, OVL_FLAG_W cells
+ss_odf_l:
+	lda @OVL_FLAG_BUF, x
+	beq ss_odf_sp
+	inx                                      // advance only while inside the token
+	bra ss_odf_put
+ss_odf_sp:
+	lda #$20                                 // past its NUL: blank the rest of the field
+ss_odf_put:
+	pha                                      // glyph (8-bit)
+	rep #$20 : .al
+	tya
+	lsr                                      // carry = odd column (BG1), A = entry in the row
+	bcs ss_odf_bg1
+	clc : adc #OVL_BG2_MAP
+	bra ss_odf_addr
+ss_odf_bg1:
+	clc : adc #OVL_BG1_MAP
+ss_odf_addr:
+	clc : adc @ovl_rowoff
+	sta @$002116
+	sep #$20 : .as
+	pla
+	rep #$20 : .al
+	and #$00ff
+	asl                                      // glyph G -> tile 2G
+	ora #$2000                               // palette 0, priority (focused list)
+	sta @$002118
+	sep #$20 : .as
+	iny
+	cpy #(OVL_FLAG_COL+OVL_FLAG_W)
+	bne ss_odf_l
 	plp
 	rts
 
 // ss_ovl_draw_empty ("no cheats") moved to igmenu.a65: it is now LOCALIZED, and a
 // localized string has to be read out of igm_cheats_tbl in bank $C8 -- which this file
 // cannot do, being shared source that also assembles into the $C1 overlay host.
-// ss_ovl_draw_title (a hard-coded "CHEATS" on row 1) is gone with the fail-safe: the
-// shell covers that row with the tab bar, so only the removed single-tab path drew it.
-
-// The fail-safe footer ("A:ON/OFF  B:BACK", hard-coded ASCII on row 25) went with the
-// fail-safe: the shell paints its own footer there, per focus level and per tab.
+// There is no list title or footer here: the shell covers row 1 with the tab bar and
+// paints its own footer on row 25, per focus level and per tab.
 // ---- sliding name window: CHEAT_NAMES holds only CHEAT_OVL_MAX (64) names, for the absolute
 //      range [CHEAT_WIN_BASE, +64). If the current visible span leaves that window, ask the MCU
 //      (CMD_CHEAT_NAMES_WINDOW) to restage a re-centred window from the $D00000 records and spin

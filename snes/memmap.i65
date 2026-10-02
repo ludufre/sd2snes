@@ -417,6 +417,17 @@
 #define OVL_NONAME_BUF              $F483C0 /* 32 B: NUL-terminated placeholder, font-encoded. */
 #define OVL_NONAME_A                $83C0   /* 16-bit abs alias of OVL_NONAME_BUF for abs,Y stores under DBR=$F4 (the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with OVL_NONAME_BUF -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65 and IGM_THM_GRAD_A above. */
 #define OVL_NONAME_MAX              32      /* buffer size: at most 31 visible chars + the NUL. */
+/* ---- localized ON/OFF token of each row of the in-game cheat list ----
+   Same contract as OVL_NONAME_BUF: the HOST that opened the list stages both tokens here
+   in its language BEFORE the first list paint (cheatoverlay.a65 via ovl_fill_noname from
+   the menu's pool, igmenu.a65 via igm_fill_noname from its $C8 table), and cheatlist.i65
+   only reads them. Two NUL-terminated font-encoded slots of at most OVL_FLAG_W (4) chars.
+   16 B in the free gap after the cheat editor's ce_* scratch (ends $F48409). */
+#define OVL_FLAG_BUF                $F48410 /* 16 B: ON token at +OVL_FLAG_ON, OFF token at +OVL_FLAG_OFF. */
+#define OVL_FLAG_A                  $8410   /* 16-bit abs alias of OVL_FLAG_BUF for abs,Y stores under DBR=$F4. KEEP IN LOCKSTEP with OVL_FLAG_BUF. */
+#define OVL_FLAG_ON                 0       /* slot offsets inside OVL_FLAG_BUF (8 B each: up to 4 */
+#define OVL_FLAG_OFF                8       /*   chars + NUL, padded so a slot is a pure index)    */
+#define OVL_FLAG_W                  4       /* token width in cells: the Russian OFF is the longest (cheatlist.i65 OVL_FLAG_COL). */
 #define OVL_CUR_OFF                 $F482E8 /* 1B: 0 = the cheat list draws its own '>' cursor (the $C0 fail-safe path); 1 = the $C8 shell suppresses it because the BAR marks the selection. Zeroed by the overlay on EVERY open, BEFORE the first list paint (ss_ovl_draw_full_row is the reader) -- PSRAM $F4 is not auto-cleared and survives reopens. The reader does a 16-bit lda + and #$00ff, so $F482E9 is fetched and discarded: keep it unallocated. */
 #define SS_OBC1_GATE                $FF0718 /* OBC1 savestate present flag (firmware-armed = fpga_conf==FPGA_OBC1, on Mk.II and Mk.III -- the OBC1 is purely reactive, no chip halt needed). Handler reads it to decide whether to capture/restore the OBC1 window. Free $FF0701..$FF07FF gap, after SRM_SLOT_STATUS (below the BPS breadcrumbs $FF0720-2E). Lockstep with SS_OBC1_GATE_ADDR in src/memmap.h. */
 #define SS_OBC1_SCRATCH             $F47000 /* PSRAM scratch for the OBC1 window image (2 KB = the SNES-visible $7800-$7FFF window: obc_lower + obc_upper mirror image + the 8 regs). Shares the coprocessor scratch slot (SA-1 IRAM / GSU cache / DSP snapshot); a game is never two chips. Captures/restores the state VISIBLE to the SNES, not the chip's internal BRAM (on Mk.II the unreachable obc_lower[512:1023] never enters the window). */

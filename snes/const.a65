@@ -209,6 +209,7 @@ text_lang_de                      .byt "Deutsch", 0
 text_lang_fr                      .byt "Fran", 141, "ais", 0
 text_lang_it                      .byt "Italiano", 0
 text_lang_ru                      .byt 80, 121, 99, 99, 207, 205, 206, 0
+text_lang_nl                      .byt "Nederlands", 0
 ; ---- In-game TAB menu HELP screen (SELECT at the tab-bar level). These are the ENGLISH
 ;      base; the per-language dicts (utils/lang_*.py) carry the translations. build_const.py
 ;      DROPS every text_igm_* label from the menu link (the menu never renders them); the
@@ -482,7 +483,7 @@ mdesc_browser_text_outline        .byt "Dark outline around the menu text: follo
 mdesc_browser_text_aa             .byt "Smooth edges on the menu text: follow the theme, or force it", 0
 mdesc_ingame_cheats               .byt "Whether to start out with cheats enabled. Can be changed using in-game buttons", 0
 mdesc_ingame_shortreset           .byt "Where a reset goes. Folder/ROM reopen the last game folder. Duration: a short press resets the game, a long one goes to the ROM.", 0
-mdesc_ingame_enable               .byt "Required for in-game buttons and 7E/7F cheats", 0
+mdesc_ingame_enable               .byt "Required for the in-game menu, savestates, in-game buttons and cheats that change the game's memory", 0
 mdesc_ingame_pad2                 .byt "Also accept the in-game button combos from the controller in port 2. Adds a little time to every interrupt.", 0
 mdesc_ingame_buttons              .byt "Enable in-game buttons (reset, en/disable cheats", 127, 128, "). Requires in-game hook to be enabled.", 0
 mdesc_ingame_cheat_overlay        .byt "In-game menu (hold L+R+Y+Left): cheats, savestates, saves and guides. Requires in-game hook. Not available on a few special-chip games.", 0
@@ -794,6 +795,13 @@ text_igm_ce_full         .byt "The cheat list is full", 0
 text_igm_ce_badcode      .byt "Invalid code", 0
 text_cheat_noname .byt "(no name)", 0
 text_igm_cheat_noname .byt "(no name)", 0
+; ON/OFF token of each row of the in-game cheat list (at most 4 cells, OVL_FLAG_W). Two
+; copies for the same reason as the placeholder above: the $C0 overlay stages
+; text_cheat_flag_* from this pool, the $C8 igmenu stages text_igm_cheat_* from its table.
+text_cheat_flag_on .byt "ON", 0
+text_cheat_flag_off .byt "OFF", 0
+text_igm_cheat_on .byt "ON", 0
+text_igm_cheat_off .byt "OFF", 0
 text_ips_header .byt "Patches", 0
 text_ips_nopatch .byt "[No patch]", 0
 

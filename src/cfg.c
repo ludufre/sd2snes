@@ -302,7 +302,7 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_COVERS_IN_LISTS,             covers_in_lists,            CK_BOOL,    0),
   /* An unclamped value leaves cur_lang past the last column of every dispatch
      table in the menu. */
-  CFGI(CFG_LANGUAGE,                    language,                   CK_NUM,     0x60),
+  CFGI(CFG_LANGUAGE,                    language,                   CK_NUM,     0x70),
   CFGI(CFG_PATCH_VERIFY_INTEGRITY,      patch_verify_integrity,     CK_BOOL,    0),
   CFGI(CFG_ENABLE_MENU_MUSIC,           enable_menu_music,          CK_BOOL,    0),
   CFGI(CFG_ENABLE_MENU_SFX,             enable_menu_sfx,            CK_BOOL,    0),
