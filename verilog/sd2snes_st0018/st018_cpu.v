@@ -41,6 +41,7 @@
 //////////////////////////////////////////////////////////////////////////////
 module st018_cpu (
   input             clk,
+  input             ce,           // clock enable: every register advances only when high
   input             rst,          // synchronous, active high
 
   output reg        m_req,
@@ -244,7 +245,7 @@ wire [4:0] rmode = (st == S_BMN || st == S_BMS) ? xmode : mode;
 wire [31:0] rfA, rfB;
 
 st018_regfile u_rf (
-  .clk(clk),
+  .clk(clk), .ce(ce),
   .we(rf_we & ~rst), .wa(rf_wa), .wd(rf_wd),
   .ra(phys(ra_r, rmode)), .rda(rfA),
   .rb(phys(rb_r, mode)),  .rdb(rfB)
@@ -535,7 +536,7 @@ reg data_issue;          // blocking temp: FSM issues a data access this cycle
 reg [31:0] di_addr, di_wdata;
 reg        di_we, di_byte;
 
-always @(posedge clk) begin
+always @(posedge clk) if (ce) begin
   dbg_retire <= 1'b0;
 
   if (rst) begin
@@ -921,6 +922,7 @@ endmodule
 //////////////////////////////////////////////////////////////////////////////
 module st018_regfile (
   input             clk,
+  input             ce,
   input             we,
   input      [4:0]  wa,
   input      [31:0] wd,
@@ -938,7 +940,7 @@ module st018_regfile (
     for (i = 0; i < 32; i = i + 1) begin mema[i] = 32'd0; memb[i] = 32'd0; end
     qa = 32'd0; qb = 32'd0; wdr = 32'd0; bya = 1'b0; byb = 1'b0;
   end
-  always @(posedge clk) begin
+  always @(posedge clk) if (ce) begin
     if (we) begin
       mema[wa] <= wd;
       memb[wa] <= wd;

@@ -526,8 +526,17 @@ wire [15:0] dsp_feat;   // mcu_cmd.v output (event-board timer settings)
 
 `ifdef MK3
 localparam ST018_CACHE_LB = 10;   // 16 KB ROM cache (M9K are plentiful)
+localparam ST018_HALF_RATE = 0;
+localparam ST018_RD_CYC = 8;
+localparam ST018_WE_CYC = 6;
 `else
 localparam ST018_CACHE_LB = 8;    //  4 KB ROM cache (mk2 block-RAM budget)
+// The ARM datapath does not make one CLK2 period on the Spartan-3: the core is enabled
+// on every other cycle (see st018.v and the FROM-TO constraint in main.ucf), and the
+// SRAM timing is counted in those cycles.
+localparam ST018_HALF_RATE = 1;
+localparam ST018_RD_CYC = 5;
+localparam ST018_WE_CYC = 3;
 `endif
 
 // PSRAM program-fetch requester of the uPD96050 core this was derived from:
@@ -540,7 +549,8 @@ reg [15:0] DSP_DINr;
 wire DSP_RRQ = 1'b0;
 wire [23:0] DSP_ROM_ADDR = 24'h000000;
 
-st018 #(.CACHE_LB(ST018_CACHE_LB)) snes_st018 (
+st018 #(.CACHE_LB(ST018_CACHE_LB), .SRAM_RD_CYC(ST018_RD_CYC), .SRAM_WE_CYC(ST018_WE_CYC),
+         .HALF_RATE(ST018_HALF_RATE)) snes_st018 (
   .clk(CLK2),
   .mcu_reset(dspx_reset),            // $EB: held from configuration until the MCU releases it
   .snes_reset(SNES_reset_strobe),

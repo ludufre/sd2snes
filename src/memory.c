@@ -1365,6 +1365,29 @@ static uint32_t load_identify(load_ctx_t *c) {
    would only desync MCU and SNES -- let it fall through as before.  That gate
    stays at the call site, where the difference is visible.
    Returns 1 when everything the game needs is on the card, 0 after a NACK. */
+/* The base core file this cartridge runs on.  On the mk2 the plain base core has no
+   Sufami Turbo map, no Gamars window and no BS Memory Pack slot / BS-LoROM remap (they
+   keep the Spartan-3 fit from meeting timing, see sd2snes_base/address.v); a cart that
+   needs one of them gets fpga_basex, the same core with all of them in.  The pack slot
+   is only confirmed after the ROM is staged (load_bs_pack_slot), i.e. after the FPGA is
+   configured, so a base-mapper cart with a .mpk next to it takes the variant up front:
+   it is a superset of the base core.  Everywhere else there is one base core. */
+static const uint8_t *load_base_core(const load_ctx_t *c) {
+#ifdef CONFIG_MK2
+  if(!romprops.fpga_conf) {
+    if(romprops.has_sufami || romprops.mapper_id == 4
+       || (romprops.fpga_features & FEAT_BSLOROM)) return FPGA_BASEX;
+    if((c->flags & LOADROM_WITH_SRAM)
+       && (romprops.mapper_id == 1
+           || (romprops.mapper_id == 0 && romprops.romsize_bytes <= 0x200000))
+       && bs_pack_exists(c->filename)) return FPGA_BASEX;
+  }
+#else
+  (void)c;
+#endif
+  return FPGA_BASE;
+}
+
 static uint32_t load_check_prereqs(load_ctx_t *c) {
   uint8_t  *filename = c->filename;
   DWORD     filesize = c->filesize;
@@ -1381,6 +1404,15 @@ static uint32_t load_check_prereqs(load_ctx_t *c) {
     return load_abort_missing(flags, MENU_ERR_SUPPLFILE,
                               path_leaf((const char*)romprops.fpga_conf));
   }
+#ifdef CONFIG_MK2
+  /* the base-core variant with the decoder extensions (see load_base_core) */
+  {
+    const uint8_t *base_core = load_base_core(c);
+    if(base_core != FPGA_BASE && !file_exists((const char*)base_core)) {
+      return load_abort_missing(flags, MENU_ERR_SUPPLFILE, path_leaf((const char*)base_core));
+    }
+  }
+#endif
   /* DSPx / ST0010 firmware. DSP1 may fall back to dsp1b.bin (see load_stage_bios). */
   if(romprops.has_dspx && romprops.dsp_fw) {
     if(!file_exists((const char*)romprops.dsp_fw)
@@ -1446,8 +1478,16 @@ static void load_reconfigure_fpga(const load_ctx_t *c) {
        menu's own reload does not come through here. */
     menu_sfx_shutdown();
   }
-  if(romprops.fpga_conf || (flags & LOADROM_WITH_FPGA)) {
-    const uint8_t *fpga_conf = romprops.fpga_conf ? romprops.fpga_conf : FPGA_BASE;
+  const uint8_t *base_core = load_base_core(c);
+#ifdef CONFIG_MK2
+  /* the FPGA holds the other flavour of the base core: it has to be swapped */
+  uint8_t base_swap = fpga_config != base_core
+                      && (fpga_config == FPGA_BASE || fpga_config == FPGA_BASEX);
+#else
+  const uint8_t base_swap = 0;
+#endif
+  if(romprops.fpga_conf || (flags & LOADROM_WITH_FPGA) || base_swap) {
+    const uint8_t *fpga_conf = romprops.fpga_conf ? romprops.fpga_conf : base_core;
     printf("reconfigure FPGA with %s...\n", fpga_conf);
     nes_dbg_log("PRE_PGM");            /* nesdbg: no-op fora de um load .nes */
     fpga_pgm((uint8_t*)fpga_conf);

@@ -81,13 +81,34 @@ reg [7:0] MAPPER_DEC; always @(posedge CLK) for (i = 0; i < 8; i = i + 1) MAPPER
 reg [23:0] SNES_ADDR; always @(posedge CLK) SNES_ADDR <= SNES_ADDR_early;
 
 // BS Memory Pack: 8M pack at PSRAM 0x900000 (FEAT_BSSLOT)
+`ifdef MK2
+ `ifndef BASE_EXT
+  `define BASE_LEAN
+ `endif
+`endif
+// Cartridge-specific decoder extensions: the BS Memory Pack slot and the BS-LoROM boot
+// remap, the Gamars window (mapper 4) and the Sufami Turbo map (mapper 5). All of them sit
+// in the SNES-address-to-ROM-address mux, the path every access takes, and with them in
+// the Spartan-3 fit cannot meet the CLK2 period. So the mk2 base core is built without
+// them (it then closes timing) and the mk2 variant sd2snes_basex -- this same source with
+// BASE_EXT defined -- carries them; the firmware loads that one for the carts that need
+// it. The mk3 core has all of them.
+`ifdef BASE_LEAN
+wire BS_SLOT = 1'b0;
+wire BSLOROM = 1'b0;
+wire MAP_GAMARS = 1'b0;
+wire MAP_SUFAMI = 1'b0;
+`else
 wire BS_SLOT = featurebits[FEAT_BSSLOT];
+wire BSLOROM = featurebits[FEAT_BSLOROM];
+wire MAP_GAMARS = MAPPER_DEC[3'b100];
+wire MAP_SUFAMI = MAPPER_DEC[3'b101];
+`endif
 wire [19:0] LOROM_OFF = {SNES_ADDR[20:16], SNES_ADDR[14:0]};
 wire BS_PACK_HIT    = BS_SLOT & (SNES_ADDR[23:21] == 3'b110); // LoROM pack $C0-$DF
 wire BS_PACK_HIT_HI = BS_SLOT & (SNES_ADDR[23:20] == 4'he);   // HiROM pack $E0-$EF
 
 // BS-LOROM (Derby): $80-$9F map to the upper 1MB (file $200000+), not $00-$1F
-wire BSLOROM = featurebits[FEAT_BSLOROM];
 wire BSLOROM_HI = BSLOROM & (SNES_ADDR[23:21] == 3'b100); // $80-$9F only
 wire [23:0] BSLOROM_ADDR = 24'h200000 + {4'b0, LOROM_OFF};
 
@@ -153,7 +174,7 @@ assign IS_SAVERAM_pre = (~map_unlock & SAVERAM_MASK[0])
 /*  Gamars Puzzle:
  *  special writable RAM at $31:6000-$61ff and $41:6000-$61ff.
  *  Both windows alias the same backing SaveRAM. */
-                      :(MAPPER_DEC[3'b100])
+                      :(MAP_GAMARS)
                       ? ((SNES_ADDR_early[23:16] == 8'h31)
                         && (SNES_ADDR_early[15:9] == 7'b0110000)
                         )
@@ -166,7 +187,7 @@ assign IS_SAVERAM_pre = (~map_unlock & SAVERAM_MASK[0])
 /*  Sufami Turbo: Slot A SRAM @ 0x60-0x6f (+ 0xe0-0xef), Slot B @ 0x70-0x7d (+ 0xf0-0xff),
  *  whole banks.  The outer SAVERAM_MASK[0] gate covers Slot A (always mapped); Slot B
  *  gets its own so an EMPTY slot is open bus instead of aliasing to offset 0. */
-                      :(MAPPER_DEC[3'b101])
+                      :(MAP_SUFAMI)
                       ? ((SNES_ADDR_early[22:21] == 2'b11)
                          & (~SNES_ROMSEL)
                          & (~SNES_ADDR_early[20] | SAVERAM_MASK_B[0])
@@ -265,7 +286,7 @@ assign SRAM_SNES_ADDR = IS_PATCH
                             *
                             * both map to the same SaveRAM offsets $000-$1ff.
                             */
-                          :(MAPPER_DEC[3'b100])
+                          :(MAP_GAMARS)
                           ?(IS_SAVERAM
                             ? SAVERAM_ADDR
                                + ({15'b0, SNES_ADDR[8:0]} & SAVERAM_MASK)
@@ -292,7 +313,7 @@ assign SRAM_SNES_ADDR = IS_PATCH
                               ? (24'h900000 + {bs_page,bs_page_offset})
                               : (BSX_ADDR & 24'h0fffff)
                            )
-                           :(MAPPER_DEC[3'b101])  /* Sufami Turbo */
+                           :(MAP_SUFAMI)  /* Sufami Turbo */
                            ?(IS_SAVERAM
                              ? (SNES_ADDR[20]
                                 ? (ST_SAVERAM_B + ({SNES_ADDR[19:16], SNES_ADDR[15:0]}
@@ -336,7 +357,7 @@ assign msu_enable = featurebits[FEAT_MSU1] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0
 assign dma_enable = (featurebits[FEAT_DMA1] | map_unlock | snescmd_unlock) & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfff0) == 16'h2020));
 /* bsx.v flash FSM: on for the BS-X base cart (mapper 3) or a slot with a pack
    (FEAT_BSSLOT, set only when a .mpk exists).  No pack -> off -> empty slot. */
-assign use_bsx = (MAPPER_DEC[3'b011]) | featurebits[FEAT_BSSLOT];
+assign use_bsx = (MAPPER_DEC[3'b011]) | BS_SLOT;
 assign srtc_enable = featurebits[FEAT_SRTC] & (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hfffe) == 16'h2800));
 assign exe_enable =                           (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hffff) == 16'h2C00));
 assign map_enable =                           (!SNES_ADDR[22] && ((SNES_ADDR[15:0] & 16'hffff) == 16'h2BB2));

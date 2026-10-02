@@ -158,6 +158,9 @@ assign loop_enable = loop_r;
 assign busy = {overrun_r, (state != ST_IDLE)};
 
 wire [23:0] length_next = length_r - (word_mode_r ? 2 : 1);
+// last unit of the run: the same as length_next == 0, taken from the register instead of
+// the subtractor so that the 24-bit borrow chain is not in front of the state decision
+wire        length_last = (length_r == (word_mode_r ? 24'd2 : 24'd1));
 
 always @(posedge clkin) begin
   if (reset) begin
@@ -232,7 +235,7 @@ always @(posedge clkin) begin
           dst_addr_r <= dst_addr_r + mod_r;
           length_r <= length_next;
 
-          if      (length_next == 0)    state <= ST_DONE;
+          if      (length_last)         state <= ST_DONE;
           else if (opcode_r == OP_COPY) state <= ST_READ;
           else                          state <= ST_WRITE;
         end

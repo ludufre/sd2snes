@@ -640,3 +640,10 @@ NET "RAM_ADDR[17]" LOC = P61;
 NET "RAM_ADDR[18]" IOSTANDARD = LVCMOS33;
 NET "RAM_ADDR[18]" DRIVE = 8;
 NET "RAM_ADDR[18]" LOC = P52;
+
+# ST018 core at half rate (st018.v, HALF_RATE): every register and block RAM of u_core
+# sits behind one clock enable that is high on every other CLK2 cycle, so a path between
+# two of them has two CLK2 periods: 20.8 ns, half a CLKIN period. A factor on a TS
+# reference scales the FREQUENCY, so that is TS_CLKIN * 2 (the report must show 20.825 ns).
+INST "snes_st018/u_core/*" TNM = "ST018_CORE";
+TIMESPEC TS_ST018_CORE = FROM "ST018_CORE" TO "ST018_CORE" TS_CLKIN * 2;

@@ -159,10 +159,46 @@ mk3 (EP4CE15, 15 408 LE, 56 M9K) has ample room; the 16 KB cache takes 16 + 1 M9
 
 ## Performance
 
-With gameplay commands and the real firmware in simulation: **≈ 17.6 MIPS** on
-mk2 (4 KB cache) and 17.8 MIPS on mk3, with cache fills taking 2 % of cycles.
-The real chip is an ARM6 at 21.47 MHz where branches and loads take 3 cycles,
-so this should be roughly on par. The self-test command `$F1` checksums the
+With gameplay commands and the real firmware in simulation: **≈ 17.8 MIPS** on
+mk3, with cache fills taking 2 % of cycles. The real chip is an ARM6 at
+21.47 MHz where branches and loads take 3 cycles, so this should be roughly on
+par. The mk2 runs the core at half rate (below), so about half of that.
+
+## mk2: half rate
+
+The ARM datapath does not make one CLK2 period (10.4 ns) on the Spartan-3: with
+the original single-rate build ISE reports a 23.5 ns path, and 14.0 ns on the
+best of 60 cost tables with PAR at "continue on impossible"; changing register
+balancing, max fanout or the XST effort level does not close it either.
+
+So on mk2 the core is enabled on every other CLK2 cycle (`st018 #(.HALF_RATE(1))`
+in `main.v`). `st018_core` and `st018_cpu` take a clock enable `ce` that gates
+every register and block RAM; with all of them behind the same enable, a path
+between two of them has two CLK2 periods, which `main.ucf` states as
+
+```
+INST "snes_st018/u_core/*" TNM = "ST018_CORE";
+TIMESPEC TS_ST018_CORE = FROM "ST018_CORE" TO "ST018_CORE" TS_CLKIN * 2;
+```
+
+(the factor scales the frequency: the report must show a 20.825 ns requirement).
+The `st018` wrapper keeps the bus side at full rate: the SNES and MCU strobes
+are one CLK2 cycle wide, so each is latched with the bus values of that cycle
+until the core's input register has taken it, and the host read data is
+registered on the read strobe itself, as before. SRAM timing is counted in
+enabled cycles (`SRAM_RD_CYC` 5, `SRAM_WE_CYC` 3: the same 62.5 ns access and
+write pulse). With `HALF_RATE` 0 (mk3) the enable is tied high and the inputs
+pass straight through.
+
+Result: Timing Score 0 on the default cost table, 19.0 ns on the two-period
+paths, 93 % of the slices, 14 RAMB16.
+
+`tb_st018.v` runs the subsystem with the real firmware at either rate (see its
+header): firmware load and checksum through an SRAM model with a 45 ns access
+time, then the `$F1` self test and `$F2` over the mailbox. Both rates load
+without a write error, return the same sums and answers and retire the same
+number of instructions up to the `$F1` answer (501 517 and 501 514); the half
+rate takes 80.7 ms for the self test against 45.6 ms. The self-test command `$F1` checksums the
 whole 160 KB ROM (compulsory misses, ~15 ms); games issue it at boot.
 
 ## Notes
