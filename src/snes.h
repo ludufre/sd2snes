@@ -145,6 +145,7 @@
 #define MENU_ERR_NOIMPL    (0x3)
 #define MENU_ERR_CARDWP    (0x4)
 #define MENU_ERR_NOHW      (0x5) /* file type needs hardware this unit lacks (mk3-only cores on mk2) */
+#define MENU_ERR_EXPCANCEL (0x6) /* the user backed out of the experimental-core warning (no popup) */
 
 #define SNES_RELEASE_RESET_DELAY_US (2)
 #define SNES_RESET_PULSELEN_MS (5)

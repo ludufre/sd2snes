@@ -446,6 +446,20 @@ menu_enttab_browser:
  .byt  0,0,0
  .byt  0,0,0
 
+ .byt  MTYPE_VALUE
+ .word !mtext_cfg_warn_exp
+ .byt  ^mtext_cfg_warn_exp
+ .word !kv_onoff
+ .byt  ^kv_onoff
+ .byt  OPTTYPE_KVBYTE
+ .word !CFG_WARN_EXPERIMENTAL
+ .byt  ^CFG_WARN_EXPERIMENTAL
+ .word !mdesc_cfg_warn_exp
+ .byt  ^mdesc_cfg_warn_exp
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
  .byt  MTYPE_FUNC
  .word !mtext_browser_restoretheme
  .byt  ^mtext_browser_restoretheme

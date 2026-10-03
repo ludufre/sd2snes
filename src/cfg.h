@@ -91,6 +91,7 @@
 #define CFG_GBC_STRETCH                  ("GbcStretch")
 #define CFG_ONBOARDING_VERSION           ("OnboardingVersion")
 #define CFG_BOOT_INTRO                   ("BootIntro")
+#define CFG_WARN_EXPERIMENTAL            ("WarnExperimental")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -260,6 +261,11 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      chime) on the first menu boot after the console is switched on (snes/bootintro.a65). Never on
      a menu reload, a return from a game or the reset button, nor when autoboot starts a game.
      YAML BootIntro + menu "Power-on screen" (browser settings). Default 1. */
+  uint8_t  warn_experimental;       /* CFG @ $1D7: ask before a game starts on an experimental
+     console core (NES, Master System, Atari 2600, Game Boy Color), after every other load
+     check passed (load_confirm_experimental in src/memory.c). The box's "don't warn again"
+     answer clears it. YAML WarnExperimental + menu "Experimental core warning" (browser
+     settings). Default 1. */
 } cfg_t;
 
 int cfg_save(void);

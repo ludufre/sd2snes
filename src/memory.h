@@ -52,6 +52,7 @@ extern char current_filename[];
  _a < _b ? _a : _b; })
 
 uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags);
+extern uint8_t exp_warn_dismissed;   /* the experimental-core box said "don't warn again"; see menucmd_launch_rom */
 void assert_reset(void);
 void init(uint8_t *filename);
 void deassert_reset(void);

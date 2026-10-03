@@ -365,6 +365,7 @@ text_igm_tr_unpin                .byt "REMOVE FROM LIST", 0
 mtext_cfg_time                    .byt "Set Clock", 0
 mtext_cfg_ask_clock               .byt "Ask for clock on boot", 0
 mtext_cfg_boot_intro              .byt "Power-on screen", 0
+mtext_cfg_warn_exp                .byt "Experimental core warning", 0
 mtext_cfg_bsx                     .byt "BS-X Settings", 0
 mtext_cfg_browser                 .byt "Browser Settings", 0
 mtext_cfg_chip                    .byt "Chip Options", 0
@@ -446,6 +447,7 @@ mdesc_mm_language                 .byt "Set the menu/firmware language", 0
 mdesc_cfg_time                    .byt "Set the date and time", 0
 mdesc_cfg_ask_clock               .byt "Ask for the time at startup while the clock is unset", 0
 mdesc_cfg_boot_intro              .byt "Show an opening screen, with a chime, when the console is switched on", 0
+mdesc_cfg_warn_exp                .byt "Ask before a game starts on an experimental console core (NES, Master System, Atari 2600, Game Boy Color)", 0
 mdesc_cfg_bsx                     .byt "BS-X/Satellaview specific settings", 0
 mdesc_cfg_browser                 .byt "Change file browser settings", 0
 mdesc_cfg_chip                    .byt "Set special chip features", 0
@@ -584,6 +586,17 @@ text_err_supplfile  .byt "Required file not found:", 0
 text_err_noimpl     .byt "Chip not supported:", 0
 text_err_nohw       .byt "Requires Mk.III hardware:", 0
 text_err_generic    .byt "Load error:", 0
+; experimental-core warning (snes/expwarn.a65): two lines of the Yes/No box, <= 40 cols each
+text_exp_title          .byt "*Experimental* core", 0
+text_exp_l1             .byt "This core is still in development:", 0
+text_exp_l2             .byt "- it may run slowly, with sound and", 0
+text_exp_l3             .byt "  graphics glitches", 0
+text_exp_l4             .byt "- some games may not work", 0
+text_exp_l5             .byt "- savestates and the in-game menu are", 0
+text_exp_l6             .byt "  not available yet", 0
+text_exp_start          .byt "Start", 0
+text_exp_back           .byt "Back", 0
+text_exp_nowarn         .byt "Start and don't warn again", 0
 text_system         .byt "CPU/PPU1/PPU2: a/b/c        VMode: x0Hz",0
 
 ; System Information screen templates.  The MCU publishes BINARY values in

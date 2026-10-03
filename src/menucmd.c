@@ -635,7 +635,13 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
      the load then reads.  Also persists the A+B pair to the .stb sidecar. */
   sufami_stage_slotb(file_lfn, sufami_sel);
   filesize = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_SRAM | LOADROM_WITH_RESET | LOADROM_WAIT_SNES);
-  if(filesize) return filesize;   /* ROM loaded and SNES reset, leave the menu loop */
+  if(filesize) {                  /* ROM loaded and SNES reset, leave the menu loop */
+    if(exp_warn_dismissed) {      /* "don't warn again" on the experimental-core box */
+      exp_warn_dismissed = 0;
+      cfg_save();
+    }
+    return filesize;
+  }
   /* load aborted (missing chip BIOS etc.): clear the file error state -- or the LED
      blinks -- and NACK, so game_handshake_error shows the message. */
   file_res = FR_OK;

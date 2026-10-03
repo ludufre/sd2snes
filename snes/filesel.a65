@@ -1753,6 +1753,7 @@ confirm_delete:
   sep #$20 : .as
   rep #$10 : .xl
   stz confirm_sel                  ; default = No
+confirm_ask:                       ; entry with confirm_sel already set by the caller
 ; park the selection bar off-screen
   lda bar_xl
   pha

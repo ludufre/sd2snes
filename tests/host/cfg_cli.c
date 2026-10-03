@@ -433,6 +433,7 @@ static void cfg_make_allchanged(void) {
   CFG.gbc_stretch = 1;                           /* hi-colour screens at 256x192 */
   CFG.onboarding_version = 1;                    /* the first-boot tour already seen */
   CFG.boot_intro = 0;                            /* no power-on screen */
+  CFG.warn_experimental = 0;                     /* no experimental-core question */
 }
 
 /* ---- the alternating-booleans config ------------------------------------

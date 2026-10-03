@@ -873,6 +873,7 @@ game_handshake:
   sta @MCU_CMD
   lda #$00
   sta @LOAD_NACK            ; clear the refusal flag: anything set from here on is OURS
+  sta @EXP_ASK              ; and the experimental-core question (see the wait below)
 gh_cmd_deferred:
 ; fork: START THE IRIS NOW, before waiting for the ACK, so its ~0.6 s of animation
 ; OVERLAPS the MCU's work instead of queueing behind it.  That work is not shavable --
@@ -929,14 +930,27 @@ gh_iris_set:
 ; alone would read that re-armed $55 as an ACK and hand a never-loaded ROM to the boot
 ; trampoline -- which then spins on $77 forever with NMI off.  LOAD_NACK is written before
 ; the $aa and stays put.  ($aa is still checked, for the case where we do catch it.)
-- lda @LOAD_NACK
+; EXP_ASK: the firmware passed every prerequisite and now wants the user to confirm an
+; experimental console core (NES, Master System, Atari 2600, Game Boy Color).  gh_exp_ask
+; ($C1, expwarn.a65) shows the warning and answers; C clear = start (the screen is black
+; again and we keep waiting for the ACK), C set = back to the menu, as after a refusal.
+gh_wait:
+  lda @LOAD_NACK
   bne game_handshake_error
+  lda @EXP_ASK
+  cmp #EXP_ASK_MAGIC
+  bne gh_wait_cmd
+  jsl gh_exp_ask
+  bcc gh_wait
+  plp
+  rts
+gh_wait_cmd:
   lda @SNES_CMD
   cmp #$55
   beq +
   cmp #$aa
   beq game_handshake_error
-  bra -
+  bra gh_wait
 +
 ; fork: zero VRAM/CGRAM/OAM so a romhack that skips PPU init boots clean (no leftover
 ; VRAM garbage; the reset preserves it).  The firmware armed PPU_CLEAR_GATE=1 in load_rom

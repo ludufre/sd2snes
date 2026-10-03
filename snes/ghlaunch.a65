@@ -65,6 +65,7 @@ gh_dl_run:
     sta @MCU_CMD
     lda #$00
     sta @LOAD_NACK              ; refusal flag: anything set from here on is OURS
+    sta @EXP_ASK                ; same for the experimental-core question
 
     plb
     plp

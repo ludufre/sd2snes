@@ -583,4 +583,13 @@ ce_tmp3         .word 0
 ce_numbuf       .byt 0,0,0,0,0   ; "#NN",0 + slack (hiprint peeks one byte past print_count)
 ce_linebuf      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; one key row: 17 keys * 2 + NUL + slack
 
+; experimental-core warning box (expwarn.a65).  Written before read on every entry.
+exp_tmp         .word 0    ; scratch
+exp_sel         .byt 0     ; focused option: 0 Start, 1 Back, 2 Start and don't warn again
+exp_row         .byt 0     ; body row being drawn
+exp_len         .byt 0     ; heading length, markers dropped
+exp_hi0         .byt 0     ; first / past-the-last column of the *green* run ($ff = none)
+exp_hi1         .byt 0
+exp_hbuf        .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; the heading without its markers + NUL + slack
+
 _END            .byt 0

@@ -115,6 +115,16 @@ ui_call_confirm:
   jsr confirm_delete
   rtl
 
+; ui_call_confirm_yes: the same box with "Yes" preselected -- the experimental-core warning
+; (snes/expwarn.a65) is a heads-up before a launch the user already asked for, so A starts
+; the game.  DB must be the WRAM bank (confirm_sel is absolute).
+ui_call_confirm_yes:
+  sep #$20 : .as
+  lda #$01
+  sta confirm_sel
+  jsr confirm_ask
+  rtl
+
 ; ui_call_greyout: the cheat editor (bank $C1) dims the window behind a sub-dialog (the
 ; keyboard / confirm over the editor or list), the same way the browser's submenus grey
 ; their parent.  window_greyout recolors the CURRENT window_x/y/w/h to the dimmed palette

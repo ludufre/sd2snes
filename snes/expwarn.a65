@@ -1,0 +1,439 @@
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it (the
+; last '.link page' wins and they emit no bytes) so every byte lands in bank $C1.
+.link page $c1
+
+; ===========================================================================
+; expwarn.a65 -- the experimental-core warning (NES, Master System, Atari 2600 and
+; the Game Boy Color core).
+;
+; The firmware asks LAST, inside the game-load prerequisite check (src/memory.c,
+; load_confirm_experimental): by then every file the load needs is known to be on the
+; card, so a missing BIOS still gets its own popup and never a warning first.  It
+; skips the question when CFG_WARN_EXPERIMENTAL is off; otherwise it writes
+; EXP_ASK_MAGIC to EXP_ASK and waits for EXP_ANSWER; game_handshake's wait
+; (snes/main.a65) sees the byte and calls gh_exp_ask.
+;
+; We arrive the way game_handshake_error does: the iris has run, the PPU is black and
+; disarmed and NMI is off, with the loading window still on the window stack.  So the
+; menu graphics are rebuilt the same way (pop the loading window, gi_dc_restore, NMI
+; back on), then the box: a heading with the word "experimental" in green, what to
+; expect (one line per label, so every language wraps its own text), and three options
+; on the menu's selection bar.
+;   Start / Start and don't warn again: answer 1 / 3, blank the screen again with the
+;        iris and return C clear -- game_handshake goes back to waiting for the ACK,
+;        which follows at once.  On 3 the firmware clears CFG_WARN_EXPERIMENTAL and
+;        saves the config once the game is loaded.
+;   Back (or B): answer 2, wait (bounded) for the firmware's refusal so LOAD_NACK is
+;        set the way the Recents/Favorites callers expect, and return C set --
+;        game_handshake returns to its caller as after a refused load, minus the popup.
+; ===========================================================================
+
+#define EXP_WIN_X    8
+#define EXP_WIN_Y    9           ; rows above 8 are the logo (not text)
+#define EXP_WIN_W    48
+#define EXP_WIN_H    16
+#define EXP_BODY_X   11          ; body column (window_x + 3)
+#define EXP_BODY_ROW 3           ; body rows: window_y + 3 .. + 8
+#define EXP_BODY_N   6
+#define EXP_OPT_ROW  10          ; options: window_y + 10 .. + 12
+#define EXP_HINT_ROW 14
+#define EXP_GREEN    2           ; palette 2: the green of the key hints
+
+gh_exp_ask:
+  php
+  phd
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  pea $0000
+  pld                         ; DP = 0: Recents/Favorites reach game_handshake from a
+                              ; show_menu FUNC, whose DP is the AllocStack frame
+  lda #$7e
+  pha
+  plb                         ; DB = WRAM: window_*, bar_* and print_* are absolute
+  lda @GH_SDD_SAVE            ; as game_handshake_error: restore screen_dma_disable so
+  sta @screen_dma_disable     ; the NMI repaints the box
+  jsl @ui_call_wclose         ; the loading window
+  jsl @gi_call_dc_restore     ; the menu graphics (the iris left the PPU disarmed)
+  lda #$81
+  sta @$004200                ; NMI + auto-joypad: the box waits on isr_done
+  jsr exp_box
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda exp_sel
+  cmp #$01
+  beq gea_back
+; ---- start: answer, then black again for the boot --------------------------
+  .as : .xl
+  lsr                         ; 0 -> start (1), 2 -> start and don't warn again (3)
+  sec
+  rol
+  sta @EXP_ANSWER
+  lda #$00
+  sta @$004200
+  sei
+  lda #$5f                    ; the menu HDMA set game_handshake uses when no ficha is up
+  sta @IRIS_HDMA_EN
+  jsl @iris_out
+  lda #$00
+  sta @cur_bright             ; the fadeloop must not light the screen up again
+  plb
+  pld
+  plp
+  clc
+  rtl
+; ---- back to the menu --------------------------------------------------------
+gea_back:
+  .as : .xl
+  lda #$02
+  sta @EXP_ANSWER
+  ldx #$00b4                  ; up to 3 s for the firmware to refuse the load: it sets
+gea_wait:                     ; LOAD_NACK and republishes Recents, which the callers read
+  .as : .xl
+  lda @LOAD_NACK
+  bne gea_done
+  lda isr_done
+  beq gea_wait
+  stz isr_done
+  dex
+  bne gea_wait
+gea_done:
+  .as : .xl
+  lda #$01
+  sta @LOAD_NACK
+  plb
+  pld
+  plp
+  sec
+  rtl
+
+; ---------------------------------------------------------------------------
+; exp_box: draw the box, run it, close it.  exp_sel = the option taken (B = Back).
+; Entry/exit .as/.xl, DB = $7E, DP = 0.
+; ---------------------------------------------------------------------------
+exp_box:
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda bar_xl                  ; the caller's bar comes back on exit
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #EXP_WIN_X
+  sta window_x
+  lda #EXP_WIN_Y
+  sta window_y
+  lda #EXP_WIN_W
+  sta window_w
+  lda #EXP_WIN_H
+  sta window_h
+  lda #^zero
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsl @ui_call_wopen
+  jsr exp_heading
+; the body, one label per row
+  stz exp_row
+eb_body:
+  .as : .xl
+  rep #$20 : .al
+  lda exp_row
+  and #$00ff
+  sta exp_tmp
+  asl
+  adc exp_tmp                 ; * 3
+  tax
+  sep #$20 : .as
+  lda @exp_body_tbl+2, x
+  sta print_bank
+  rep #$20 : .al
+  lda @exp_body_tbl, x
+  sta print_src
+  sep #$20 : .as
+  lda #EXP_BODY_X
+  sta print_x
+  lda exp_row
+  clc
+  adc #EXP_WIN_Y+EXP_BODY_ROW
+  sta print_y
+  lda #44
+  sta print_count
+  stz print_pal
+  jsl @gi_call_hiprint
+  sep #$20 : .as
+  rep #$10 : .xl
+  inc exp_row
+  lda exp_row
+  cmp #EXP_BODY_N
+  bcc eb_body
+; the options, centred
+  stz exp_row
+eb_opts:
+  .as : .xl
+  rep #$20 : .al
+  lda exp_row
+  and #$00ff
+  sta exp_tmp
+  asl
+  adc exp_tmp
+  tax
+  sep #$20 : .as
+  lda @exp_opt_tbl+2, x
+  sta print_bank
+  rep #$20 : .al
+  lda @exp_opt_tbl, x
+  sta print_src
+  sep #$20 : .as
+  lda exp_row
+  clc
+  adc #EXP_WIN_Y+EXP_OPT_ROW
+  sta print_y
+  jsr exp_center
+  sep #$20 : .as
+  rep #$10 : .xl
+  inc exp_row
+  lda exp_row
+  cmp #$03
+  bcc eb_opts
+; the key hint, keys in green
+  lda #^text_confirm_hint
+  sta print_bank
+  ldx #!text_confirm_hint
+  stx print_src
+  lda #EXP_WIN_Y+EXP_HINT_ROW
+  sta print_y
+  jsr exp_center
+  jsl @hint_keys
+  sep #$20 : .as
+  rep #$10 : .xl
+  stz exp_sel                 ; Start: the user already asked for this game
+  jsr exp_bar
+  stz screen_dma_disable      ; the NMI uploads the box from here on
+eb_loop:
+  .as : .xl
+  lda isr_done
+  beq eb_loop
+  stz isr_done
+  jsl @ui_call_pad
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda pad_b
+  bne eb_cancel
+  lda pad_a
+  bne eb_take
+  lda pad_up
+  bne eb_up
+  lda pad_down
+  bne eb_down
+  bra eb_loop
+eb_up:
+  .as : .xl
+  lda exp_sel
+  beq eb_loop
+  dec exp_sel
+  bra eb_moved
+eb_down:
+  .as : .xl
+  lda exp_sel
+  cmp #$02
+  bcs eb_loop
+  inc exp_sel
+eb_moved:
+  .as : .xl
+  lda #$01                    ; snd_fx_cursor
+  sta @SFX_MAILBOX
+  jsr exp_bar
+  bra eb_loop
+eb_cancel:
+  .as : .xl
+  lda #$01
+  sta exp_sel                 ; B = Back
+eb_take:
+  .as : .xl
+  lda exp_sel
+  cmp #$01
+  beq eb_sfx_back
+  lda #$02                    ; snd_fx_confirm: the game starts
+  bra eb_sfx
+eb_sfx_back:
+  .as : .xl
+  lda #$03                    ; snd_fx_back
+eb_sfx:
+  .as : .xl
+  sta @SFX_MAILBOX
+  jsl @ui_call_wclose
+  sep #$20 : .as
+  rep #$10 : .xl
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  rts
+
+; exp_bar: the selection bar on the focused option (bar_yl is the row above the text).
+exp_bar:
+  .as : .xl
+  lda #EXP_WIN_X+1
+  sta bar_xl
+  lda #EXP_WIN_W-2
+  sta bar_wl
+  lda exp_sel
+  clc
+  adc #EXP_WIN_Y+EXP_OPT_ROW-1
+  sta bar_yl
+  rts
+
+; ---------------------------------------------------------------------------
+; exp_center: print print_bank/print_src (a localized label) centred in the box on row
+; print_y.  Entry/exit .as/.xl.
+; ---------------------------------------------------------------------------
+exp_center:
+  .as : .xl
+  jsl @ui_call_resolve        ; print_bank/print_src -> this language's string
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda print_bank
+  sta longptr+2
+  ldx print_src
+  stx longptr
+  ldy #$0000
+-
+  lda [longptr], y
+  beq +
+  iny
+  cpy #EXP_WIN_W-2
+  bcc -
++ tya
+  sta print_count
+  jsr exp_center_x
+  stz print_pal
+  jsl @gi_call_hiprint
+  sep #$20 : .as
+  rep #$10 : .xl
+  rts
+
+; exp_center_x: print_x = window centre for a run of A characters.  .as/.xl.
+exp_center_x:
+  .as : .xl
+  eor #$ff
+  sec
+  adc #EXP_WIN_W              ; EXP_WIN_W - len
+  lsr
+  clc
+  adc #EXP_WIN_X
+  sta print_x
+  rts
+
+; ---------------------------------------------------------------------------
+; exp_heading: the heading, centred, with the run between the two '*' of the label in
+; green ("Experimental core", "Núcleo experimental", ...: the markers let every
+; language put the word where its grammar does).  Entry/exit .as/.xl.
+; ---------------------------------------------------------------------------
+exp_heading:
+  .as : .xl
+  lda #^text_exp_title
+  sta print_bank
+  ldx #!text_exp_title
+  stx print_src
+  jsl @ui_call_resolve
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda print_bank
+  sta longptr+2
+  ldx print_src
+  stx longptr
+  lda #$ff
+  sta exp_hi0
+  sta exp_hi1
+  ldy #$0000
+  ldx #$0000
+eh_copy:
+  .as : .xl
+  lda [longptr], y
+  beq eh_end
+  iny
+  cmp #$2a                    ; '*'
+  bne eh_char
+  lda exp_hi0
+  cmp #$ff
+  bne +
+  txa
+  sta exp_hi0
+  bra eh_copy
++ txa
+  sta exp_hi1
+  bra eh_copy
+eh_char:
+  .as : .xl
+  sta !exp_hbuf, x
+  inx
+  cpx #EXP_WIN_W-4
+  bcc eh_copy
+eh_end:
+  .as : .xl
+  stz !exp_hbuf, x
+  stz !exp_hbuf+1, x          ; hiprint peeks one byte past print_count
+  txa
+  sta exp_len
+  sta print_count
+  jsr exp_center_x
+  lda #EXP_WIN_Y+1
+  sta print_y
+  lda #^exp_hbuf
+  sta print_bank
+  ldx #!exp_hbuf
+  stx print_src
+  stz print_pal
+  jsl @gi_call_hiprint
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda exp_hi1                 ; the green run, when the label has both markers
+  cmp #$ff
+  beq eh_out
+  sec
+  sbc exp_hi0
+  beq eh_out
+  bcc eh_out
+  sta print_count
+  lda exp_len
+  jsr exp_center_x
+  clc
+  adc exp_hi0
+  sta print_x
+  rep #$20 : .al
+  lda exp_hi0
+  and #$00ff
+  clc
+  adc #!exp_hbuf
+  sta print_src
+  sep #$20 : .as
+  lda #^exp_hbuf
+  sta print_bank
+  lda #EXP_GREEN
+  sta print_pal
+  jsl @gi_call_hiprint
+  sep #$20 : .as
+  rep #$10 : .xl
+eh_out:
+  .as : .xl
+  stz print_pal
+  rts
+
+; the body rows and the options, as 24-bit label pointers
+exp_body_tbl:
+  .word !text_exp_l1 : .byt ^text_exp_l1
+  .word !text_exp_l2 : .byt ^text_exp_l2
+  .word !text_exp_l3 : .byt ^text_exp_l3
+  .word !text_exp_l4 : .byt ^text_exp_l4
+  .word !text_exp_l5 : .byt ^text_exp_l5
+  .word !text_exp_l6 : .byt ^text_exp_l6
+exp_opt_tbl:
+  .word !text_exp_start : .byt ^text_exp_start
+  .word !text_exp_back : .byt ^text_exp_back
+  .word !text_exp_nowarn : .byt ^text_exp_nowarn

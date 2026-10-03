@@ -1388,6 +1388,49 @@ static const uint8_t *load_base_core(const load_ctx_t *c) {
   return FPGA_BASE;
 }
 
+/* NES, Master System, Atari 2600 and the Game Boy Color core: experimental, and without
+   savestates or the in-game menu.  On the Mk.II the first three are refused earlier and a
+   .gbc runs on the Super Game Boy, so this is only ever true on the Mk.III. */
+static int load_is_experimental(void) {
+  return nes_romprops.has_nes || sms_active || a26_romprops.has_a26
+      || (sgb_romprops.has_sgb && sgb_romprops.core_is_gbc);
+}
+
+/* Ask the menu, which is parked in game_handshake's wait, to show the warning, and wait
+   for the answer.  Only a menu that advertises MENU_CAP_FEAT_EXPWARN is asked (an older
+   one would never answer).  The wait is bounded: no answer in 10 minutes counts as "back
+   to the menu", so the firmware can never sit here forever.  1 = start the game. */
+/* Set when the user answered "don't warn again": CFG.warn_experimental is already 0 and
+   menucmd_launch_rom saves the config once the load returns.  Not here: cfg_save writes
+   through file_handle, which still holds the ROM. */
+uint8_t exp_warn_dismissed;
+
+static int load_confirm_experimental(void) {
+  uint8_t caps[4];
+  uint8_t answer = 0;
+  tick_t start;
+  if(!CFG.warn_experimental) return 1;
+  sram_readblock(caps, SRAM_MENU_ADDR + MENU_ADDR_SYSINFO_CAPS, sizeof(caps));
+  if(caps[0] != MENU_CAP_MAGIC0 || caps[1] != MENU_CAP_MAGIC1
+     || !(caps[3] & MENU_CAP_FEAT_EXPWARN)) return 1;
+  sram_writebyte(0, SRAM_EXP_ANSWER_ADDR);
+  sram_writebyte(EXP_ASK_MAGIC, SRAM_EXP_ASK_ADDR);
+  printf("experimental core: asking the menu\n");
+  start = getticks();
+  while(!(answer = sram_readbyte(SRAM_EXP_ANSWER_ADDR))) {
+    if(getticks() - start > 600 * HZ) break;
+    delay_ms(10);
+  }
+  sram_writebyte(0, SRAM_EXP_ASK_ADDR);
+  printf("experimental core: answer %u\n", answer);
+  if(answer == EXP_ANSWER_START_NOWARN) {
+    CFG.warn_experimental = 0;
+    exp_warn_dismissed = 1;
+    return 1;
+  }
+  return answer == EXP_ANSWER_START;
+}
+
 static uint32_t load_check_prereqs(load_ctx_t *c) {
   uint8_t  *filename = c->filename;
   DWORD     filesize = c->filesize;
@@ -1449,6 +1492,11 @@ static uint32_t load_check_prereqs(load_ctx_t *c) {
      (clean NACK while the SNES is still parked) instead of half-booting. */
   if(!(flags & LOADROM_WITH_COMBO) && filesize < 1024) {
     return load_abort_missing(flags, MENU_ERR_FS, path_leaf((const char*)filename));
+  }
+  /* Experimental console cores, asked LAST: everything the load needs is known to be on
+     the card, so the warning is never followed by a missing-file popup. */
+  if(load_is_experimental() && !load_confirm_experimental()) {
+    return load_abort_missing(flags, MENU_ERR_EXPCANCEL, "");
   }
   /* Prerequisites OK -> committed to the load.  The menu SFX teardown itself is
      deferred further, to just before the FPGA reconfig below -- see there. */
