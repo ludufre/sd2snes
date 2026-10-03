@@ -318,7 +318,6 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_ENABLE_BPS_COPIER,           enable_bps_copier,          CK_BOOL,    0),
   CFGI(CFG_CLEAR_PPU_ON_BOOT,           clear_ppu_on_boot,          CK_BOOL,    0),
   CFGI(CFG_BUS_COMPAT,                  bus_compat,                 CK_BOOL,    0),
-  CFGI(CFG_ENABLE_GAME_MANUAL,          enable_game_manual,         CK_BOOL,    0),
   CFGI(CFG_A26_VIDEO_WIDTH,             a26_video_width,            CK_NUM,     0x10),
   CFGI(CFG_CC_TIME_LIMIT,               cc_time_limit,              CK_NUM,     0xf3),
   CFGI(CFG_SKIN_NAME,                   skin_name,                  CK_STR,     0),

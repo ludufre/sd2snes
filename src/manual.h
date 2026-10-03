@@ -22,8 +22,8 @@
 #include <stdint.h>
 
 /* Probe the <=8 guide candidates, cache the compacted guide table, and publish MANUAL_GUIDES +
- * MANUAL_META. Call at game load (after igmenu_stage/saveinfo_stage). No valid guide, or
- * EnableGameManual off -> the present bit stays 0 (the tab shows "not found"). Bounded + fail-safe. */
+ * MANUAL_META. Call at game load (after igmenu_stage/saveinfo_stage). No valid guide -> the
+ * present bit stays 0 (the tab shows "not found"). Bounded + fail-safe. */
 void manual_stage_meta(uint8_t *rom_path);
 
 /* Same thing, but a NO-OP when `rom_path` is the one already staged (exact string compare).

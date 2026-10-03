@@ -1929,8 +1929,6 @@ gi_dc_restore:
 ;    they cannot drift into advertising a dead key. Reads only the $FF staging bytes the MCU
 ;    published at query time, so it is free to call on every body rebuild. .as in; A clobbered.
 gi_man_avail:
-  lda @CFG_ENABLE_GAME_MANUAL
-  beq gma_no
   lda @MANUAL_META|$0002       ; meta_abi: a firmware/menu mismatch degrades to "no guides"
   cmp #MANUAL_META_ABI
   bne gma_no

@@ -18,14 +18,12 @@
 #include <string.h>
 #include "ff.h"
 #include "memory.h"
-#include "cfg.h"        /* CFG.enable_game_manual gate */
 #include "gameinfo.h"   /* gameinfo_info_base: shared /sd2snes/info bucket-path derivation */
 #include "fileops.h"    /* file_lfn: the current game's path (in-game rebuild source, see below) */
 #include "manual.h"
 #include "psram_io.h"
 #include "scratch.h"    /* man_buf = the shared LEAF scratch (see scratch.h) */
 
-extern cfg_t CFG;
 
 /* .man header (40B, was 16B; the +4 ver / +5 bpp offsets are PRESERVED so the existing magic/
  * version/bpp check keeps its shape):
@@ -128,7 +126,7 @@ extern cfg_t CFG;
 #define MAN_GUIDE_REC_BYTES (32)
 
 /* MANUAL_META (16B @ SRAM_MANUAL_META_ADDR): +0 flags, +1 npages(guide 0), +2 meta_abi, +3.. rsvd */
-#define MAN_META_FLAG_PRESENT  (0x01)   /* >=1 valid guide staged AND EnableGameManual is on */
+#define MAN_META_FLAG_PRESENT  (0x01)   /* >=1 valid guide staged */
 #define MAN_META_FLAG_ERROR    (0x02)   /* a transient block-read failure (viewer shows error) */
 #define MAN_META_FLAG_ZREADY   (0x04)   /* a zoom page is staged and valid in $C5/$C6 */
 #define MAN_META_ABI           (3)      /* firmware<->igmenu.bin data-contract sanity (memmap.i65). 3: title[0] may carry a document-type slug (1..5) the shell translates */
@@ -195,9 +193,6 @@ static uint16_t man_s1res_page;           /*   1x and 2x stay resident together 
    start as power-on garbage and could fake a hit against a garbage path. */
 static char     man_meta_cache_path[256] IN_AHBRAM;
 static uint8_t  man_meta_cache_valid;     /* .bss on purpose -- see above */
-static uint8_t  man_meta_cache_cfg;       /* CFG.enable_game_manual captured at arm time: toggling
-                                             the option must invalidate the hit, or a cached
-                                             "present" would survive the user turning it OFF */
 static uint8_t  man_stage_refused;        /* the last manual_stage_meta could not take the
                                              scratch: its "no guides" must not be cached */
 /* Where man_stage_zattrs builds one prebuilt tilemap row, INSIDE man_buf (attr bytes land at +0,
@@ -297,7 +292,6 @@ void manual_stage_meta(uint8_t *rom_path) {
   sram_writeshort(0x0000, IGMENU_PERSIST_MAGIC_ADDR);
 
   man_stage_refused = 0;
-  if(!CFG.enable_game_manual) return;   /* toggle off -> stay "not present" */
   if(!scratch_leaf_take(SCR_MANUAL)) {  /* scratch busy: stay "not present", uncached */
     man_stage_refused = 1;
     return;
@@ -431,8 +425,7 @@ void manual_stage_meta(uint8_t *rom_path) {
 void manual_stage_meta_cached(uint8_t *rom_path) {
   unsigned len;
 
-  if(man_meta_cache_valid && man_meta_cache_cfg == CFG.enable_game_manual
-     && !strcmp(man_meta_cache_path, (const char *)rom_path)) return;
+  if(man_meta_cache_valid && !strcmp(man_meta_cache_path, (const char *)rom_path)) return;
 
   manual_stage_meta(rom_path);          /* clears man_meta_cache_valid itself */
   if(man_stage_refused) return;
@@ -443,7 +436,6 @@ void manual_stage_meta_cached(uint8_t *rom_path) {
   len = (unsigned)strlen((const char *)rom_path);
   if(len && len < sizeof(man_meta_cache_path)) {
     memcpy(man_meta_cache_path, rom_path, len + 1);
-    man_meta_cache_cfg = CFG.enable_game_manual;
     man_meta_cache_valid = 1;
   }
 }

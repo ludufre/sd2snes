@@ -421,7 +421,6 @@ static void cfg_make_allchanged(void) {
   CFG.enable_bps_copier = 0;
   CFG.clear_ppu_on_boot = 1;
   CFG.bus_compat = 1;
-  CFG.enable_game_manual = 0;
   /* L+R+X+Right: 4 buttons, includes a shoulder, and no subset of any reserved
      gesture -- cfg_check_menu_combo() has to accept it verbatim ("rXLR"). */
   CFG.ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_X | SNES_BUTTON_RIGHT;
