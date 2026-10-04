@@ -35,11 +35,8 @@ onb_demo_tbl:
   .word !onb_demo_reset_2 : .byt ^onb_demo_reset_2 : .word !onb_demo_reset_2_pal : .byt ^onb_demo_reset_2_pal
   .word !onb_demo_reset_3 : .byt ^onb_demo_reset_3 : .word !onb_demo_reset_3_pal : .byt ^onb_demo_reset_3_pal
   .word !onb_demo_reset_4 : .byt ^onb_demo_reset_4 : .word !onb_demo_reset_4_pal : .byt ^onb_demo_reset_4_pal
-  .word !onb_demo_theme : .byt ^onb_demo_theme : .word !onb_demo_theme_pal : .byt ^onb_demo_theme_pal
-  .word !onb_demo_cheats : .byt ^onb_demo_cheats : .word !onb_demo_cheats_pal : .byt ^onb_demo_cheats_pal
   .word !onb_demo_patches : .byt ^onb_demo_patches : .word !onb_demo_patches_pal : .byt ^onb_demo_patches_pal
   .word !onb_demo_consoles : .byt ^onb_demo_consoles : .word !onb_demo_consoles_pal : .byt ^onb_demo_consoles_pal
-  .word !onb_demo_chips : .byt ^onb_demo_chips : .word !onb_demo_chips_pal : .byt ^onb_demo_chips_pal
   .word !onb_demo_memtest : .byt ^onb_demo_memtest : .word !onb_demo_memtest_pal : .byt ^onb_demo_memtest_pal
   .word !onb_demo_saves : .byt ^onb_demo_saves : .word !onb_demo_saves_pal : .byt ^onb_demo_saves_pal
   .word !onb_demo_pcm : .byt ^onb_demo_pcm : .word !onb_demo_pcm_pal : .byt ^onb_demo_pcm_pal
@@ -54,6 +51,32 @@ onb_demo_tbl:
   .word !onb_demo_carts_more : .byt ^onb_demo_carts_more : .word !onb_demo_carts_more_pal : .byt ^onb_demo_carts_more_pal
   .word !onb_demo_icons : .byt ^onb_demo_icons : .word !onb_demo_icons_pal : .byt ^onb_demo_icons_pal
   .word !onb_demo_gameinfo_cheats : .byt ^onb_demo_gameinfo_cheats : .word !onb_demo_gameinfo_cheats_pal : .byt ^onb_demo_gameinfo_cheats_pal
+  .word !onb_demo_theme_restore : .byt ^onb_demo_theme_restore : .word !onb_demo_theme_restore_pal : .byt ^onb_demo_theme_restore_pal
+  .word !onb_demo_text_theme : .byt ^onb_demo_text_theme : .word !onb_demo_text_theme_pal : .byt ^onb_demo_text_theme_pal
+  .word !onb_demo_text_full : .byt ^onb_demo_text_full : .word !onb_demo_text_full_pal : .byt ^onb_demo_text_full_pal
+  .word !onb_demo_text_nooutline : .byt ^onb_demo_text_nooutline : .word !onb_demo_text_nooutline_pal : .byt ^onb_demo_text_nooutline_pal
+  .word !onb_demo_text_noaa : .byt ^onb_demo_text_noaa : .word !onb_demo_text_noaa_pal : .byt ^onb_demo_text_noaa_pal
+  .word !onb_demo_lists_on : .byt ^onb_demo_lists_on : .word !onb_demo_lists_on_pal : .byt ^onb_demo_lists_on_pal
+  .word !onb_demo_lists_off : .byt ^onb_demo_lists_off : .word !onb_demo_lists_off_pal : .byt ^onb_demo_lists_off_pal
+  .word !onb_demo_video_on : .byt ^onb_demo_video_on : .word !onb_demo_video_on_pal : .byt ^onb_demo_video_on_pal
+  .word !onb_demo_video_off : .byt ^onb_demo_video_off : .word !onb_demo_video_off_pal : .byt ^onb_demo_video_off_pal
+  .word !onb_demo_clipmusic_on : .byt ^onb_demo_clipmusic_on : .word !onb_demo_clipmusic_on_pal : .byt ^onb_demo_clipmusic_on_pal
+  .word !onb_demo_clipmusic_off : .byt ^onb_demo_clipmusic_off : .word !onb_demo_clipmusic_off_pal : .byt ^onb_demo_clipmusic_off_pal
+  .word !onb_demo_cheatlist : .byt ^onb_demo_cheatlist : .word !onb_demo_cheatlist_pal : .byt ^onb_demo_cheatlist_pal
+  .word !onb_demo_patchmenu : .byt ^onb_demo_patchmenu : .word !onb_demo_patchmenu_pal : .byt ^onb_demo_patchmenu_pal
+  .word !onb_demo_sufami : .byt ^onb_demo_sufami : .word !onb_demo_sufami_pal : .byt ^onb_demo_sufami_pal
+  .word !onb_demo_atari : .byt ^onb_demo_atari : .word !onb_demo_atari_pal : .byt ^onb_demo_atari_pal
+  .word !onb_demo_cctime : .byt ^onb_demo_cctime : .word !onb_demo_cctime_pal : .byt ^onb_demo_cctime_pal
+  .word !onb_demo_folders : .byt ^onb_demo_folders : .word !onb_demo_folders_pal : .byt ^onb_demo_folders_pal
+  .word !onb_demo_sd2snesdir_on : .byt ^onb_demo_sd2snesdir_on : .word !onb_demo_sd2snesdir_on_pal : .byt ^onb_demo_sd2snesdir_on_pal
+  .word !onb_demo_sd2snesdir_off : .byt ^onb_demo_sd2snesdir_off : .word !onb_demo_sd2snesdir_off_pal : .byt ^onb_demo_sd2snesdir_off_pal
+  .word !onb_demo_led : .byt ^onb_demo_led : .word !onb_demo_led_pal : .byt ^onb_demo_led_pal
+  .word !onb_demo_clearppu : .byt ^onb_demo_clearppu : .word !onb_demo_clearppu_pal : .byt ^onb_demo_clearppu_pal
+  .word !onb_demo_buscompat : .byt ^onb_demo_buscompat : .word !onb_demo_buscompat_pal : .byt ^onb_demo_buscompat_pal
+  .word !onb_demo_sysinfo : .byt ^onb_demo_sysinfo : .word !onb_demo_sysinfo_pal : .byt ^onb_demo_sysinfo_pal
+  .word !onb_demo_clock : .byt ^onb_demo_clock : .word !onb_demo_clock_pal : .byt ^onb_demo_clock_pal
+  .word !onb_demo_trainer : .byt ^onb_demo_trainer : .word !onb_demo_trainer_pal : .byt ^onb_demo_trainer_pal
+  .word !onb_demo_chips_more : .byt ^onb_demo_chips_more : .word !onb_demo_chips_more_pal : .byt ^onb_demo_chips_more_pal
 
 onb_demo_lang_en_pal:
   .byt $00, $00, $ff, $7f, $ef, $45, $cf, $0d, $8d, $11, $44, $19, $40, $19, $eb, $1c

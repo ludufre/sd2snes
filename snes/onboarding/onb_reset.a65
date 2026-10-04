@@ -32,8 +32,20 @@ ONB_NMI_ROUTINE:
   jmp @onb_wel_nmi
 +
   lda @onb_screen_static
-  bne onb_nmi_nofade            ; card build in progress -> don't touch VRAM/fade
+  beq onb_nmi_live
+  jmp onb_nmi_nofade            ; card build in progress -> don't touch VRAM/fade
+onb_nmi_live:
+  .as : .xl
 
+  ; the font-edge preview's next 4 KB piece (onboarding_main.a65 onb_font_step): that
+  ; VBlank carries nothing else -- the tilemaps go again on the next one, the demo
+  ; picture waits
+  lda @onb_font_busy
+  beq onb_nmi_tiles
+  jsr onb_font_step
+  bra onb_nmi_fade
+onb_nmi_tiles:
+  .as : .xl
   ; whole screen rows 0..27 (mode-5): BG1 + BG2 tilemaps. The redesign has no static
   ; mode-3 band -- the entire card lives in the tile buffers, so re-DMA it all (live
   ; redraws of the option value / language switch appear). 28*64 B/BG fits one VBlank.
@@ -50,6 +62,8 @@ ONB_NMI_ROUTINE:
 +
 
   ; brightness fade toward onb_tgt_bright (1 step/frame). cur==tgt -> no-op.
+onb_nmi_fade:
+  .as : .xl
   lda @onb_cur_bright
   cmp @onb_tgt_bright
   beq onb_nmi_nofade

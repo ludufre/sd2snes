@@ -46,6 +46,10 @@
    snes/memmap.i65 -- keep all three in lockstep.
    =========================================================================== */
 #define CFG_ADDR                    $FF0100
+#define CFG_ENABLE_INGAME_HOOK      CFG_ADDR+$0011  /* bool: the in-game hook (savestates, in-game menu);
+                                                       a "yes" on a card with ONB_FF_HOOK turns it on */
+#define CFG_ENABLE_INGAME_BUTTONS   CFG_ADDR+$0012  /* bool: the FPGA's fixed in-game gestures (reset to
+                                                       menu...); turned on with ONB_FF_BUTTONS */
 #define CFG_SKIN_NAME               CFG_ADDR+$001A  /* uint8[128] full theme path ("" = baked) */
 #define CFG_BRIGHTNESS_LIMIT        CFG_ADDR+$009D
 #define CFG_ENABLE_RST_TO_MENU      CFG_ADDR+$009F  /* 0 off / 1 menu / 2 folder / 3 rom / 4 by duration */
@@ -59,10 +63,41 @@
 #define CFG_MENU_MUSIC_FILE         CFG_ADDR+$00BC  /* uint8[128] full bgm .spc path ("" = menu.spc) */
 #define CFG_ENABLE_CHEAT_OVERLAY    CFG_ADDR+$013D  /* bool */
 #define CFG_SHOW_GAME_INFO          CFG_ADDR+$013E  /* 0 off / 1 on / 2 context menu only */
+#define CFG_GAME_INFO_VIDEO         CFG_ADDR+$0140  /* bool: the .fmv clip on the game info card */
+#define CFG_GAME_INFO_MUSIC         CFG_ADDR+$0141  /* bool: the clip's .pcm soundtrack */
+#define CFG_CC_TIME_LIMIT           CFG_ADDR+$014A  /* Competition Cart round, 0..15 = 3..18 min */
 #define CFG_MENU_MUSIC_RANDOM       CFG_ADDR+$014B  /* bool */
+#define CFG_TEXT_OUTLINE            CFG_ADDR+$01CC  /* 0 theme / 1 on / 2 off */
+#define CFG_TEXT_ANTIALIAS          CFG_ADDR+$01CD  /* 0 theme / 1 on / 2 off */
 #define CFG_OPEN_MSU_FOLDERS        CFG_ADDR+$01CF  /* bool */
+#define CFG_SHOW_SD2SNES_FOLDER     CFG_ADDR+$01D0  /* bool */
 #define CFG_ENABLE_INGAME_PAD2      CFG_ADDR+$01D3  /* bool */
 #define CFG_ONBOARDING_VERSION      CFG_ADDR+$01D5  /* the tour version seen, 0 = never (src/cfg.h) */
+
+/* The MCU's status block (src/snes.h mcu_status_t, status_load_to_menu): published on every
+   menu-image boot, the tour's included, before the firmware enters its command loop. */
+#define ST_IS_MK2                   $FF1108 /* 1 on the Mk.II (SD2SNES). Lockstep with ST_IS_MK2
+                                               (snes/memmap.i65: ST_MCU_ADDR+$0008) and
+                                               mcu_status_t.is_mk2. The same board on every boot,
+                                               so the byte a previous menu boot left is right too */
+
+/* The pristine menu font the firmware keeps when it remaps the font edges of a fresh menu
+   image (src/theme.c theme_font_edges, src/memmap.h SRAM_FONT_ORIG_ADDR): valid only when
+   the image's own font came out remapped -- onb_font_init checks it before trusting it. */
+#define SRAM_FONT_ORIG              $FA8000
+#define ONB_FONT_LEN                $1000   /* 256 tiles x 16 B of 2bpp (snes/font.a65) */
+
+/* The live font-edge preview (onb_font_*, onboarding_main.a65): the font's high plane,
+   remapped, laid out the way genfonts leaves the two VRAM copies -- character c is tile 2c,
+   its 8 rows of 2bpp at the start of the tile and zeros after them: BG2 (2bpp, word $4000)
+   16 words per character, BG1 (4bpp, word $0000) 32. Only the high bytes, the zeros
+   included: the NMI writes $2119 alone (VMAIN increments on the high byte), so the low
+   planes stay as genfonts wrote them. The zero slots are cleared once (onb_font_init) and
+   never written again. */
+#define ONB_FONT_BUF                $7F0000 /* BG2's 4 KB: byte 16c + r */
+#define ONB_FONT_BUF_BG1            $7F1000 /* BG1's 8 KB: byte 32c + r */
+#define ONB_FONT_K1                 $7F3000 /* the remap mask of the fill: hi &= (lo & K1) ^ K2 */
+#define ONB_FONT_K2                 $7F3001
 #define ONB_VERSION                 1       /* this tour's version; lockstep with snes/memmap.i65.
                                                A release that adds cards bumps it and tags the new
                                                cards with it (+ONB_FD_SINCE): the gate shows the tour
@@ -124,21 +159,34 @@
      +6  word  text label ptr          (localized paragraph, pre-wrapped: lines split
                                         by byte 1, padded to the same count in every
                                         language -- utils/gen_onb_lang.py)
-     +8  word  unused (0)
-     +10 word  unused (0)
+     +8  word  a second parent CFG byte (low16, bank $FF), 0 = none: the card is left
+               out while it is 0 too (the clip's music needs the video AND the card)
+     +10 byte  flags (ONB_FF_*): what a "yes" on the card also turns on. The tour shows a
+               card whose feature runs from the in-game hook whatever the hook's state, and
+               an answer != 0 there writes 1 to CFG_ENABLE_INGAME_HOOK (and to
+               CFG_ENABLE_INGAME_BUTTONS with ONB_FF_BUTTONS). A 0 never turns them off.
+     +11 byte  unused (0)
      +12 byte  accent palette          (ONB_PAL_*; unused since the badge went away)
      +13 byte  option kind             (ONB_OPT_*)
      +14 word  cfg field offset        (low16 of the CFG addr; bank $FF implied)
    =========================================================================== */
-#define ONB_NUM_FEATURES  31    /* 19 cards + the 12 items of the "and more" card */
+#define ONB_NUM_FEATURES  48    /* 40 cards + the 8 items of the "and more" card */
 #define ONB_FEAT_STRIDE   16
 #define ONB_FD_DEP        0
+#define ONB_FD_DEP2       8       /* a second parent CFG byte (0 = none) */
 #define ONB_FD_SINCE      2       /* the tour version that added the card (low byte) */
 #define ONB_FD_NAME       4
+#define ONB_FD_FLAGS      10      /* byte: ONB_FF_* */
 #define ONB_FD_TEXT       6
 #define ONB_FD_PAL        12
 #define ONB_FD_OPT        13
 #define ONB_FD_CFG        14
+
+/* descriptor flags (+10): a "yes" (answer != 0) on the card also writes 1 to... */
+#define ONB_FF_HOOK       $01  /* ...CFG_ENABLE_INGAME_HOOK: the feature runs from the in-game hook */
+#define ONB_FF_BUTTONS    $02  /* ...CFG_ENABLE_INGAME_BUTTONS: it needs the FPGA's fixed gestures too */
+#define ONB_FF_MK3ONLY    $04  /* not a "yes" flag: the card is shown only on the Mk.III (FXPAK PRO) */
+#define ONB_FF_MK2ONLY    $08  /* not a "yes" flag: the card is shown only on the Mk.II (SD2SNES) */
 
 /* option kinds (+13 of the descriptor) */
 #define ONB_OPT_INFO      0    /* no interactive option */
@@ -148,6 +196,8 @@
 #define ONB_OPT_LANG      4    /* the tour language itself (onb_cur_lang + CFG_LANGUAGE) */
 #define ONB_OPT_GI        5    /* show_game_info 0..2: Off/On/Context */
 #define ONB_OPT_MORE      6    /* "and more": a list of info items (ONB_MORE_FIRST..), no answer */
+#define ONB_OPT_EDGE      7    /* a font edge (text_outline/_antialias_mode): Theme/On/Off */
+#define ONB_OPT_CCTIME    8    /* cc_time_limit 0..15: the round's 3..18 minutes */
 
 /* accent palette indices == the menu palette's text sub-palettes (palette.a65,
    loaded as is): 0 white, 1 light yellow, 2 light green, 3 window-border blue.

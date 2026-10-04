@@ -441,7 +441,7 @@ mdesc_mm_last                     .byt "Show up to 10 most recently played games
 mdesc_mm_favorites                .byt "Show up to 20 favorite games", 0
 mdesc_mm_cfg                      .byt "Configure the sd2snes", 0
 mdesc_mm_sysinfo                  .byt "Info about FW version, SD Card, SNES, CIC", 127, 128, 0
-mdesc_mm_memtest                  .byt "FPGA-RAM wiring check (10 s). The full test also checks every cell (30 s). Resets the console.", 0
+mdesc_mm_memtest                  .byt "Checks the FPGA-RAM wiring, then every memory cell (30 s). Resets the console.", 0
 mdesc_mm_language                 .byt "Set the menu/firmware language", 0
 mdesc_cfg_time                    .byt "Set the date and time", 0
 mdesc_cfg_ask_clock               .byt "Ask for the time at startup while the clock is unset", 0
@@ -636,11 +636,11 @@ text_si_updatefw  .byt "*** Please update the firmware ***", 0
 ; live in memtest.a65, not here.  A fragment is followed by the line NUMBER, so it
 ; must end where that number belongs -- "check data line D" + "3".
 ; text_mtl_cellfail ends the same way, but with a six-digit hex ADDRESS after it.
-; The prompt is two lines because three buttons plus the warning do not fit in 40
-; columns -- and note build_const.py measures the TRANSLATIONS only, never the English
+; The prompt is two lines (keys, then what A costs) so each translation has room --
+; and note build_const.py measures the TRANSLATIONS only, never the English
 ; below, so an over-long line here is clipped on screen with no build error.
-text_mtl_prompt   .byt "A: Wiring test  X: Full test  B: Close", 0
-text_mtl_prompt2  .byt "Both reset the console. X takes 30s.", 0
+text_mtl_prompt   .byt "A: Start test  B: Close", 0
+text_mtl_prompt2  .byt "Resets the console. Takes about 30s.", 0
 text_mtl_run      .byt "Testing memory, please wait", 127, 128, 0
 text_mtl_none     .byt "No test has been run yet.", 0
 text_mtl_pass     .byt "All RAM lines OK.", 0

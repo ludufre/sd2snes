@@ -279,24 +279,23 @@
 #define MT_FINDINGS                 8   /* MT_MAX_FIND records of MT_FIND_SIZE: +0 chip (MT_CHIP_*), +1 kind (MT_KIND_*), +2 line, +3 second line of a shorted pair (0 otherwise) */
 #define MT_FIND_SIZE                4
 #define MT_MAX_FIND                 12
-/* --- cell sweep (the X button / MEMTEST_MODE_FULL). The wiring walk above only touches
- * one address per line, so a single weak cell in the middle of the array passes it; these
- * report the write/verify sweep of all 16 MB + 512 KB. 24-bit fields are three bytes
- * little-endian, read a byte at a time. */
+/* --- cell sweep (the second half of the test the A button runs, after the wiring walk).
+ * The walk above only touches one address per line, so a single weak cell in the middle of
+ * the array passes it; these report the write/verify sweep of all 16 MB + 512 KB. 24-bit
+ * fields are three bytes little-endian, read a byte at a time. */
 #define MT_CELL_BAD                 56  /* u24: bad bytes found, saturating at $FFFFFF */
 #define MT_CELL_GOT                 59  /* u8: the byte actually read at MT_CELL_ADDR */
 #define MT_CELL_ADDR                60  /* u24: address of the FIRST bad byte */
 #define MT_CELL_INFO                63  /* u8, bits below */
-#define MT_CI_RAN                   $01 /* bit0: the sweep ran. Clear = wiring-only test, and the fields above mean nothing -- the screen leaves its line blank */
+#define MT_CI_RAN                   $01 /* bit0: the sweep ran. Clear = no sweep in this block (a walk-only run from an older menu), and the fields above mean nothing -- the screen leaves its line blank */
 #define MT_CI_RAM1                  $02 /* bit1: the first bad byte was in RAM1 (U511), so MT_CELL_ADDR is a RAM1 offset; clear means RAM0 */
 #define MT_CI_TIMEOUT               $04 /* bit2: the sweep gave up waiting on the FPGA. The counts are partial and say nothing about the rest */
-#define MT_CI_SKIPPED               $08 /* bit3: a full test was asked for but the wiring walk had already failed, so sweeping was pointless -- one open address line makes every aliased cell "bad" */
+#define MT_CI_SKIPPED               $08 /* bit3: the wiring walk had already failed, so sweeping was pointless -- one open address line makes every aliased cell "bad" */
 #define MT_SIZE                     64
-/* Which test to run, handed to the firmware in MCU_PARAM+7 with the command (lockstep with
- * MEMTEST_MODE_* in src/memtest.h). FULL is a marker rather than 1 so that a stale byte
- * left in MCU_PARAM by an earlier command cannot turn a 10-second test into a 30-second
- * one; anything the firmware does not recognize means WIRING. */
-#define MT_MODE_WIRING              0
+/* Written to MCU_PARAM+7 with the command.  Current firmware ignores it and always runs
+ * the full test; a firmware that still had a walk-only mode read it, and $5a was its
+ * "full" marker (anything else meant walk-only), so this keeps such a firmware running
+ * the test the screen describes. */
 #define MT_MODE_FULL                $5a
 #define MT_CHIP_RAM0_1              0   /* U501 */
 #define MT_CHIP_RAM0_2              1   /* U502 (Mk.III only) */

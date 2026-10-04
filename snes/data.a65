@@ -514,9 +514,6 @@ mt_off          .word 0    ; byte offset of the finding being drawn, inside MT_F
                            ;   A VARIABLE and not X on purpose: mt_blank and mt_flush both
                            ;   use X, so an index held in a register would not survive the
                            ;   loop body that composes and prints each line.
-mt_mode         .byt 0     ; MT_MODE_* for the run being started. Held here rather than on
-                           ;   the stack across mt_run's banner-and-fade preamble, which is
-                           ;   a long stretch of calls to keep a balanced push alive over.
 mt_top          .byt 0     ; first finding drawn in the list viewport. Up/Down move it; the
                            ;   firmware can report more faults than the nine rows fit.
 ; Scrollbar working set, mirroring listsel_scrollbar's lsb_* in filesel.a65.  Separate

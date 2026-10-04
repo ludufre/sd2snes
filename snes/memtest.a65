@@ -60,7 +60,7 @@
                                    from sysinfo_win_x so this screen never has to read the
                                    window_* bytes pop_window is counting rows with. */
 /* Frames the "testing, please wait" banner stays up before the screen fades out. The
-   console is then dark for the ~6-10s the test takes (~30s for the full one), so this is
+   console is then dark for the ~30s the test takes, so this is
    the only chance the user gets to read WHY it went dark -- long enough for that, short
    enough not to feel like the button did nothing. */
 #define MT_BANNER_FRAMES 90
@@ -224,17 +224,10 @@ mt_loop:
   jsl @ui_call_pad
   lda pad_b
   bne mt_screen_out
-  ; X = the full test (wiring walk AND every cell), A = the walk alone.  The mode travels
-  ; in A into mt_run, which is the only routine that knows how to hand it to the firmware.
-  lda pad_x
-  beq mt_loop_a
-  lda #MT_MODE_FULL
-  jsr mt_run
-  bra mt_loop
-mt_loop_a:
+  ; A = the test: the wiring walk, then every cell (the firmware skips the cells when the
+  ; walk already failed).
   lda pad_a
   beq mt_loop_dn
-  lda #MT_MODE_WIRING
   jsr mt_run
   bra mt_loop
   ; Up/Down scroll the findings viewport.  Both self-gate on mt_maxtop, so on a screen
@@ -290,8 +283,6 @@ mt_run:
   php
   sep #$20 : .as
   rep #$10 : .xl
-  sta mt_mode                 ; MT_MODE_* from the caller, parked before anything else
-                              ; touches A (the banner and the fade are next)
   jsr mt_draw_running
   jsr mt_wait_frame
   jsr mt_wait_frame           ; two frames: let the NMI actually land it in VRAM
@@ -309,10 +300,12 @@ mt_run:
   ; RUNNING that survives the ACK means this firmware has no memtest.
   lda #MT_ST_RUNNING
   sta @MEMTEST_BLK+MT_STATE
-  ; Which test, in the slot LOADROM and EXPORT_PATCHED_ROM use for their own parameter.
-  ; Written AFTER the cover sync on purpose: a cover request in flight goes through
-  ; set_mcu_addr and would leave its own bytes here.
-  lda mt_mode
+  ; The full-test marker, in the slot LOADROM and EXPORT_PATCHED_ROM use for their own
+  ; parameter.  Current firmware always runs the full test and ignores the byte; it is
+  ; written so that a firmware from when a walk-only mode existed runs the same test this
+  ; screen describes.  AFTER the cover sync on purpose: a cover request in flight goes
+  ; through set_mcu_addr and would leave its own bytes here.
+  lda #MT_MODE_FULL
   sta @MCU_PARAM+7
   lda #$00
   sta @SNES_CMD
@@ -530,8 +523,8 @@ mt_dr_status:
   jsr mt_put_str
   jsr mt_flush
 
-  ; --- row 1: the cell sweep's verdict (blank when it did not run, which is also what
-  ;     makes this row read as the separator it used to be for a wiring-only test)
+  ; --- row 1: the cell sweep's verdict (blank when there is none to show: no test yet,
+  ;     a refusal, or a block from a firmware that did not sweep)
   jsr mt_line_cell
   jsr mt_flush
 
@@ -581,7 +574,7 @@ mt_dr_nomore:
   jsr mt_flush
 
   ; --- rows 12-13: the key legend, which is also the confirmation prompt: there is no
-  ;     separate "are you sure?", the buttons say what they cost.  Two rows because three
+  ;     separate "are you sure?", the legend says what A costs.  Two rows because the
   ;     buttons plus the warning do not fit in 40 columns, and an over-long line would be
   ;     silently clipped by mt_emit rather than caught at build time.
   jsr mt_blank
@@ -859,8 +852,7 @@ mt_mn_yes:
 ; ----------------------------------------------------------------------
 ;  mt_line_cell -- compose the cell-sweep line into mt_linebuf (row 1).
 ;  Entry/exit .as/.xl, DB=$7E, DP=0.  Always leaves a blanked buffer, so the caller can
-;  flush unconditionally: a wiring-only run just prints an empty row, which is exactly the
-;  blank separator this row used to be.
+;  flush unconditionally: a result without a sweep just prints an empty row.
 ;
 ;  Note MT_CI_TIMEOUT sharing text_mtl_nocore.  A timeout means the test core stopped
 ;  answering the MCU mid-sweep, and whether that is a corrupt fpga_test file or a core that
@@ -886,7 +878,8 @@ mt_line_cell:
 mt_lc_have:
   lda @MEMTEST_BLK+MT_CELL_INFO
   and #MT_CI_RAN
-  beq mt_lc_out               ; wiring-only run: the cell fields below mean nothing
+  beq mt_lc_out               ; no sweep in this block (a walk-only run from an older
+                              ; menu): the cell fields below mean nothing
   lda @MEMTEST_BLK+MT_CELL_INFO
   and #MT_CI_SKIPPED
   bne mt_lc_skip

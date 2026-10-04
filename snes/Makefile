@@ -33,15 +33,19 @@ MENU_SIZE = 196608
 ONB_O65 = onboarding/onb_header.ips onboarding/onb_reset.o65 onboarding/onboarding_main.o65 onboarding/onb_ui.o65 \
           onboarding/onboarding_const.o65 onboarding/onb_const_lang.o65 onboarding/onb_data.o65 \
           onboarding/onb_demo_a.o65 onboarding/onb_demo_b.o65 onboarding/onb_demo_c.o65 onboarding/onb_demo_d.o65 \
-          onboarding/onb_demo_e.o65 onboarding/onb_demo_f.o65 onboarding/onb_demo_g.o65 onboarding/onb_spc.o65 onboarding/onb_welcome.o65 \
-          font.o65 palette.o65 spc700.o65
+          onboarding/onb_demo_e.o65 onboarding/onb_demo_f.o65 onboarding/onb_demo_g.o65 onboarding/onb_demo_h.o65 \
+          onboarding/onb_demo_i.o65 onboarding/onb_demo_j.o65 onboarding/onb_spc.o65 onboarding/onb_welcome.o65 \
+          font.o65 palette.o65 spc700.o65 onboarding/onb_const_lang_b.o65
 ONB_OUT = onboarding.bin
-# 9 banks ($C0 code + the menu's palette, $C1 strings, $C2-$C8 the
-# demo pictures -- utils/gen_onb_demo.py). The image is loaded over the menu's own
-# PSRAM ($C0..$C8), all of it idle while the tour runs ($C8, the igmenu.bin staging,
-# is restaged on every game load; the cover staging at $C9 is never reached). NB: no inline comment on the
-# next line -- make would fold it into the value and break the Python pad expr.
-ONB_SIZE = 589824
+# 12 banks ($C0 code + the menu's palette + half of the string pool, $C1 the string
+# tables and the other half, $C2-$CB the demo pictures -- utils/gen_onb_demo.py). The
+# image is loaded over the menu's own PSRAM ($C0..$CB), all of it idle while the tour
+# runs: $C8 (the igmenu.bin staging) is restaged on every game load, and $C9-$CB (the
+# cover and game info staging) are only written when the menu asks for a cover or a
+# game info card, which the tour never does. $CC-$CF hold the menu sounds the tour
+# plays: the image must stop below them. NB: no inline comment on the next line --
+# make would fold it into the value and break the Python pad expr.
+ONB_SIZE = 786432
 
 LOG = $(OBJS:=.log)
 MAP = $(IPS:.ips=.map) $(O65:.o65=.map)
@@ -53,9 +57,11 @@ GENDEPFLAGS = -MM -MP -MF $(DEPDIR)/$(@F).d -MT $(@F) -I.
 
 all: $(OUT) $(IGMENU) $(ONB_OUT) $(MAP)
 
-# the tour's own string pool (bank $C1), EN + the same 7 languages as the menu; the
+# the tour's own string pool, EN + the same 7 languages as the menu, split by language
+# over two banks: tables + en/pt/es/it in $C1 (onb_const_lang.a65), de/fr/ru/nl in $C0
+# (onb_const_lang_b.a65; gen_onb_lang.py POOL_B_LANGS). The
 # answers' value words come from the menu's const.a65 / lang_*.py (menu_text).
-onboarding/onb_const_lang.a65: utils/gen_onb_lang.py utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py
+onboarding/onb_const_lang.a65 onboarding/onb_const_lang_b.a65 &: utils/gen_onb_lang.py utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py
 	python3 utils/gen_onb_lang.py -o onboarding/onb_const_lang.a65
 
 # Same loud guard as the menu link (the `| tee` masks sneslink's exit code).
@@ -137,7 +143,7 @@ link.log: $(OBJS)
 
 clean:
 	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 const_lang_tab.a65 igmenu_lang.i65 $(OUT) *.o65.log *.ips.log $(IGMENU) igmenu_raw.smc igmenu.link.log
-	rm -f -- onboarding/*.o65 onboarding/*.ips onboarding/*.o65.log onboarding/*.ips.log onboarding/onb_const_lang.a65 $(ONB_OUT) onb_link.log
+	rm -f -- onboarding/*.o65 onboarding/*.ips onboarding/*.o65.log onboarding/*.ips.log onboarding/onb_const_lang.a65 onboarding/onb_const_lang_b.a65 $(ONB_OUT) onb_link.log
 
 -include $(info $(DEPDIR)) $(shell mkdir $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*)
 

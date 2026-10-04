@@ -15,8 +15,8 @@
  * official diagnostic has the same one.  Its test_mem() sweeps all 16 MB but has NO
  * CALLER, and the SNES-side memtest: in snes/tests/tests.a65 is commented out, so the only
  * cells it ever verifies are the first 1 MiB of 16, incidentally, inside test_sddma().
- * MEMTEST_MODE_FULL closes that: one write pass and one verify pass over both arrays,
- * ~20 seconds on top of the walk, on its own button so nobody pays for it by default.
+ * The cell sweep closes that: one write pass and one verify pass over both arrays, ~20
+ * seconds on top of the walk, run after it on every test.
  *
  * WHY IT NEEDS THE fpga_test CORE: the runtime cores leave RAM1 (U511, the 4 Mbit SRAM)
  * completely undriven -- RAM_DATA/RAM_ADDR have no assignment in sd2snes_base/main.v --
@@ -288,7 +288,7 @@ static void mt_ram1(mt_ctx_t *ctx) {
   mt_check_ctrl(ctx, MEMTEST_CHIP_RAM1);
 }
 
-/* ---- RAM0 and RAM1: the cell sweep (MEMTEST_MODE_FULL) --------------------------- */
+/* ---- RAM0 and RAM1: the cell sweep ------------------------------------------------ */
 
 /* The diagnostic firmware's pattern (test_mem, src/tests/tests.c).  Every byte differs
    from its neighbours AND from the same offset one 64 KB page up, so an address line that
@@ -484,7 +484,7 @@ int memtest_available(void) {
   return f_stat((TCHAR *)FPGA_MEMTEST, &fno) == FR_OK;
 }
 
-void memtest_run(uint8_t mode) {
+void memtest_run(void) {
   mt_ctx_t ctx;
   mt_cell_t cc;
   memtest_blk_t blk;
@@ -516,10 +516,8 @@ void memtest_run(uint8_t mode) {
      line aliases half the array onto the other half, so every cell in it reads back wrong
      and the real answer disappears under millions of "bad cells".  Say it was skipped
      rather than reporting a number that means nothing. */
-  if(mode == MEMTEST_MODE_FULL) {
-    if(ctx.nfind) cc.info = MEMTEST_CELL_RAN | MEMTEST_CELL_SKIPPED;
-    else mt_cells(&cc);
-  }
+  if(ctx.nfind) cc.info = MEMTEST_CELL_RAN | MEMTEST_CELL_SKIPPED;
+  else mt_cells(&cc);
 
   /* The block lives in PSRAM, and both mt_ram1 and mt_cells leave the MCU window on RAM1. */
   fpga_select_mem(0);

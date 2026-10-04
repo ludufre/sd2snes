@@ -166,4 +166,17 @@ onb_wel_pad       .word 0   ;   the pad last VBlank (a skip is a new press)
 onb_wel_vmax      .word 0   ;   the latest line a VBlank's work ended on ($ffff: past it)
 onb_apu_stub      .byt 0    ; the welcome clip left the silent S-DSP stub running
 
+onb_font_ok       .byt 0    ; the font-edge preview has a pristine font: 0 none, 1 the image's
+                            ;   own (not remapped), 2 SRAM_FONT_ORIG (onb_font_init)
+onb_font_boot     .byt 0    ; the edges the loaded font came without (bit0 AA, bit1 outline)
+onb_font_theme    .byt 0    ;   ... those of them the theme asked for ("Theme" in the preview)
+onb_font_shown    .byt 0    ; the edges off in the VRAM font now
+onb_font_load     .byt 0    ;   ... and in the one the NMI is streaming
+onb_font_busy     .byt 0    ; the NMI streams ONB_FONT_BUF: 1 BG2 next, 2/3 BG1's halves
+onb_font_ring     .byt 0    ; onb_font_scan: an outline pixel was seen...
+onb_font_aa       .byt 0    ;   ... an anti-alias one
+onb_font_lo       .byt 0    ;   (its scratch)
+onb_font_mo       .byt 0    ; onb_font_want: the outline mode the screen shows...
+onb_font_ma       .byt 0    ;   ... and the anti-alias one (0 theme / 1 on / 2 off)
+
 onb_data_end      .byt 0

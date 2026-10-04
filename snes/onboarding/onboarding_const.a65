@@ -107,25 +107,46 @@ onb_text_startbtn .byt "START", 0
 ; answer gives, the flags on the language card, an icon where nothing changes on screen
 ; (sound, buttons); a "No" is its picture greyed.
 onb_demo_map
-  .byt 0, 1, 2, 3, 4, 5, 6, 7, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  1 language: its flag
-  .byt 8, 9, 10, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  2 covers: off/large/small
-  .byt 8, 11, 12, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  3 game info: off (the browser; A starts the game)/on/context
-  .byt 13, 14, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  4 menu music: yes/no
-  .byt 15, 16, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  5 random music
-  .byt 17, 18, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  6 menu sounds
-  .byt 19, 20, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  7 in-game menu
-  .byt 21, 22, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  8 savestates
-  .byt 25, 26, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  9 MSU-1 folders: yes/no
-  .byt 27, 28, 29, 30, 31, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 10 smart reset: off/menu/folder/game/duration
-  .byt 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, $ff, $ff, $ff, $ff   ; 11 and more: its 12 items
-  .byt 44, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 12 what is new in 2.17
-  .byt 23, 24, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 13 controller 2: yes/no
-  .byt 45, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 14 Game Boy Color
-  .byt 46, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 15 the in-game shortcut list
-  .byt 47, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 16 Seta chips and bootlegs
-  .byt 48, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 17 Super 20 in 1, Gamars, .sfrom
-  .byt 49, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 18 file-type icons in the list
-  .byt 50, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 19 cheats from the game info card
+  .byt 0, 1, 2, 3, 4, 5, 6, 7, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  1 language
+  .byt 48, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  2 themes: the sd2snes+ theme, a .thm, restoring it or the classic one
+  .byt 49, 50, 51, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  3 text outline
+  .byt 49, 50, 52, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  4 text anti-aliasing
+  .byt 8, 9, 10, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  5 box art
+  .byt 53, 54, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  6 covers in Recent/Favorites (box art on)
+  .byt 8, 11, 12, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  7 game info card
+  .byt 55, 56, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  8 its video clip (the card on)
+  .byt 57, 58, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  9 the clip's music (the clip and the card on)
+  .byt 13, 14, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 10 menu music
+  .byt 15, 16, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 11 random music (music on)
+  .byt 17, 18, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 12 menu sounds
+  .byt 25, 26, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 13 MSU-1 folders
+  .byt 36, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 14 the .pcm track player
+  .byt 65, 66, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 15 show the sd2snes folder
+  .byt 27, 28, 29, 30, 31, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 16 smart reset
+  .byt 59, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 17 the cheat list
+  .byt 19, 20, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 18 in-game menu (a yes turns the hook on)
+  .byt 21, 22, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 19 savestates (a yes turns the hook on)
+  .byt 35, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 20 4 saves per game (the in-game menu on; its yes turned the hook on)
+  .byt 72, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 21 the RAM trainer (the in-game menu on; its yes turned the hook on)
+  .byt 32, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 22 IPS/BPS patches and their header mode
+  .byt 60, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 23 creating the patched ROM
+  .byt 73, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 24 more special chips (chips_more)
+  .byt 61, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 25 Sufami Turbo Slot B
+  .byt 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63   ; 26 Competition Cart round
+  .byt 33, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 27 other consoles (Mk.III only)
+  .byt 62, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 28 Atari 2600 controls (Mk.III only)
+  .byt 64, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 29 the card's folders
+  .byt 34, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 30 memory test
+  .byt 67, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 31 the Mk.II LED (Mk.II only)
+  .byt 68, 69, 70, 37, 38, 39, 71, 40, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 32 and more
+  .byt 41, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 33 2.17: what's new
+  .byt 23, 24, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 34 2.17: controller 2 (a yes turns the hook and the in-game buttons on)
+  .byt 42, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 35 2.17: Game Boy Color (Mk.III only)
+  .byt 43, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 36 2.17: the shortcut/hook list
+  .byt 44, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 37 2.17: Seta chips, bootlegs
+  .byt 45, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 38 2.17: Super 20 in 1, Gamars, .sfrom
+  .byt 46, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 39 2.17: the browser icons
+  .byt 47, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 40 2.17: cheats from the game info card
 
 ; menu window title brackets (the menu's window_tl / window_tr glyphs)
 onb_text_wtl      .byt 28, 0
@@ -153,9 +174,16 @@ onb_langname_4  .byt "Fran", 141, "ais", 0
 onb_langname_5  .byt "Italiano", 0
 onb_langname_6  .byt 80, 121, 99, 99, 207, 205, 206, 0
 onb_langname_7  .byt "Nederlands", 0
-; values per answer kind, indexed by ONB_OPT_* (INFO, ONOFF, COVERS, RESET, LANG, GI, MORE);
+; values per answer kind, indexed by ONB_OPT_* (INFO, ONOFF, COVERS, RESET, LANG, GI, MORE,
+; EDGE, CCTIME);
 ; LANG steps the tour language instead, so its count is unused
-onb_opt_count     .byt 0, 2, 3, 5, 0, 3, 12
+onb_opt_count     .byt 0, 2, 3, 5, 0, 3, 8, 3, 16
+
+; the Competition Cart round's answers (ONB_OPT_CCTIME): cc_time_limit 0..15 = 3..18 min
+onb_cc_label_tbl  .word onb_text_cc_3, onb_text_cc_4, onb_text_cc_5, onb_text_cc_6
+                  .word onb_text_cc_7, onb_text_cc_8, onb_text_cc_9, onb_text_cc_10
+                  .word onb_text_cc_11, onb_text_cc_12, onb_text_cc_13, onb_text_cc_14
+                  .word onb_text_cc_15, onb_text_cc_16, onb_text_cc_17, onb_text_cc_18
 
 onb_langname_tbl  .word onb_langname_0, onb_langname_1, onb_langname_2, onb_langname_3
                   .word onb_langname_4, onb_langname_5, onb_langname_6, onb_langname_7
@@ -165,71 +193,107 @@ onb_langname_tbl  .word onb_langname_0, onb_langname_1, onb_langname_2, onb_lang
 ; last, then the 2.17 section: its separator and the release's cards), then the items of
 ; the "and more" card (from ONB_MORE_FIRST). ONB_FEAT_STRIDE=16 bytes each;
 ; layout in onb_memmap.i65). name/text point at the localized strtab rows in
-; onb_const_lang.a65 ($C1); +0 = the parent CFG byte that must be on. cfg = low16 of
+; onb_const_lang.a65 ($C1); +0 = the parent CFG byte that must be on; +10 = the ONB_FF_*
+; flags (a yes on an in-game hook feature turns the hook on, never off; ONB_FF_MK3ONLY /
+; ONB_FF_MK2ONLY show the card on one board only). cfg = low16 of
 ; the CFG byte the card's question writes (bank $FF), 0 for an info-only card.
 ; ===========================================================================
 onb_feat_table:
-  .word 0, 1, onb_f1_name, onb_f1_text, 0, 0
+  .word 0, 1, onb_f1_name, onb_f1_text, 0, 0   ; 1 language
   .byt ONB_PAL_AMBER, ONB_OPT_LANG : .word 0
-  .word 0, 1, onb_f2_name, onb_f2_text, 0, 0
-  .byt ONB_PAL_RED, ONB_OPT_COVERS : .word !CFG_SHOW_COVERS
-  .word 0, 1, onb_f3_name, onb_f3_text, 0, 0
-  .byt ONB_PAL_PURPLE, ONB_OPT_GI : .word !CFG_SHOW_GAME_INFO
-  .word 0, 1, onb_f4_name, onb_f4_text, 0, 0
-  .byt ONB_PAL_AMBER, ONB_OPT_ONOFF : .word !CFG_ENABLE_MENU_MUSIC
-  .word !CFG_ENABLE_MENU_MUSIC, 1, onb_f5_name, onb_f5_text, 0, 0
-  .byt ONB_PAL_AMBER, ONB_OPT_ONOFF : .word !CFG_MENU_MUSIC_RANDOM
-  .word 0, 1, onb_f6_name, onb_f6_text, 0, 0
-  .byt ONB_PAL_AMBER, ONB_OPT_ONOFF : .word !CFG_ENABLE_MENU_SFX
-  .word 0, 1, onb_f7_name, onb_f7_text, 0, 0
-  .byt ONB_PAL_CYAN, ONB_OPT_ONOFF : .word !CFG_ENABLE_CHEAT_OVERLAY
-  .word 0, 1, onb_f8_name, onb_f8_text, 0, 0
-  .byt ONB_PAL_CYAN, ONB_OPT_ONOFF : .word !CFG_ENABLE_INGAME_SAVESTATE
-  .word 0, 1, onb_f9_name, onb_f9_text, 0, 0
-  .byt ONB_PAL_RED, ONB_OPT_ONOFF : .word !CFG_OPEN_MSU_FOLDERS
-  .word 0, 1, onb_f10_name, onb_f10_text, 0, 0
-  .byt ONB_PAL_GREEN, ONB_OPT_RESET : .word !CFG_ENABLE_RST_TO_MENU
-  .word 0, 1, onb_f11_name, onb_f11_text, 0, 0
-  .byt ONB_PAL_CYAN, ONB_OPT_MORE : .word 0
-  .word 0, 1, onb_f12_name, onb_f12_text, 0, 0
-  .byt ONB_PAL_AMBER, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f13_name, onb_f13_text, 0, 0
-  .byt ONB_PAL_CYAN, ONB_OPT_ONOFF : .word !CFG_ENABLE_INGAME_PAD2
-  .word 0, 1, onb_f14_name, onb_f14_text, 0, 0
-  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f15_name, onb_f15_text, 0, 0
-  .byt ONB_PAL_CYAN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f16_name, onb_f16_text, 0, 0
-  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f17_name, onb_f17_text, 0, 0
-  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f18_name, onb_f18_text, 0, 0
-  .byt ONB_PAL_RED, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f19_name, onb_f19_text, 0, 0
+  .word 0, 1, onb_f2_name, onb_f2_text, 0, 0   ; 2 themes: the sd2snes+ theme, a .thm, restoring it or the classic one
   .byt ONB_PAL_PURPLE, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f20_name, onb_f20_text, 0, 0
+  .word 0, 1, onb_f3_name, onb_f3_text, 0, 0   ; 3 text outline
+  .byt ONB_PAL_PURPLE, ONB_OPT_EDGE : .word !CFG_TEXT_OUTLINE
+  .word 0, 1, onb_f4_name, onb_f4_text, 0, 0   ; 4 text anti-aliasing
+  .byt ONB_PAL_PURPLE, ONB_OPT_EDGE : .word !CFG_TEXT_ANTIALIAS
+  .word 0, 1, onb_f5_name, onb_f5_text, 0, 0   ; 5 box art
+  .byt ONB_PAL_RED, ONB_OPT_COVERS : .word !CFG_SHOW_COVERS
+  .word !CFG_SHOW_COVERS, 1, onb_f6_name, onb_f6_text, 0, 0   ; 6 covers in Recent/Favorites (box art on)
+  .byt ONB_PAL_RED, ONB_OPT_ONOFF : .word !CFG_COVERS_IN_LISTS
+  .word 0, 1, onb_f7_name, onb_f7_text, 0, 0   ; 7 game info card
+  .byt ONB_PAL_PURPLE, ONB_OPT_GI : .word !CFG_SHOW_GAME_INFO
+  .word !CFG_SHOW_GAME_INFO, 1, onb_f8_name, onb_f8_text, 0, 0   ; 8 its video clip (the card on)
+  .byt ONB_PAL_PURPLE, ONB_OPT_ONOFF : .word !CFG_GAME_INFO_VIDEO
+  .word !CFG_GAME_INFO_VIDEO, 1, onb_f9_name, onb_f9_text, !CFG_SHOW_GAME_INFO, 0   ; 9 the clip's music (the clip and the card on)
+  .byt ONB_PAL_PURPLE, ONB_OPT_ONOFF : .word !CFG_GAME_INFO_MUSIC
+  .word 0, 1, onb_f10_name, onb_f10_text, 0, 0   ; 10 menu music
+  .byt ONB_PAL_AMBER, ONB_OPT_ONOFF : .word !CFG_ENABLE_MENU_MUSIC
+  .word !CFG_ENABLE_MENU_MUSIC, 1, onb_f11_name, onb_f11_text, 0, 0   ; 11 random music (music on)
+  .byt ONB_PAL_AMBER, ONB_OPT_ONOFF : .word !CFG_MENU_MUSIC_RANDOM
+  .word 0, 1, onb_f12_name, onb_f12_text, 0, 0   ; 12 menu sounds
+  .byt ONB_PAL_AMBER, ONB_OPT_ONOFF : .word !CFG_ENABLE_MENU_SFX
+  .word 0, 1, onb_f13_name, onb_f13_text, 0, 0   ; 13 MSU-1 folders
+  .byt ONB_PAL_RED, ONB_OPT_ONOFF : .word !CFG_OPEN_MSU_FOLDERS
+  .word 0, 1, onb_f14_name, onb_f14_text, 0, 0   ; 14 the .pcm track player
+  .byt ONB_PAL_RED, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f15_name, onb_f15_text, 0, 0   ; 15 show the sd2snes folder
+  .byt ONB_PAL_RED, ONB_OPT_ONOFF : .word !CFG_SHOW_SD2SNES_FOLDER
+  .word 0, 1, onb_f16_name, onb_f16_text, 0, 0   ; 16 smart reset
+  .byt ONB_PAL_GREEN, ONB_OPT_RESET : .word !CFG_ENABLE_RST_TO_MENU
+  .word 0, 1, onb_f17_name, onb_f17_text, 0, 0   ; 17 the cheat list
+  .byt ONB_PAL_CYAN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f18_name, onb_f18_text, 0, ONB_FF_HOOK   ; 18 in-game menu (a yes turns the hook on)
+  .byt ONB_PAL_CYAN, ONB_OPT_ONOFF : .word !CFG_ENABLE_CHEAT_OVERLAY
+  .word 0, 1, onb_f19_name, onb_f19_text, 0, ONB_FF_HOOK   ; 19 savestates (a yes turns the hook on)
+  .byt ONB_PAL_CYAN, ONB_OPT_ONOFF : .word !CFG_ENABLE_INGAME_SAVESTATE
+  .word !CFG_ENABLE_CHEAT_OVERLAY, 1, onb_f20_name, onb_f20_text, 0, 0   ; 20 4 saves per game (the in-game menu on; its yes turned the hook on)
+  .byt ONB_PAL_CYAN, ONB_OPT_INFO : .word 0
+  .word !CFG_ENABLE_CHEAT_OVERLAY, 1, onb_f21_name, onb_f21_text, 0, 0   ; 21 the RAM trainer (the in-game menu on; its yes turned the hook on)
+  .byt ONB_PAL_CYAN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f22_name, onb_f22_text, 0, 0   ; 22 IPS/BPS patches and their header mode
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f21_name, onb_f21_text, 0, 0
+  .word 0, 1, onb_f23_name, onb_f23_text, 0, 0   ; 23 creating the patched ROM
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f22_name, onb_f22_text, 0, 0
+  .word 0, 1, onb_f24_name, onb_f24_text, 0, 0   ; 24 more special chips
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f23_name, onb_f23_text, 0, 0
+  .word 0, 1, onb_f25_name, onb_f25_text, 0, 0   ; 25 Sufami Turbo Slot B
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f24_name, onb_f24_text, 0, 0
+  .word 0, 1, onb_f26_name, onb_f26_text, 0, 0   ; 26 Competition Cart round
+  .byt ONB_PAL_GREEN, ONB_OPT_CCTIME : .word !CFG_CC_TIME_LIMIT
+  .word 0, 1, onb_f27_name, onb_f27_text, 0, ONB_FF_MK3ONLY   ; 27 other consoles (Mk.III only)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f25_name, onb_f25_text, 0, 0
+  .word 0, 1, onb_f28_name, onb_f28_text, 0, ONB_FF_MK3ONLY   ; 28 Atari 2600 controls (Mk.III only)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f26_name, onb_f26_text, 0, 0
+  .word 0, 1, onb_f29_name, onb_f29_text, 0, 0   ; 29 the card's folders
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f27_name, onb_f27_text, 0, 0
+  .word 0, 1, onb_f30_name, onb_f30_text, 0, 0   ; 30 memory test
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f28_name, onb_f28_text, 0, 0
+  .word 0, 1, onb_f31_name, onb_f31_text, 0, ONB_FF_MK2ONLY   ; 31 the Mk.II LED (Mk.II only)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f29_name, onb_f29_text, 0, 0
+  .word 0, 1, onb_f32_name, onb_f32_text, 0, 0   ; 32 and more
+  .byt ONB_PAL_CYAN, ONB_OPT_MORE : .word 0
+  .word 0, 1, onb_f33_name, onb_f33_text, 0, 0   ; 33 2.17: what's new
+  .byt ONB_PAL_AMBER, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f34_name, onb_f34_text, 0, ONB_FF_HOOK+ONB_FF_BUTTONS   ; 34 2.17: controller 2 (a yes turns the hook and the in-game buttons on)
+  .byt ONB_PAL_CYAN, ONB_OPT_ONOFF : .word !CFG_ENABLE_INGAME_PAD2
+  .word 0, 1, onb_f35_name, onb_f35_text, 0, ONB_FF_MK3ONLY   ; 35 2.17: Game Boy Color (Mk.III only)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f30_name, onb_f30_text, 0, 0
+  .word 0, 1, onb_f36_name, onb_f36_text, 0, 0   ; 36 2.17: the shortcut/hook list
+  .byt ONB_PAL_CYAN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f37_name, onb_f37_text, 0, 0   ; 37 2.17: Seta chips, bootlegs
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f31_name, onb_f31_text, 0, 0
+  .word 0, 1, onb_f38_name, onb_f38_text, 0, 0   ; 38 2.17: Super 20 in 1, Gamars, .sfrom
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f39_name, onb_f39_text, 0, 0   ; 39 2.17: the browser icons
+  .byt ONB_PAL_RED, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f40_name, onb_f40_text, 0, 0   ; 40 2.17: cheats from the game info card
+  .byt ONB_PAL_PURPLE, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f41_name, onb_f41_text, 0, 0   ; 41 and more: clear PPU on boot
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f42_name, onb_f42_text, 0, 0   ; 42 and more: bus timing compat
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f43_name, onb_f43_text, 0, 0   ; 43 and more: hardware model
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f44_name, onb_f44_text, 0, 0   ; 44 and more: BS-X
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f45_name, onb_f45_text, 0, 0   ; 45 and more: delete
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f46_name, onb_f46_text, 0, 0   ; 46 and more: missing BIOS
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f47_name, onb_f47_text, 0, 0   ; 47 and more: clock and date
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f48_name, onb_f48_text, 0, 0   ; 48 and more: option descriptions
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
 
 ; the bar colour: the menu's hdma_bar_color_src ("normal", then "highlight"), the

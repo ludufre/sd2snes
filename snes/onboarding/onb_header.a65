@@ -92,7 +92,7 @@ NMI_8bit:
 
 *= $C0FFD5  .byt $31 ; rom map + speed (HiROM FastROM) -- matches m3nu
 *= $C0FFD6  .byt $00 ; rom type   ROM only (no SRTC/SRAM; onboarding has no save)
-*= $C0FFD7  .byt $09 ; rom size   512 kByte class (9 banks $C0..$C8; the MCU loads the file size)
+*= $C0FFD7  .byt $0A ; rom size   1 MByte class (12 banks $C0..$CB; the MCU loads the file size)
 *= $C0FFD8  .byt $00 ; sram size  none
 *= $C0FFD9  .byt $01 ; rom region 1 = USA (NTSC, like m3nu)
 *= $C0FFDA  .byt $33 ; company id flag

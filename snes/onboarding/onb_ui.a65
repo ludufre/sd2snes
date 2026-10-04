@@ -8,9 +8,8 @@
 ; onb_resolve_str is the i18n resolver: a string pointer inside the localized
 ; dispatch table range [onb_strtab_lo, onb_strtab_hi) is swapped for the active
 ; language's column (indexed by onb_cur_lang); any other pointer passes through.
-; For now the string pool is EN-only (onboarding_const.a65); the structure is here
-; and ready so build_const-style localization can be added later (see the strtab
-; placeholders in onboarding_const.a65).
+; The strings are split by language over two pools (utils/gen_onb_lang.py): the
+; tables and pool A in $C1, pool B in $C0; onb_strpool_bank gives a column's bank.
 ;
 ; .as/.xl GOTCHA: every routine with `lda #imm`/`ldx #imm` declares its widths on
 ; entry (directives leak in SOURCE order).
@@ -47,10 +46,11 @@ onb_resolve_str:
   bcs onb_rs_out
   sep #$20 : .as
   lda @onb_cur_lang
-  cmp @onb_strtab_nlang     ; languages actually present (placeholder = 1 for now)
+  cmp @onb_strtab_nlang     ; languages present (8, gen_onb_lang.py LANGS)
   bcc +
   lda #$00                  ; past the last present column -> English
-+ asl
++ pha
+  asl
   rep #$20 : .al
   and #$00ff
   clc
@@ -62,8 +62,15 @@ onb_resolve_str:
   rep #$20 : .al
   lda [onb_resolve_ptr]
   sta @onb_print_src
+  ; the string itself lives in its language's pool: the pool is split by language
+  ; across two banks (gen_onb_lang.py POOL_B_LANGS), the table entry is 16 bits
   sep #$20 : .as
-  lda #^onb_strtab_lo
+  pla                       ; the column pushed above (one byte: A was 8 bits there)
+  rep #$20 : .al
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda @onb_strpool_bank, x
   sta @onb_print_bank
 onb_rs_out:
   plb

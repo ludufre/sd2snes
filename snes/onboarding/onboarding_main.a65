@@ -38,12 +38,14 @@
 ;   header rows 1..2 : the name + N/total (cards shown now), the rule right under
 ;   left   cols 1..30: the card's paragraph under its name, then the answers as a
 ;                        list in a menu window right under it (the bar on one; it
-;                        scrolls when the answers do not fit above the progress bar)
+;                        scrolls when the answers do not fit above the progress bar).
+;                        The "and more" card the other way round: its items on top,
+;                        the focused one's paragraph under them (onb_more_body)
 ;   right  (OBJ)     : the demo picture of the focused answer (onb_build_oam)
 ;   footer rows 25/27: progress bar + the input hints of the view
-#define ONB_NUM_CARDS      19      ; cards walked: the base tour ("and more" last), then the
+#define ONB_NUM_CARDS      40      ; cards walked: the base tour ("and more" last), then the
                                    ; 2.17 section (its separator card and the release's cards)
-#define ONB_MORE_FIRST     19      ; the "and more" items: descriptors 19..30 of onb_feat_table
+#define ONB_MORE_FIRST     40      ; the "and more" items: descriptors 40..47 of onb_feat_table
 ; header
 #define ONB_HDR_ROW        1       ; feature name (primary language)
 
@@ -99,6 +101,7 @@ onb_coldboot:
   ;     a full WRAM fill here (the onboarding ROM has a small WRAM footprint); we
   ;     just zero our own gates explicitly, which is the documented requirement. ---
   jsr onb_clear_vars
+  jsr onb_font_init     ; the font-edge preview's pristine font (before setup_gfx uploads it)
   jsr onb_snes_init     ; PPU registers to a known state (clone of menu snes_init)
   jsr onb_setup_gfx     ; fonts + tilemaps + palette into VRAM (forced blank)
   jsr onb_store_wram    ; copy the WRAM-wait trampoline into $7EF200 (hardcoded MVN len)
@@ -201,6 +204,7 @@ onb_boot_fresh:
 onb_loop:
   .as : .xl
   jsr onb_demo_kick     ; start streaming the focused answer's picture, if it changed
+  jsr onb_font_kick     ; the font-edge cards: the font the bar previews
   jsr onb_syncread      ; one debounced joypad sample (sync to NMI + auto-read)
   lda @onb_view
   cmp #3
@@ -319,10 +323,12 @@ onb_seen_init:
   rts
 
 ; onb_card_skipped: A = card index. Carry SET when the card is left out: it is older
-;   than the version the user has seen (+ONB_FD_SINCE <= onb_seen), or its descriptor
-;   names a parent CFG byte (+ONB_FD_DEP) and that byte is 0 -- no random music
-;   without music, no guides without the in-game menu. Leaves onb_descptr on that
-;   card. .as/.xl in.
+;   than the version the user has seen (+ONB_FD_SINCE <= onb_seen), it is for the other
+;   board (+ONB_FD_FLAGS: ONB_FF_MK3ONLY on a Mk.II, ONB_FF_MK2ONLY on a Mk.III; the board
+;   is ST_IS_MK2, which the firmware publishes on every boot of a menu image), or its
+;   descriptor names a parent CFG byte (+ONB_FD_DEP, and a second one at +ONB_FD_DEP2)
+;   and that byte is 0 -- no random music without music, no covers in the lists without
+;   covers, no clip music without the clip. Leaves onb_descptr on that card. .as/.xl in.
 onb_card_skipped:
   .as : .xl
   jsr onb_feat_ptr_idx
@@ -331,19 +337,27 @@ onb_card_skipped:
   cmp @onb_seen
   beq onb_cs_old
   bcc onb_cs_old
-  rep #$20 : .al
-  ldy #ONB_FD_DEP
+  ldy #ONB_FD_FLAGS
+  lda @ST_IS_MK2
+  cmp #$01                  ; exactly 1: anything else reads as the Mk.III
+  beq onb_cs_mk2
   lda [onb_descptr], y
-  beq onb_cs_no
-  sta @onb_cfgptr
-  sep #$20 : .as
-  lda #^CFG_ADDR
-  sta @onb_cfgptr+2
-  ldy #$0000
-  lda [onb_cfgptr], y
-  bne onb_cs_no
-  sec
-  rts
+  and #ONB_FF_MK2ONLY
+  bne onb_cs_off
+  bra onb_cs_board
+onb_cs_mk2:
+  .as : .xl
+  lda [onb_descptr], y
+  and #ONB_FF_MK3ONLY
+  bne onb_cs_off
+onb_cs_board:
+  .as : .xl
+  ldy #ONB_FD_DEP
+  jsr onb_cs_parent         ; the parent...
+  bcs onb_cs_off
+  ldy #ONB_FD_DEP2          ; ...and the grandparent (the clip's music: the video, and
+  jsr onb_cs_parent         ; the game info card the video plays on)
+  bcs onb_cs_off
 onb_cs_no:
   sep #$20 : .as
   clc
@@ -351,6 +365,31 @@ onb_cs_no:
 onb_cs_old:
   .as : .xl
   sec
+  rts
+onb_cs_off:
+  .as : .xl
+  sec
+  rts
+
+; onb_cs_parent: Y = a descriptor field naming a parent CFG byte (low16, bank $FF; 0 =
+;   none). Carry SET when there is one and it is 0. Keeps onb_descptr. .as/.xl in/out.
+onb_cs_parent:
+  .as : .xl
+  rep #$20 : .al
+  lda [onb_descptr], y
+  beq onb_csp_none
+  sta @onb_cfgptr
+  sep #$20 : .as
+  lda #^CFG_ADDR
+  sta @onb_cfgptr+2
+  ldy #$0000
+  lda [onb_cfgptr], y
+  bne onb_csp_none
+  sec
+  rts
+onb_csp_none:
+  sep #$20 : .as
+  clc
   rts
 
 ; onb_count_visible: onb_vis_total = cards shown now, onb_vis_pos = the current one's
@@ -477,9 +516,37 @@ onb_answer:
   ldy #$0000
   pla
   sta [onb_cfgptr], y
+  jsr onb_answer_deps   ; a yes on an in-game hook feature turns the hook on
   lda #$00
   sta @onb_sfx_pending  ; a "menu sounds" preview is the answer now
 + jmp onb_next
+
+; onb_answer_deps: A = the answer just written. A feature that runs from the in-game hook
+;   (descriptor +ONB_FD_FLAGS) is offered whatever the hook's state, so its yes (A != 0)
+;   also writes 1 to CFG_ENABLE_INGAME_HOOK (ONB_FF_HOOK) and to CFG_ENABLE_INGAME_BUTTONS
+;   (ONB_FF_BUTTONS); a 0 leaves both as they are. onb_descptr is on the card
+;   (onb_feat_cfgptr). .as/.xl in/out.
+onb_answer_deps:
+  .as : .xl
+  cmp #$00
+  beq onb_ad_out
+  ldy #ONB_FD_FLAGS
+  lda [onb_descptr], y
+  sta @onb_tmp
+  and #ONB_FF_HOOK
+  beq onb_ad_buttons
+  lda #$01
+  sta @CFG_ENABLE_INGAME_HOOK
+onb_ad_buttons:
+  .as : .xl
+  lda @onb_tmp
+  and #ONB_FF_BUTTONS
+  beq onb_ad_out
+  lda #$01
+  sta @CFG_ENABLE_INGAME_BUTTONS
+onb_ad_out:
+  .as : .xl
+  rts
 
 onb_redraw_loop:
   .as : .xl
@@ -789,6 +856,7 @@ onb_build_split:
   ; build the whole card into the WRAM tile buffers, then DMA it to VRAM (forced blank).
   jsr onb_build_body
   jsr onb_dma_body
+  jsr onb_font_sync      ; the font this card shows (the font-edge preview, or back to the saved)
 
   ; enable HDMA (ch1+ch2 gradient only) at vblank, then unblank.
   jsr onb_waitblank
@@ -1139,15 +1207,6 @@ onb_bb_card:
   ldy #ONB_FD_NAME : jsr onb_emit_loc
   ; N-of-N (dim), right-aligned on the header row
   jsr onb_draw_nn
-  ; "and more": the text below the header is the focused item's
-  jsr onb_feat_optkind
-  cmp #ONB_OPT_MORE
-  bne +
-  lda @onb_sel
-  clc
-  adc #ONB_MORE_FIRST
-  jsr onb_feat_ptr_idx
-+
   ; amber rule under the header
   lda #ONB_RULE_X : sta @onb_print_x
   lda #ONB_RULE_ROW : sta @onb_print_y
@@ -1157,6 +1216,13 @@ onb_bb_card:
 
   ; ================= right: the demo picture is OBJ (onb_build_oam) =================
 
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_MORE
+  bne onb_bb_textfirst
+  jsr onb_more_body         ; "and more": its items on top, the focused one's text under them
+  bra onb_bb_footer
+onb_bb_textfirst:
+  .as : .xl
   ; ================= left: the paragraph, then the answers =================
   lda #ONB_COL_X : sta @onb_print_x
   lda #ONB_TEXT_ROW : sta @onb_print_y
@@ -1166,6 +1232,8 @@ onb_bb_card:
   jsr onb_draw_option_value
   jsr onb_bar_place         ; the bar follows the list wherever it landed
 
+onb_bb_footer:
+  .as : .xl
   ; ================= footer + progress bar =================
   jsr onb_draw_progress
   jsr onb_draw_footer
@@ -1258,6 +1326,100 @@ onb_list_layout:
   lda @onb_nopts
 + sta @onb_list_vis
   jsr onb_list_follow
+  rts
+
+; onb_more_body: the "and more" card, the other way round (the user's call): the item
+;   list in its box right under the rule -- the box's title on ONB_TEXT_ROW -- and the
+;   focused item's paragraph one blank row under the box. Every item's paragraph has
+;   the same height in every language (gen_onb_lang.py), so the box shows
+;   ONB_MORE_ROWS - that height items and scrolls the rest (with the 9-line paragraphs
+;   of 2.17 all 8 items fit); the paragraph's last row is at most row 24, where the
+;   other cards' box ends. .as/.xl in.
+#define ONB_MORE_ROWS      18      ; items + paragraph rows: box rows 4..(5+vis), a blank,
+                                   ; the paragraph down to row 24
+onb_more_body:
+  .as : .xl
+  lda @onb_sel
+  clc
+  adc #ONB_MORE_FIRST
+  jsr onb_feat_ptr_idx      ; the focused item
+  ldy #ONB_FD_TEXT
+  jsr onb_para_count        ; onb_para_n = its rows
+  lda #ONB_TEXT_ROW+1
+  sta @onb_list_row
+  lda #ONB_MORE_ROWS
+  sec
+  sbc @onb_para_n
+  bcc omb_one               ; a paragraph taller than the room: keep one item
+  beq omb_one
+  cmp @onb_nopts
+  bcc omb_vis
+  lda @onb_nopts
+  bra omb_vis
+omb_one:
+  .as : .xl
+  lda #$01
+omb_vis:
+  .as : .xl
+  sta @onb_list_vis
+  jsr onb_list_follow
+  jsr onb_draw_option_value ; (points onb_descptr back at the card)
+  jsr onb_bar_place
+  lda @onb_sel
+  clc
+  adc #ONB_MORE_FIRST
+  jsr onb_feat_ptr_idx
+  lda #ONB_COL_X : sta @onb_print_x
+  lda @onb_list_row         ; under the box's bottom border and a blank row
+  clc
+  adc @onb_list_vis
+  adc #$02
+  sta @onb_print_y
+  lda #ONB_PAL_WHITE : sta @onb_print_pal
+  ldy #ONB_FD_TEXT
+  jmp onb_emit_para
+
+; onb_para_count: Y = descriptor field offset of a paragraph. onb_para_n = the rows
+;   onb_emit_para would print (its lines are split by byte 1). .as/.xl in.
+onb_para_count:
+  php
+  phd
+  sep #$20 : .as
+  rep #$10 : .xl
+  pea $0000
+  pld
+  rep #$20 : .al
+  lda [onb_descptr], y
+  sta @onb_print_src
+  sep #$20 : .as
+  lda #^onb_strtab_lo
+  sta @onb_print_bank
+  jsr onb_resolve_str
+  rep #$20 : .al
+  lda @onb_print_src
+  sta @onb_print_ptr
+  sep #$20 : .as
+  lda @onb_print_bank
+  sta @onb_print_ptr+2
+  lda #$01
+  sta @onb_para_n
+  ldy #$0000
+opc_loop:
+  .as : .xl
+  lda [onb_print_ptr], y
+  beq opc_out
+  cmp #$01
+  bne +
+  lda @onb_para_n
+  inc
+  sta @onb_para_n
++ iny
+  cpy #$0800                ; defensive cap
+  bne opc_loop
+opc_out:
+  .as : .xl
+  pld
+  plp
   rts
 
 ; onb_list_follow: keep the bar (onb_sel) inside the visible rows. Carry SET when
@@ -1819,8 +1981,39 @@ onb_row_label:
   bne +
   lda @onb_row
   jmp onb_reset_value_ptr
++ cmp #ONB_OPT_EDGE
+  bne +
+  lda @onb_row
+  jmp onb_edge_value_ptr
++ cmp #ONB_OPT_CCTIME
+  bne +
+  lda @onb_row              ; the round timer: "3 min" .. "18 min", one label per row
+  rep #$20 : .al
+  and #$000f
+  asl
+  tax
+  lda @onb_cc_label_tbl, x
+  tax
+  sep #$20 : .as
+  lda #^onb_strtab_lo
+  rts
 + lda @onb_row
   jmp onb_gi_value_ptr
+
+; onb_edge_value_ptr: A = a font-edge mode (TextOutline / TextAntiAlias: 0 theme,
+;   1 on, 2 off -- the menu's kv_text_edge order). X=addr, A=bank of its label.
+;   .as/.xl in/out.
+onb_edge_value_ptr:
+  .as : .xl
+  ldx #!onb_text_theme
+  cmp #$01
+  bne +
+  ldx #!onb_text_on
++ cmp #$02
+  bne +
+  ldx #!onb_text_off
++ lda #^onb_strtab_lo
+  rts
 
 ; onb_gi_value_ptr: A = show_game_info (0/1/2). X=addr, A=bank of Off / On / Context.
 ;   .as/.xl in/out.
@@ -2469,6 +2662,10 @@ onb_setup_gfx:
   ; build the fonts into VRAM (BG1 base $0000, BG2 base $4000) -- onb_genfonts is
   ; the port of the menu's genfonts (main.a65), driven by onb_font (onb_font.a65).
   jsr onb_genfonts
+  lda @onb_font_boot     ; genfonts uploaded the image's font as the firmware left it
+  sta @onb_font_shown
+  lda #$00
+  sta @onb_font_busy
   ; OBJ name base; both demo slots start blank.
   lda #ONB_OBSEL
   sta $2101
@@ -2580,5 +2777,397 @@ onb_dma_body:
   DMA7(#$01, #28*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF, #$18)
   ldx #BG2_TILE_BASE : stx $2116
   DMA7(#$01, #28*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF, #$18)
+  plp
+  rts
+
+; ===========================================================================
+; Font-edge preview: on the text outline and anti-aliasing cards the tour's own text
+; follows the bar (Theme / On / Off), and the two cards compose (what one keeps, the
+; other shows over it). The firmware remaps the font of every menu image it loads,
+; this one included, with the SAVED answers (src/theme.c theme_font_edges): the high
+; plane loses bits (AA off: hi &= ~lo, the step becomes fill; outline off: hi &= lo,
+; the ring becomes transparent), which cannot be undone from the remapped font. So the
+; preview works from a pristine font: the image's own when the firmware left it alone,
+; else the copy the firmware kept at SRAM_FONT_ORIG -- checked against the loaded font
+; first (same low plane, no high bit the remap could not have cleared). "Theme" is what
+; the .thm asks for, which only shows on screen: an edge saved as Theme carries it in
+; the loaded font; one saved On or Off hides it, and the preview takes the theme as
+; leaving that edge on (the default of every theme the Theme Creator makes).
+;
+; The remapped high plane goes to ONB_FONT_BUF (onb_font_fill) and then to VRAM: in
+; forced blank at once when a card is built (onb_font_sync), or by the NMI in three
+; 4 KB pieces, each in a VBlank of its own without the tilemaps (onb_font_step).
+; ===========================================================================
+
+; the masks of onb_font_fill per edge bits (bit0 AA off, bit1 outline off):
+;   hi' = hi & ((lo & K1) ^ K2) -- none: hi, AA off: hi & ~lo, outline off: hi & lo, both: 0
+onb_font_k1_tbl   .byt $00, $ff, $ff, $00
+onb_font_k2_tbl   .byt $ff, $ff, $00, $00
+
+; onb_font_init: boot, before onb_setup_gfx. What the loaded font came without
+;   (onb_font_boot), the pristine font to remap (onb_font_ok) and the theme's edges
+;   (onb_font_theme; kept as the first boot found them across the tour's own reset,
+;   when the CFG may hold the answers given since). .as/.xl in.
+onb_font_init:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  sta @onb_font_busy
+  sta @onb_font_ok
+  sta @onb_font_ring
+  sta @onb_font_aa
+  ldx #$0000
+ofi_scan:
+  .as : .xl
+  lda @font, x              ; low plane
+  sta @onb_font_lo
+  eor #$ff
+  and @font+1, x            ; high and not low: the outline ring
+  ora @onb_font_ring
+  sta @onb_font_ring
+  lda @onb_font_lo
+  and @font+1, x            ; high and low: the anti-alias step
+  ora @onb_font_aa
+  sta @onb_font_aa
+  inx
+  inx
+  cpx #ONB_FONT_LEN
+  bne ofi_scan
+  lda #$00
+  sta @onb_font_boot
+  lda @onb_font_aa
+  bne +
+  lda #$01
+  sta @onb_font_boot
++ lda @onb_font_ring
+  bne +
+  lda @onb_font_boot
+  ora #$02
+  sta @onb_font_boot
++ lda @onb_font_boot
+  bne ofi_orig
+  lda #$01                  ; nothing taken away: the image's font is the pristine one
+  sta @onb_font_ok
+  bra ofi_theme
+ofi_orig:
+  .as : .xl
+  lda #$00
+  sta @onb_font_ring
+  sta @onb_font_aa
+  ldx #$0000
+ofi_val:
+  .as : .xl
+  lda @font, x
+  cmp @SRAM_FONT_ORIG, x
+  bne ofi_theme             ; another low plane: not this font's copy (no preview)
+  lda @SRAM_FONT_ORIG+1, x
+  eor #$ff
+  and @font+1, x
+  bne ofi_theme             ; a high bit the remap could not have left
+  lda @SRAM_FONT_ORIG, x
+  sta @onb_font_lo
+  eor #$ff
+  and @SRAM_FONT_ORIG+1, x
+  ora @onb_font_ring
+  sta @onb_font_ring
+  lda @onb_font_lo
+  and @SRAM_FONT_ORIG+1, x
+  ora @onb_font_aa
+  sta @onb_font_aa
+  inx
+  inx
+  cpx #ONB_FONT_LEN
+  bne ofi_val
+  lda @onb_font_ring
+  beq ofi_theme
+  lda @onb_font_aa
+  beq ofi_theme
+  lda #$02
+  sta @onb_font_ok
+ofi_theme:
+  .as : .xl
+  rep #$20 : .al
+  lda @onb_resume_magic     ; back from the tour's own reset: keep what the first boot found
+  cmp #ONB_RESUME_MAGIC
+  sep #$20 : .as
+  beq ofi_clear
+  lda #$00
+  sta @onb_font_theme
+  lda @CFG_TEXT_ANTIALIAS   ; saved as Theme: the loaded font shows what the theme wants
+  bne +
+  lda @onb_font_boot
+  and #$01
+  sta @onb_font_theme
++ lda @CFG_TEXT_OUTLINE
+  bne ofi_clear
+  lda @onb_font_boot
+  and #$02
+  ora @onb_font_theme
+  sta @onb_font_theme
+ofi_clear:
+  .as : .xl
+  lda @onb_font_ok
+  beq ofi_out
+  ; the buffer's zero slots (every byte the fill does not write)
+  phb
+  lda #^ONB_FONT_BUF
+  pha
+  plb
+  rep #$20 : .al
+  lda #$0000
+  ldx #$0000
+- sta !ONB_FONT_BUF, x
+  inx
+  inx
+  cpx #$3000
+  bne -
+  sep #$20 : .as
+  plb
+ofi_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_font_want: A = the edges the screen should show without (bit0 AA, bit1 outline):
+;   the saved answers, the focused one in place of its own on a font-edge card. .as/.xl
+;   in/out.
+onb_font_want:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CFG_TEXT_OUTLINE
+  sta @onb_font_mo
+  lda @CFG_TEXT_ANTIALIAS
+  sta @onb_font_ma
+  lda @onb_view
+  cmp #2
+  bne ofw_eval
+  jsr onb_feat_optkind
+  cmp #ONB_OPT_EDGE
+  bne ofw_eval
+  jsr onb_feat_cfgptr
+  rep #$20 : .al
+  lda @onb_cfgptr
+  cmp #!CFG_TEXT_OUTLINE
+  sep #$20 : .as
+  bne ofw_aa
+  lda @onb_sel              ; the rows are the values: Theme, On, Off
+  sta @onb_font_mo
+  bra ofw_eval
+ofw_aa:
+  .as : .xl
+  lda @onb_sel
+  sta @onb_font_ma
+ofw_eval:
+  .as : .xl
+  lda #$00
+  sta @onb_font_lo
+  lda @onb_font_ma
+  cmp #$01                  ; On: the step stays
+  beq ofw_ol
+  cmp #$02                  ; Off
+  beq +
+  lda @onb_font_theme       ; Theme
+  and #$01
+  beq ofw_ol
++ lda #$01
+  sta @onb_font_lo
+ofw_ol:
+  .as : .xl
+  lda @onb_font_mo
+  cmp #$01
+  beq ofw_out
+  cmp #$02
+  beq +
+  lda @onb_font_theme
+  and #$02
+  beq ofw_out
++ lda @onb_font_lo
+  ora #$02
+  sta @onb_font_lo
+ofw_out:
+  .as : .xl
+  plp
+  lda @onb_font_lo
+  rts
+
+; onb_font_fill: A = edge bits. ONB_FONT_BUF <- the pristine font's high plane remapped
+;   that way, in both VRAM layouts (the zero slots are left alone). ~1.5 frames of CPU.
+;   .as/.xl in.
+onb_font_fill:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  phb
+  rep #$20 : .al
+  and #$0003
+  tax
+  sep #$20 : .as
+  lda @onb_font_k1_tbl, x
+  sta @ONB_FONT_K1
+  lda @onb_font_k2_tbl, x
+  sta @ONB_FONT_K2
+  lda #^ONB_FONT_BUF
+  pha
+  plb                       ; DB = the buffer's bank (the masks too)
+  ldx #$0000                ; the font, 2 bytes a row
+  ldy #$0000                ; BG2's layout: 16c + r
+  lda @onb_font_ok
+  cmp #$02
+  bne off_img
+  jmp off_orig
+off_img:
+  .as : .xl
+  lda @font, x
+  and !ONB_FONT_K1
+  eor !ONB_FONT_K2
+  inx
+  and @font, x
+  inx
+  sta !ONB_FONT_BUF, y
+  iny
+  tya
+  and #$07
+  bne off_img
+  rep #$20 : .al            ; the character's 8 rows done: skip its blank tile
+  tya
+  clc
+  adc #$0008
+  tay
+  sep #$20 : .as
+  cpy #$1000
+  bne off_img
+  bra off_bg1
+off_orig:
+  .as : .xl
+  lda @SRAM_FONT_ORIG, x
+  and !ONB_FONT_K1
+  eor !ONB_FONT_K2
+  inx
+  and @SRAM_FONT_ORIG, x
+  inx
+  sta !ONB_FONT_BUF, y
+  iny
+  tya
+  and #$07
+  bne off_orig
+  rep #$20 : .al
+  tya
+  clc
+  adc #$0008
+  tay
+  sep #$20 : .as
+  cpy #$1000
+  bne off_orig
+off_bg1:
+  .as : .xl
+  ; BG1's copy: the same 8 bytes per character, 32 bytes apart
+  rep #$30 : .al : .xl
+  ldx #!ONB_FONT_BUF
+  ldy #!ONB_FONT_BUF_BG1
+off_mvn:
+  .al : .xl
+  lda #$0007
+  mvn $7f, $7f              ; 8 bytes; X and Y step 8
+  txa
+  clc
+  adc #$0008
+  tax
+  tya
+  clc
+  adc #$0018
+  tay
+  cpx #!ONB_FONT_BUF+$1000
+  bne off_mvn
+  plb
+  plp
+  rts
+
+; onb_font_kick: main loop, once per frame. When the screen should show another font and
+;   the NMI is not streaming one, fill the buffer and hand it to the NMI. .as/.xl in.
+onb_font_kick:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_font_ok
+  beq ofk_out
+  lda @onb_font_busy
+  bne ofk_out
+  jsr onb_font_want
+  cmp @onb_font_shown
+  beq ofk_out
+  sta @onb_font_load
+  jsr onb_font_fill
+  lda #$01                  ; last: the NMI reads the buffer once this is set
+  sta @onb_font_busy
+ofk_out:
+  .as : .xl
+  plp
+  rts
+
+; onb_font_step: NMI, while onb_font_busy: one 4 KB piece, BG2's then BG1's two halves.
+;   The NMI leaves the tilemaps and the demo picture out of that VBlank. DB = 0. .as/.xl in.
+onb_font_step:
+  .as : .xl
+  lda @onb_font_busy
+  cmp #$02
+  beq ofs_bg1a
+  cmp #$03
+  beq ofs_bg1b
+  ldx #$4000
+  stx $2116
+  DMA7(#$00, #$1000, #^ONB_FONT_BUF, #!ONB_FONT_BUF, #$19)
+  lda #$02
+  sta @onb_font_busy
+  rts
+ofs_bg1a:
+  .as : .xl
+  ldx #$0000
+  stx $2116
+  DMA7(#$00, #$1000, #^ONB_FONT_BUF_BG1, #!ONB_FONT_BUF_BG1, #$19)
+  lda #$03
+  sta @onb_font_busy
+  rts
+ofs_bg1b:
+  .as : .xl
+  ldx #$1000                ; one byte per VRAM word: the second 4 KB starts at character 128
+  stx $2116
+  DMA7(#$00, #$1000, #^ONB_FONT_BUF_BG1, #!ONB_FONT_BUF_BG1+$1000, #$19)
+  lda @onb_font_load
+  sta @onb_font_shown
+  lda #$00
+  sta @onb_font_busy
+  rts
+
+; onb_font_sync: a card build, in forced blank (onb_build_split): the font the card wants,
+;   all at once -- also what ends a stream the build cut short. DB = 0. .as/.xl in.
+onb_font_sync:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @onb_font_ok
+  beq ofsy_out
+  jsr onb_font_want
+  sta @onb_font_load
+  lda @onb_font_busy
+  bne +
+  lda @onb_font_load
+  cmp @onb_font_shown
+  beq ofsy_out
++ lda @onb_font_load
+  jsr onb_font_fill
+  ldx #$4000
+  stx $2116
+  DMA7(#$00, #$1000, #^ONB_FONT_BUF, #!ONB_FONT_BUF, #$19)
+  ldx #$0000
+  stx $2116
+  DMA7(#$00, #$2000, #^ONB_FONT_BUF_BG1, #!ONB_FONT_BUF_BG1, #$19)
+  lda @onb_font_load
+  sta @onb_font_shown
+  lda #$00
+  sta @onb_font_busy
+ofsy_out:
+  .as : .xl
   plp
   rts

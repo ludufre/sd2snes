@@ -845,18 +845,16 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
              export, minus its trampoline: there is nowhere off-cartridge to park the CPU.
          The result then has to survive to the next boot, which it does: memtest_run
          publishes into $FF07xx and nothing on the reload path writes there. */
-      /* Which of the two tests the menu asked for.  Read in a statement of its own and
-         BEFORE anything that touches the FPGA address latch, exactly like the xidx of
-         EXPORT_PATCHED_ROM above: snescmd_readbyte goes through set_mcu_addr, so folding
-         it into a later expression makes the order the compiler's business. */
-      uint8_t mtmode = snescmd_readbyte(SNESCMD_MCU_PARAM + 7);
+      /* MCU_PARAM+7 is NOT read.  Earlier menus put a mode byte there (0 = wiring walk
+         only, $5a = walk + cell sweep); every run is the full one now, and the menu keeps
+         writing $5a only so that a firmware from before the change runs the same test. */
       if(!memtest_available()) {
         memtest_publish_nocore();
         snescmd_writebyte(0x55, SNESCMD_SNES_CMD);
         return 0;
       }
       assert_reset();
-      memtest_run(mtmode);
+      memtest_run();
       /* NOTE: returns cmd, not 0 -- menu_reload only takes effect once the menu loop
          exits.  The reload is not optional: the FPGA is on the test core, the low PSRAM
          is scribbled over, and the SNES is in reset.  main()'s outer loop puts fpga_base
