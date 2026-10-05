@@ -77,12 +77,29 @@ parameter [3:0]
 ;
 
 integer i;
+`ifdef BOOTLEG
+// The bootleg variant decodes LoROM only: every bootleg is plain LoROM (src/bootleg.c sets
+// mapper_id = 1 for each of them, and fpga_bootleg is never loaded for anything else -- the
+// menu always goes back to fpga_base), so the other branches of the mapper muxes and the
+// BS-X base cart logic (use_bsx -> bsx.v) fold away: ~700 FFs and ~1000 LUTs less, and with
+// them the mk2 fit meets timing (the bootleg core with the full mapper set missed by 0.01 ns).
+wire [7:0] MAPPER_DEC = 8'b0000_0010;
+`else
 reg [7:0] MAPPER_DEC; always @(posedge CLK) for (i = 0; i < 8; i = i + 1) MAPPER_DEC[i] <= (MAPPER == i);
+`endif
 reg [23:0] SNES_ADDR; always @(posedge CLK) SNES_ADDR <= SNES_ADDR_early;
 
 // BS Memory Pack: 8M pack at PSRAM 0x900000 (FEAT_BSSLOT)
 `ifdef MK2
  `ifndef BASE_EXT
+  `define BASE_LEAN
+ `endif
+`endif
+// The bootleg variant (sd2snes_bootleg, BOOTLEG macro) is lean on BOTH boards: every bootleg
+// is plain LoROM (src/bootleg.c forces mapper 1 and clears FEAT_BSLOROM, and the pack slot is
+// never armed for a cart that has an fpga_conf), so it needs none of the extensions below.
+`ifdef BOOTLEG
+ `ifndef BASE_LEAN
   `define BASE_LEAN
  `endif
 `endif

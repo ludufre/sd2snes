@@ -103,6 +103,11 @@ module mcu_cmd(
   output reg [15:0] featurebits_out,
 
   output reg region_out,
+`ifdef BOOTLEG
+  // chip feature word (CMD 0xef, 2 param bytes, MSB first).
+  // bootleg core: chipfeat[2:0] = protection variant (see sd2snes_bootleg/bootleg.v)
+  output reg [15:0] chipfeat_out = 16'h0000,
+`endif
   // SNES sync/clk
   input snes_sysclk,
 
@@ -470,6 +475,13 @@ always @(posedge clk) begin
         endcase
       8'hee:
         region_out <= param_data[0];
+`ifdef BOOTLEG
+      8'hef:
+        case (spi_byte_cnt)
+          32'h2: dsp_feat_tmp <= param_data;
+          32'h3: chipfeat_out <= {dsp_feat_tmp, param_data};
+        endcase
+`endif
       8'hfa: // handles all group, index, value, invmask writes.  unit is responsible for decoding group for match
         case (spi_byte_cnt)
           32'h2: begin

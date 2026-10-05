@@ -2,9 +2,17 @@
 
 Dedicated core for copy-protected unlicensed LoROM bootlegs: the games in fullsnes
 "SNES Cart Unlicensed Variants" (https://problemkaputt.de/fullsnes.htm) plus the ones nocash,
-Revenant and others documented on nesdev (forum t=15510, 2017).  It is `sd2snes_base`
-plus `bootleg.v` and a small address remap in `main.v`; everything else (MSU-1, DMA,
-cheats, in-game hooks, SFX fetcher) is unchanged.
+Revenant and others documented on nesdev (forum t=15510, 2017).  It is a variant of
+`sd2snes_base`, not a copy: this directory holds only `bootleg.v` and the project files,
+and the build takes every other source and the IP from `../sd2snes_base` with the
+`BOOTLEG` macro defined.  `BOOTLEG` adds to the base files the protection unit's
+instance and read mux (`main.v`), the KOF98 address remap in front of `SNES_ADDR_early`
+(`main.v`), the CMD 0xEF chip feature word (`mcu_cmd.v`), and makes the address decoder
+LoROM-only (`address.v`): no Sufami Turbo map, Gamars window, BS Memory Pack slot or BS-LoROM
+remap, and no HiROM/ExHiROM/BS-X/menu mapper either (with the BS-X base cart logic of
+`bsx.v` folding away) -- every bootleg is plain LoROM and the firmware loads this core for
+nothing else.  Everything else (MSU-1, DMA, cheats, in-game hooks, SFX
+fetcher) is the base core's, and follows it.
 
 ## Protection variants
 
@@ -49,8 +57,14 @@ Cracked versions of these games carry no protection and are left alone: they loa
 the normal base core.
 
 ## Layout
-- `verilog/sd2snes_bootleg/` – the core.  Put it next to `sd2snes_base`; `CORE = bootleg`
-  builds `fpga_bootleg.bit` (mk2) / `fpga_bootleg.bi3` (mk3); copy those to `/sd2snes/`.
+- `verilog/sd2snes_bootleg/` – the variant: `bootleg.v`, `Makefile` (`VSRC_DIR =
+  ../sd2snes_base`, `VSRC_LOCAL = bootleg.v`, the base IP dirs), `main.qsf`/`.qpf` (mk3,
+  `VERILOG_MACRO BOOTLEG`, sources and constraints from `../sd2snes_base`) and
+  `sd2snes_bootleg.xise` (mk2, Verilog Macros `MK2 | BOOTLEG`, swept cost table) and
+  `ucf.extra` (the `SYSTEM_JITTER` line; `make mk2` generates `main.ucf` = `ucf.extra` +
+  `../sd2snes_base/main.ucf`, so the mk2 fit meets timing with the DCM jitter counted).  `make mk2` / `make mk3`
+  build `fpga_bootleg.bit` / `fpga_bootleg.bi3`; copy those to `/sd2snes/`.
+- `verilog/sd2snes_base/` – everything else, with the `ifdef BOOTLEG` blocks.
 - `src/bootleg.c`, `src/bootleg.h` – the CRC table and the rom properties fix-up; called from `smc.c` and `memory.c`.
 - `src/utils/bootleg_fp.py` – prints table rows (CRC + 64 KB fingerprint) for ROM files;
   `--fix OUTDIR` converts doubled-bank overdumps to the clean image.

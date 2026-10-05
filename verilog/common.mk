@@ -59,16 +59,31 @@ XILINX_PART = $(shell $(XILINX_ENV) $(XILINX_BIN)/xtclsh $(XILINX_SCRIPTS)/xgetp
 VSRC := $(sort $(VSRC))
 VHSRC := $(sort $(VHSRC))
 UCF := main.ucf
+SDC := main.sdc
 
 # apply differing source path
 ifdef VSRC_DIR
 	VSRC := $(patsubst %,$(VSRC_DIR)/%,$(VSRC))
 	VHSRC := $(patsubst %,$(VSRC_DIR)/%,$(VHSRC))
-	# a variant dir may carry its own main.ucf (e.g. extra timing guard bands);
-	# fall back to the parent tree's only when there is no local one
-	ifeq ($(wildcard main.ucf),)
+	# The mk2 constraints of a variant are its parent's main.ucf. A variant that needs more
+	# (e.g. the SYSTEM_JITTER guard band its fit is signed against) keeps ONLY those lines in
+	# its own ucf.extra, and its main.ucf is GENERATED as ucf.extra followed by the parent's
+	# main.ucf (rule in the Xilinx section; gitignored, never edited by hand), so pin and
+	# timing constraints of the parent reach the variant by construction, not by a copy.
+	ifneq ($(wildcard ucf.extra),)
+	UCF_GEN := 1
+	else
 	UCF := $(patsubst %,$(VSRC_DIR)/%,$(UCF))
 	endif
+	# same for the mk3 timing constraints (the variant's main.qsf names the one it uses)
+	ifeq ($(wildcard main.sdc),)
+	SDC := $(patsubst %,$(VSRC_DIR)/%,$(SDC))
+	endif
+endif
+# sources of a variant that live in the variant dir itself, not in VSRC_DIR
+# (e.g. sd2snes_bootleg/bootleg.v next to the base core it builds from)
+ifneq ($(strip $(VSRC_LOCAL)),)
+	VSRC += $(sort $(VSRC_LOCAL))
 endif
 
 XIL_IP := $(sort $(XIL_IP))
@@ -125,6 +140,17 @@ smartxplorer: main.ngd currentProps.stratfile hostlistfile.txt
 fpga_$(CORE).bit: main.bit
 	../../utils/rle $^ $@
 
+ifdef UCF_GEN
+# Generated variant constraints (see UCF_GEN above). Rebuilt on every run but REWRITTEN only
+# when the bytes change: a no-op build keeps the mtime, so nothing downstream re-runs, and an
+# edit of the parent's main.ucf (or of ucf.extra) re-synthesizes the variant whatever mtimes
+# rsync carried to the server.
+main.ucf: ucf.extra $(VSRC_DIR)/main.ucf ALWAYS
+	@cat ucf.extra $(VSRC_DIR)/main.ucf > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; \
+		echo "[mk2] fpga_$(CORE): main.ucf = ucf.extra + $(VSRC_DIR)/main.ucf"; fi
+endif
+
 main.ngc: main.xst main.prj $(UCF)
 	$(call T,[mk2] fpga_$(CORE) - Synthesize)
 	rm -f $@
@@ -170,9 +196,18 @@ main.bit: main.ncd main.ut
 	$(call T)
 
 # IP Core regeneration
+# A variant core (VSRC_DIR + XIL_IPCORE_DIR pointing at its parent, e.g. gsu3 -> sd2snes_gsu,
+# basex and bootleg -> sd2snes_base) share the parent's IP directory, and a parallel build of both runs
+# two coregen in that directory at once; coregen keeps its scratch files there, so both fail
+# ("<ip>.scr not found", "Failed to generate <ip>"). Every coregen call holds a lock on the IP
+# directory and re-checks the target inside it: whoever comes second finds the netlist the
+# first one just wrote and leaves it alone, so no netlist is rewritten while the other build
+# reads it. Without flock(1) the subshell runs unlocked, as before.
 $(XIL_IPCORE_DIR)/%.ngc: $(XIL_IPCORE_DIR)/%.xco | $(XIL_IPCORE_DIR)/coregen.cgc
 	$(call T,[mk2] fpga_$(CORE) - Regenerate IP Cores)
-	$(XILINX_ENV) $(XILINX_BIN)/coregen -p $(XIL_IPCORE_DIR) -b $< -r
+	( flock 9 2>/dev/null; \
+	  [ $@ -nt $< ] || { $(XILINX_ENV) $(XILINX_BIN)/coregen -p $(XIL_IPCORE_DIR) -b $< -r; } \
+	) 9>$(XIL_IPCORE_DIR)/.coregen.lock
 
 # ## Supplementary files required for Xilinx processes ##
 # PRJ file - basically a list of files that comprise the project
@@ -204,7 +239,7 @@ fpga_$(CORE).bi3: output_files/main.rbf
 	../../utils/rle $^ $@
 
 # Intel pulls a lot more stuff from project context...
-output_files/main.rbf: $(VSRC) $(VHSRC) $(HEADER) $(INT_IP) $(INT_QIP) main.sdc
+output_files/main.rbf: $(VSRC) $(VHSRC) $(HEADER) $(INT_IP) $(INT_QIP) $(SDC)
 	rm -rf db incremental_db
 	$(call T,[mk3] fpga_$(CORE) - Map)
 	$(INTEL_ENV) $(INTEL_BIN)/quartus_map --read_settings_files=on --write_settings_files=off sd2snes_$(CORE) -c main

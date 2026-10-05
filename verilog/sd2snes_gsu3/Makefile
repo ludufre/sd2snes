@@ -1,5 +1,6 @@
 CORE = gsu3
 
+# main.ucf is generated (common.mk): ucf.extra (SYSTEM_JITTER) + ../sd2snes_gsu/main.ucf
 VSRC_DIR = ../sd2snes_gsu
 
 VSRC = address.v cheat.v regshadow.v dac.v dcm.v gsu.v main.v mcu_cmd.v msu.v sd_dma.v spi.v

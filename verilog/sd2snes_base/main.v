@@ -163,6 +163,9 @@ wire [3:0] SRTC_SNES_DATA_IN;
 wire [7:0] SRTC_SNES_DATA_OUT;
 
 wire [15:0] featurebits;
+`ifdef BOOTLEG
+wire [15:0] chipfeat;
+`endif
 wire feat_cmd_unlock = featurebits[5];
 wire feat_bs_base_enable = featurebits[12];
 wire feat_bs_slot = featurebits[14];
@@ -246,7 +249,25 @@ wire [7:0] SNES_PA = (SNES_PAr[5] & SNES_PAr[4]);
 
 wire [7:0] SNES_DATA_IN = (SNES_DATAr[3] & SNES_DATAr[2]);
 
+`ifdef BOOTLEG
+/* KOF98 bootleg bank switch (sd2snes_bootleg/bootleg.v): while active, ROM accesses see
+   A19..A16 replaced before address decoding.  Declared here because SNES_ADDR_early
+   (ISE wants declare-before-use) feeds address.v.  Only ROM accesses (A15, or
+   banks 40-7D/C0-FF) are remapped, so the full-address decoders for $2Axx-$2Cxx
+   never see a changed bank. */
+wire       bootleg_rom_bank_en;
+wire [3:0] bootleg_rom_bank;
+wire [23:0] SNES_ADDR_early_raw = (SNES_ADDRr[3] & SNES_ADDRr[2]);
+wire        SNES_ADDR_early_wram = ~SNES_ADDR_early_raw[23] & (SNES_ADDR_early_raw[22:17] == 6'b111111); // 7E-7F
+wire        SNES_ADDR_early_rom  = ~SNES_ADDR_early_wram
+                                 & (SNES_ADDR_early_raw[15] | SNES_ADDR_early_raw[22]);  // = /ROMSEL decode
+reg  [23:0] SNES_ADDR_early; always @(posedge CLK2)
+  SNES_ADDR_early <= (bootleg_rom_bank_en & SNES_ADDR_early_rom)
+                     ? {SNES_ADDR_early_raw[23:20], bootleg_rom_bank, SNES_ADDR_early_raw[15:0]}
+                     : SNES_ADDR_early_raw;
+`else
 reg  [23:0] SNES_ADDR_early; always @(posedge CLK2) SNES_ADDR_early <= (SNES_ADDRr[3] & SNES_ADDRr[2]);
+`endif
 
 wire SNES_PULSE_IN = SNES_READ_IN & SNES_WRITE_IN & ~SNES_CPU_CLK_IN;
 
@@ -750,6 +771,9 @@ mcu_cmd snes_mcu_cmd(
   .mcu_wrq(MCU_WRQ),
   .mcu_rq_rdy(MCU_RDY),
   .region_out(mcu_region),
+`ifdef BOOTLEG
+  .chipfeat_out(chipfeat),
+`endif
   .snescmd_addr_out(snescmd_addr_mcu),
   .snescmd_we_out(snescmd_we_mcu),
   .snescmd_data_out(snescmd_data_out_mcu),
@@ -823,6 +847,31 @@ address snes_addr(
   .exe_enable(exe_enable),
   .map_enable(map_enable)
 );
+
+`ifdef BOOTLEG
+/* Bootleg copy-protection (the sd2snes_bootleg variant of this core, see its bootleg.v).
+   The MCU picks the variant from the ROM CRC32 and sends it as chipfeat[2:0] (CMD 0xef)
+   before the SNES leaves reset. */
+wire       bootleg_rd_hit;
+wire [7:0] BOOTLEG_SNES_DATA_OUT;
+wire       bootleg_open_bus;
+
+bootleg snes_bootleg(
+  .clk(CLK2),
+  .reset(SNES_reset_strobe),
+  .variant(chipfeat[2:0]),
+  .snes_addr(SNES_ADDR),
+  .snes_data_in(BUS_DATA),
+  .is_patch(IS_PATCH),
+  .rd_strobe(SNES_RD_start),
+  .wr_strobe(SNES_WR_end),
+  .rd_hit(bootleg_rd_hit),
+  .data_out(BOOTLEG_SNES_DATA_OUT),
+  .open_bus(bootleg_open_bus),
+  .rom_bank_en(bootleg_rom_bank_en),
+  .rom_bank(bootleg_rom_bank)
+);
+`endif
 
 reg pad_latch = 0;
 reg [4:0] pad_cnt = 0;
@@ -921,6 +970,9 @@ assign SNES_DATA = (r213f_enable & ~SNES_PARD) ? (r213f_forceread ? 8'bZ : r213f
                                   // put spinloop below cheat so we don't overwrite jmp target after NMI
                                   :loop_enable ? loop_data
                                   :((snescmd_unlock | feat_cmd_unlock | map_snescmd_rd_unlock_r) & snescmd_enable) ? snescmd_dout
+`ifdef BOOTLEG
+                                  :bootleg_rd_hit ? BOOTLEG_SNES_DATA_OUT
+`endif
                                   :(ROM_ADDR0 ? ROM_DATA[7:0] : ROM_DATA[15:8])
                                   ) : 8'bZ;
 
@@ -1340,7 +1392,12 @@ assign ROM_BLE = ~ROM_ADDR0 & ~(~SD_DMA_TO_ROM & CTX_HIT & CTX_ROM_WORDr) & ~(~S
 
 reg ReadOrWrite_r; always @(posedge CLK2) ReadOrWrite_r <= ~(SNES_READr[1] & SNES_READr[0] & SNES_WRITEr[1] & SNES_WRITEr[0]);
 
-assign SNES_DATABUS_OE = (msu_enable & ReadOrWrite_r) ? 1'b0 :
+assign SNES_DATABUS_OE =
+`ifdef BOOTLEG
+                         bootleg_open_bus ? 1'b1 :   // protection "open bus" windows
+                         (bootleg_rd_hit & ReadOrWrite_r) ? 1'b0 :   // incl. non-ROM port 6xxx
+`endif
+                         (msu_enable & ReadOrWrite_r) ? 1'b0 :
                          (dma_enable & ReadOrWrite_r) ? 1'b0 :
                          (loop_enable & ~SNES_READ_sel) ? 1'b0 :
                          (bsx_data_ovr & ~IS_PATCH & ReadOrWrite_r) ? 1'b0 :

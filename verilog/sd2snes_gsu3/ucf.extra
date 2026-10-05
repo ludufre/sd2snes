@@ -1,0 +1,10 @@
+# GUARD BAND -- do not drop this line (same rationale as the spc7110 core's ucf):
+# Spartan-3 trce computes NO clock uncertainty (INFO Timing:3389/3390) and CLK2
+# is the CLKFX output of a DCM whose measured period jitter is 0.75 ns peak to
+# peak (stamped in the DCM header).  SYSTEM_JITTER becomes a per-path
+# uncertainty of jitter/sqrt(2), so 0.48 ns buys a ~0.34 ns guard band without
+# touching the PERIOD itself.  0.48 is the LARGEST value the spc7110 design
+# closes on; if this variant fails to close timing at 0.48, lower the value
+# rather than dropping the line (an unreachable constraint makes place-and-route
+# give up early and the physical result gets dramatically worse).
+SYSTEM_JITTER = 0.48 ns;
