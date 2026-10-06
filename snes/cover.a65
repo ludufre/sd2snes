@@ -49,6 +49,7 @@ cover_init:
   ; setup_gfx runs in forced blank with NMI still OFF, so we write VRAM directly.
   lda #COVER_OBSEL
   sta $2101
+  jsl @cjk_evict_b           ; CJK glyphs still shown from $2000 move out first
   ldx #COVER_OBJ_VRAM_BASE
   stx $2116
   DMA7(#$09, #COVER_OBJ_CLEAR_LEN, #^zero, #!zero, #$18)
@@ -164,6 +165,7 @@ cover_menu_off:
   php
   sep #$20 : .as
   rep #$10 : .xl
+  jsl @cjk_allow_b           ; the cover reloads before it shows: $2000 lends itself to CJK glyphs
   lda cover_loaded
   beq +
   jsr cover_hide
@@ -447,6 +449,7 @@ cshow_bad:
   plp
   rts
 cshow_ok:
+  jsl @cjk_evict_b_live      ; CJK glyphs lent the cover's VRAM move out, screen on
   jsr cover_calc_sizes_obj   ; -> cover_tilebytes, cover_halfbytes, cover_chunk2_vram,
                              ;    cover_palbytes
   ; ShowCovers == 2 (small): resample to 8x8 tiles + draw 8x8 sprites instead.
@@ -470,6 +473,7 @@ cshow_large:
   lda #$80                   ; CGADD = 128 (start of the OBJ palette region)
   sta $2121
   DMA7(#$00, cover_palbytes, #^COVER_C9_PAL, #!COVER_C9_PAL, #$22)
+  jsl @cjk_evict_b           ; CJK glyphs still shown from $2000 move out first
   ldx #COVER_OBJ_VRAM_BASE
   stx $2116
   DMA7(#$01, cover_halfbytes, #^COVER_C9_TILES, #!COVER_C9_TILES, #$18)
@@ -524,6 +528,7 @@ csm_mul:
   lda #$80                   ; CGADD = 128 (OBJ palette region)
   sta $2121
   DMA7(#$00, cover_palbytes, #^COVER_C9_PAL, #!COVER_C9_PAL, #$22)
+  jsl @cjk_evict_b           ; CJK glyphs still shown from $2000 move out first
   ldx #COVER_OBJ_VRAM_BASE
   stx $2116
   DMA7(#$01, cover_tilebytes, #^COVER_SMALL_TILEBUF, #!COVER_SMALL_TILEBUF, #$18)

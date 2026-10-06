@@ -15,6 +15,7 @@
 #include "psram_io.h"
 #include "util.h"
 #include "scratch.h"  /* gameinfo_load FRAME + three LEAF helpers (see scratch.h) */
+#include "cjkglyph.h" /* a Japanese/Chinese title or description: the glyphs it needs */
 
 extern cfg_t CFG;   /* game info "Show video" / "Play video music" toggles (game_info_video/_music) */
 
@@ -71,10 +72,94 @@ static const char gi_fb_str[][3] = {
   "",
 };
 
+/* CJK (menu languages 8 = Japanese, 9 = Chinese). The menu font has no ideographs: the menu
+ * draws them from a glyph cache in VRAM (snes/cjk.a65). Its own strings bring their glyphs; the
+ * text of a game (title_<code> / description_<code> in the .yml) cannot, so this file gives each
+ * distinct ideograph of the current game an index, writes the text as the byte pair
+ * {$FF, $80 + index} (the cache's glyphs 640..767), and draws the glyphs into
+ * SRAM_GAMEINFO_CJK_ADDR from the language's full font, /sd2snes/lang/<code>.fnt
+ * (snes/utils/gen_cjk_font.py). More distinct ideographs than GI_CJK_MAX print as '?'. */
+#define GI_CJK_MAX   128
+#define GI_CJK_FIRST 0x2E80             /* kana, ideographs, full-width forms (build_const) */
+static uint16_t gi_cjk_cp[GI_CJK_MAX] IN_AHBRAM;   /* written before read (gi_cjk_n) */
+static uint8_t  gi_cjk_n;
+static const char *gi_cjk_code;         /* "ja"/"zh" while the menu language is CJK, else NULL */
+
+static void gi_cjk_reset(void) {
+  gi_cjk_n = 0;
+  gi_cjk_code = CFG.language == 8 ? "ja" : CFG.language == 9 ? "zh" : NULL;
+}
+
+/* index of an ideograph for this game (a new one is added); -1 = the table is full */
+static int gi_cjk_index(uint32_t cp) {
+  for(int k = 0; k < gi_cjk_n; k++)
+    if(gi_cjk_cp[k] == cp) return k;
+  if(gi_cjk_n >= GI_CJK_MAX) return -1;
+  gi_cjk_cp[gi_cjk_n] = (uint16_t)cp;
+  return gi_cjk_n++;
+}
+
+/* Draw every indexed ideograph of the game into SRAM_GAMEINFO_CJK_ADDR: one sequential pass
+ * over the sorted font file, merged with the sorted indices. A glyph the font lacks stays
+ * blank. Bounded by the file; fail-safe (no file = blank glyphs). */
+typedef struct {
+  uint16_t cp[GI_CJK_MAX];               /* the indices sorted by code point... */
+  uint8_t  idx[GI_CJK_MAX];              /* ...and which index each one is */
+  uint8_t  rec[10];
+  uint8_t  tile[64];
+} gi_cjk_scratch_t;
+SCRATCH_FITS(gi_cjk_scratch_t, SCRATCH_LEAF_BYTES);
+
+static void gi_cjk_sheet(void) {
+  if(!gi_cjk_code || !gi_cjk_n) return;
+  if(!scratch_leaf_take(SCR_GI_CJK)) return;
+  gi_cjk_scratch_t *s = SCRATCH_LEAF(gi_cjk_scratch_t);
+  int n = gi_cjk_n;
+  for(int k = 0; k < n; k++) {           /* insertion sort, n <= 128 */
+    int j = k;
+    while(j > 0 && s->cp[j - 1] > gi_cjk_cp[k]) { s->cp[j] = s->cp[j - 1]; s->idx[j] = s->idx[j - 1]; j--; }
+    s->cp[j] = gi_cjk_cp[k];
+    s->idx[j] = (uint8_t)k;
+  }
+  memset(s->tile, 0, sizeof(s->tile));    /* blank first: a glyph the file lacks stays blank */
+  for(int k = 0; k < n; k++)
+    sram_writeblock(s->tile, SRAM_GAMEINFO_CJK_ADDR + (uint32_t)k * 64, 64);
+  char path[] = "/sd2snes/lang/xx.fnt";
+  path[14] = gi_cjk_code[0];
+  path[15] = gi_cjk_code[1];
+  file_open((const uint8_t *)path, FA_READ);
+  if(!file_res) {
+    UINT br;
+    int want = 0;
+    if(f_read(&file_handle, s->rec, 8, &br) == FR_OK && br == 8 && !memcmp(s->rec, "SDF1", 4)) {
+      unsigned count = s->rec[4] | (s->rec[5] << 8);
+      for(unsigned r = 0; r < count && want < n; r++) {
+        if(f_read(&file_handle, s->rec, 10, &br) != FR_OK || br != 10) break;
+        uint16_t cp = (uint16_t)(s->rec[0] | (s->rec[1] << 8));
+        while(want < n && s->cp[want] < cp) want++;           /* not in the font */
+        if(want < n && s->cp[want] == cp) {
+          cjk_render_glyph(s->rec + 2, s->tile);
+          sram_writeblock(s->tile, SRAM_GAMEINFO_CJK_ADDR + (uint32_t)s->idx[want] * 64, 64);
+          want++;
+        }
+      }
+    }
+    file_close();
+  }
+  file_res = 0;                          /* soft: the text still shows, the glyphs blank */
+  scratch_leaf_drop();
+}
+
 /* Decoded (>= 0x80) codepoint -> 0..3 font bytes into out. A glyph when the font has one, a
  * typographic stand-in when it has not, '?' otherwise. */
 static int gi_cp_emit(uint32_t cp, uint8_t *out) {
   uint8_t b = 0;
+  if(gi_cjk_code && cp >= GI_CJK_FIRST && cp <= 0xFFFF) {
+    int k = gi_cjk_index(cp);
+    if(k >= 0) { out[0] = 0xFF; out[1] = (uint8_t)(0x80 + k); return 2; }
+    out[0] = '?';
+    return 1;
+  }
   if(cp - GI_FONT_LATIN1_BASE < sizeof(gi_font_latin1))
     b = gi_font_latin1[cp - GI_FONT_LATIN1_BASE];
   else if(cp - GI_FONT_CYRILLIC_BASE < sizeof(gi_font_cyrillic))
@@ -197,7 +282,7 @@ static void gi_field(const char *key, char *field, int size) {
 static const char *gi_desc_lang_key(void) {
   static const char *const keys[] = {
     NULL, "description_pt", "description_es", "description_de", "description_fr", "description_it",
-    "description_ru", "description_nl",
+    "description_ru", "description_nl", "description_ja", "description_zh",
   };
   return (CFG.language < sizeof(keys) / sizeof(keys[0])) ? keys[CFG.language] : NULL;
 }
@@ -544,6 +629,7 @@ void gameinfo_load(uint8_t *rom_path) {
                                          * there is no .yml). Skips a full scan of the (huge)
                                          * info dir for the 99% of games that have no video. */
 
+  gi_cjk_reset();                        /* this game's ideographs: none yet */
   memset(&f->meta, 0, sizeof(f->meta));
   f->meta.magic[0] = GAMEINFO_MAGIC0;
   f->meta.magic[1] = GAMEINFO_MAGIC1;
@@ -590,6 +676,12 @@ void gameinfo_load(uint8_t *rom_path) {
     {
       const char *lkey = gi_desc_lang_key();
       if(lkey) gi_value_scan(lkey, f->meta.description, sizeof(f->meta.description));
+      if(gi_cjk_code) {              /* a CJK menu: the game's own-language title, when given */
+        char tkey[] = "title_xx";
+        tkey[6] = gi_cjk_code[0];
+        tkey[7] = gi_cjk_code[1];
+        gi_value_scan(tkey, f->meta.title, sizeof(f->meta.title));
+      }
       file_res = 0;                  /* soft, like a missing .yml: the English stays */
     }
   } else {
@@ -649,6 +741,7 @@ void gameinfo_load(uint8_t *rom_path) {
     }
   }
 
+  gi_cjk_sheet();                        /* the glyphs the text above indexed */
   sram_writeblock(&f->meta, SRAM_GAMEINFO_ADDR, sizeof(f->meta));
 }
 
@@ -779,6 +872,7 @@ static unsigned gi_value_scan(const char *key, char *mem, unsigned memcap) {
  * fail-safe; on failure the region stays invalid and the menu keeps the 256-char copy. */
 void gameinfo_desc_full(void) {
   const char *lkey = gi_desc_lang_key();
-  if(lkey && gi_value_scan(lkey, NULL, 0)) return;   /* localized text staged */
-  gi_value_scan("description", NULL, 0);             /* English (also re-invalidates on failure) */
+  if(!(lkey && gi_value_scan(lkey, NULL, 0)))        /* localized text staged, else... */
+    gi_value_scan("description", NULL, 0);           /* English (also re-invalidates on failure) */
+  gi_cjk_sheet();                                    /* glyphs the full text added */
 }

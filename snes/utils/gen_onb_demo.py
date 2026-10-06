@@ -49,7 +49,7 @@ DEMOS = ["lang_en", "lang_ptbr", "lang_es", "lang_de", "lang_fr", "lang_it", "la
          "lists_on", "lists_off", "video_on", "video_off", "clipmusic_on", "clipmusic_off",
          "cheatlist", "patchmenu", "sufami", "atari", "cctime", "folders",
          "sd2snesdir_on", "sd2snesdir_off", "led", "clearppu", "buscompat", "sysinfo", "clock",
-         "trainer", "chips_more"]
+         "trainer", "chips_more", "lang_ja", "lang_zh"]
 PER_BANK = 8                   # 8 x (7168 + 256) bytes = 59392, a bank holds 65536
 BANKS = ("$c2", "$c3", "$c4", "$c5", "$c6", "$c7", "$c8", "$c9", "$ca", "$cb")
 SUFFIX = "abcdefghij"          # onb_demo_<suffix>.a65, one per bank (the Makefile lists them all)

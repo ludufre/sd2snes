@@ -16,6 +16,7 @@ into sprites 1:1. Redraw one by hand and gen_onb_demo.py takes it as is.
     python3 utils/gen_onb_art.py                  # every picture
     python3 utils/gen_onb_art.py --sheet out.png  # plus a contact sheet
 """
+import math
 import os
 import re
 import struct
@@ -610,6 +611,25 @@ def country_flag(code, w, h, ex=0.5, ey=0.5, es=1.0):
         mask = Image.new("L", (W4, H4), 0)
         ImageDraw.Draw(mask).ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
         im.paste(globe, (0, 0), mask)
+    elif code == "ja":
+        d.rectangle([0, 0, W4, H4], fill=(255, 255, 255))
+        r = H4 * 0.3                      # the disc: 3/5 of the height, centred
+        d.ellipse([W4 / 2 - r, H4 / 2 - r, W4 / 2 + r, H4 / 2 + r], fill=(188, 0, 45))
+    elif code == "zh":
+        d.rectangle([0, 0, W4, H4], fill=(238, 28, 37))
+        u = H4 / 20                       # the canton's grid: 15 x 10 units on half the flag
+
+        def star(cx, cy, r, rot=0.0):
+            pts = []
+            for k in range(10):
+                a = math.pi / 2 + rot + k * math.pi / 5
+                q = r if k % 2 == 0 else r * 0.382
+                pts.append((cx + q * math.cos(a), cy - q * math.sin(a)))
+            d.polygon(pts, fill=(255, 255, 0))
+        star(5 * u * W4 / (H4 * 1.5), 5 * u, 3 * u)
+        for sx, sy in ((10, 2), (12, 4), (12, 7), (10, 9)):
+            x, y = sx * u * W4 / (H4 * 1.5), sy * u
+            star(x, y, u, math.atan2(y - 5 * u, x - 5 * u * W4 / (H4 * 1.5)) + math.pi / 2)
     elif code == "uk":
         blue, red, white = (1, 33, 105), (200, 16, 46), (255, 255, 255)
         d.rectangle([0, 0, W4, H4], fill=blue)
@@ -625,11 +645,11 @@ def country_flag(code, w, h, ex=0.5, ey=0.5, es=1.0):
     return im.resize((w, h), Image.LANCZOS)
 
 
-LANGS = ["en", "ptbr", "es", "de", "fr", "it", "ru", "nl"]
+LANGS = ["en", "ptbr", "es", "de", "fr", "it", "ru", "nl", "ja", "zh"]
 
 
 def flags(focus):
-    """The focused language's flag large, all eight in a strip below, the focused one lit."""
+    """The focused language's flag large, all ten in a strip below, the focused one lit."""
     def f():
         im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(im)
@@ -637,14 +657,14 @@ def flags(focus):
         im.paste(flag(LANGS[focus], 84, 56), (22, 10))
         d.rectangle([21, 9, 106, 66], outline=(255, 255, 255, 255))
         for k, c in enumerate(LANGS):
-            x, y = 3 + (k % 4) * 31, 76 + (k // 4) * 18
-            small = flag(c, 26, 14)
+            x, y = 4 + (k % 5) * 25, 76 + (k // 5) * 18
+            small = flag(c, 21, 14)
             if k != focus:
                 small = Image.blend(small, Image.new("RGB", small.size, (10, 20, 50)), 0.55)
-            d.rectangle([x - 1, y - 1, x + 26, y + 14], fill=(18, 22, 52, 255))
+            d.rectangle([x - 1, y - 1, x + 21, y + 14], fill=(18, 22, 52, 255))
             im.paste(small, (x, y))
             if k == focus:
-                d.rectangle([x - 2, y - 2, x + 27, y + 15], outline=BORDER + (255,))
+                d.rectangle([x - 2, y - 2, x + 22, y + 15], outline=BORDER + (255,))
         return im
     return f
 

@@ -31,7 +31,7 @@ File layout (offsets from the file start, which the firmware puts at $D00000):
   +6   u16 stream offset (the stream starts in the first bank)
   +8   u16 HDMA backdrop table offset ([count, lo, hi]..., 0; CGDATA write-twice)
   +10  u8  overlay line (screen y of the "Welcome" sprites' top)
-  +11  u8  languages (8)
+  +11  u8  languages (10)
   +12  u16 overlay offset per language
   overlay block: u8 sprites, u8 0, u16 tile bytes, sprites x (x, y) u8, tile bytes
                  (to OBJ name table 0; sprite k uses characters (k/8)*32 + (k%8)*2)
@@ -97,7 +97,8 @@ LOGO_SCALE = 1.75
 
 WELCOME = ["Welcome!", "Bem-vindo!", "¡Bienvenido!", "Willkommen!", "Bienvenue !",
            "Benvenuto!", "Добро пожаловать!",
-           "Welkom!"]
+           "Welkom!", "ようこそ!", "欢迎!"]
+WELCOME_CJK_FONT = {8: "misaki_gothic_2nd.hex", 9: "fusion8_zh_hans.hex"}   # by language
 
 
 def s5(c):
@@ -496,19 +497,45 @@ def cgram(pals):
 
 # ------------------------------------------------------------------ the overlay
 
-def welcome_text(s, body_top=(255, 236, 150), body_bot=(255, 255, 255), outline=(14, 16, 44)):
-    """The menu font at 3x (hires pixels: 1.5 x 3 lowres), gold to white, dark outline."""
+def _cjk_cell(rows):
+    """A CJK glyph as the menu draws it: each pixel two hires pixels wide, colour 1 the body,
+    colour 2 the contour (build_const.cjk_glyph_tiles) -- 8 rows of 16 colour indices."""
+    t = build_const.cjk_glyph_tiles(rows)
+    out = []
+    for y in range(8):
+        row = []
+        for half in (0, 32):
+            p0, p1 = t[half + 2 * y], t[half + 2 * y + 1]
+            row += [((p0 >> (7 - x)) & 1) | (((p1 >> (7 - x)) & 1) << 1) for x in range(8)]
+        out.append(row)
+    return out
+
+
+def welcome_text(s, body_top=(255, 236, 150), body_bot=(255, 255, 255), outline=(14, 16, 44),
+                 cjk_font=None):
+    """The menu font at 3x (hires pixels: 1.5 x 3 lowres), gold to white, dark outline. A CJK
+    character is a 16-pixel cell from cjk_font (snes/fonts/), drawn the way the menu does."""
     _, font = fontedit.load_font()
-    k = 6                                      # draw at 6 px per hires pixel, then halve x
-    im = Image.new("RGBA", (len(s) * 8 * k, 8 * k), (0, 0, 0, 0))
-    px = im.load()
-    for i, ch in enumerate(s):
+    cjk = build_const.load_cjk_font(os.path.join(HERE, "..", "fonts", cjk_font)) if cjk_font else {}
+    cells = []
+    for ch in s:
+        if build_const.is_cjk(ch):
+            if ch not in cjk:
+                sys.exit("gen_welcome: no glyph for %r in %s" % (ch, cjk_font))
+            cells.append(_cjk_cell(cjk[ch]))
+            continue
         code = build_const.ENCODE.get(ch, ord(ch))
         if code >= 256 or (ch != " " and code == 32):
             sys.exit("gen_welcome: no glyph for %r" % ch)
-        g = fontedit.tile_to_pixels(font[code])
+        cells.append(fontedit.tile_to_pixels(font[code]))
+    width = sum(len(g[0]) for g in cells)
+    k = 6                                      # draw at 6 px per hires pixel, then halve x
+    im = Image.new("RGBA", (width * k, 8 * k), (0, 0, 0, 0))
+    px = im.load()
+    x0 = 0
+    for g in cells:
         for gy in range(8):
-            for gx in range(8):
+            for gx in range(len(g[0])):
                 c = g[gy][gx]
                 if not c:
                     continue
@@ -516,13 +543,14 @@ def welcome_text(s, body_top=(255, 236, 150), body_bot=(255, 255, 255), outline=
                 rgb = {1: body, 2: outline, 3: lerp(body, outline, 0.5)}[c]
                 for dy in range(k):
                     for dx in range(k):
-                        px[(i * 8 + gx) * k + dx, gy * k + dy] = rgb + (255,)
-    return im.resize((len(s) * 8 * 3 // 2 * 1, 8 * 3), Image.LANCZOS)
+                        px[(x0 + gx) * k + dx, gy * k + dy] = rgb + (255,)
+        x0 += len(g[0])
+    return im.resize((width * 3 // 2, 8 * 3), Image.LANCZOS)
 
 
 def overlay_blocks():
     """Per language: the sprites (16x16) covering the line, and one OBJ palette for all."""
-    ims = [welcome_text(s) for s in WELCOME]
+    ims = [welcome_text(s, cjk_font=WELCOME_CJK_FONT.get(k)) for k, s in enumerate(WELCOME)]
     acc = {}
     for im in ims:
         px = im.load()

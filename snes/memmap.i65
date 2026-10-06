@@ -184,6 +184,94 @@
 
 #define BG2_TILE_BUF                $7EA000
 #define BG1_TILE_BUF                $7EB000
+
+/* CJK glyph cache (cjk.a65). An ideograph is a 16-px BG1 cell: two consecutive 4bpp tiles in a
+   VRAM SLOT, loaded when a string first prints it and recycled when nothing shows it any more.
+   Slots map to tiles through CJK_SLOT_TILE, so the pool can live wherever the screen has room:
+     normal  region A = BG1 tiles $340-$3FF (VRAM $3400-$3FFF; no menu screen uses it), slots
+             0..95; region B = tiles $200-$2FF (VRAM $2000-$2FFF, the box-art OBJ tiles), slots
+             96..223, ONLY while a menu has hidden the cover (cover_menu_off) -- every cover
+             upload first moves what B still shows into A (cjk_evict_b);
+     ficha   the game-info screen fills $2000-$3FFF with its band: the slots are the band's
+             EMPTY tiles (transparent cover tiles, which the band then maps to its blank
+             char), set up by cjk_ficha_begin; the menu's tables are saved and come back on
+             the way out (cjk_vram_restore, run by setup_gfx).
+   A glyph is 64 bytes in its sheet (two 4bpp tiles, planes 2/3 zero): one DMA per upload.
+   The tables live in WRAM bank $7F, which the menu does not otherwise use (always long
+   addressing); they survive a warm reset and are zeroed at cold boot by cjk_init. */
+#define CJK_VRAM_A                  $3400
+#define CJK_TILE_A                  $0340
+#define CJK_NSLOTS_A                96
+#define CJK_TILE_B                  $0200
+#define CJK_NSLOTS                  224        /* A + B (and the ficha's cap) */
+#define CJK_LEAD0                   $FA        /* lead bytes $FA-$FF (build_const.py) */
+#define CJK_MARK                    $B0        /* first byte of a string with glyphs: the optional
+                                                  alignment column (build_const.py CJK_MARK) */
+#define CJK_SPACE_TILE              $0040      /* tile 2*' ': the blank BG2 half beside a glyph */
+#define CJK_PER_NMI                 12         /* glyph uploads per VBlank (one 64-byte DMA each); measured, see cjk_nmi */
+#define CJK_G2S                     $7F0000    /* glyph -> slot+1, 1 byte per glyph (768) */
+#define CJK_S2G                     $7F0300    /* slot -> glyph+1, 1 word per slot (0 = free): $0300-$04BF.
+                                                  The tables below are packed: a table that grows must
+                                                  push the next one (an overlap once let the NMI's dirty
+                                                  flags erase slot bindings) */
+#define CJK_DIRTY                   $7F04C0    /* slot needs uploading (1 byte per slot) */
+#define CJK_GCMARK                  $7F05A0    /* collector scratch (1 byte per slot) */
+#define CJK_SLOT_TILE               $7F0680    /* slot -> BG1 tile number (word per slot) */
+#define CJK_TILE_SLOT               $7F0840    /* (tile-$200)/2 -> slot+1, for the collector (256 B) */
+#define CJK_NDIRTY                  $7F0940    /* slots waiting for the NMI (byte) */
+#define CJK_TOFU                    $7F0941    /* glyphs printed as '?' (no slot free), saturating */
+#define CJK_LANG_CUR                $7F0942    /* the CJK language whose file is in $7F (column; 0 = none) */
+#define CJK_NACTIVE                 $7F0943    /* slots the allocator may use (byte) */
+#define CJK_BOK                     $7F0944    /* 1 = region B usable (the cover is hidden) */
+#define CJK_MODE                    $7F0945    /* 0 = normal, 1 = ficha */
+#define CJK_EVLIVE                  $7F0947    /* cjk_evict_b runs with the screen on: moved glyphs go to the NMI */
+#define CJK_EVMOVED                 $7F0948    /* the live eviction moved a glyph: wait for the NMI to send it */
+#define CJK_GCDRY                   $7F0946    /* the last collection freed nothing: the next CJK_GC_SKIP
+                                                  allocations that fail skip it (one scan per run, not per glyph) */
+#define CJK_GC_SKIP                 32
+#define CJK_TMP                     $7F0950    /* main-loop scratch: +0 count, +2 glyph, +4 slot, +6 */
+#define CJK_NTMP                    $7F0958    /* NMI-side scratch (the NMI can land between a
+                                                  main-loop write and read of CJK_TMP) */
+#define CJK_REMAP                   $7F0A00    /* cjk_evict_b: (tile-$200)/2 -> new tile (word, 256) */
+#define CJK_FBLANK                  $7F0C00    /* ficha: 1 bit per band tile (#0-255): empty, given to the cache */
+#define CJK_SAVE                    $7F0C40    /* ficha: the menu's G2S (768) + S2G (448) */
+/* The BG2 pool: a glyph that starts on an EVEN column (BG2's) gets a 16-px BG2 cell there,
+   so a CJK string never needs a blank column to reach BG1 (it used to start one column late,
+   misaligned with ASCII rows and spilling into window borders). The cells are BG2 tiles in
+   the lower screens of both 32x64 tilemaps, which the menu never shows (its HDMA scroll ends
+   on row 29; the NMI uploads rows 9..31): tiles 640..767 = VRAM $5400 (BG2 map rows 32..63),
+   896..1023 = $5C00 (BG1 map rows 32..63); 2bpp, 32 bytes a cell. Off on the game-info screen
+   (CJK_MODE): there an even start still pads (cjk_print_bg2). */
+#define CJK2_NSLOTS                 128
+#define CJK2_TILE_A                 640        /* slots 0..63: tile 640 + 2s, VRAM $5400 + 16s */
+#define CJK2_TILE_B                 768        /* slots 64..127: tile 768 + 2s (= 896 + 2(s-64)) */
+#define CJK2_G2S                    $7F1100    /* 768 B: glyph -> BG2 slot + 1 */
+#define CJK2_S2G                    $7F1400    /* 128 words: BG2 slot -> glyph + 1 */
+#define CJK2_DIRTY                  $7F1500    /* 128 B */
+#define CJK2_MARK                   $7F1580    /* 128 words: the collector's marks */
+#define CJK2_NEXT                   $7F1680    /* round-robin start of the allocator */
+#define CJK2_GCDRY                  $7F1681    /* failed allocations left to skip the collector */
+#define CJK_WMODE                   $7F1682    /* cjk_walk_stack: what to do with each word */
+#define CJK2_TMP                    $7F1690    /* scratch (16 B) */
+#define CJK_DQ_HEAD                 $7F16A0    /* the upload queue (cjk_qpush / cjk_nmi): next to send */
+#define CJK_DQ_TAIL                 $7F16A2    /*   ... next free entry */
+#define CJK_EDGE                    $7F16A4    /* cjk_window_edge scratch (12 B) */
+#define CJK_DQ_SIZE                 512        /* entries (power of two, > 224 + 128) */
+#define CJK_DQ                      $7F1700    /* 512 words: BG1 slot, or $8000 | BG2 slot */
+#define CJK_INIT_END                $1B00      /* cjk_init zeroes $7F0000 up to here */
+#define CJK_WRAM_WAIT               $7F1F00    /* cls_load's bounded wait for the MCU, run from WRAM */
+#define CLL_WRAM_LEN                32         /* >= cll_wram_end - cll_wram (cjk.a65) */
+/* The active CJK language: /sd2snes/lang/<code>.bin (build_const.py), copied to $7F:CJK_LANG_BASE.
+   Header (16 B): "SDL1", column, version, pool_len, sheet_addr, nglyphs, total_len (words LE).
+   Every address in it (dispatch-table words, sheet_addr) is absolute in bank $7F. */
+#define GI_CJK_SHEET                $CBC000    /* glyphs 640+ (lead $FF): the game-info screen's CJK text, drawn
+                                                  by the firmware (SRAM_GAMEINFO_CJK_ADDR, src/memmap.h) */
+#define CJK_LANG_BASE               $7F2000
+#define CJK_LANG_SHEET              $7F2008    /* header word: address of the glyph sheet in $7F */
+#define CJK_LANG_MAX                $DF00      /* $7F2000..$7FFEFF ($7FFFE0 = launch trampoline) */
+#define LANG_STAGE                  $D00000    /* the MCU stages the file here (SRAM_LANG_STAGE_ADDR,
+                                                  time-shared with the cheat records); lockstep src/memmap.h */
+#define CMD_LOAD_LANG               $4c        /* SNES_CMD_LOAD_LANG: MCU_PARAM = the 2-letter code */
 #define COVER_OAM_LO                $7EC000    /* cover OAM low-table shadow (64 sprites*4) */
 
 #define WRAM_ROUTINE                $7EF000

@@ -51,9 +51,10 @@ resolve_str:
   sep #$20 : .as
   lda cur_lang
   cmp @strtab_nlang        ; languages actually present (set by build_const)
-  bcc +
+  bcc rs_col_ok
   lda #$00                 ; cur_lang past the last present column -> English
-+ rep #$20 : .al
+rs_col_ok:
+  rep #$20 : .al
   and #$00ff
   tax                      ; X = the column, for strpool_bank below
   asl
@@ -220,15 +221,18 @@ hiprint:
   adc print_x
   and #$fffe
   tax
+hiprint_nomark               ; (a CJK glyph fits either layer's column: no alignment marker)
+  .al : .xl
   lda print_x
   lsr
   bcs hiprint_bg1
 hiprint_bg2
   lda [print_ptr]
-  ror
-  and #$007f
-  beq hiprint_end
-  rol
+  and #$00ff
+  cmp #$0002
+  bcc hiprint_end            ; 0/1: end of string
+  cmp #CJK_LEAD0
+  bcs hiprint_cjk2           ; a CJK glyph (cjk.a65)
   asl
   inc print_ptr
   ora print_temp
@@ -236,11 +240,13 @@ hiprint_bg2
   dey
   beq hiprint_end
 hiprint_bg1
+  .al : .xl
   lda [print_ptr]
-  ror
-  and #$007f
-  beq hiprint_end
-  rol
+  and #$00ff
+  cmp #$0002
+  bcc hiprint_end
+  cmp #CJK_LEAD0
+  bcs hiprint_cjk1
   asl
   inc print_ptr
   ora print_temp
@@ -250,6 +256,17 @@ hiprint_bg1
   dey
   beq hiprint_end
   bra hiprint_bg2
+hiprint_cjk2
+  .al : .xl
+  jsl @cjk_print_bg2         ; Z clear: on a BG2 cell, next column is BG2's again
+  bcs hiprint_end
+  beq hiprint_bg1
+  bra hiprint_bg2
+hiprint_cjk1
+  .al : .xl
+  jsl @cjk_print_bg1
+  bcs hiprint_end
+  bra hiprint_bg1
 hiprint_end
   sep #$20 : .as
   lda [print_ptr]
@@ -309,6 +326,7 @@ loprint_end
   rts
 
 draw_window:
+  jsl @cjk_window_edge       ; a glyph left of the window would spill onto its border
   phb
   php
   sep #$20 : .as
@@ -520,10 +538,7 @@ pushw_skip_current_head
 ; calculate address of next stack element
   tax
   phx                 ; save "previous" head
-  lda @WINDOW_STACK_BASE+6, x
-  and #$00fe
-  clc
-  adc #$0002
+  jsl @win_rowbytes         ; bytes a row of the previous element
   sep #$20 : .as
   sta $211b
   stz $211b
@@ -550,8 +565,9 @@ pushw_write_element
   lda window_w
   and #$00ff
   sta @WINDOW_STACK_BASE+6, x
-  ora #$0001
-  pha                 ; save rounded window_w = count -1 for MVN
+  jsl @win_rowbytes
+  dec
+  pha                 ; save bytes a row - 1 = count - 1 for MVN
   lda window_h
   and #$00ff
   pha                 ; save window_h
@@ -565,14 +581,7 @@ pushw_write_element
   lda listsel_max
   and #$00ff
   sta @WINDOW_STACK_BASE+14, x
-  lda @WINDOW_STACK_BASE+4, x
-  rep #$20 : .al
-  xba                 ; calculate start offset (64*window_y + window_x)
-  lsr
-  lsr
-  clc
-  adc @WINDOW_STACK_BASE+2, x
-  and #$fffe          ; align to 16 bit
+  jsl @win_start      ; start offset (64*window_y + first saved column)
   tax                 ; source offset
   lda window_stack_head
   clc
@@ -649,9 +658,9 @@ popw_rewind_head
 ; restore data needed to recover from current window
   lda #$0000
   sep #$20 : .as
-  lda @WINDOW_STACK_BASE+6, x
-  ora #$01
-  pha                 ; save rounded count for MVN
+  jsl @win_rowbytes
+  dec
+  pha                 ; save count - 1 for MVN
   lda @WINDOW_STACK_BASE+8, x
   pha
   lda @WINDOW_STACK_BASE+10, x
@@ -661,14 +670,8 @@ popw_rewind_head
   lda @WINDOW_STACK_BASE+14, x
   sta listsel_max
 
-  lda @WINDOW_STACK_BASE+4, x
   rep #$20 : .al
-  xba                 ; calculate dest offset (64*window_y + window_x)
-  lsr
-  lsr
-  clc
-  adc @WINDOW_STACK_BASE+2, x
-  and #$fffe          ; align to 16 bit
+  jsl @win_start      ; dest offset (64*window_y + first saved column)
   tay                 ; dest offset
   lda window_stack_head
   clc
@@ -729,9 +732,10 @@ popw_rewind_head
 ; peek into previous head (if any) to restore dimensions of previous window
 ; otherwise restore dimensions of current window
   cpx #$ffff
-  bne +
+  bne popw_xy
   tyx
-+ lda @WINDOW_STACK_BASE+2, x
+popw_xy:
+  lda @WINDOW_STACK_BASE+2, x
   sta window_x
   lda @WINDOW_STACK_BASE+4, x
   sta window_y

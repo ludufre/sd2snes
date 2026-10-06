@@ -525,6 +525,32 @@ static void onboarding_stage_welcome(void) {
   file_close();
 }
 
+/* SNES_CMD_LOAD_LANG: stage /sd2snes/lang/<code>.bin (a CJK menu language, snes/cjk.a65)
+   for the menu to copy into WRAM $7F.  The magic word is zeroed first and the file streams
+   over it, so a missing, oversized or unreadable file leaves no magic and the menu stays in
+   English.  The code is the two lowercase letters in MCU_PARAM. */
+static void menu_stage_lang(void) {
+  char path[] = "/sd2snes/lang/xx.bin";
+  uint8_t code[2];
+  sram_writelong(0, SRAM_LANG_STAGE_ADDR);
+  snescmd_readblock(code, SNESCMD_MCU_PARAM, 2);
+  if(code[0] < 'a' || code[0] > 'z' || code[1] < 'a' || code[1] > 'z') return;
+  path[14] = code[0];
+  path[15] = code[1];
+  file_open((uint8_t*)path, FA_READ);
+  if(file_res) return;
+  if(file_handle.fsize >= 16 && file_handle.fsize <= SRAM_LANG_STAGE_MAX) {
+    set_mcu_addr(SRAM_LANG_STAGE_ADDR);
+    for(;;) {
+      ff_sd_offload = 1;
+      sd_offload_tgt = 0;
+      if(!file_read() || file_res) break;
+    }
+    if(file_res) sram_writelong(0, SRAM_LANG_STAGE_ADDR);
+  }
+  file_close();
+}
+
 void menucmd_fmv_gate(uint8_t cmd) {
   /* The PCM player owns the DAC through the same menu_music_* engine, and it issues
      commands this gate does not know (play, pause, resume).  Without this guard the gate
@@ -993,6 +1019,9 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       onboarding_pending = 1;
       *menu_reload = 1;
       return cmd;
+    case SNES_CMD_LOAD_LANG:
+      menu_stage_lang();
+      return 0;
     case SNES_CMD_ONB_WELCOME:
       /* The tour's welcome clip (snes/onboarding/onb_welcome.a65).  The jingle streams
          from the card like the info screen's FMV soundtrack, not through the FPGA sfxdma

@@ -33,13 +33,21 @@ NMI_ROUTINE:
 nmi_skip_upload:
   jmp skip_screen_dma
 do_screen_dma:
-  ldx #BG1_TILE_BASE+32*9
+; CJK glyphs waiting for VRAM go up first, in place of this frame's tilemaps: the
+; buffers may already point at them, so the tilemaps wait for a VBlank with none left.
+  lda @CJK_NDIRTY
+  beq +
+  jsl @cjk_nmi
+  jmp skip_screen_dma
+; rows 9..31: the HDMA scroll shows nothing below row 29, and rows 32..63 (each tilemap's
+; lower screen) hold the CJK BG2 cells (cjk.a65), which these uploads would overwrite
++ ldx #BG1_TILE_BASE+32*9
   stx $2116
-  DMA7(#$01, #40*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF+64*9, #$18)
+  DMA7(#$01, #23*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF+64*9, #$18)
 
   ldx #BG2_TILE_BASE+32*9
   stx $2116
-  DMA7(#$01, #40*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF+64*9, #$18)
+  DMA7(#$01, #23*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF+64*9, #$18)
 
   ldx #BG2_TILE_BASE
   stx $2116

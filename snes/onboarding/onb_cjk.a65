@@ -1,0 +1,817 @@
+; onboarding: the CJK glyph cache (Japanese / Chinese text in the tour).
+;
+; The tour's font is 256 characters; an ideograph is a glyph from a sheet instead
+; (gen_onb_lang.py: 32 bytes a glyph, the two 2bpp tiles of a 16-px BG2 cell). onb_hiprint
+; asks onb_cjk_cell for the cell of glyph g and writes its tile number into the BG2 tilemap.
+;
+; The cells live in what the tour never shows: its BG2/BG1 tilemaps are 32x64 and the screen
+; is 28 rows, so the lower screen of each (BG2's $5400-$57FF, BG1's $5C00-$5FFF) is free VRAM
+; that BG2's character base ($4000) reaches as tiles 640..767 and 896..1023: 128 cells.
+;
+; A WRAM mirror (OCJ_MIRROR) holds every slot's 32 bytes, so the upload is ONE DMA of a byte
+; range ([OCJ_LO, OCJ_HI)) instead of one per glyph: in forced blank all of it (onb_cjk_flush,
+; at the end of onb_build_split), in the NMI a bounded piece before the tilemaps (onb_cjk_nmi;
+; the tilemaps wait until the cells they point at are in VRAM).
+;
+; A card build starts from an empty cache (onb_cjk_reset). A live redraw (the language card
+; switching language, an answer list scrolling) can run out of slots: the collector frees
+; every slot no BG2 tilemap entry of the screen points at (onb_card_redraw rebuilds the whole
+; body, so what is drawn so far is all that is still wanted).
+;
+; .as/.xl GOTCHA: every routine declares its widths on entry (directives leak in SOURCE order).
+
+#include "onboarding/onb_memmap.i65"
+#include "onboarding/onb_dma.i65"
+.link page $cb
+
+#define OCJ_TOFU_TILE   $007e   /* '?' (char 63 = tile 126) */
+#define OCJ_TILE_A      640     /* slots 0..63: tiles 640+2s, VRAM $5400 + 16s */
+#define OCJ_TILE_B      768     /* slots 64..127: tiles 768+2s (= 896 + 2(s-64)), VRAM $5C00 */
+#define OCJ_VRAM_A      $5400
+#define OCJ_VRAM_B      $5C00
+#define OCJ_HALF        2048    /* mirror bytes of region A */
+#define OCJ_NMI_SMALL   1024    /* a piece this small goes with the tilemaps in one VBlank */
+#define OCJ_NMI_BIG     2048    /* a bigger one alone (the tilemaps wait a frame) */
+
+; ---------------------------------------------------------------------------
+; onb_cjk_reset -- empty cache, nothing to upload. Any widths in, kept.
+; ---------------------------------------------------------------------------
+onb_cjk_reset:
+  php
+  rep #$30 : .al : .xl
+  phx
+  ldx #$0000
+  lda #$0000
+ocr_g2s:
+  sta @OCJ_G2S, x
+  inx
+  inx
+  cpx #768
+  bcc ocr_g2s
+  ldx #$0000
+ocr_s2g:
+  sta @OCJ_S2G, x
+  inx
+  inx
+  cpx #2*OCJ_NSLOTS
+  bcc ocr_s2g
+  sta @OCJ_LO
+  sta @OCJ_HI
+  sep #$20 : .as
+  sta @OCJ_NEXT
+  sta @OCJ_TOFU
+  sta @OCJ_BUSY
+  sta @OCJ_SHIFT
+  lda @onb_cur_lang
+  sta @OCJ_LANG
+  rep #$20 : .al
+  plx
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------
+; onb_cjk_cell -- A (16 bits) = glyph index. Out: A = the tile number of its cell (bind and
+; load it if it is not cached), or '?' when there is no slot or no sheet for it. .al/.xl in
+; and out; X, Y, DB, DP kept.
+; ---------------------------------------------------------------------------
+onb_cjk_cell:
+  .al : .xl
+  php
+  phx
+  phy
+  rep #$30 : .al : .xl
+  sta @OCJ_TMP                  ; the glyph
+  sep #$20 : .as
+  lda #$01
+  sta @OCJ_BUSY
+  lda @onb_cur_lang             ; another language: its glyphs 128+ are not these
+  cmp @OCJ_LANG
+  beq occ_lang_ok
+  jsr ocj_drop_lang
+occ_lang_ok:
+  rep #$20 : .al
+  lda @OCJ_TMP
+  cmp #768
+  bcs occ_tofu
+  tax
+  sep #$20 : .as
+  lda @OCJ_G2S, x
+  bne occ_hit
+  jsr ocj_src                   ; onb_cjk_src = where the glyph's 32 bytes are; C = none
+  bcs occ_tofu
+  jsr ocj_alloc                 ; A = a free slot; C = none
+  bcs occ_tofu
+  sta @OCJ_TMP+2                ; the slot
+  rep #$20 : .al
+  lda @OCJ_TMP
+  tax
+  sep #$20 : .as
+  lda @OCJ_TMP+2
+  inc
+  sta @OCJ_G2S, x               ; glyph -> slot + 1
+  rep #$20 : .al
+  lda @OCJ_TMP+2
+  and #$00ff
+  asl
+  tax
+  lda @OCJ_TMP
+  inc
+  sta @OCJ_S2G, x               ; slot -> glyph + 1
+  jsr ocj_load                  ; its 32 bytes into the mirror, the dirty range grown
+  sep #$20 : .as
+  lda @OCJ_TMP+2
+  inc
+occ_hit:
+  .as : .xl
+  dec                           ; the slot
+  rep #$20 : .al
+  and #$00ff
+  asl
+  cmp #2*64
+  bcc +
+  adc #OCJ_TILE_B-1             ; (carry set)
+  bra occ_out
++ adc #OCJ_TILE_A
+  bra occ_out
+occ_tofu:
+  .al : .xl
+  sep #$20 : .as
+  lda @OCJ_TOFU
+  inc
+  beq +
+  sta @OCJ_TOFU
++ rep #$20 : .al
+  lda #OCJ_TOFU_TILE
+occ_out:
+  .al : .xl
+  pha
+  sep #$20 : .as
+  lda #$00
+  sta @OCJ_BUSY
+  rep #$20 : .al
+  pla
+  ply
+  plx
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------
+; onb_cjk_pair -- the cell of a CJK-only string drawn from an ODD column (onb_hiprint): its
+; left half is the right half of glyph OCJ_PA-1, its right half the left half of glyph
+; OCJ_PB-1 (0 = blank half). Cached like a glyph, keyed by the pair (S2G = $8000 | PA, S2K =
+; PB). Out: A = its tile, or '?'. .al/.xl in and out; X, Y, DB, DP kept.
+; ---------------------------------------------------------------------------
+onb_cjk_pair:
+  .al : .xl
+  php
+  phx
+  phy
+  rep #$30 : .al : .xl
+  sep #$20 : .as
+  lda #$01
+  sta @OCJ_BUSY
+  lda @onb_cur_lang
+  cmp @OCJ_LANG
+  beq ocp_lang_ok
+  jsr ocj_drop_lang
+ocp_lang_ok:
+  rep #$20 : .al
+  ldx #$0000
+ocp_find:
+  .al : .xl
+  lda @OCJ_S2G, x
+  cmp #$8000
+  bcc ocp_next
+  and #$7fff
+  cmp @OCJ_PA
+  bne ocp_next
+  lda @OCJ_S2K, x
+  cmp @OCJ_PB
+  beq ocp_hit
+ocp_next:
+  .al : .xl
+  inx
+  inx
+  cpx #2*OCJ_NSLOTS
+  bcc ocp_find
+  lda @OCJ_PA                   ; both sheets must exist before a slot is taken
+  beq +
+  dec
+  sta @OCJ_TMP
+  sep #$20 : .as
+  jsr ocj_src
+  rep #$20 : .al
+  bcs ocp_tofu
++ lda @OCJ_PB
+  beq +
+  dec
+  sta @OCJ_TMP
+  sep #$20 : .as
+  jsr ocj_src
+  rep #$20 : .al
+  bcs ocp_tofu
++ sep #$20 : .as
+  jsr ocj_alloc                 ; A = a free slot; C = none
+  rep #$20 : .al
+  bcs ocp_tofu
+  and #$00ff
+  sta @OCJ_TMP+2
+  asl
+  tax
+  lda @OCJ_PA
+  ora #$8000
+  sta @OCJ_S2G, x
+  lda @OCJ_PB
+  sta @OCJ_S2K, x
+  phx
+  lda @OCJ_TMP+2
+  asl
+  asl
+  asl
+  asl
+  asl
+  sta @OCJ_TMP+4                ; the slot's mirror offset
+  lda @OCJ_PA
+  ldx #16                       ; the left glyph's right tile -> the cell's left tile
+  ldy #0
+  jsr ocp_half
+  lda @OCJ_PB
+  ldx #0                        ; the right glyph's left tile -> the cell's right tile
+  ldy #16
+  jsr ocp_half
+  jsr ocj_grow
+  plx
+ocp_hit:
+  .al : .xl
+  txa                           ; 2 * slot
+  cmp #2*64
+  bcc +
+  adc #OCJ_TILE_B-1             ; (carry set)
+  bra ocp_out
++ adc #OCJ_TILE_A
+  bra ocp_out
+ocp_tofu:
+  .al : .xl
+  sep #$20 : .as
+  lda @OCJ_TOFU
+  inc
+  beq +
+  sta @OCJ_TOFU
++ rep #$20 : .al
+  lda #OCJ_TOFU_TILE
+ocp_out:
+  .al : .xl
+  pha
+  sep #$20 : .as
+  lda #$00
+  sta @OCJ_BUSY
+  rep #$20 : .al
+  pla
+  ply
+  plx
+  plp
+  rtl
+
+; ocp_half: A = glyph + 1 (0 = blank): 16 bytes of it -- its tile at X (0 left, 16 right) --
+;   into the mirror at OCJ_TMP+4 + Y. .al/.xl in and out.
+ocp_half:
+  .al : .xl
+  phx
+  phy
+  cmp #$0000
+  beq oph_blank
+  dec
+  sta @OCJ_TMP
+  sep #$20 : .as
+  jsr ocj_src
+  rep #$20 : .al
+  ldy #OCJ_PAIRBUF_LO
+  jsr ocj_render
+  ply
+  plx
+  phx
+  phy
+  tya
+  clc
+  adc @OCJ_TMP+4
+  tay                           ; the mirror byte
+  lda #$0008
+  sta @OCJ_TMP+6
+oph_copy:
+  .al : .xl
+  lda @OCJ_PAIRBUF, x
+  phx
+  tyx
+  sta @OCJ_MIRROR, x
+  plx
+  inx
+  inx
+  iny
+  iny
+  lda @OCJ_TMP+6
+  dec
+  sta @OCJ_TMP+6
+  bne oph_copy
+  ply
+  plx
+  rts
+oph_blank:
+  .al : .xl
+  tya
+  clc
+  adc @OCJ_TMP+4
+  tax
+  ldy #$0008
+  lda #$0000
+oph_zero:
+  .al : .xl
+  sta @OCJ_MIRROR, x
+  inx
+  inx
+  dey
+  bne oph_zero
+  ply
+  plx
+  rts
+
+; ocj_drop_lang: the language changed -- unbind every slot holding a glyph 128+ (they were
+;   the old language's) and keep the common ones. .as/.xl in and out.
+ocj_drop_lang:
+  .as : .xl
+  sta @OCJ_LANG
+  rep #$20 : .al
+  ldx #$0000
+odl_loop:
+  lda @OCJ_S2G, x
+  cmp #128+1
+  bcc odl_next                  ; free, or a common glyph
+  jsr ocj_unbind
+odl_next:
+  .al : .xl
+  inx
+  inx
+  cpx #2*OCJ_NSLOTS
+  bcc odl_loop
+  sep #$20 : .as
+  rts
+
+; ocj_unbind: X = 2 * slot, A = its S2G (non zero: glyph + 1, or $8000+ for a pair cell,
+;   which G2S does not index). .al/.xl in and out; X kept.
+ocj_unbind:
+  .al : .xl
+  phx
+  cmp #$8000
+  bcs oub_pair
+  dec
+  tax
+  sep #$20 : .as
+  lda #$00
+  sta @OCJ_G2S, x
+  rep #$20 : .al
+oub_pair:
+  .al : .xl
+  plx
+  lda #$0000
+  sta @OCJ_S2G, x
+  rts
+
+; ocj_src: OCJ_TMP = glyph. onb_cjk_src = the long address of its 32 bytes: 0..127 in the
+;   common sheet, 128+ in the current language's (onb_cjk_sheet / _bank, by language).
+;   C set when the language has no sheet. .as/.xl in and out.
+ocj_src:
+  .as : .xl
+  rep #$20 : .al
+  lda @OCJ_TMP
+  cmp #128
+  bcs ocs_lang
+  asl
+  asl
+  asl
+  clc
+  adc #!onb_cjk_common
+  sta @onb_cjk_src
+  sep #$20 : .as
+  lda #^onb_cjk_common
+  sta @onb_cjk_src+2
+  clc
+  rts
+ocs_lang:
+  .al : .xl
+  sec
+  sbc #128
+  asl
+  asl
+  asl
+  pha
+  lda @onb_cur_lang
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda @onb_cjk_sheet_bank, x
+  beq ocs_none
+  sta @onb_cjk_src+2
+  rep #$20 : .al
+  txa
+  asl
+  tax
+  pla
+  clc
+  adc @onb_cjk_sheet, x
+  sta @onb_cjk_src
+  sep #$20 : .as
+  clc
+  rts
+ocs_none:
+  .as : .xl
+  rep #$20 : .al
+  pla
+  sep #$20 : .as
+  sec
+  rts
+
+; ocj_alloc: A = a free slot (from OCJ_NEXT on, round robin, so a card's glyphs sit together
+;   and the dirty range stays one run). None free: collect, then try again. C set = none.
+;   .as/.xl in and out.
+ocj_alloc:
+  .as : .xl
+  jsr ocj_find
+  bcc oca_out
+  jsr ocj_gc
+  jsr ocj_find
+oca_out:
+  .as : .xl
+  rts
+
+ocj_find:
+  .as : .xl
+  lda @OCJ_NEXT
+  and #OCJ_NSLOTS-1
+  sta @OCJ_TMP+3
+  ldy #OCJ_NSLOTS
+ocf_loop:
+  .as : .xl
+  rep #$20 : .al
+  lda @OCJ_TMP+3
+  and #$007f
+  asl
+  tax
+  lda @OCJ_S2G, x
+  sep #$20 : .as
+  beq ocf_free
+  lda @OCJ_TMP+3
+  inc
+  and #OCJ_NSLOTS-1
+  sta @OCJ_TMP+3
+  dey
+  bne ocf_loop
+  sec
+  rts
+ocf_free:
+  .as : .xl
+  lda @OCJ_TMP+3
+  inc
+  and #OCJ_NSLOTS-1
+  sta @OCJ_NEXT
+  lda @OCJ_TMP+3
+  clc
+  rts
+
+; ocj_gc: free every bound slot no BG2 tilemap entry of the screen (rows 0..27) points at.
+;   .as/.xl in and out.
+ocj_gc:
+  .as : .xl
+  rep #$20 : .al
+  ldx #$0000
+  lda #$0000
+ogc_clr:
+  sta @OCJ_MARK, x
+  inx
+  inx
+  cpx #2*OCJ_NSLOTS
+  bcc ogc_clr
+  ldx #$0000
+ogc_scan:
+  .al : .xl
+  lda @BG2_TILE_BUF, x
+  and #$03ff
+  cmp #OCJ_TILE_A
+  bcc ogc_next
+  cmp #OCJ_TILE_A+128
+  bcc ogc_a
+  cmp #OCJ_TILE_B+128           ; tiles 768..895 are not ours
+  bcc ogc_next
+  sec
+  sbc #OCJ_TILE_B               ; 896..1023 -> 128..255 = 2s
+  bra ogc_mark
+ogc_a:
+  .al : .xl
+  sec
+  sbc #OCJ_TILE_A               ; 640..767 -> 0..127 = 2s
+ogc_mark:
+  .al : .xl
+  phx
+  tax
+  lda #$0001
+  sta @OCJ_MARK, x
+  plx
+ogc_next:
+  .al : .xl
+  inx
+  inx
+  cpx #28*64
+  bcc ogc_scan
+  ldx #$0000                    ; X = 2 * slot
+ogc_free:
+  .al : .xl
+  lda @OCJ_MARK, x
+  bne ogc_fnext                 ; on screen
+  lda @OCJ_S2G, x
+  beq ogc_fnext                 ; free already
+  jsr ocj_unbind
+ogc_fnext:
+  .al : .xl
+  inx
+  inx
+  cpx #2*OCJ_NSLOTS
+  bcc ogc_free
+  sep #$20 : .as
+  rts
+
+; ocj_load: draw the glyph at onb_cjk_src (8 bytes: its 8x8 rows, bit 7 = the leftmost pixel)
+;   into the mirror at slot OCJ_TMP+2 as the font draws a letter -- each pixel two hires
+;   pixels wide, colour 1 the body, colour 2 a contour on the orthogonal neighbours (the
+;   diagonal-only ones stay transparent) -- and grow the dirty range [LO, HI) over it. The
+;   same picture as gen_onb_lang.py's _glyph_2bpp (build_const.cjk_glyph_tiles), byte for
+;   byte. .al/.xl in and out.
+ocj_load:
+  .al : .xl
+  lda @OCJ_TMP+2
+  and #$00ff
+  asl
+  asl
+  asl
+  asl
+  asl
+  sta @OCJ_TMP+4                ; the slot's mirror offset
+  clc
+  adc #OCJ_MIRROR_LO
+  tay
+  jsr ocj_render
+  jmp ocj_grow
+
+; ocj_render: the glyph at onb_cjk_src as ocj_load draws it, its 32 bytes (left tile, then
+;   right tile) at Y in bank $7F. .al/.xl in and out.
+ocj_render:
+  .al : .xl
+  phb
+  phy
+  sep #$20 : .as
+  lda #OCJ_MIRROR_BANK
+  pha
+  plb
+  rep #$20 : .al
+  lda #$0000
+  sta !OCJ_ROWS         ; the rows above and below the glyph are empty
+  sta !OCJ_ROWS+18
+  ldy #$0000
+  ldx #$0002
+ocl_rows:
+  .al : .xl
+  lda [onb_cjk_src], y
+  and #$00ff
+  asl
+  phx
+  tax
+  lda @onb_cjk_dbl, x           ; each pixel doubled: 16 hires pixels, bit 15 the leftmost
+  plx
+  sta !OCJ_ROWS, x
+  inx
+  inx
+  iny
+  cpy #8
+  bcc ocl_rows
+  ply                           ; Y = the left tile's row y, 2 bytes a row
+  phy
+  ldx #$0002                    ; X = the row in OCJ_ROWS
+ocl_draw:
+  .al : .xl
+  lda !OCJ_ROWS, x
+  asl
+  sta !OCJ_TMP+6
+  lda !OCJ_ROWS, x
+  lsr
+  ora !OCJ_TMP+6
+  ora !OCJ_ROWS-2, x
+  ora !OCJ_ROWS+2, x
+  sta !OCJ_TMP+6        ; every pixel next to the body...
+  lda !OCJ_ROWS, x
+  eor #$ffff
+  and !OCJ_TMP+6
+  sta !OCJ_TMP+6        ; ...that is not body: the contour (colour 2, plane 1)
+  sep #$20 : .as
+  lda !OCJ_ROWS+1, x  ; left tile: the high bytes
+  sta !$0000, y
+  lda !OCJ_TMP+7
+  sta !$0001, y
+  lda !OCJ_ROWS, x      ; right tile: the low bytes
+  sta !$0010, y
+  lda !OCJ_TMP+6
+  sta !$0011, y
+  rep #$20 : .al
+  iny
+  iny
+  inx
+  inx
+  cpx #18
+  bcc ocl_draw
+  ply
+  plb
+  rts
+
+; ocj_grow: grow the dirty range [LO, HI) over the 32 bytes at mirror offset OCJ_TMP+4.
+;   .al/.xl in and out.
+ocj_grow:
+  .al : .xl
+  lda @OCJ_LO
+  cmp @OCJ_HI
+  bcc ocl_grow                  ; a range is pending: widen it
+  lda @OCJ_TMP+4
+  sta @OCJ_LO
+  clc
+  adc #32
+  sta @OCJ_HI
+  rts
+ocl_grow:
+  .al : .xl
+  lda @OCJ_TMP+4
+  cmp @OCJ_LO
+  bcs +
+  sta @OCJ_LO
++ lda @OCJ_TMP+4
+  clc
+  adc #32
+  cmp @OCJ_HI
+  bcc +
+  sta @OCJ_HI
++ rts
+
+; each byte with its bits doubled (bit 7 -> bits 15/14 ... bit 0 -> bits 1/0)
+onb_cjk_dbl:
+  .word $0000, $0003, $000c, $000f, $0030, $0033, $003c, $003f
+  .word $00c0, $00c3, $00cc, $00cf, $00f0, $00f3, $00fc, $00ff
+  .word $0300, $0303, $030c, $030f, $0330, $0333, $033c, $033f
+  .word $03c0, $03c3, $03cc, $03cf, $03f0, $03f3, $03fc, $03ff
+  .word $0c00, $0c03, $0c0c, $0c0f, $0c30, $0c33, $0c3c, $0c3f
+  .word $0cc0, $0cc3, $0ccc, $0ccf, $0cf0, $0cf3, $0cfc, $0cff
+  .word $0f00, $0f03, $0f0c, $0f0f, $0f30, $0f33, $0f3c, $0f3f
+  .word $0fc0, $0fc3, $0fcc, $0fcf, $0ff0, $0ff3, $0ffc, $0fff
+  .word $3000, $3003, $300c, $300f, $3030, $3033, $303c, $303f
+  .word $30c0, $30c3, $30cc, $30cf, $30f0, $30f3, $30fc, $30ff
+  .word $3300, $3303, $330c, $330f, $3330, $3333, $333c, $333f
+  .word $33c0, $33c3, $33cc, $33cf, $33f0, $33f3, $33fc, $33ff
+  .word $3c00, $3c03, $3c0c, $3c0f, $3c30, $3c33, $3c3c, $3c3f
+  .word $3cc0, $3cc3, $3ccc, $3ccf, $3cf0, $3cf3, $3cfc, $3cff
+  .word $3f00, $3f03, $3f0c, $3f0f, $3f30, $3f33, $3f3c, $3f3f
+  .word $3fc0, $3fc3, $3fcc, $3fcf, $3ff0, $3ff3, $3ffc, $3fff
+  .word $c000, $c003, $c00c, $c00f, $c030, $c033, $c03c, $c03f
+  .word $c0c0, $c0c3, $c0cc, $c0cf, $c0f0, $c0f3, $c0fc, $c0ff
+  .word $c300, $c303, $c30c, $c30f, $c330, $c333, $c33c, $c33f
+  .word $c3c0, $c3c3, $c3cc, $c3cf, $c3f0, $c3f3, $c3fc, $c3ff
+  .word $cc00, $cc03, $cc0c, $cc0f, $cc30, $cc33, $cc3c, $cc3f
+  .word $ccc0, $ccc3, $cccc, $cccf, $ccf0, $ccf3, $ccfc, $ccff
+  .word $cf00, $cf03, $cf0c, $cf0f, $cf30, $cf33, $cf3c, $cf3f
+  .word $cfc0, $cfc3, $cfcc, $cfcf, $cff0, $cff3, $cffc, $cfff
+  .word $f000, $f003, $f00c, $f00f, $f030, $f033, $f03c, $f03f
+  .word $f0c0, $f0c3, $f0cc, $f0cf, $f0f0, $f0f3, $f0fc, $f0ff
+  .word $f300, $f303, $f30c, $f30f, $f330, $f333, $f33c, $f33f
+  .word $f3c0, $f3c3, $f3cc, $f3cf, $f3f0, $f3f3, $f3fc, $f3ff
+  .word $fc00, $fc03, $fc0c, $fc0f, $fc30, $fc33, $fc3c, $fc3f
+  .word $fcc0, $fcc3, $fccc, $fccf, $fcf0, $fcf3, $fcfc, $fcff
+  .word $ff00, $ff03, $ff0c, $ff0f, $ff30, $ff33, $ff3c, $ff3f
+  .word $ffc0, $ffc3, $ffcc, $ffcf, $fff0, $fff3, $fffc, $ffff
+
+; ---------------------------------------------------------------------------
+; onb_cjk_upload -- DMA (channel 7) the next piece of the dirty range to VRAM: up to A bytes
+; (16 bits), never across the two regions. Out: C set while some of it is still dirty.
+; Forced blank or VBlank only. Any widths in, kept.
+; ---------------------------------------------------------------------------
+onb_cjk_upload:
+  php
+  rep #$30 : .al : .xl
+  sta @OCJ_TMP+4                ; the most to move
+  lda @OCJ_LO
+  cmp @OCJ_HI
+  bcs ocu_clean
+  clc
+  adc @OCJ_TMP+4
+  cmp @OCJ_HI
+  bcc +
+  lda @OCJ_HI
++ sta @OCJ_TMP+6                ; the piece's end
+  lda @OCJ_LO
+  cmp #OCJ_HALF
+  bcs ocu_b
+  lda @OCJ_TMP+6                ; region A ends at the mirror's half
+  cmp #OCJ_HALF+1
+  bcc +
+  lda #OCJ_HALF
+  sta @OCJ_TMP+6
++ lda @OCJ_LO
+  lsr
+  clc
+  adc #OCJ_VRAM_A
+  bra ocu_go
+ocu_b:
+  .al : .xl
+  sec
+  sbc #OCJ_HALF
+  lsr
+  clc
+  adc #OCJ_VRAM_B
+ocu_go:
+  .al : .xl
+  sta @$002116
+  lda @OCJ_LO
+  clc
+  adc #OCJ_MIRROR_LO
+  sta @$004372
+  lda @OCJ_TMP+6
+  sec
+  sbc @OCJ_LO
+  sta @$004375
+  sep #$20 : .as
+  lda #$80
+  sta @$002115
+  lda #$01                      ; two registers, write once: $2118/$2119
+  sta @$004370
+  lda #$18
+  sta @$004371
+  lda #OCJ_MIRROR_BANK
+  sta @$004374
+  lda #$80
+  sta @$00420b
+  rep #$20 : .al
+  lda @OCJ_TMP+6
+  sta @OCJ_LO
+  cmp @OCJ_HI
+  bcs ocu_clean
+  plp
+  sec
+  rtl
+ocu_clean:
+  .al : .xl
+  lda #$0000
+  sta @OCJ_LO
+  sta @OCJ_HI
+  plp
+  clc
+  rtl
+
+; ---------------------------------------------------------------------------
+; onb_cjk_flush -- everything still dirty, now (forced blank). Any widths in, kept.
+; ---------------------------------------------------------------------------
+onb_cjk_flush:
+  php
+  rep #$30 : .al : .xl
+ocf2_loop:
+  lda #$1000
+  jsl @onb_cjk_upload
+  bcs ocf2_loop
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------
+; onb_cjk_nmi -- the NMI's share (ONB_NMI_ROUTINE, before the tilemaps). Out: C set when
+; the tilemaps must wait (cells they point at are not in VRAM yet, or the main thread is
+; changing the range), V set when a piece went up this VBlank (the demo stream waits: the
+; tilemaps and a piece fill it). Any widths in.
+; ---------------------------------------------------------------------------
+onb_cjk_nmi:
+  php
+  sep #$20 : .as
+  lda @OCJ_BUSY
+  bne ocn_wait
+  rep #$20 : .al
+  lda @OCJ_HI
+  sec
+  sbc @OCJ_LO
+  beq ocn_clean
+  bcc ocn_clean
+  cmp #OCJ_NMI_SMALL+1
+  bcc +                         ; small: the whole of it, then the tilemaps
+  lda #OCJ_NMI_BIG              ; big: a piece alone
++ jsl @onb_cjk_upload
+  bcs ocn_wait
+  plp
+  clc
+  sep #$40                      ; V: a piece went up
+  rtl
+ocn_wait:
+  plp
+  sec
+  rtl
+ocn_clean:
+  plp
+  clc
+  clv
+  rtl

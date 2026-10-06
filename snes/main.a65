@@ -85,6 +85,7 @@ coldboot:       ; Regular, cold-start init
   ; direct page, and the init below resets all three.
   jsl @boot_intro
   jsr clear_wram
+  jsl @cjk_init          ; CJK glyph cache tables (bank $7F): clear_wram left $55 there
   ; fork: the onboarding tour hands the console over WITHOUT a reset (src/main.c sets
   ; MENU_HANDOFF): the S-SMP keeps the music it plays and the tour left BGM_STATE
   ; saying what, so the APU is not touched (it is not at IPL: apu_ram_init would hang).
@@ -191,10 +192,11 @@ coldboot_autoboot_out:
   ; whole menu draws in the right language from the first frame.
   sep #$20 : .as
   lda @CFG_LANGUAGE
-  cmp #$08
+  cmp #$0a
   bcc +
   lda #$00              ; unknown -> English
 + sta @cur_lang
+  jsl @cjk_lang_sync     ; a CJK language: its strings+glyphs file into WRAM $7F (cjk.a65)
   jsr filesel_init
   ; If this menu boot follows a theme/BGM change (the MCU staged the browser
   ; position in BROWSER_DIR/BROWSER_FILE), reopen that folder and put the cursor
@@ -338,6 +340,8 @@ setup_gfx:
   ldx #BG2_TILE_BASE
   stx $2116
   DMA7(#$09, #$1000, #^zero, #!zero, #$18)
+  jsl @cjk_vram_restore  ; the CJK glyphs the screen may still show (warm boot, ficha exit):
+                         ; after the clears, which wipe the BG2 cells in the maps' lower screens
 
 ; hide all sprites. The cover replaces the logo and uses BG1 (not OBJ); the old
 ; logo splash sprites are gone. Fill OAM with $f0 so every sprite Y = 240, off

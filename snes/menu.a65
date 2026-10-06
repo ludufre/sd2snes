@@ -757,6 +757,7 @@ desc_next_line:
   .al : .xl                  ; caller enters in 16-bit A/X/Y (no rep emitted)
   lda @dl_idx
   sta @dl_start
+  sta @dl_cjkbrk             ; no glyph seen yet (a break AT the start is no break)
   tay                        ; Y = read index
   ldx #$0000                 ; X = chars on this line
   lda #$ffff
@@ -771,12 +772,28 @@ dnl_loop:
   cpx !desc_iw
   bcs dnl_full               ; line already full -> must break here
   cmp #$0020
-  bne +
+  bne dnl_notsp
   sty !dl_lastsp             ; remember this space
-+ inx
+dnl_notsp:
+  .al : .xl
+  cmp #CJK_LEAD0
+  bcc dnl_notcjk
+  tya
+  sta @dl_cjkbrk             ; a CJK glyph starts here: the line may break before it
+  inx                        ; its two bytes go together (a trail can look like a lead)
+  iny
+  cpx !desc_iw
+  bcc dnl_notcjk
+  dey                        ; the trail's column is past the edge: break before the lead
+  bra dnl_brk_here
+dnl_notcjk:
+  .al : .xl
+  inx
   iny
   bra dnl_loop
 dnl_full:
+  cmp #CJK_LEAD0
+  bcs dnl_brk_here           ; the boundary is a glyph: break right before it
   cmp #$0020
   bne dnl_full_nospace
 ; boundary char is a space -> clean break of exactly DESC_IW chars
@@ -789,6 +806,31 @@ dnl_full:
   stz !dl_eos
   rts
 dnl_full_nospace:
+  .al : .xl
+  lda @dl_cjkbrk             ; a glyph start after the last space breaks closer to the edge
+  cmp @dl_start              ; (and keeps a glyph's two bytes together)
+  beq dnl_full_sp
+  lda @dl_lastsp
+  cmp #$ffff
+  beq dnl_brk_glyph
+  lda @dl_cjkbrk
+  cmp @dl_lastsp
+  bcc dnl_full_sp
+dnl_brk_glyph:
+  .al : .xl
+  lda @dl_cjkbrk
+  tay
+dnl_brk_here:
+  .al : .xl
+  tya                        ; break before index Y, nothing dropped
+  sec
+  sbc @dl_start
+  sta @dl_llen
+  sty !dl_idx
+  stz !dl_eos
+  rts
+dnl_full_sp:
+  .al : .xl
   lda @dl_lastsp
   cmp #$ffff
   beq dnl_hard
@@ -1269,10 +1311,11 @@ show_menu_editvalue:
     ; CFG_LANGUAGE so show_menu_cont's relang check fires only on a real commit.
     sep #$20 : .as
     lda @CFG_LANGUAGE
-    cmp #$08
+    cmp #$0a
     bcc +
     lda #$00
 +   sta cur_lang
+    jsl @cjk_lang_sync         ; a CJK language: load its file (or fall back to English)
     jmp show_menu_cont
 #undef _locals
 

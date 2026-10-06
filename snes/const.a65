@@ -210,6 +210,8 @@ text_lang_fr                      .byt "Fran", 141, "ais", 0
 text_lang_it                      .byt "Italiano", 0
 text_lang_ru                      .byt 80, 121, 99, 99, 207, 205, 206, 0
 text_lang_nl                      .byt "Nederlands", 0
+text_lang_ja                      .byt "日本語", 0
+text_lang_zh                      .byt "简体中文", 0
 ; ---- In-game TAB menu HELP screen (SELECT at the tab-bar level). These are the ENGLISH
 ;      base; the per-language dicts (utils/lang_*.py) carry the translations. build_const.py
 ;      DROPS every text_igm_* label from the menu link (the menu never renders them); the

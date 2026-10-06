@@ -1,0 +1,2254 @@
+#include "memmap.i65"
+#include "dma.i65"
+.link page $c1                ; AFTER dma.i65, which sets page $c0 itself
+
+#define CJK_BAND_BLANK  $03D8    /* = GI_FMV_BLANK_CHAR (gameinfo.a65): the band's empty tile */
+
+; ===========================================================================
+; CJK glyph cache.
+;
+; The menu font is 256 tiles, one byte per character. Japanese and Chinese need hundreds of
+; ideographs, but one screen only ever shows a few dozen, so they are not in the font: each
+; is a 16-px BG1 cell whose two tiles are loaded into a VRAM slot when a string first prints
+; it, and recycled when nothing on screen (or saved under a window) shows it.
+;
+; Encoding (build_const.py): a glyph is the byte pair lead/trail, lead = CJK_LEAD0 + i/128,
+; trail = $80 + i%128. Glyphs 0-127 are the resident sheet (cjk_sheet, the languages' own
+; names); 128-639 the active CJK language's sheet, loaded into WRAM $7F with its strings
+; (cjk_lang_sync). Two bytes, two columns: BG1 owns the odd columns and its cell spans the
+; column after, so the glyph goes on the BG1 cell of its first column and the BG2 cell of the
+; second gets a blank. A string with glyphs starts with CJK_MARK, the column hiprint fills
+; with a blank when the string starts on a BG2 column; a lead that still lands on a BG2
+; column (a string assembled from pieces) moves one column on (cjk_print_bg2).
+;
+; Slots and where they live: memmap.i65 (CJK_*). Upload: the printer binds a slot and marks
+; it dirty; the NMI uploads dirty slots INSTEAD of the tilemaps, which go up on the first
+; VBlank with nothing pending -- so no tilemap is ever shown referencing a glyph that is not
+; in VRAM yet. Where the screen is blanked anyway (the game-info screen, a warm reset, the
+; cover upload) the uploads are synchronous.
+; ===========================================================================
+
+; cjk_init: zero the tables (cold boot -- clear_wram leaves $55 in them), map the normal pool.
+cjk_init:
+  php
+  rep #$30 : .al : .xl
+  ldx #$0000
+cji_loop:
+  .al : .xl
+  lda #$0000
+  sta @CJK_G2S, x
+  inx
+  inx
+  cpx #CJK_INIT_END
+  bcc cji_loop
+  jsr cjk_map_normal
+  plp
+  rtl
+
+; cjk_map_normal: the menu's slot -> tile map (A then B), its reverse, the active count, and
+; the normal mode. .al/.xl out.
+cjk_map_normal:
+  rep #$30 : .al : .xl
+  jsr cjk_clear_rev
+  ldx #$0000                 ; slot
+cmn_loop:
+  .al : .xl
+  txa
+  cmp #CJK_NSLOTS_A
+  bcs cmn_b
+  asl
+  clc
+  adc #CJK_TILE_A
+  bra cmn_set
+cmn_b:
+  .al : .xl
+  sec
+  sbc #CJK_NSLOTS_A
+  asl
+  clc
+  adc #CJK_TILE_B
+cmn_set:
+  .al : .xl
+  jsr cjk_bind_tile
+  inx
+  cpx #CJK_NSLOTS
+  bcc cmn_loop
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_MODE
+  lda @CJK_BOK
+  beq cmn_a_only
+  lda #CJK_NSLOTS
+  bra cmn_n
+cmn_a_only:
+  .as : .xl
+  lda #CJK_NSLOTS_A
+cmn_n:
+  .as : .xl
+  sta @CJK_NACTIVE
+  rep #$20 : .al
+  rts
+
+; cjk_clear_rev: empty the tile -> slot map. .al/.xl.
+cjk_clear_rev:
+  .al : .xl
+  ldx #$0000
+  lda #$0000
+ccr_loop:
+  .al : .xl
+  sta @CJK_TILE_SLOT, x
+  inx
+  inx
+  cpx #$0100
+  bcc ccr_loop
+  rts
+
+; cjk_bind_tile: slot X gets tile A (even, $200..$3FF); records the reverse. .al/.xl, X kept.
+cjk_bind_tile:
+  .al : .xl
+  phx
+  pha
+  txa
+  asl
+  tax
+  pla
+  sta @CJK_SLOT_TILE, x
+  sec
+  sbc #CJK_TILE_B
+  lsr
+  tax                        ; (tile - $200) / 2
+  lda $01, s                 ; slot
+  inc
+  sep #$20 : .as
+  sta @CJK_TILE_SLOT, x
+  rep #$20 : .al
+  plx
+  rts
+
+; cjk_print_bg2 / cjk_print_bg1: hiprint met a lead byte (A = it, .al/.xl) on a BG2 / BG1
+; column. X = tilemap index of that column, Y = columns left, DB = $7E, DP = 0, [print_ptr]
+; at the lead. Out: X/Y/print_ptr past the glyph, carry SET = stop printing (no room left,
+; or a lead without its trail -- a string clipped mid-pair).
+cjk_print_bg2:
+  .al : .xl
+  sep #$20 : .as
+  lda @CJK_MODE
+  rep #$20 : .al
+  bne cpb2_pad               ; the game-info screen has no BG2 pool
+  cpy #$0002
+  bcc cpb2_pad               ; (the BG1 path stops these cleanly)
+  phy
+  ldy #$0001
+  lda [print_ptr], y         ; trail
+  ply
+  and #$00ff
+  cmp #$0080
+  bcc cpb2_pad
+  and #$007f
+  sta @CJK_TMP+2
+  lda [print_ptr]
+  and #$00ff
+  sec
+  sbc #CJK_LEAD0
+  xba                        ; (lead - LEAD0) * 256
+  lsr                        ;                * 128
+  ora @CJK_TMP+2             ; glyph index
+  phx
+  phy
+  jsr cjk2_slot_for          ; A = BG2 tile number, carry set = no BG2 cell
+  ply
+  plx
+  bcs cpb2_pad
+  ora !print_temp
+  sta !BG2_TILE_BUF, x       ; the glyph: BG2 cell = this column and the next
+  lda !print_temp
+  ora #CJK_SPACE_TILE
+  sta !BG1_TILE_BUF, x       ; BG1's cell over the next column stays blank
+  inc !print_ptr
+  inc !print_ptr
+  inx
+  inx
+  dey
+  dey
+  bne cpb2_more
+  sec
+  rtl
+cpb2_more:
+  .al : .xl
+  lda #$0001                 ; go on at the next column, a BG2 one (Z clear)
+  clc
+  rtl
+cpb2_pad:
+  .al : .xl
+  lda !print_temp
+  ora #CJK_SPACE_TILE
+  sta !BG2_TILE_BUF, x       ; no BG2 cell: the blank column that moves the glyph onto BG1. It is NOT
+                             ; charged to the columns left: callers size print_count to the
+                             ; text, and charging it would drop the last glyph. The text ends
+                             ; one column further right instead (build_const budgets for it),
+  inc !print_count           ; and print_done counts that column, so whatever a caller
+                             ; places after the text (a title's closing cap) moves with it.
+cjk_print_bg1:
+  .al : .xl
+  cpy #$0002
+  bcs cpb_room
+  sec                        ; a glyph needs two columns
+  rtl
+cpb_room:
+  .al : .xl
+  phy
+  ldy #$0001
+  lda [print_ptr], y         ; trail
+  ply
+  and #$00ff
+  cmp #$0080
+  bcs cpb_pair
+  sec                        ; no trail: stop at the dangling lead
+  rtl
+cpb_pair:
+  .al : .xl
+  and #$007f
+  sta @CJK_TMP+2
+  lda [print_ptr]
+  and #$00ff
+  sec
+  sbc #CJK_LEAD0
+  xba                        ; (lead - LEAD0) * 256
+  lsr                        ;                * 128
+  ora @CJK_TMP+2             ; glyph index
+  phx
+  phy
+  jsr cjk_slot_for           ; A = tile number, carry set = no slot free
+  ply
+  plx
+  bcc cpb_tile
+  sep #$20 : .as
+  lda @CJK_TOFU              ; count it (saturating): the tests read it
+  inc
+  beq cpb_tofu_sat
+  sta @CJK_TOFU
+cpb_tofu_sat:
+  .as : .xl
+  rep #$20 : .al
+  lda #$007e                 ; tile of '?': every slot is on screen
+cpb_tile:
+  .al : .xl
+  ora !print_temp
+  sta !BG1_TILE_BUF, x       ; the glyph: BG1 cell = this column and the next
+  lda !print_temp
+  ora #CJK_SPACE_TILE
+  sta !BG2_TILE_BUF+2, x     ; the next column's BG2 half stays blank
+  inc !print_ptr
+  inc !print_ptr
+  inx
+  inx
+  dey
+  dey
+  bne cpb_more
+  sec
+  rtl
+cpb_more:
+  .al : .xl
+  lda #$0000                 ; go on at the next column, a BG1 one (Z set)
+  clc
+  rtl
+
+; cjk_slot_for: A = glyph index -> A = BG1 tile number of its slot (bound and marked dirty
+; if it was not cached), carry clear; carry set = every slot is in use on screen. .al/.xl.
+cjk_slot_for:
+  .al : .xl
+  sta @CJK_TMP+2
+  tax
+  sep #$20 : .as
+  lda @CJK_G2S, x
+  beq csf_alloc
+  dec                        ; cached: slot
+  rep #$20 : .al
+  and #$00ff
+  bra csf_tile
+csf_alloc:
+  .as : .xl
+  jsr cjk_alloc
+  bcc csf_bind
+  jsr cjk_lazy_b             ; no cover in VRAM: region B is ours, whatever path got here
+  bcs csf_try_gc
+  jsr cjk_alloc
+  bcc csf_bind
+csf_try_gc:
+  .xl
+  sep #$20 : .as
+  lda @CJK_GCDRY             ; the last collection found nothing to free: the next glyphs
+  beq csf_gc                 ; of the same drawing will not do better, and each collection
+  dec                        ; scans the whole window stack (frames). Skip a run of them,
+  sta @CJK_GCDRY             ; then try again (a closed window may have freed slots)
+  bra csf_full
+csf_gc:
+  .as : .xl
+  jsr cjk_gc                 ; full: free what nothing shows any more
+  jsr cjk_alloc
+  bcc csf_bind
+  sep #$20 : .as
+  lda #CJK_GC_SKIP
+  sta @CJK_GCDRY
+csf_full:
+  .as : .xl
+  rep #$20 : .al
+  sec
+  rts
+csf_bind:
+  .al : .xl
+  sta @CJK_TMP+4             ; slot
+  inc
+  pha
+  lda @CJK_TMP+2
+  tax
+  pla
+  sep #$20 : .as
+  sta @CJK_G2S, x            ; glyph -> slot+1
+  rep #$20 : .al
+  lda @CJK_TMP+4
+  asl
+  tax
+  lda @CJK_TMP+2
+  inc
+  sta @CJK_S2G, x            ; slot -> glyph+1
+  lda @CJK_TMP+4
+  tax
+  jsr cjk_dirty1             ; queued BEFORE the caller writes the tilemap entry
+  rep #$20 : .al
+  lda @CJK_TMP+4
+csf_tile:
+  .al : .xl
+  asl
+  tax
+  lda @CJK_SLOT_TILE, x
+  clc
+  rts
+
+; cjk_alloc: first free slot among the active ones (region A first: it comes first in the
+; normal map). Out: A = slot (.al), carry clear; carry set = none.
+cjk_alloc:
+  rep #$30 : .al : .xl
+  lda @CJK_NACTIVE
+  and #$00ff
+  asl
+  sta @CJK_TMP+6             ; end, in words
+  ldx #$0000
+cja_loop:
+  .al : .xl
+  txa
+  cmp @CJK_TMP+6
+  bcs cja_none
+  lda @CJK_S2G, x
+  beq cja_found
+  inx
+  inx
+  bra cja_loop
+cja_none:
+  .al : .xl
+  sec
+  rts
+cja_found:
+  .al : .xl
+  txa
+  lsr                        ; slot
+  clc
+  rts
+
+; cjk_mark_refs: mark (CJK_GCMARK) every slot some tilemap entry still shows -- the BG1
+; buffer from row 9 (rows 0-8 are the header, whose 8bpp logo tiles $300+ look like ours)
+; and every window backup on the stack. Conservative: a word that merely looks like one of
+; our tiles keeps its slot. .al/.xl.
+cjk_mark_refs:
+  rep #$30 : .al : .xl
+  ldx #$0000
+  lda #$0000
+cmr_clr:
+  .al : .xl
+  sta @CJK_GCMARK, x
+  inx
+  inx
+  cpx #CJK_NSLOTS
+  bcc cmr_clr
+  ldx #64*9
+cmr_bg1:
+  .al : .xl
+  lda @BG1_TILE_BUF, x
+  jsr cjk_mark_word
+  inx
+  inx
+  cpx #$1000
+  bcc cmr_bg1
+  lda #$0000                 ; the BG1 halves of every window backup on the stack
+  sta @CJK_WMODE
+  jsr cjk_walk_stack
+  rts
+
+; cjk_stack_end: A = byte offset of the end of the window stack's top element (0 = empty).
+; .al/.xl, X/Y clobbered.
+cjk_stack_end:
+  .al : .xl
+  lda @window_stack_head
+  cmp #$ffff
+  bne cse_some
+  lda #$0000
+  rts
+cse_some:
+  .al : .xl
+  tax
+  jsl @win_rowbytes
+  asl                        ; bytes per row, both layers
+  sta @CJK_TMP+6
+  lda @WINDOW_STACK_BASE+8, x
+  and #$00ff
+  tay
+  txa
+  clc
+  adc #$0010                 ; header
+cse_rows:
+  .al : .xl
+  cpy #$0000
+  beq cse_out
+  clc
+  adc @CJK_TMP+6
+  dey
+  bra cse_rows
+cse_out:
+  .al : .xl
+  rts
+
+; cjk_mark_word: A = a tilemap entry; if its tile is a slot's, mark that slot. X kept.
+cjk_mark_word:
+  .al : .xl
+  and #$03ff
+  sec
+  sbc #CJK_TILE_B
+  bcc cmw_out                ; below $200
+  lsr
+  bcs cmw_out                ; odd tile: not a cell start
+  phx
+  tax
+  sep #$20 : .as
+  lda @CJK_TILE_SLOT, x
+  beq cmw_none
+  dec
+  rep #$20 : .al
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda #$01
+  sta @CJK_GCMARK, x
+cmw_none:
+  .as : .xl
+  rep #$20 : .al
+  plx
+cmw_out:
+  .al : .xl
+  rts
+
+; cjk_gc: unbind every slot nothing shows. Called only when the active pool is full.
+cjk_gc:
+  php
+  jsr cjk_mark_refs
+  ldx #$0000                 ; slot
+cjg_floop:
+  .al : .xl
+  sep #$20 : .as
+  lda @CJK_GCMARK, x
+  rep #$20 : .al
+  bne cjg_fnext              ; (rep leaves Z alone)
+  jsr cjk_unbind
+cjg_fnext:
+  .al : .xl
+  inx
+  cpx #CJK_NSLOTS
+  bcc cjg_floop
+  plp
+  rts
+
+; cjk_unbind: free slot X (if bound). .al/.xl, X kept.
+cjk_unbind:
+  .al : .xl
+  phx
+  txa
+  asl
+  tax
+  lda @CJK_S2G, x
+  beq cub_out
+  dec                        ; glyph
+  pha
+  lda #$0000
+  sta @CJK_S2G, x
+  plx
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_G2S, x
+  rep #$20 : .al
+cub_out:
+  .al : .xl
+  plx
+  rts
+
+
+; ---------------------------------------------------------------------------
+; The window stack, by layer. An element (ui.a65 push_window) is a 16-byte header -- +0 the
+; previous element ($ffff = none), +6 width, +8 height -- then the BG1 rows, then the BG2
+; rows, each row (w|1)+1 bytes. Walking it by element keeps a BG2 word (a BG2 cell's tile
+; number overlaps region B's) away from the BG1 passes and vice versa.
+; ---------------------------------------------------------------------------
+
+; cjk_walk_stack: every word of the BG1 halves (CJK_WMODE 0: mark for the BG1 pool, 2:
+; rewrite region B) or the BG2 halves (1: mark for the BG2 pool) of the stack. .al/.xl.
+cjk_walk_stack:
+  .al : .xl
+  lda #32                    ; elements, at most (a corrupt chain cannot loop forever)
+  sta @CJK2_TMP+10
+  lda @window_stack_head
+cws_elem:
+  .al : .xl
+  cmp #$ffff
+  bne cws_some
+  rts
+cws_some:
+  .al : .xl
+  sta @CJK2_TMP+4            ; the element
+  tax
+  jsl @win_rowbytes
+  sta @CJK2_TMP+6            ; bytes a row
+  lda @WINDOW_STACK_BASE+8, x
+  and #$00ff
+  tay
+  lda #$0000
+  cpy #$0000
+  beq cws_sized
+cws_mul:
+  .al : .xl
+  clc
+  adc @CJK2_TMP+6
+  dey
+  bne cws_mul
+cws_sized:
+  .al : .xl
+  sta @CJK2_TMP+6            ; bytes a layer
+  lda @CJK2_TMP+4
+  clc
+  adc #16                    ; the BG1 half
+  tax
+  lda @CJK_WMODE
+  cmp #$0001
+  bne cws_half
+  txa
+  clc
+  adc @CJK2_TMP+6            ; the BG2 half
+  tax
+cws_half:
+  .al : .xl
+  txa
+  clc
+  adc @CJK2_TMP+6
+  sta @CJK2_TMP+8            ; its end
+cws_word:
+  .al : .xl
+  txa
+  cmp @CJK2_TMP+8
+  bcs cws_next
+  jsr cjk_walk_word
+  inx
+  inx
+  bra cws_word
+cws_next:
+  .al : .xl
+  lda @CJK2_TMP+10
+  dec
+  sta @CJK2_TMP+10
+  beq cws_out
+  lda @CJK2_TMP+4
+  tax
+  lda @WINDOW_STACK_BASE, x  ; the previous element
+  bra cws_elem
+cws_out:
+  .al : .xl
+  rts
+
+; cjk_walk_word: the stack word at X, by CJK_WMODE. .al/.xl, X kept.
+cjk_walk_word:
+  .al : .xl
+  lda @CJK_WMODE
+  beq cww_mark1
+  cmp #$0001
+  beq cww_mark2
+  lda @WINDOW_STACK_BASE, x
+  jsr cer_word
+  sta @WINDOW_STACK_BASE, x
+  rts
+cww_mark1:
+  .al : .xl
+  lda @WINDOW_STACK_BASE, x
+  jmp cjk_mark_word
+cww_mark2:
+  .al : .xl
+  lda @WINDOW_STACK_BASE, x
+  jmp cjk2_mark_word
+
+; ---------------------------------------------------------------------------
+; The BG2 pool (memmap.i65 CJK2_*).
+; ---------------------------------------------------------------------------
+
+; cjk2_slot_for: A = glyph index -> A = the BG2 tile number of its cell (bound and marked
+; dirty if it was not cached), carry set = no cell. .al/.xl, X/Y clobbered.
+cjk2_slot_for:
+  .al : .xl
+  sta @CJK2_TMP              ; the glyph
+  tax
+  sep #$20 : .as
+  lda @CJK2_G2S, x
+  beq c2s_alloc
+  dec                        ; cached: its slot
+  rep #$20 : .al
+  and #$00ff
+  bra c2s_tile
+c2s_alloc:
+  .as : .xl
+  jsr cjk2_alloc
+  bcc c2s_bind
+  sep #$20 : .as
+  lda @CJK2_GCDRY            ; the last collection freed nothing: skip a run of them
+  beq c2s_gc
+  dec
+  sta @CJK2_GCDRY
+  rep #$20 : .al
+  sec
+  rts
+c2s_gc:
+  .as : .xl
+  jsr cjk2_gc
+  jsr cjk2_alloc
+  bcc c2s_bind
+  sep #$20 : .as
+  lda #CJK_GC_SKIP
+  sta @CJK2_GCDRY
+  rep #$20 : .al
+  sec
+  rts
+c2s_bind:
+  .al : .xl
+  sta @CJK2_TMP+2            ; the slot
+  lda @CJK2_TMP
+  tax
+  sep #$20 : .as
+  lda @CJK2_TMP+2
+  inc
+  sta @CJK2_G2S, x           ; glyph -> slot + 1
+  rep #$20 : .al
+  lda @CJK2_TMP+2
+  asl
+  tax
+  lda @CJK2_TMP
+  inc
+  sta @CJK2_S2G, x           ; slot -> glyph + 1
+  lda @CJK2_TMP+2
+  tax
+  jsr cjk_dirty2             ; queued before the caller writes the tilemap entry
+  rep #$20 : .al
+  lda @CJK2_TMP+2
+c2s_tile:
+  .al : .xl
+  asl                        ; 2s
+  cmp #2*64
+  bcc c2s_a
+  adc #CJK2_TILE_B-1         ; (carry set) 768 + 2s
+  clc
+  rts
+c2s_a:
+  .al : .xl
+  adc #CJK2_TILE_A           ; 640 + 2s
+  clc
+  rts
+
+; cjk2_alloc: a free BG2 slot, round robin. A = it, carry set = none. .al/.xl out.
+cjk2_alloc:
+  rep #$30 : .al : .xl
+  lda @CJK2_NEXT
+  and #$007f
+  sta @CJK2_TMP+4
+  ldy #CJK2_NSLOTS
+c2a_loop:
+  .al : .xl
+  lda @CJK2_TMP+4
+  asl
+  tax
+  lda @CJK2_S2G, x
+  beq c2a_free
+  lda @CJK2_TMP+4
+  inc
+  and #$007f
+  sta @CJK2_TMP+4
+  dey
+  bne c2a_loop
+  sec
+  rts
+c2a_free:
+  .al : .xl
+  lda @CJK2_TMP+4
+  inc
+  sep #$20 : .as
+  and #$7f
+  sta @CJK2_NEXT
+  rep #$20 : .al
+  lda @CJK2_TMP+4
+  clc
+  rts
+
+; cjk2_mark_word: A = a BG2 tilemap word; marks the BG2 slot it shows, if any. .al/.xl, X kept.
+cjk2_mark_word:
+  .al : .xl
+  and #$03ff
+  lsr
+  bcs c2m_out                ; odd tile: not a cell start
+  asl
+  cmp #CJK2_TILE_A
+  bcc c2m_out
+  cmp #CJK2_TILE_A+128
+  bcc c2m_a
+  cmp #CJK2_TILE_B+128       ; 768..895 are not ours
+  bcc c2m_out
+  sec
+  sbc #CJK2_TILE_B           ; 896..1023 -> 128..255 = 2s
+  bra c2m_mark
+c2m_a:
+  .al : .xl
+  sec
+  sbc #CJK2_TILE_A           ; 640..767 -> 0..127 = 2s
+c2m_mark:
+  .al : .xl
+  phx
+  tax
+  lda #$0001
+  sta @CJK2_MARK, x
+  plx
+c2m_out:
+  .al : .xl
+  rts
+
+; cjk2_gc: free every BG2 slot nothing shows: the BG2 buffer (rows 9..31) and the BG2 halves of
+; the window stack. Saves P.
+cjk2_gc:
+  php
+  rep #$30 : .al : .xl
+  ldx #$0000
+  lda #$0000
+c2g_clr:
+  .al : .xl
+  sta @CJK2_MARK, x
+  inx
+  inx
+  cpx #2*CJK2_NSLOTS
+  bcc c2g_clr
+  ldx #64*9
+c2g_buf:
+  .al : .xl
+  lda @BG2_TILE_BUF, x
+  jsr cjk2_mark_word
+  inx
+  inx
+  cpx #64*32
+  bcc c2g_buf
+  lda #$0001
+  sta @CJK_WMODE
+  jsr cjk_walk_stack
+  ldx #$0000                 ; X = 2 * slot
+c2g_free:
+  .al : .xl
+  lda @CJK2_MARK, x
+  bne c2g_next
+  lda @CJK2_S2G, x
+  beq c2g_next
+  jsr cjk2_unbind
+c2g_next:
+  .al : .xl
+  inx
+  inx
+  cpx #2*CJK2_NSLOTS
+  bcc c2g_free
+  plp
+  rts
+
+; cjk2_unbind: X = 2 * BG2 slot, A = its glyph + 1 (non zero). .al/.xl, X kept.
+cjk2_unbind:
+  .al : .xl
+  phx
+  dec
+  tax
+  sep #$20 : .as
+  lda #$00
+  sta @CJK2_G2S, x
+  rep #$20 : .al
+  plx
+  lda #$0000
+  sta @CJK2_S2G, x
+  rts
+
+; cjk2_upload_slot: X = BG2 slot (.al/.xl), DB = 0, VMAIN = $80, channel 7 set up by
+; cus_setup. Sends the 2bpp halves of its glyph (bytes 0..15 and 32..47 of the 64-byte cell:
+; planes 0/1 of each tile) to the cell's two tiles. A free slot is skipped. X kept.
+cjk2_upload_slot:
+  .al : .xl
+  phx
+  txa
+  asl
+  tax
+  lda @CJK2_S2G, x
+  beq c2u_none
+  dec
+  pha
+  txa                        ; 2s
+  cmp #2*64
+  bcc c2u_a
+  sec
+  sbc #2*64
+  asl
+  asl
+  asl                        ; 16 (s - 64)
+  clc
+  adc #$5C00
+  bra c2u_w
+c2u_a:
+  .al : .xl
+  asl
+  asl
+  asl                        ; 16 s
+  clc
+  adc #$5400
+c2u_w:
+  .al : .xl
+  sta @CJK2_TMP+12           ; the cell's VRAM word
+  pla
+  jsr cus_src                ; A1T/A1B = the glyph's 64 bytes
+  lda @CJK2_TMP+12
+  sta $2116
+  lda #$0010
+  sta $4375
+  sep #$20 : .as
+  lda #$80
+  sta $420b                  ; the left tile
+  rep #$20 : .al
+  lda $4372
+  clc
+  adc #$0010                 ; skip planes 2/3 of the left tile
+  sta $4372
+  lda @CJK2_TMP+12
+  clc
+  adc #$0008
+  sta $2116
+  lda #$0010
+  sta $4375
+  sep #$20 : .as
+  lda #$80
+  sta $420b                  ; the right tile
+  rep #$20 : .al
+c2u_none:
+  .al : .xl
+  plx
+  rts
+
+; cjk2_mark_all_dirty: every bound BG2 slot needs VRAM again (the tilemaps were rewritten).
+; .al/.xl.
+cjk2_mark_all_dirty:
+  .al : .xl
+  ldx #$0000
+c2d_loop:
+  .al : .xl
+  txa
+  asl
+  phx
+  tax
+  lda @CJK2_S2G, x
+  plx
+  cmp #$0000
+  beq c2d_next
+  jsr cjk_dirty2
+  rep #$20 : .al
+c2d_next:
+  .al : .xl
+  inx
+  cpx #CJK2_NSLOTS
+  bcc c2d_loop
+  rts
+
+; cjk_upload_slot: X = slot (.al/.xl), DB = 0, VMAIN = $80, DMA channel 7 set up by cus_setup
+; (A -> B, two registers to $2118). Copies the slot's glyph (64 bytes: its two 4bpp tiles)
+; into VRAM. A free slot is skipped.
+cjk_upload_slot:
+  .al : .xl
+  phx
+  txa
+  asl
+  tax
+  lda @CJK_SLOT_TILE, x
+  asl
+  asl
+  asl
+  asl                        ; VRAM word = tile * 16
+  sta @CJK_NTMP+4
+  lda @CJK_S2G, x
+  plx
+  cmp #$0000                 ; (plx just set Z from the slot number)
+  beq cus_out
+  dec                        ; glyph
+  jsr cus_src
+  lda @CJK_NTMP+4
+  sta $2116
+  lda #$0040
+  sta $4375
+  sep #$20 : .as
+  lda #$80
+  sta $420b                  ; (8-bit store: a 16-bit one would also write $420c, HDMA)
+  rep #$20 : .al
+cus_out:
+  .al : .xl
+  rts
+
+; cus_src: A = glyph index (.al) -> channel 7's source (A1T/A1B) = its 64 bytes: the resident
+; sheet (0..127), the active language's in WRAM $7F (128..639), or a game's text (640+).
+; .al out, X kept.
+cus_src:
+  .al : .xl
+  cmp #$0080
+  bcs cus_lang
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl                        ; glyph * 64
+  clc
+  adc #!cjk_sheet            ; a resident glyph: the sheet linked into the menu
+  sta $4372
+  sep #$20 : .as
+  lda #^cjk_sheet
+  bra cus_go
+cus_lang:
+  .al : .xl
+  cmp #$0280
+  bcs cus_game
+  sec
+  sbc #$0080
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl
+  clc
+  adc @CJK_LANG_SHEET        ; the active language's sheet, copied to WRAM $7F
+  sta $4372
+  sep #$20 : .as
+  lda #$7f
+  bra cus_go
+cus_game:
+  .al : .xl
+  sec
+  sbc #$0280                 ; glyphs 640+: a game's own text, drawn by the firmware
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl
+  clc
+  adc #!GI_CJK_SHEET
+  sta $4372
+  sep #$20 : .as
+  lda #^GI_CJK_SHEET
+cus_go:
+  .as : .xl
+  sta $4374
+  rep #$20 : .al
+  rts
+
+; cus_setup: the fixed part of channel 7 for cjk_upload_slot. DB = 0. Preserves widths.
+cus_setup:
+  php
+  sep #$20 : .as
+  lda #$01                   ; A -> B, increment, two registers ($2118/$2119)
+  sta $4370
+  lda #$18
+  sta $4371
+  plp
+  rts
+
+; cjk_nmi: called by the NMI (inside the line-225 guard, DB = 0) while CJK_NDIRTY != 0.
+; Sends queued cells (cjk_qpush) until the queue is empty, CJK_PER_NMI went up, or the line is
+; too late for one more (cjn_time). Out: carry set = some still queued (the caller skips the
+; tilemaps this frame). A queue, not a scan of the dirty flags: scanning 224 + 128 flags took
+; ~25 lines of VBlank by itself, and at boot the uploads after it ran out of VBlank.
+cjk_nmi:
+  php
+  rep #$30 : .al : .xl
+  jsr cus_setup
+  lda #CJK_PER_NMI
+  sta @CJK_NTMP
+cjn_loop:
+  .al : .xl
+  lda @CJK_DQ_HEAD
+  cmp @CJK_DQ_TAIL
+  beq cjn_empty
+  sep #$20 : .as
+  jsr cjn_time               ; past the safe part of VBlank: the rest waits a frame
+  rep #$20 : .al
+  bcs cjn_budget
+  jsr cjk_qpop_send
+  lda @CJK_NTMP
+  dec
+  sta @CJK_NTMP
+  bne cjn_loop
+cjn_budget:
+  .al : .xl
+  sep #$20 : .as
+  lda #$01                   ; more next VBlank
+  sta @CJK_NDIRTY
+  plp
+  sec
+  rtl
+cjn_empty:
+  .al : .xl
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_NDIRTY
+  plp
+  clc
+  rtl
+
+; cjk_qpop_send: take the queue's oldest cell and send it (a free one is skipped). .al/.xl.
+cjk_qpop_send:
+  .al : .xl
+  lda @CJK_DQ_HEAD
+  asl
+  tax
+  lda @CJK_DQ, x
+  pha
+  lda @CJK_DQ_HEAD
+  inc
+  and #CJK_DQ_SIZE-1
+  sta @CJK_DQ_HEAD
+  pla
+  bmi cqs_bg2
+  tax
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_DIRTY, x
+  rep #$20 : .al
+  jmp cjk_upload_slot
+cqs_bg2:
+  .al : .xl
+  and #$7fff
+  tax
+  sep #$20 : .as
+  lda #$00
+  sta @CJK2_DIRTY, x
+  rep #$20 : .al
+  jmp cjk2_upload_slot
+
+; cjk_dirty1 / cjk_dirty2: X = a BG1 / BG2 slot whose cell needs VRAM: queue it (once).
+; Write the entry, then the tail, then the flag: an NMI between them sees the cell next time.
+; Any widths in; .as out; X kept.
+cjk_dirty1:
+  sep #$20 : .as
+  lda @CJK_DIRTY, x
+  bne cqd_out
+  lda #$01
+  sta @CJK_DIRTY, x
+  rep #$20 : .al
+  txa
+  bra cjk_qpush
+cjk_dirty2:
+  sep #$20 : .as
+  lda @CJK2_DIRTY, x
+  bne cqd_out
+  lda #$01
+  sta @CJK2_DIRTY, x
+  rep #$20 : .al
+  txa
+  ora #$8000
+cjk_qpush:
+  .al : .xl
+  phx
+  pha
+  lda @CJK_DQ_TAIL
+  asl
+  tax
+  pla
+  sta @CJK_DQ, x
+  lda @CJK_DQ_TAIL
+  inc
+  and #CJK_DQ_SIZE-1
+  sta @CJK_DQ_TAIL
+  plx
+  sep #$20 : .as
+  lda #$01
+  sta @CJK_NDIRTY
+cqd_out:
+  .as : .xl
+  rts
+
+; cjk_qreset: an empty queue and no dirty flag (a flag left set would keep its cell out of
+; the queue for good). .al/.xl out.
+cjk_qreset:
+  rep #$30 : .al : .xl
+  lda #$0000
+  sta @CJK_DQ_HEAD
+  sta @CJK_DQ_TAIL
+  ldx #$0000
+cqr_loop:
+  .al : .xl
+  sta @CJK_DIRTY, x
+  inx
+  inx
+  cpx #CJK_NSLOTS
+  bcc cqr_loop
+  ldx #$0000
+cqr_loop2:
+  .al : .xl
+  sta @CJK2_DIRTY, x
+  inx
+  inx
+  cpx #CJK2_NSLOTS
+  bcc cqr_loop2
+  sep #$20 : .as
+  sta @CJK_NDIRTY
+  rep #$20 : .al
+  rts
+
+; cjn_time: carry set when an upload started now could run out of VBlank (it ends on line
+; 261; a VRAM write after it is dropped): the current line is 253 or later, or already past it
+; into the next frame. .as in and out, X kept. Needs $4201 bit 7 (snes_init) for the $2137 latch.
+cjn_time:
+  .as : .xl
+  lda $2137                  ; latch H/V
+  lda $213f                  ; reset the OPVCT read flip-flop
+  lda $213d                  ; V, low 8 bits
+  xba
+  lda $213d                  ; V bit 8
+  lsr
+  bcs cjt_late               ; 256+
+  xba
+  cmp #253
+  bcs cjt_late
+  cmp #225
+  bcc cjt_late               ; wrapped into the next frame
+  clc
+  rts
+cjt_late:
+  .as : .xl
+  sec
+  rts
+
+; cjk_flush_now: send every queued cell right away. The screen must be blanked (forced blank
+; or a blanked VBlank window) and the NMI off. DB/widths preserved. rtl.
+cjk_flush_now:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CJK_NDIRTY
+  beq cfn_out
+  lda #$00
+  pha
+  plb
+  lda #$80
+  sta $2115
+  rep #$30 : .al : .xl
+  jsr cus_setup
+cfn_loop:
+  .al : .xl
+  lda @CJK_DQ_HEAD
+  cmp @CJK_DQ_TAIL
+  beq cfn_done
+  jsr cjk_qpop_send
+  bra cfn_loop
+cfn_done:
+  .al : .xl
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_NDIRTY
+cfn_out:
+  .as : .xl
+  plb
+  plp
+  rtl
+
+; cjk_vram_restore: VRAM was reloaded (forced blank, NMI off: setup_gfx -- cold/warm boot,
+; the game-info screen's way out -- and the manual viewer's way out). Back from the
+; game-info screen, the menu's own tables come back first. Then every bound slot is
+; uploaded right away. Preserves P/DB.
+cjk_vram_restore:
+  php
+  phb
+  sep #$20 : .as
+  lda @CJK_MODE
+  beq cvr_normal
+  jsr cjk_tables_restore
+  jsr cjk_map_normal
+cvr_normal:
+  .xl
+  rep #$30 : .al : .xl
+  ldx #$0000                 ; slot
+cvr_mark:
+  .al : .xl
+  phx
+  txa
+  asl
+  tax
+  lda @CJK_S2G, x
+  plx
+  cmp #$0000
+  beq cvr_next
+  jsr cjk_dirty1
+  rep #$20 : .al
+cvr_next:
+  .al : .xl
+  inx
+  cpx #CJK_NSLOTS
+  bcc cvr_mark
+  jsr cjk2_mark_all_dirty    ; the BG2 cells live in the tilemaps' lower screens: also gone
+  jsl @cjk_flush_now
+  plb
+  plp
+  rtl
+
+; cjk_tables_save / cjk_tables_restore: the menu's G2S + S2G <-> CJK_SAVE (the game-info
+; screen has its own pool). .al/.xl out.
+cjk_tables_save:
+  rep #$30 : .al : .xl
+  ldx #$0000
+cts_loop:
+  .al : .xl
+  lda @CJK_G2S, x
+  sta @CJK_SAVE, x
+  inx
+  inx
+  cpx #$0300+CJK_NSLOTS*2
+  bcc cts_loop
+  rts
+
+cjk_tables_restore:
+  rep #$30 : .al : .xl
+  ldx #$0000
+ctr_loop:
+  .al : .xl
+  lda @CJK_SAVE, x
+  sta @CJK_G2S, x
+  inx
+  inx
+  cpx #$0300+CJK_NSLOTS*2
+  bcc ctr_loop
+  rts
+
+;  ---------------------------------------------------------------------------
+; The geometry of a window stack element (ui.a65 push_window / pop_window, the walkers above).
+; Each row saves the words of columns [S, S+R) of both layers. A glyph cell is two columns,
+; so the word of the column just left of an EVEN window_x (a BG1 cell spilling onto the
+; window's first column) is saved too: S = x-2 there, x&~1 otherwise (an odd x already
+; starts at its pair's BG2 word). X = the element; X, Y kept; P kept; A out (16 bits). rtl.
+; ---------------------------------------------------------------------------
+win_scol:
+  php
+  rep #$30 : .al : .xl
+  lda @WINDOW_STACK_BASE+2, x
+  and #$00ff
+  beq wsc_pair
+  lsr
+  bcs wsc_pair2
+  asl
+  dec
+  dec                        ; even x >= 2: x - 2
+  plp
+  rtl
+wsc_pair2:
+  .al : .xl
+  asl                        ; odd x: x - 1
+wsc_pair:
+  .al : .xl
+  plp
+  rtl
+
+win_rowbytes:
+  php
+  rep #$30 : .al : .xl
+  lda @WINDOW_STACK_BASE+6, x
+  and #$00ff
+  ora #$0001
+  inc                        ; the pairs from x&~1 through the last column
+  pha
+  lda @WINDOW_STACK_BASE+2, x
+  and #$00ff
+  beq wrb_out
+  lsr
+  bcs wrb_out
+  pla
+  inc
+  inc                        ; + the pair left of an even x
+  pha
+wrb_out:
+  .al : .xl
+  pla
+  plp
+  rtl
+
+win_start:
+  php
+  rep #$30 : .al : .xl
+  lda @WINDOW_STACK_BASE+4, x
+  and #$00ff
+  xba
+  lsr
+  lsr                        ; 64 * y
+  pha
+  jsl @win_scol
+  clc
+  adc $01, s
+  sta $01, s
+  pla
+  plp
+  rtl
+
+;  ---------------------------------------------------------------------------
+; cjk_window_edge: draw_window is about to draw at window_x. A glyph cell is 16 px, two
+; columns: one starting at window_x-1 (outside the window) would show its right half on top
+; of the new left border. Blank it -- only where the window stack's top element saved that
+; word (the region the window covers or greys), so pop_window brings it back. Any widths,
+; DB; everything kept. rtl.
+; ---------------------------------------------------------------------------
+cjk_window_edge:
+  php
+  rep #$30 : .al : .xl
+  phx
+  phy
+  lda @window_x
+  and #$00ff
+  beq cwe_out
+  dec
+  sta @CJK_EDGE              ; c = the column left of the window
+  lda @window_stack_head
+  cmp #$ffff
+  beq cwe_out
+  tax
+  jsl @win_scol
+  sta @CJK_EDGE+2            ; the saved bytes of a row: [lo, hi)
+  jsl @win_rowbytes
+  clc
+  adc @CJK_EDGE+2
+  sta @CJK_EDGE+4
+  lda @CJK_EDGE
+  and #$fffe
+  sta @CJK_EDGE+6            ; c's word in its layer's row
+  cmp @CJK_EDGE+2
+  bcc cwe_out
+  cmp @CJK_EDGE+4
+  bcs cwe_out
+  lda @WINDOW_STACK_BASE+4, x
+  and #$00ff
+  sta @CJK_EDGE+8            ; saved rows: [y0, y0+h0)
+  lda @WINDOW_STACK_BASE+8, x
+  and #$00ff
+  clc
+  adc @CJK_EDGE+8
+  sta @CJK_EDGE+10
+  lda @window_y
+  and #$00ff
+  tay                        ; Y = row
+cwe_row:
+  .al : .xl
+  tya
+  cmp @CJK_EDGE+10
+  bcs cwe_out
+  lda @window_y
+  and #$00ff
+  sta @CJK_EDGE+2
+  lda @window_h
+  and #$00ff
+  clc
+  adc @CJK_EDGE+2
+  sta @CJK_EDGE+2            ; the window's last row + 1
+  tya
+  cmp @CJK_EDGE+2
+  bcs cwe_out
+  cmp @CJK_EDGE+8
+  bcc cwe_next               ; above the saved rows
+  xba
+  lsr
+  lsr                        ; row * 64
+  clc
+  adc @CJK_EDGE+6
+  tax
+  lda @CJK_EDGE
+  lsr
+  bcc cwe_bg2
+  lda @BG1_TILE_BUF, x       ; odd column: a BG1 cell is a slot's tile ($200-$3ff, even)
+  and #$03ff
+  sec
+  sbc #CJK_TILE_B
+  bcc cwe_next
+  lsr
+  bcs cwe_next
+  phx
+  tax
+  lda @CJK_TILE_SLOT, x
+  plx
+  and #$00ff
+  beq cwe_next
+  lda @BG1_TILE_BUF, x
+  and #$fc00
+  ora #CJK_SPACE_TILE
+  sta @BG1_TILE_BUF, x
+  bra cwe_next
+cwe_bg2:
+  .al : .xl
+  lda @BG2_TILE_BUF, x       ; even column: a BG2 cell (640..767, 896..1023, even)
+  and #$03ff
+  lsr
+  bcs cwe_next
+  cmp #640/2
+  bcc cwe_next
+  cmp #768/2
+  bcc cwe_blank2
+  cmp #896/2
+  bcc cwe_next
+cwe_blank2:
+  .al : .xl
+  lda @BG2_TILE_BUF, x
+  and #$fc00
+  ora #CJK_SPACE_TILE
+  sta @BG2_TILE_BUF, x
+cwe_next:
+  .al : .xl
+  iny
+  bra cwe_row
+cwe_out:
+  .al : .xl
+  ply
+  plx
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------
+; Region B: the box-art cover's OBJ tiles ($2000-$2FFF) while a menu hides the cover.
+; ---------------------------------------------------------------------------
+
+; cjk_allow_b: cover_menu_off hid the cover, which reloads (re-uploading $2000) before it
+; shows again: region B is free until then. Any widths. rtl.
+cjk_allow_b:
+  php
+  sep #$20 : .as
+  lda @CJK_MODE
+  bne cab_out
+  lda #$01
+  sta @CJK_BOK
+  lda #CJK_NSLOTS
+  sta @CJK_NACTIVE
+cab_out:
+  .as
+  plp
+  rtl
+
+; cjk_lazy_b: region B closed although no cover is in VRAM (cover_loaded = 0: a path that hid
+; or never showed the cover without cover_menu_off -- a warm boot, the way back from the game
+; info screen or a game) -> open it now. Any cover upload evicts it first (cjk_evict_b), so
+; this is always safe. C clear = opened (try the allocator again). Any widths in; .as/.xl out.
+cjk_lazy_b:
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CJK_BOK
+  bne clb_no                 ; already open: really full
+  lda @CJK_MODE
+  bne clb_no                 ; the game info screen has its own pool
+  lda @cover_loaded
+  bne clb_no                 ; a cover is shown from $2000
+  lda #$01
+  sta @CJK_BOK
+  lda #CJK_NSLOTS
+  sta @CJK_NACTIVE
+  clc
+  rts
+clb_no:
+  .as : .xl
+  sec
+  rts
+
+; cjk_evict_b: the cover is about to overwrite $2000-$2FFF (forced blank, NMI off). Region B
+; closes; every B slot still shown moves to a free A slot (bound, uploaded right now, its
+; tilemap entries rewritten), the rest is freed. Any widths/DB. rtl.
+cjk_evict_b:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @CJK_MODE
+  beq ceb_normal
+  jmp ceb_out
+ceb_normal:
+  .as : .xl
+  lda @CJK_EVLIVE
+  bne ceb_go                 ; (the live pass leaves VRAM to the NMI)
+  lda @CJK_NDIRTY            ; in the blank window: what the live pass left for the NMI
+  beq ceb_go                 ; and it has not sent yet goes up now
+  jsl @cjk_flush_now
+ceb_go:
+  .as : .xl
+  lda @CJK_BOK
+  bne ceb_open
+  jmp ceb_out
+ceb_open:
+  .as : .xl
+  lda #$00
+  sta @CJK_BOK
+  lda #CJK_NSLOTS_A
+  sta @CJK_NACTIVE
+  rep #$30 : .al : .xl
+  ldx #CJK_NSLOTS_A*2        ; no B slot bound (the usual case: A fills first): nothing to
+ceb_any:                     ; move, and no reason to scan the screen
+  .al : .xl
+  lda @CJK_S2G, x
+  bne ceb_some
+  inx
+  inx
+  cpx #CJK_NSLOTS*2
+  bcc ceb_any
+  jmp ceb_out
+ceb_some:
+  .al : .xl
+  sep #$20 : .as
+  lda #$00
+  pha
+  plb
+  lda @CJK_EVLIVE
+  bne ceb_live
+  lda #$80
+  sta $2115
+  rep #$30 : .al : .xl
+  jsr cus_setup
+ceb_live:
+  rep #$30 : .al : .xl
+  ldx #$0000
+  lda #$0000
+ceb_clr:
+  .al : .xl
+  sta @CJK_REMAP, x
+  inx
+  inx
+  cpx #$0200
+  bcc ceb_clr
+  jsr cjk_mark_refs
+  ldx #$0000                 ; A slots bound to glyphs no longer on screen (a closed
+ceb_afree:                   ; description, a popped window) make room for the moves:
+  .al : .xl                  ; ceb_move only takes a FREE A slot
+  sep #$20 : .as
+  lda @CJK_GCMARK, x
+  rep #$20 : .al
+  bne ceb_anext              ; (rep leaves Z alone)
+  jsr cjk_unbind
+ceb_anext:
+  .al : .xl
+  inx
+  cpx #CJK_NSLOTS_A
+  bcc ceb_afree
+  ldx #CJK_NSLOTS_A          ; every B slot
+ceb_loop:
+  .al : .xl
+  phx
+  txa
+  asl
+  tax
+  lda @CJK_S2G, x
+  plx
+  cmp #$0000
+  beq ceb_next               ; free
+  sep #$20 : .as
+  lda @CJK_GCMARK, x
+  rep #$20 : .al
+  beq ceb_free               ; bound but not shown
+  jsr ceb_move
+ceb_free:
+  .al : .xl
+  jsr cjk_unbind
+ceb_next:
+  .al : .xl
+  inx
+  cpx #CJK_NSLOTS
+  bcc ceb_loop
+  jsr ceb_rewrite
+ceb_out:
+  .xl
+  plb
+  plp
+  rtl
+
+; cjk_evict_b_live: the same, with the screen on and the NMI running, BEFORE a cover upload
+; (cover_show). Scanning the screen and the window stack takes frames; done inside the
+; cover's blank window it showed as a black flash. Here the moved glyphs are left to the NMI
+; (dirty), which sends them and then the rewritten tilemaps; this waits for that (bounded:
+; with the NMI off nothing would drain, and the blank-window cjk_evict_b sends what is left).
+; Any widths/DB. rtl.
+cjk_evict_b_live:
+  php
+  rep #$10 : .xl
+  phx
+  phy
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_EVMOVED
+  lda #$01
+  sta @CJK_EVLIVE
+  jsl @cjk_evict_b
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_EVLIVE
+  lda @CJK_EVMOVED           ; nothing moved (no glyph on the cover's tiles, or a language
+  beq cel_out                ; without CJK): the cover goes up at once, as it always did
+  ldy #40                    ; frames, at most
+cel_wait:
+  .as : .xl
+  lda @CJK_NDIRTY
+  beq cel_settle
+  jsr cel_frame
+  dey
+  bne cel_wait
+cel_settle:
+  .as : .xl
+  jsr cel_frame              ; one VBlank for the tilemaps, one more for a late NMI
+  jsr cel_frame
+cel_out:
+  .as : .xl
+  ply
+  plx
+  plp
+  rtl
+
+; cel_frame: wait for the next NMI (isr_done), bounded. NOT by polling $4212 for the VBlank
+; edge: the menu's NMI fills the whole VBlank and may return after it ended, so the edge is
+; never seen (the bug that hung waitblank-style waits when the NMI grew by a few cycles).
+; .as in; X kept.
+cel_frame:
+  .as : .xl
+  phx
+  lda #$00
+  sta @isr_done
+  ldx #$0000
+cel_f1:
+  .as : .xl
+  lda @isr_done
+  bne cel_f2
+  dex
+  bne cel_f1
+cel_f2:
+  .as : .xl
+  plx
+  rts
+
+; ceb_move: B slot X (shown) -> the first free A slot: rebind, upload, record the remap.
+; No free A slot: it is freed with the rest (and shows whatever the cover leaves). X kept.
+ceb_move:
+  .al : .xl
+  phx
+  ldy #$0000                 ; A slot * 2
+cem_find:
+  .al : .xl
+  tya
+  cmp #CJK_NSLOTS_A*2
+  bcs cem_none
+  tyx
+  lda @CJK_S2G, x
+  beq cem_got
+  iny
+  iny
+  bra cem_find
+cem_none:
+  .al : .xl
+  plx
+  rts
+cem_got:
+  .al : .xl
+  lda $01, s                 ; the B slot
+  asl
+  tax
+  lda @CJK_S2G, x            ; glyph+1
+  tyx
+  sta @CJK_S2G, x            ; the A slot takes it
+  dec
+  pha                        ; glyph
+  tya
+  lsr
+  inc                        ; A slot + 1
+  plx
+  sep #$20 : .as
+  sta @CJK_G2S, x            ; glyph -> the A slot
+  rep #$20 : .al
+  lda $01, s                 ; the B slot's tile -> the A slot's tile, for ceb_rewrite
+  asl
+  tax
+  lda @CJK_SLOT_TILE, x
+  sec
+  sbc #CJK_TILE_B            ; = byte offset in the word table (tile - $200 is even)
+  pha
+  tyx
+  lda @CJK_SLOT_TILE, x
+  plx
+  sta @CJK_REMAP, x
+  tya
+  lsr
+  tax
+  sep #$20 : .as
+  lda @CJK_EVLIVE
+  beq cem_now
+  jsr cjk_dirty1             ; screen on: the NMI sends it, before the tilemaps that use it
+  lda #$01
+  sta @CJK_EVMOVED
+  rep #$20 : .al
+  bra cem_sent
+cem_now:
+  .as : .xl
+  rep #$20 : .al
+  jsr cjk_upload_slot        ; the A slot, now
+cem_sent:
+  .al : .xl
+  plx                        ; the B slot: drop its side of the binding (G2S already
+  phx                        ; points at the A slot, so cjk_unbind must not clear it)
+  txa
+  asl
+  tax
+  lda #$0000
+  sta @CJK_S2G, x
+  plx
+  rts
+
+; ceb_rewrite: every tilemap word (BG1 buffer from row 9, the window stack) on a remapped
+; B tile now points at its A tile. .al/.xl.
+ceb_rewrite:
+  .al : .xl
+  ldx #64*9
+cer_bg1:
+  .al : .xl
+  lda @BG1_TILE_BUF, x
+  jsr cer_word
+  sta @BG1_TILE_BUF, x
+  inx
+  inx
+  cpx #$1000
+  bcc cer_bg1
+  lda #$0002                 ; the BG1 halves of the window backups (a BG2 word can carry a
+  sta @CJK_WMODE             ; BG2 cell whose number is in region B's range: not ours)
+  jsr cjk_walk_stack
+  rts
+
+; cer_word: A = a tilemap word -> the same word with a remapped tile replaced. X kept.
+cer_word:
+  .al : .xl
+  pha
+  and #$03ff
+  sec
+  sbc #CJK_TILE_B
+  bcc cerw_keep
+  cmp #$0100
+  bcs cerw_keep              ; not region B
+  phx
+  tax
+  lda @CJK_REMAP, x
+  plx
+  cmp #$0000
+  beq cerw_keep
+  sta @CJK_TMP+6             ; the new tile
+  pla
+  and #$fc00
+  ora @CJK_TMP+6
+  rts
+cerw_keep:
+  .al : .xl
+  pla
+  rts
+
+; ---------------------------------------------------------------------------
+; The game-info screen (gameinfo.a65): its band fills $2000-$3FFF, so its glyphs go into the
+; band's EMPTY tiles instead.
+; ---------------------------------------------------------------------------
+
+; cjk_ficha_begin: from gi_fmv_band_v3, forced blank, BEFORE the band tilemap is built.
+; With a CJK language active: keep the menu's tables (unless already in this mode -- the
+; screen reloads in place for Up/Down), then hand the cache the band's free tiles: with a
+; .gcv cover, the cover tiles that are all zero (the band maps them to its blank char, see
+; cjk_band_char); with the floating OBJ cover, window 0's second half; with none, all of it.
+; Without one the menu's pool is left alone (setup_gfx re-uploads it on the way out). rtl.
+cjk_ficha_begin:
+  php
+  phb
+  rep #$30 : .al : .xl
+  lda #$2000                 ; the band's usual layout: cover in window 0 ($2000, #256), the
+  sta @gi_cov_vram           ; empty cell = the zeroed tile #984 at $7B00
+  lda #GI_COVER_CHAR0
+  sta @gi_cov_char0
+  lda #$7b00
+  sta @gi_blank_vram
+  lda #CJK_BAND_BLANK
+  sta @gi_blank_char
+  sep #$20 : .as
+  lda @CJK_LANG_CUR
+  beq cfb_out
+  cmp @cur_lang
+  bne cfb_out
+  lda @CJK_MODE
+  bne cfb_inmode
+  jsr cjk_tables_save
+cfb_inmode:
+  .xl
+  sep #$20 : .as
+  lda #$01
+  sta @CJK_MODE              ; (CJK_BOK is the menu's: it is back in force on the way out)
+  jsr cjk_qreset             ; a fresh pool: nothing bound, nothing queued
+  rep #$30 : .al : .xl
+  ldx #$0000
+  lda #$0000
+cfb_clr:
+  .al : .xl
+  sta @CJK_G2S, x
+  inx
+  inx
+  cpx #CJK_GCMARK-CJK_G2S    ; G2S, S2G, DIRTY
+  bcc cfb_clr
+  ldx #$0000
+cfb_clrb:
+  .al : .xl
+  sta @CJK_FBLANK, x
+  inx
+  inx
+  cpx #$0020
+  bcc cfb_clrb
+  sep #$20 : .as
+  ldx #$0000                 ; free band tiles, 1 bit each, from the cover flags
+  lda @GI_FLAGS
+  and #GI_FLAG_COVER
+  beq cfb_nocov
+  lda @GI_FLAGS
+  and #GI_FLAG_FMV
+  bne cfb_scan               ; window 1 holds the clip/snapshot: the cover shares window 0
+  rep #$20 : .al             ; no clip: the cover moves to window 1 (#768, $6000) and window 0
+  lda #$6000                 ; is all ours. The empty cell becomes char 32 (the font's space:
+  sta @gi_cov_vram           ; tiles 64/65, all zero, which as one 8bpp tile #32 is blank too)
+  lda #$0300
+  sta @gi_cov_char0
+  lda #$0400
+  sta @gi_blank_vram
+  lda #$0020
+  sta @gi_blank_char
+  sep #$20 : .as
+  bra cfb_all
+cfb_nocov:
+  .as : .xl
+  lda @GI_FLAGS
+  and #GI_FLAG_COVER_OBJ
+  beq cfb_all
+  ldx #$0010                 ; floating cover: OBJ tiles in $2000-$2FFF; #128-255 are free
+cfb_all:
+  .as : .xl
+  lda #$ff
+  sta @CJK_FBLANK, x
+  inx
+  cpx #$0020
+  bcc cfb_all
+  bra cfb_slots
+cfb_scan:
+  .as : .xl
+  jsr cfb_scan_cover
+cfb_slots:
+  .as : .xl
+  jsr cfb_build
+cfb_out:
+  .as : .xl
+  plb
+  plp
+  rtl
+
+; cfb_scan_cover: CJK_FBLANK bit n = the .gcv band tile #n (64 bytes in COVER_C9_TILES) is
+; all zero. .as in, .as out.
+cfb_scan_cover:
+  rep #$30 : .al : .xl
+  ldx #$0000                 ; byte offset of the tile
+  ldy #$0000                 ; tile
+cfs_tile:
+  .al : .xl
+  phx
+  lda #$0020                 ; 32 words
+  sta @CJK_TMP
+cfs_word:
+  .al : .xl
+  lda @COVER_C9_TILES, x
+  bne cfs_used
+  inx
+  inx
+  lda @CJK_TMP
+  dec
+  sta @CJK_TMP
+  bne cfs_word
+  jsr cfb_bit                ; all zero: set its bit
+  sep #$20 : .as
+  ora @CJK_FBLANK, x
+  sta @CJK_FBLANK, x
+  rep #$20 : .al
+cfs_used:
+  .al : .xl
+  plx
+  txa
+  clc
+  adc #$0040
+  tax
+  iny
+  cpy #$0100
+  bcc cfs_tile
+  sep #$20 : .as
+  rts
+
+; cfb_bit: Y = band tile -> X = its byte in CJK_FBLANK, A(8 bits, in a .al A) = its bit.
+cfb_bit:
+  .al : .xl
+  tya
+  and #$0007
+  tax
+  lda @cfs_bits, x
+  and #$00ff
+  pha
+  tya
+  lsr
+  lsr
+  lsr
+  tax
+  pla
+  rts
+cfs_bits:
+  .byt $01, $02, $04, $08, $10, $20, $40, $80
+
+; cfb_build: slot -> tile for every free band tile (8bpp tile #n = 4bpp tiles $200+2n and
+; $201+2n), up to CJK_NSLOTS; the active count. .as in, .as out.
+cfb_build:
+  rep #$30 : .al : .xl
+  jsr cjk_clear_rev
+  lda #$0000
+  sta @CJK_TMP+4             ; slots so far
+  ldy #$0000                 ; band tile n
+cfbb_loop:
+  .al : .xl
+  lda @CJK_TMP+4
+  cmp #CJK_NSLOTS
+  bcs cfbb_done
+  jsr cfb_bit
+  sep #$20 : .as
+  and @CJK_FBLANK, x
+  rep #$20 : .al
+  beq cfbb_next              ; (rep leaves Z alone)
+  lda @CJK_TMP+4
+  tax                        ; slot
+  tya
+  asl
+  clc
+  adc #CJK_TILE_B            ; tile $200 + 2n
+  jsr cjk_bind_tile
+  lda @CJK_TMP+4
+  inc
+  sta @CJK_TMP+4
+cfbb_next:
+  .al : .xl
+  iny
+  cpy #$0100
+  bcc cfbb_loop
+cfbb_done:
+  .al : .xl
+  lda @CJK_TMP+4
+  sep #$20 : .as
+  sta @CJK_NACTIVE
+  rts
+
+; cjk_band_char: gi_fmv_build_tmap_v3, per cover cell. A(16) = the cover char (#256+n) ->
+; the band's blank char instead when tile n went to the glyph cache. X/Y kept. rtl.
+cjk_band_char:
+  php
+  rep #$30 : .al : .xl
+  pha
+  sep #$20 : .as
+  lda @CJK_MODE
+  beq cbc_keep
+  rep #$20 : .al
+  lda @gi_cov_char0
+  cmp #GI_COVER_CHAR0
+  bne cbc_keep               ; the cover moved to window 1: none of its cells is ours
+  lda $01, s
+  sec
+  sbc #GI_COVER_CHAR0
+  cmp #$0100
+  bcs cbc_keep
+  phx
+  phy
+  tay
+  jsr cfb_bit
+  sep #$20 : .as
+  and @CJK_FBLANK, x
+  rep #$20 : .al
+  ply                        ; (Z from the and: ply/plx would overwrite it, so keep it in A)
+  plx
+  and #$00ff
+  beq cbc_keep
+  pla
+  lda #CJK_BAND_BLANK
+  plp
+  rtl
+cbc_keep:
+  .xl
+  rep #$20 : .al
+  pla
+  plp
+  rtl
+
+; ===========================================================================
+; The active CJK language. Its strings and glyphs are not in the menu image: they are
+; /sd2snes/lang/<code>.bin, which the MCU stages in PSRAM (LANG_STAGE) and the menu copies
+; to WRAM $7F, where the dispatch tables' words for that column point.
+; ===========================================================================
+
+; cls_code: A(8) = a language -> A(16) = its two-letter code if it is a CJK column, else 0
+; (Z set). X clobbered. .as/.xl in, .al out.
+cls_code:
+  .as : .xl
+  cmp @strtab_nlang
+  bcs cls_code_none
+  rep #$20 : .al
+  and #$00ff
+  asl
+  tax
+  lda @cjk_lang_code, x
+  rts
+cls_code_none:
+  .as : .xl
+  rep #$20 : .al
+  lda #$0000
+  rts
+
+; cjk_lang_sync: after cur_lang changed (cold boot, a committed Language edit, the first-boot
+; gate), make $7F hold cur_lang's file when cur_lang is a CJK language. On any failure (no
+; file on the card, an older firmware without the command, a bad file) cur_lang falls back
+; to English: nothing may resolve a CJK column whose pool is not in $7F. The MCU command
+; needs the menu loop running (after wait_mcu_ready). Any widths/DB/DP; preserves them. rtl.
+cjk_lang_sync:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @cur_lang
+  jsr cls_code
+  beq cls_out                ; not a CJK language
+  sta @CJK_TMP               ; its code, for the MCU
+  sep #$20 : .as
+  lda @cur_lang
+  cmp @CJK_LANG_CUR
+  beq cls_out                ; already in $7F
+  jsr cls_load
+  bcc cls_out
+  sep #$20 : .as
+  lda #$00
+  sta @cur_lang              ; no file: English
+cls_out:
+  plb
+  plp
+  rtl
+
+; cls_load: ask the MCU for the file, check it, copy it to $7F, drop the previous language's
+; glyphs from the cache. Carry clear = loaded. .al in (CJK_TMP = code).
+cls_load:
+  .al : .xl
+  sep #$20 : .as
+  jsl @ui_call_coversync     ; a cover request in flight would answer our $55
+  rep #$20 : .al
+  lda @CJK_TMP
+  sta @MCU_PARAM
+  lda #$0000
+  sta @MCU_PARAM+2           ; (LANG_STAGE is in $D0, which the menu cannot write: the MCU
+                             ;  zeroes its magic before staging, so only a whole file has one)
+  ; The MCU clears MCU_CMD each time it (re)enters its command loop, and writes its "ready"
+  ; $55 just before. A command written while it is still booting or busy is erased, and the
+  ; $55 that follows read as "done" while the stage still held an OLDER file (seen on hardware
+  ; right after a menu reload: the menu ran with the previous build's strings). So: wait until
+  ; it is idle ($55), clear SNES_CMD, send; from then on only the end of OUR command writes
+  ; $55. The wait runs from WRAM (cll_wram: the SD DMA takes the PSRAM bus, the menu's code
+  ; with it) and is bounded: no $55 = the command was erased after all, send it again.
+  sep #$20 : .as
+  ldy #$0010                 ; idle first (bounded)
+cll_idle_o:
+  .as : .xl
+  ldx #$0000
+cll_idle:
+  .as : .xl
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  beq cll_ready
+  dex
+  bne cll_idle
+  dey
+  bne cll_idle_o
+cll_ready:
+  .as : .xl
+  phb
+  rep #$20 : .al
+  lda #CLL_WRAM_LEN-1        ; the bounded wait, into WRAM
+  ldx #!cll_wram
+  ldy #!CJK_WRAM_WAIT
+  mvn ^CJK_WRAM_WAIT, ^cll_wram
+  plb
+  sep #$20 : .as
+  lda #$04                   ; tries
+  sta @CJK_TMP+6
+cll_send:
+  .as : .xl
+  php
+  sei
+  lda #$00
+  sta @$004200               ; NMI off: its handler lives in PSRAM
+  sta @SNES_CMD
+  lda #CMD_LOAD_LANG
+  sta @MCU_CMD
+  jsl @CJK_WRAM_WAIT         ; A = SNES_CMD at the end: $55 = done
+  pha
+  lda #$00
+  sta @MCU_CMD
+  lda @$004210               ; drop the NMI that came while it was off
+  lda #$81
+  sta @$004200               ; NMI + auto joypad, as the menu runs
+  pla
+  plp
+  cmp #CMD_MCU_RDY
+  beq cll_done
+  lda @CJK_TMP+6
+  dec
+  sta @CJK_TMP+6
+  bne cll_send
+  rep #$20 : .al             ; never served: English
+  sec
+  rts
+cll_done:
+  .as : .xl
+  rep #$20 : .al
+  lda @LANG_STAGE
+  cmp #$4453                 ; "SD"
+  bne cll_fail
+  lda @LANG_STAGE+2
+  cmp #$314c                 ; "L1"
+  bne cll_fail
+  sep #$20 : .as
+  lda @LANG_STAGE+4          ; the column the file was built for
+  cmp @cur_lang
+  bne cll_fail
+  rep #$20 : .al
+  lda @LANG_STAGE+12         ; total length
+  cmp #$0010
+  bcc cll_fail
+  cmp #CJK_LANG_MAX+1
+  bcs cll_fail
+  dec
+  ldx #$0000                 ; LANG_STAGE
+  ldy #$2000                 ; CJK_LANG_BASE
+  mvn $7f, $d0
+  jsr cjk_flush_lang
+  sep #$20 : .as
+  lda @cur_lang
+  sta @CJK_LANG_CUR
+  clc
+  rts
+cll_fail:
+  .al : .xl
+  sec
+  rts
+
+; cll_wram: copied to CJK_WRAM_WAIT and run from there. Waits (bounded, ~1 s) for SNES_CMD to be
+; $55; A = SNES_CMD on the way out. .as/.xl.
+cll_wram:
+  .as : .xl
+  ldy #$0004
+cllw_o:
+  ldx #$0000
+cllw_i:
+  lda @SNES_CMD
+  cmp #CMD_MCU_RDY
+  beq cllw_out
+  dex
+  bne cllw_i
+  dey
+  bne cllw_o
+cllw_out:
+  rtl
+cll_wram_end:
+
+; cjk_flush_lang: unbind every slot holding a glyph of the language range (128+): its index
+; means something else in the new file. The caller redraws (a committed language change
+; reopens the main menu and repaints the statusbar). .al/.xl.
+cjk_flush_lang:
+  rep #$30 : .al : .xl
+  ldx #$0000
+cfl_loop:
+  .al : .xl
+  phx
+  txa
+  asl
+  tax
+  lda @CJK_S2G, x
+  plx
+  cmp #$0000
+  beq cfl_next
+  dec
+  cmp #$0080
+  bcc cfl_next
+  jsr cjk_unbind
+cfl_next:
+  .al : .xl
+  inx
+  cpx #CJK_NSLOTS
+  bcc cfl_loop
+  ldx #$0000                 ; and the BG2 pool's (X = 2 * slot)
+cfl2_loop:
+  .al : .xl
+  lda @CJK2_S2G, x
+  beq cfl2_next
+  cmp #$0081                 ; glyph + 1: 1..128 are the resident ones
+  bcc cfl2_next
+  jsr cjk2_unbind
+cfl2_next:
+  .al : .xl
+  inx
+  inx
+  cpx #2*CJK2_NSLOTS
+  bcc cfl2_loop
+  rts
+
+; cjk_preview_lang: the Language entry's live preview (mfunc_chg_language, every scroll of
+; the value list), A(8) = the language under the cursor. A CJK language whose file is not in
+; $7F is NOT previewed (cur_lang keeps the current one): loading files while scrolling would
+; drop the glyphs of the menu still on screen. The commit loads it (menu.a65, cjk_lang_sync).
+cjk_preview_lang:
+  php
+  phx
+  sep #$20 : .as
+  rep #$10 : .xl
+  pha
+  jsr cls_code
+  beq cpl_take
+  sep #$20 : .as
+  lda $01, s
+  cmp @CJK_LANG_CUR
+  bne cpl_keep
+cpl_take:
+  .xl
+  sep #$20 : .as
+  pla
+  sta @cur_lang
+  plx
+  plp
+  rtl
+cpl_keep:
+  .as : .xl
+  pla
+  plx
+  plp
+  rtl

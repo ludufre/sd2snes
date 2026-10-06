@@ -43,8 +43,24 @@ onb_nmi_live:
   lda @onb_font_busy
   beq onb_nmi_tiles
   jsr onb_font_step
-  bra onb_nmi_fade
+  jmp onb_nmi_fade
 onb_nmi_tiles:
+  .as : .xl
+  ; the CJK glyph cells first (onb_cjk.a65): a tilemap must not point at a cell before it
+  ; is in VRAM. C = the tilemaps wait this frame; V = a piece of cells went up, so the
+  ; demo stream waits (the tilemaps + a piece fill the VBlank)
+  jsl @onb_cjk_nmi
+  bcc +
+  jmp onb_nmi_fade
++ bvc onb_nmi_tiles2
+  ldx #BG1_TILE_BASE
+  stx $2116
+  DMA7(#$01, #28*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF, #$18)
+  ldx #BG2_TILE_BASE
+  stx $2116
+  DMA7(#$01, #28*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF, #$18)
+  jmp onb_nmi_fade
+onb_nmi_tiles2:
   .as : .xl
   ; whole screen rows 0..27 (mode-5): BG1 + BG2 tilemaps. The redesign has no static
   ; mode-3 band -- the entire card lives in the tile buffers, so re-DMA it all (live

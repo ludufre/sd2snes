@@ -55,7 +55,7 @@
 #define CFG_ENABLE_RST_TO_MENU      CFG_ADDR+$009F  /* 0 off / 1 menu / 2 folder / 3 rom / 4 by duration */
 #define CFG_ENABLE_INGAME_SAVESTATE CFG_ADDR+$00A3  /* bool */
 #define CFG_SHOW_COVERS             CFG_ADDR+$00B6  /* 0=off 1=large 2=small */
-#define CFG_LANGUAGE                CFG_ADDR+$00B7  /* 0 EN 1 PT 2 ES 3 DE 4 FR 5 IT 6 RU 7 NL */
+#define CFG_LANGUAGE                CFG_ADDR+$00B7  /* 0 EN 1 PT 2 ES 3 DE 4 FR 5 IT 6 RU 7 NL 8 JA 9 ZH */
 #define CFG_ENABLE_MENU_MUSIC       CFG_ADDR+$00B9  /* bool */
 #define CFG_COVERS_IN_LISTS         CFG_ADDR+$00BA  /* bool (covers in Recent/Favorite lists) */
 #define CFG_ENABLE_MENU_SFX         CFG_ADDR+$00BB  /* bool */
@@ -102,7 +102,43 @@
                                                cards with it (+ONB_FD_SINCE): the gate shows the tour
                                                again and only those cards are walked */
 
-#define ONB_NLANG                   8       /* languages; == the menu's language clamp */
+#define ONB_NLANG                   10      /* languages; == the menu's language clamp */
+
+/* ===========================================================================
+   CJK (Japanese 8, Chinese 9): the tour's 256-character font has no ideographs. A CJK
+   character is the byte pair {$FA + g/128, $80 + g%128} (gen_onb_lang.py; glyph g of the
+   language's sheet, 0..127 = the glyphs every language shows), and a string with CJK starts
+   with ONB_CJK_MARK. onb_hiprint draws a glyph as ONE BG2 cell (16 hires px, two 2bpp tiles)
+   at an even column, a blank on BG1's odd column over its right half. The cells come from a
+   cache in the BG2 tilemaps' unused lower screens (32x64 maps, rows 32..63 never shown):
+   tiles 640..767 (VRAM $5400) and 896..1023 ($5C00), 128 cells (onb_cjk.a65).
+   =========================================================================== */
+#define ONB_CJK_MARK                $B0     /* a CJK string's first byte: aligns its glyphs */
+#define ONB_CJK_LEAD0               $FA
+#define OCJ_NSLOTS                  128
+#define OCJ_G2S                     $7F4000 /* 768 B: glyph -> slot + 1 (0 = not cached) */
+#define OCJ_S2G                     $7F4300 /* 128 words: slot -> glyph + 1 (0 = free) */
+#define OCJ_MARK                    $7F4400 /* 256 B: the collector's marks, a word per slot */
+#define OCJ_NEXT                    $7F4500 /* the next slot the allocator tries */
+#define OCJ_LANG                    $7F4501 /* the language the cached glyphs 128+ belong to */
+#define OCJ_TOFU                    $7F4502 /* glyphs printed as '?' (no slot, or no sheet) */
+#define OCJ_BUSY                    $7F4503 /* the main thread is changing the dirty range */
+#define OCJ_LO                      $7F4504 /* the mirror's bytes not in VRAM yet: [LO, HI) */
+#define OCJ_HI                      $7F4506
+#define OCJ_TMP                     $7F4508 /* scratch (8 B) */
+#define OCJ_ROWS                    $7F4510 /* ocj_load: a glyph's 8 rows, doubled, with an empty
+                                               row above and below (10 words) */
+#define OCJ_S2K                     $7F4600 /* 128 words: a PAIR cell's right glyph + 1 (onb_cjk_pair):
+                                               its S2G is $8000 | left glyph + 1 (0 = blank half) */
+#define OCJ_PA                      $7F4700 /* onb_cjk_pair's arguments: the left half's glyph + 1... */
+#define OCJ_PB                      $7F4702 /*   ... and the right half's (0 = blank) */
+#define OCJ_SHIFT                   $7F4704 /* 1: onb_hiprint may draw a CJK-only string from an odd
+                                               column with pair cells (labels, footer words) */
+#define OCJ_PAIRBUF                 $7F4720 /* 32 B: a glyph rendered for a pair cell */
+#define OCJ_PAIRBUF_LO              $4720   /*   (its address in bank $7F) */
+#define OCJ_MIRROR                  $7F5000 /* 4 KB: slot s's two tiles at 32s, what VRAM gets */
+#define OCJ_MIRROR_LO               $5000
+#define OCJ_MIRROR_BANK             $7F
 #define ONB_RST_MODES               5       /* CFG_ENABLE_RST_TO_MENU values 0..4 */
 
 /* ===========================================================================

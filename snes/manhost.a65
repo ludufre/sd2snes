@@ -243,6 +243,7 @@ mhg_restore:
 	plb                                        ;   phb/plb in it would break this silently.
 	sep #$20 : .as
 	lda #$80 : sta @$002115                    ; re-assert after genfonts (it drives ch7)
+	jsl @cjk_vram_restore                      ; the viewer's VRAM also covered the CJK glyph slots
 	; (b) historical: the .man page staging ($C3..$C7) used to overwrite the browser's
 	;     file-STRING table there. The dir buffer lives in $DB/$DC-$DF now, so nothing is
 	;     destroyed anymore -- the re-scan stays because it is cheap and keeps this exit

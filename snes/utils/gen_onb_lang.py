@@ -19,18 +19,38 @@ onboarding_const.a65 ($C0).
 
 Usage: gen_onb_lang.py -o onb_const_lang.a65
 """
-import sys, os
+import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_const as bc
 from build_const import encode_string, ENCODE
 
-# Column order == onb_cur_lang index == the menu's CFG_LANGUAGE.
-LANGS = ["en", "ptbr", "es", "de", "fr", "it", "ru", "nl"]
+# Column order == onb_cur_lang index == the menu's CFG_LANGUAGE. The CJK languages come
+# last (build_const.CJK_LANGS): their text is drawn from a glyph cache on BG2 (onb_cjk.a65).
+LANGS = ["en", "ptbr", "es", "de", "fr", "it", "ru", "nl", "ja", "zh"]
+CJK_LANGS = ("ja", "zh")
+if os.environ.get("ONB_CJK_ONLY"):          # a translator's check of one CJK column alone
+    CJK_LANGS = (os.environ["ONB_CJK_ONLY"],)
+    LANGS = LANGS[:8] + list(CJK_LANGS)
 
 from pathlib import Path
 from build_const import parse_base, load_dict, decode_args
 _UTILS = Path(os.path.dirname(os.path.abspath(__file__)))
 _EN = parse_base(_UTILS.parent / "const.a65")[1]
 _DICTS = {l: load_dict(_UTILS / ("lang_%s.py" % l)) for l in LANGS[1:]}
+# The tour's own words in a CJK language (onb_lang_<code>.json): "name_N" / "text_N" for card N,
+# and the STRINGS labels. A key it lacks falls back to English.
+_TOUR = {}
+for _l in CJK_LANGS:
+    _p = _UTILS / ("onb_lang_%s.json" % _l)
+    _TOUR[_l] = json.loads(_p.read_text(encoding="utf-8")) if _p.exists() else {}
+
+
+def _cjk_cols(key, vals):
+    """vals in the 8 non-CJK languages -> all LANGS, the CJK columns from the tour dicts."""
+    vals = tuple(vals)
+    if len(vals) == len(LANGS):
+        return vals
+    return vals + tuple(_TOUR[l].get(key, vals[0]) for l in CJK_LANGS)
 
 
 def menu_text(label):
@@ -101,9 +121,13 @@ STRINGS = {
                          "НАЖМИ A ДЛЯ МЕНЮ", "DRUK OP A: MENU"),
 }
 
+STRINGS = {k: _cjk_cols(k, v) for k, v in STRINGS.items()}
+
 # the Competition Cart round, one answer per value: 0..15 = 3..18 minutes (cfg.h cc_time_limit)
+_MIN = {"ru": "мин", "ja": "分", "zh": "分钟"}
 for _m in range(3, 19):
-    STRINGS["onb_text_cc_%d" % _m] = tuple("%d %s" % (_m, "мин" if l == "ru" else "min") for l in LANGS)
+    STRINGS["onb_text_cc_%d" % _m] = tuple(("%d%s" if l in CJK_LANGS else "%d %s") % (_m, _MIN.get(l, "min"))
+                                           for l in LANGS)
 
 # The descriptors in tour order, by name: the base tour's cards (1-32, "and more" last),
 # the 2.17 section (33-40: its separator card, then the release's cards), then the
@@ -231,14 +255,14 @@ NAMES = [
 # there (each piece is wrapped on its own), for a list of short lines under a sentence.
 TEXTS = [
   # 1 language
-  ('The whole menu, the in-game menu and this tour in 8 languages. Move the bar to try one: the tour switches at once. You can change it later in Configuration.',
-   'O menu inteiro, o menu in-game e este tour em 8 idiomas. Mova a barra para experimentar: o tour troca na hora. Dá para mudar depois em Configurações.',
-   'Todo el menú, el menú del juego y este tour en 8 idiomas. Mueve la barra para probar: el tour cambia al instante. Puedes cambiarlo luego en Configuración.',
-   'Das ganze Menü, das Ingame-Menü und diese Tour in 8 Sprachen. Bewege den Balken zum Testen: die Tour wechselt sofort. Später in den Einstellungen änderbar.',
-   'Tout le menu, le menu en jeu et cette visite en 8 langues. Déplace la barre pour essayer : la visite change aussitôt. Modifiable ensuite dans Configuration.',
-   'Tutto il menu, il menu in gioco e questo tour in 8 lingue. Sposta la barra per provare: il tour cambia subito. Puoi cambiarla dopo in Configurazione.',
-   'Всё меню, Меню в игре и этот тур на 8-ми языках. Двигай полосу, чтобы попробовать: тур сразу переключится. Потом можно сменить в настройках.',
-   'Het hele menu, het in-game menu en deze rondleiding in 8 talen. Beweeg de balk om te proberen: de rondleiding wisselt meteen. Later te wijzigen in Configuratie.'),
+  ('The menu and this tour in 10 languages, the in-game menu in 8. Move the bar to try one: the tour switches at once. You can change it later in Configuration.',
+   'O menu e este tour em 10 idiomas, o menu in-game em 8. Mova a barra para experimentar: o tour troca na hora. Dá para mudar depois em Configurações.',
+   'El menú y este tour en 10 idiomas, el menú del juego en 8. Mueve la barra para probar: el tour cambia al instante. Puedes cambiarlo luego en Configuración.',
+   'Das Menü und diese Tour in 10 Sprachen, das Ingame-Menü in 8. Bewege den Balken zum Testen: die Tour wechselt sofort. Später in den Einstellungen änderbar.',
+   'Le menu et cette visite en 10 langues, le menu en jeu en 8. Déplace la barre pour essayer : la visite change aussitôt. Modifiable ensuite dans Configuration.',
+   'Il menu e questo tour in 10 lingue, il menu in gioco in 8. Sposta la barra per provare: il tour cambia subito. Puoi cambiarla dopo in Configurazione.',
+   'Меню и этот тур на 10-ти языках, Меню в игре на 8-ми. Двигай полосу, чтобы попробовать: тур сразу переключится. Потом можно сменить в настройках.',
+   'Het menu en deze rondleiding in 10 talen, het in-game menu in 8. Beweeg de balk om te proberen: de rondleiding wisselt meteen. Later te wijzigen in Configuratie.'),
   # 2 themes: the sd2snes+ theme, a .thm from the list, restoring it or the classic one
   ("Change the menu's logo, colours and gradient: pick a .thm in the list to apply it. Make your own in the Theme Creator or take one from the site's gallery. In {browser}, {restoretheme} brings back sd2snes+, the factory theme, and {restoreclassic} the old teal look (classic.thm).",
    'Troque o logo, as cores e o gradiente do menu: escolha um .thm na lista para aplicar. Crie o seu no Theme Creator ou pegue um na galeria do site. Em {browser}, {restoretheme} volta ao sd2snes+, o tema de fábrica, e {restoreclassic} ao visual verde-azulado antigo (classic.thm).',
@@ -657,10 +681,41 @@ TEXTS = [
    'Elke optie in {cfg} toont in een kader een zin die uitlegt wat ze doet, in de taal van het menu, zodat elke instelling zonder handleiding duidelijk is.'),
 ]
 
+def _has_cjk(text):
+    return any(bc.is_cjk(ch) for ch in text)
+
+
+def _cjk_cells(text):
+    """Cells of a string with CJK, as encode_string lays it out: the marker, 2 per glyph at
+    an even offset after it (a blank pads an odd one), 1 per other character; the button
+    brackets take none."""
+    off, i = 0, 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "{":                           # a raw byte (a menu word's special glyph)
+            i = text.index("}", i) + 1
+            off += 1
+            continue
+        if ch in "[]":
+            pass
+        elif ch in '";':
+            sys.exit("gen_onb_lang: %r is not allowed in %r" % (ch, text))
+        elif bc.is_cjk(ch):
+            off += 2 + (off & 1)
+        elif ch in ENCODE or (" " <= ch <= "~"):
+            off += 1
+        else:
+            sys.exit("gen_onb_lang: no font tile for %r (U+%04X) in %r" % (ch, ord(ch), text))
+        i += 1
+    return off + 1
+
+
 def _cells(text):
     """Screen cells of a string; aborts on a character the font has no tile for
     (build_const.encode_string would pass it through as raw UTF-8 bytes, which
     draw as two tiles of garbage -- nothing downstream catches that)."""
+    if _has_cjk(text):
+        return _cjk_cells(text)
     n = 0
     for ch in text:
         if ch in "[]":                  # a button's green markup: no cell (see _encode_line)
@@ -720,6 +775,14 @@ def _encode_line(line):
     """encode_string for a paragraph line, the button brackets turned into BTN_TOGGLE."""
     if line.count("[") != line.count("]"):
         sys.exit("gen_onb_lang: unbalanced button markup in %r" % line)
+    if _has_cjk(line):
+        # one encode for the whole line: a CJK string carries ONE marker, at its start, and
+        # the toggles take no column in its alignment
+        t = line.replace("[", "{%d}" % BTN_TOGGLE).replace("]", "{%d}" % BTN_TOGGLE)
+        tail = "{%d}" % BTN_TOGGLE
+        if t.endswith(tail):
+            t = t[:-len(tail)]
+        return encode_string(t, zero_width=(BTN_TOGGLE,))[:-3]
     toks = []
     for k, seg in enumerate(line.replace("]", "[").split("[")):
         if k:
@@ -736,10 +799,60 @@ def _encode_line(line):
     return ", ".join(toks)
 
 
+# Japanese/Chinese line breaking: a line may break between any two characters, except
+# before these (closing punctuation, small kana, the long-vowel mark) or after the openers.
+_NO_START = set("、。，．・：；！？）」』】〕〉》ー々ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ”’)]!?,.:%")
+_NO_END = set("（「『【〔〈《“‘([")
+
+
+def _cjk_units(text):
+    """A CJK text as unbreakable units: one per CJK character, a run of other characters
+    (a Latin word, a number, [A]) as one, and the blanks between them as break points."""
+    units, cur = [], ""
+    for ch in text:
+        if bc.is_cjk(ch) or ch == " ":
+            if cur:
+                units.append(cur)
+                cur = ""
+            units.append(ch)
+        else:
+            cur += ch
+    if cur:
+        units.append(cur)
+    return units
+
+
+def _wrap_cjk(text, width):
+    lines, cur = [], []
+    for u in _cjk_units(text):
+        if u == " " and not cur:
+            continue
+        cand = "".join(cur + [u]).rstrip()
+        if not cur or _cells(cand) <= width:
+            cur.append(u)
+            continue
+        # break: never start the line with closing punctuation, never end one on an opener
+        nxt = [u]
+        while cur and (nxt[0][0] in _NO_START or cur[-1][-1] in _NO_END):
+            nxt.insert(0, cur.pop())
+        if not cur:
+            sys.exit("gen_onb_lang: cannot break %r in %d cells" % (text, width))
+        lines.append("".join(cur).strip())
+        cur = nxt if nxt[0] != " " else nxt[1:]
+    if cur:
+        lines.append("".join(cur).strip())
+    for l in lines:
+        if _cells(l) > width:
+            sys.exit("gen_onb_lang: line %r is %d cells, max %d" % (l, _cells(l), width))
+    return lines
+
+
 def _wrap(text, width):
     """Word-wrap to width cells; a "\n" starts a new line (each piece wraps on its own)."""
     if "\n" in text:
         return [l for piece in text.split("\n") for l in _wrap(piece, width)]
+    if _has_cjk(text):
+        return _wrap_cjk(text, width)
     lines, cur = [], ""
     for word in text.split():
         cand = (cur + " " + word) if cur else word
@@ -762,6 +875,8 @@ def _wrap(text, width):
 
 if len(NAMES) != len(TEXTS):
     sys.exit("gen_onb_lang: %d names, %d texts" % (len(NAMES), len(TEXTS)))
+NAMES = [_cjk_cols("name_%d" % (i + 1), v) for i, v in enumerate(NAMES)]
+TEXTS = [_cjk_cols("text_%d" % (i + 1), v) for i, v in enumerate(TEXTS)]
 _wrapped = []
 for _n, (_names, _texts) in enumerate(zip(NAMES, TEXTS), 1):
     if len(_names) != len(LANGS) or len(_texts) != len(LANGS):
@@ -796,25 +911,107 @@ for _i, cols in enumerate(_wrapped):
 # generator prints (each bank also holds code or the font).
 POOL_B_LANGS = ("de", "fr", "ru", "nl")
 
+# The CJK languages: each column's strings in a pool of its own (onb_cjk_<code>.a65), and
+# every glyph sheet in onb_cjk_sheets.a65 -- 8 bytes a glyph, its 8x8 rows, which
+# onb_cjk.a65 draws into a 16-px BG2 cell (doubled, with the font's contour) when it loads it.
+# The ROM cannot grow past $CB (the menu sounds live in PSRAM $CC-$CF), so they go where
+# there is room; the link fails on an overflow.
+CJK_POOL_BANK = {"ja": "$cb", "zh": "$c1"}
+CJK_SHEET_BANK = "$cb"
+CJK_COMMON_MAX = 128          # glyphs 0..127: shown in every language (the languages' names)
+CJK_LANG_FIRST = 128          # 128..767: the active CJK language's
+CJK_LANG_MAX = 640
+LANG_NAME_LABELS = {"ja": "text_lang_ja", "zh": "text_lang_zh"}   # the menu's (const.a65)
+
+
+def _glyph_2bpp(rows):
+    t = bc.cjk_glyph_tiles(rows)            # 4bpp: left tile 32 B, right tile 32 B
+    return t[0:16] + t[32:48]               # planes 0/1 of each: BG2 is 2bpp
+
+
+def _texts_of(vals):
+    for v in vals:
+        if isinstance(v, list):
+            yield from v
+        else:
+            yield v
+
+
+def cjk_maps():
+    """The glyph registries: (common_map, lang_maps, fonts, common) -- char -> glyph index for
+    what every language shows (the CJK languages' own names, in their own fonts) and for each
+    CJK language; the fonts by language; the font each common glyph comes from."""
+    fonts = {l: bc.load_cjk_font(_UTILS.parent / "fonts" / bc.CJK_LANGS[l]) for l in CJK_LANGS}
+    langnames = {l: decode_args(_EN[LANG_NAME_LABELS[l]]) for l in CJK_LANGS}
+    common = {}                              # char -> font
+    for l, name in langnames.items():
+        for ch in name:
+            if bc.is_cjk(ch):
+                common.setdefault(ch, l)
+    for label, vals in STRINGS.items():
+        for k, text in enumerate(vals):
+            if LANGS[k] not in CJK_LANGS:
+                for t in _texts_of([text]):
+                    for ch in t:
+                        if bc.is_cjk(ch):
+                            common.setdefault(ch, CJK_LANGS[0])
+    if len(common) > CJK_COMMON_MAX:
+        sys.exit("gen_onb_lang: %d common CJK glyphs, room for %d" % (len(common), CJK_COMMON_MAX))
+    common_map = {ch: i for i, ch in enumerate(sorted(common))}
+    lang_maps = {}
+    for l in CJK_LANGS:
+        k = LANGS.index(l)
+        used = sorted({ch for vals in STRINGS.values() for t in _texts_of([vals[k]]) for ch in t
+                       if bc.is_cjk(ch)})
+        missing = [ch for ch in used if ch not in fonts[l]]
+        if missing:
+            sys.exit("gen_onb_lang: [%s] no glyph in %s for %s" % (l, bc.CJK_LANGS[l], "".join(missing)))
+        if len(used) > CJK_LANG_MAX:
+            sys.exit("gen_onb_lang: [%s] %d CJK glyphs, room for %d" % (l, len(used), CJK_LANG_MAX))
+        lang_maps[l] = {ch: CJK_LANG_FIRST + i for i, ch in enumerate(used)}
+
+    return common_map, lang_maps, fonts, common
+
 
 def main():
     out_path = "onb_const_lang.a65"
     if "-o" in sys.argv:
         out_path = sys.argv[sys.argv.index("-o") + 1]
-    out_b = os.path.join(os.path.dirname(out_path), "onb_const_lang_b.a65")
+    out_dir = os.path.dirname(out_path)
+    out_b = os.path.join(out_dir, "onb_const_lang_b.a65")
+
+    common_map, lang_maps, fonts, common = cjk_maps()
+    langnames = {l: decode_args(_EN[LANG_NAME_LABELS[l]]) for l in CJK_LANGS}
+
+    def use(lang):
+        bc.CJK = lang_maps.get(lang, common_map)
 
     nlang = len(LANGS)
     head = ["; ==========================================================================",
             "; AUTO-GENERATED by utils/gen_onb_lang.py -- DO NOT EDIT BY HAND.",
-            "; Onboarding i18n string pool (EN/PT/ES/DE/FR/IT/RU/NL). Edit the STRINGS table in the",
-            "; generator and re-run `make` instead.",
+            "; Onboarding i18n string pool (" + "/".join(l.upper()[:2] for l in LANGS) + "). Edit the",
+            "; STRINGS table in the generator and re-run `make` instead.",
             "; =========================================================================="]
     L = head + [".link page $c1", ""]
     B = head + ["; pool B: the columns of " + ", ".join(POOL_B_LANGS) + " (onb_strpool_bank)",
                 ".link page $c0", "", "onb_pool_b:"]
+    C = {l: head + ["; the %s column's strings (its glyphs: onb_cjk_sheets.a65)" % l,
+                    ".link page %s" % CJK_POOL_BANK[l], "", "onb_pool_%s:" % l] for l in CJK_LANGS}
+    S = head + ["; the CJK glyph sheets (onb_cjk.a65): 8 bytes a glyph, its rows top-down, bit 7 the",
+                "; leftmost pixel", ".link page %s" % CJK_SHEET_BANK, ""]
+
+    def pool_label(lang):
+        if lang in CJK_LANGS:
+            return "^onb_pool_" + lang
+        return "^onb_pool_b" if lang in POOL_B_LANGS else "^onb_pool_a"
+
     L.append("onb_strtab_nlang  .byt %d" % nlang)
     L.append("; the bank of each language's strings, by onb_cur_lang")
-    L.append("onb_strpool_bank  .byt " + ", ".join("^onb_pool_b" if l in POOL_B_LANGS else "^onb_pool_a"
+    L.append("onb_strpool_bank  .byt " + ", ".join(pool_label(l) for l in LANGS))
+    L.append("; per language: its CJK glyph sheet (0 = a language without one), glyphs 128 up")
+    L.append("onb_cjk_sheet     .word " + ", ".join("!onb_sheet_" + l if l in CJK_LANGS else "0"
+                                                      for l in LANGS))
+    L.append("onb_cjk_sheet_bank .byt " + ", ".join("^onb_sheet_" + l if l in CJK_LANGS else "0"
                                                      for l in LANGS))
     L.append("")
     L.append("; ---- dispatch tables (one row of %d word pointers per label) ----" % nlang)
@@ -825,6 +1022,10 @@ def main():
             L.append("  .word !%s_%s" % (label, lang))
     L.append("onb_strtab_hi:")
     L.append("")
+    S.append("; the common glyphs (0..%d), in every language" % (len(common_map) - 1))
+    S.append("onb_cjk_common:")
+    for ch, i in sorted(common_map.items(), key=lambda kv: kv[1]):
+        S.append("  .byt " + ", ".join("$%02x" % b for b in fonts[common[ch]][ch]) + "   ; %s" % ch)
     L.append("; ---- pool A: per-language strings (font-encoded; outside the dispatch range) ----")
     L.append("onb_pool_a:")
     size = dict.fromkeys(LANGS, 0)
@@ -832,7 +1033,8 @@ def main():
         if len(vals) != nlang:
             sys.exit("label %s has %d values, expected %d" % (label, len(vals), nlang))
         for lang, text in zip(LANGS, vals):
-            dst = B if lang in POOL_B_LANGS else L
+            use(lang)
+            dst = C[lang] if lang in CJK_LANGS else (B if lang in POOL_B_LANGS else L)
             if isinstance(text, list):          # a paragraph: lines joined by byte 1
                 toks = []
                 for k, line in enumerate(text):
@@ -843,24 +1045,49 @@ def main():
                     if enc:
                         toks.append(enc)
                     toks.append("1" if k < len(text) - 1 else "0")
-                dst.append("%s_%s  .byt %s" % (label, lang, ", ".join(toks)))
-                size[lang] += sum(_cells(x) + x.count("[") + x.count("]") + 1 for x in text)
+                args = ", ".join(toks)
+                dst.append("%s_%s  .byt %s" % (label, lang, args))
+                size[lang] += len(bc.args_to_bytes(args))
                 continue
             if _cells(text) > _budget(label):
                 sys.exit("gen_onb_lang: %s[%s] is %d cells, budget %d: %r"
                          % (label, lang, _cells(text), _budget(label), text))
             enc = encode_string(text)
             dst.append("%s_%s  .byt %s" % (label, lang, enc))
-            size[lang] += _cells(text) + 1
+            size[lang] += len(bc.args_to_bytes(enc))
+
+    # the CJK languages' own names, for the language list (onboarding_const.a65's
+    # onb_langname_tbl: the same bank as the table)
+    use(None)
+    B.append("")
+    for l in CJK_LANGS:
+        B.append("onb_langname_%d  .byt %s" % (LANGS.index(l), encode_string(langnames[l])))
+
+    sheets = {}
+    for l in CJK_LANGS:
+        S.append("")
+        S.append("; %s: %d glyphs, from %d" % (l, len(lang_maps[l]), CJK_LANG_FIRST))
+        S.append("onb_sheet_%s:" % l)
+        for ch, i in sorted(lang_maps[l].items(), key=lambda kv: kv[1]):
+            S.append("  .byt " + ", ".join("$%02x" % b for b in fonts[l][ch]) + "   ; %s" % ch)
+        sheets[l] = 8 * len(lang_maps[l])
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(L) + "\n")
     with open(out_b, "w", encoding="utf-8") as f:
         f.write("\n".join(B) + "\n")
+    for l in CJK_LANGS:
+        with open(os.path.join(out_dir, "onb_cjk_%s.a65" % l), "w", encoding="utf-8") as f:
+            f.write("\n".join(C[l]) + "\n")
+    with open(os.path.join(out_dir, "onb_cjk_sheets.a65"), "w", encoding="utf-8") as f:
+        f.write("\n".join(S) + "\n")
     pool_b = sum(size[l] for l in POOL_B_LANGS)
-    print("generated %s + %s: %d labels x %d languages; pool A %d B, pool B %d B (%s)"
-          % (out_path, os.path.basename(out_b), len(STRINGS), nlang, sum(size.values()) - pool_b,
-             pool_b, " ".join("%s=%d" % kv for kv in size.items())))
+    pool_a = sum(size[l] for l in LANGS if l not in POOL_B_LANGS and l not in CJK_LANGS)
+    print("generated %s + %s: %d labels x %d languages; pool A %d B, pool B %d B; %s; %d common glyphs (%s)"
+          % (out_path, os.path.basename(out_b), len(STRINGS), nlang, pool_a, pool_b,
+             ", ".join("%s %d B in %s + %d glyphs %d B" % (l, size[l], CJK_POOL_BANK[l], len(lang_maps[l]), sheets[l])
+                       for l in CJK_LANGS),
+             len(common_map), " ".join("%s=%d" % kv for kv in size.items())))
 
 
 if __name__ == "__main__":

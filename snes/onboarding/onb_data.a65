@@ -66,6 +66,9 @@ onb_print_ptr     .word 0  ; 3-byte working pointer for hiprint
                   .byt 0
 onb_resolve_ptr   .word 0  ; resolve_str working pointer (3 bytes)
                   .byt 0
+onb_cjk_src       .word 0  ; onb_cjk.a65: the glyph being copied (3 bytes; direct page, [dp],y)
+                  .byt 0
+onb_cjk_g         .word 0  ; onb_hiprint: the glyph index of a CJK pair
 
 ; ---- HDMA WRAM tables (HDMA must fetch from WRAM, not ROM) ----
 

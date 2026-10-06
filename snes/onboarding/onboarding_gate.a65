@@ -39,7 +39,7 @@
 #define ONBG_VAL_X   20
 #define ONBG_NAME_X  22    /* == ONBG_VAL_X + 2; snescom takes immediates literally */
 #define ONBG_GT_OFS  23    /* == ONBG_VAL_X + 3: '>' after the name, one blank between */
-#define ONBG_NLANG   8     /* == IGM_LANG_COUNT; the language clamps in main.a65/menu.a65 */
+#define ONBG_NLANG   10    /* the language clamps in main.a65/menu.a65 (the tour and the in-game menu fall back to English past their own counts) */
 
 ; -- onboarding_gate: the hook. jsl from $C0; forces DP=0 / DB=$7E like memtest. --
 onboarding_gate:
@@ -91,6 +91,7 @@ onbg_lang_next:
 onbg_lang_set:
   .as : .xl
   sta cur_lang
+  jsl @cjk_lang_sync        ; a CJK language: load its file (English if it is missing)
   jsr onbg_draw_text
   bra onbg_input
 
@@ -129,19 +130,28 @@ onbg_load_tour:
   .as : .xl
   jsr mt_fade_out          ; the reload rewrites the image we display and run from
   jsl @ui_call_coversync   ; an in-flight cover $55 would read as our answer
+  ; The firmware streams the tour over this image (SD-DMA takes the PSRAM bus from the
+  ; SNES): nothing may run from it until the reset -- not this wait, not the NMI, whose
+  ; half-overwritten code showed as flashes of garbage on the black screen. NMI off,
+  ; forced blank held, and the wait runs from WRAM. A refusal ($aa) is followed by the
+  ; menu loop's $55, which ends the wait.
+  php
+  sei
+  lda #$00
+  sta @$004200
+  lda #$80
+  sta @$002100
   lda #$00
   sta @SNES_CMD
   lda #CMD_LOAD_ONBOARDING
   sta @MCU_CMD
-onbg_lt_wait:
-  lda @SNES_CMD
-  cmp #CMD_MCU_RDY
-  beq onbg_lt_nack
-  cmp #$aa                  ; NACK
-  bne onbg_lt_wait
-onbg_lt_nack:
+  jsl @WRAM_WAIT_MCU
   lda #$00
   sta @MCU_CMD
+  lda @$004210             ; a VBlank flag left from the wait would fire the NMI at once
+  lda #$81
+  sta @$004200
+  plp
   jmp mt_fade_in
 
 ; -- onboarding_replay: Settings > "Tour of the new features" (MTYPE_FUNC, reached
@@ -299,6 +309,7 @@ onbg_clear_row:
 onbg_lang_tbl:
   .word !text_lang_en, !text_lang_ptbr, !text_lang_es, !text_lang_de
   .word !text_lang_fr, !text_lang_it, !text_lang_ru, !text_lang_nl
+  .word !text_lang_ja, !text_lang_zh
 onbg_lt     .byt "<", 0
 onbg_gt     .byt ">", 0
 onbg_blank  .byt "                                          ", 0   ; 42 spaces

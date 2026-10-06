@@ -934,7 +934,7 @@ ovl_resolve_str:
   cmp #^strtab_lo
   bne ovl_rs_plain
   lda @CFG_LANGUAGE
-  cmp @strtab_nlang
+  cmp @strtab_nlang_latin   ; a CJK column's pool is in WRAM, the game's in game: English
   bcc ovl_rs_lang
   lda #$00                 ; past the last column the build emitted -> English
 ovl_rs_lang:

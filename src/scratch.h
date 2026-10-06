@@ -52,7 +52,8 @@ enum {
   SCR_MANUAL,
   SCR_IGMENU,
   SCR_A26,
-  SCR_DIRSCAN
+  SCR_DIRSCAN,
+  SCR_GI_CJK
 };
 
 /* 1 = taken; 0 = someone else holds it (logged), caller takes its failure path */

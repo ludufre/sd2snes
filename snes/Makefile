@@ -4,8 +4,12 @@ IPS = header.ips
 # One run emits three objects, in three different banks: const_lang ($C0, neutral
 # labels), const_lang_str ($C2, the string pool) and const_lang_tab ($C1, the
 # dispatch tables). The tables sit apart from the pool because $C2 is the scarce
-# bank and $C1 has tens of KB free.
-O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 const_lang_tab.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 diricon.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 hookxlate.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 expwarn.o65 cheatmenu.o65 cheatedit.o65 iris.o65 bootintro.o65 onboarding/onboarding_gate.o65 # gfx.o65 # vars.o65
+# bank and $C1 has tens of KB free. A fourth file, const_lang_cjk ($C1), is the glyph
+# sheet of the CJK cache (cjk.o65): the ideographs any translation uses, drawn from
+# fonts/misaki_gothic_2nd.hex. The CJK languages (ja, zh: LAST on the command line) do not
+# go into the image: each column, with its glyphs, is a lang_<code>.bin that ships in
+# /sd2snes/lang/ and that the menu loads into WRAM when the language is selected.
+O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 const_lang_tab.o65 const_lang_cjk.o65 cjk.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 diricon.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 hookxlate.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 expwarn.o65 cheatmenu.o65 cheatedit.o65 iris.o65 bootintro.o65 onboarding/onboarding_gate.o65 # gfx.o65 # vars.o65
 
 OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
@@ -35,7 +39,8 @@ ONB_O65 = onboarding/onb_header.ips onboarding/onb_reset.o65 onboarding/onboardi
           onboarding/onb_demo_a.o65 onboarding/onb_demo_b.o65 onboarding/onb_demo_c.o65 onboarding/onb_demo_d.o65 \
           onboarding/onb_demo_e.o65 onboarding/onb_demo_f.o65 onboarding/onb_demo_g.o65 onboarding/onb_demo_h.o65 \
           onboarding/onb_demo_i.o65 onboarding/onb_demo_j.o65 onboarding/onb_spc.o65 onboarding/onb_welcome.o65 \
-          font.o65 palette.o65 spc700.o65 onboarding/onb_const_lang_b.o65
+          font.o65 palette.o65 spc700.o65 onboarding/onb_const_lang_b.o65 \
+          onboarding/onb_cjk.o65 onboarding/onb_cjk_ja.o65 onboarding/onb_cjk_zh.o65 onboarding/onb_cjk_sheets.o65
 ONB_OUT = onboarding.bin
 # 12 banks ($C0 code + the menu's palette + half of the string pool, $C1 the string
 # tables and the other half, $C2-$CB the demo pictures -- utils/gen_onb_demo.py). The
@@ -55,13 +60,15 @@ DEPDIR := .dep
 # onboarding/ (cpp otherwise looks next to the SOURCE file; snescom uses the CWD).
 GENDEPFLAGS = -MM -MP -MF $(DEPDIR)/$(@F).d -MT $(@F) -I.
 
-all: $(OUT) $(IGMENU) $(ONB_OUT) $(MAP)
+all: $(OUT) $(IGMENU) $(ONB_OUT) $(MAP) lang_ja.fnt lang_zh.fnt
 
 # the tour's own string pool, EN + the same 7 languages as the menu, split by language
 # over two banks: tables + en/pt/es/it in $C1 (onb_const_lang.a65), de/fr/ru/nl in $C0
 # (onb_const_lang_b.a65; gen_onb_lang.py POOL_B_LANGS). The
 # answers' value words come from the menu's const.a65 / lang_*.py (menu_text).
-onboarding/onb_const_lang.a65 onboarding/onb_const_lang_b.a65 &: utils/gen_onb_lang.py utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py
+# Japanese and Chinese: their tour words in utils/onb_lang_<code>.json, their strings in a
+# pool of their own (onb_cjk_<code>.a65) and every glyph sheet in onb_cjk_sheets.a65.
+onboarding/onb_const_lang.a65 onboarding/onb_const_lang_b.a65 onboarding/onb_cjk_ja.a65 onboarding/onb_cjk_zh.a65 onboarding/onb_cjk_sheets.a65 &: utils/gen_onb_lang.py utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py utils/lang_ja.py utils/lang_zh.py utils/onb_lang_ja.json utils/onb_lang_zh.json fonts/misaki_gothic_2nd.hex fonts/fusion8_zh_hans.hex
 	python3 utils/gen_onb_lang.py -o onboarding/onb_const_lang.a65
 
 # Same loud guard as the menu link (the `| tee` masks sneslink's exit code).
@@ -75,8 +82,15 @@ $(ONB_OUT): $(ONB_O65)
 # three files: const_lang.a65 (bank $C0: neutral data), const_lang_str.a65 (bank $C2:
 # the localized string pool) and const_lang_tab.a65 (bank $C1: the dispatch tables
 # resolve_str walks) -> m3nu.bin spans 3 banks.
-const_lang.a65 const_lang_str.a65 const_lang_tab.a65 &: const.a65 utils/build_const.py utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py
-	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py -o const_lang.a65
+const_lang.a65 const_lang_str.a65 const_lang_tab.a65 const_lang_cjk.a65 lang_ja.bin lang_zh.bin &: const.a65 utils/build_const.py fonts/misaki_gothic_2nd.hex fonts/fusion8_zh_hans.hex utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py utils/lang_ja.py utils/lang_zh.py
+	python3 utils/build_const.py const.a65 utils/lang_ptbr.py utils/lang_es.py utils/lang_de.py utils/lang_fr.py utils/lang_it.py utils/lang_ru.py utils/lang_nl.py utils/lang_ja.py utils/lang_zh.py -o const_lang.a65
+
+# The firmware's CJK fonts (src/gameinfo.c draws a game's Japanese/Chinese title and
+# description with them): /sd2snes/lang/<code>.fnt.
+lang_ja.fnt: fonts/misaki_gothic_2nd.hex utils/gen_cjk_font.py
+	python3 utils/gen_cjk_font.py fonts/misaki_gothic_2nd.hex -o lang_ja.fnt
+lang_zh.fnt: fonts/fusion8_zh_hans.hex utils/gen_cjk_font.py
+	python3 utils/gen_cjk_font.py fonts/fusion8_zh_hans.hex -o lang_zh.fnt
 
 # igmenu_lang.i65: the in-game HELP tab's font-encoded i18n string tables, generated
 # from the English base (const.a65) + the SAME language dicts as const_lang, by
@@ -142,8 +156,8 @@ link.log: $(OBJS)
 	  echo "*** snescom FAILED on $< (see $(@:.log=).log)"; rm -f $(@:.log=); exit 1; fi
 
 clean:
-	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 const_lang_tab.a65 igmenu_lang.i65 $(OUT) *.o65.log *.ips.log $(IGMENU) igmenu_raw.smc igmenu.link.log
-	rm -f -- onboarding/*.o65 onboarding/*.ips onboarding/*.o65.log onboarding/*.ips.log onboarding/onb_const_lang.a65 onboarding/onb_const_lang_b.a65 $(ONB_OUT) onb_link.log
+	rm -f -- *~ *.ips *.o65 const_lang.a65 const_lang_str.a65 const_lang_tab.a65 const_lang_cjk.a65 lang_*.bin lang_*.fnt igmenu_lang.i65 $(OUT) *.o65.log *.ips.log $(IGMENU) igmenu_raw.smc igmenu.link.log
+	rm -f -- onboarding/*.o65 onboarding/*.ips onboarding/*.o65.log onboarding/*.ips.log onboarding/onb_const_lang.a65 onboarding/onb_const_lang_b.a65 onboarding/onb_cjk_ja.a65 onboarding/onb_cjk_zh.a65 onboarding/onb_cjk_sheets.a65 $(ONB_OUT) onb_link.log
 
 -include $(info $(DEPDIR)) $(shell mkdir $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*)
 

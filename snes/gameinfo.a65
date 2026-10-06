@@ -915,6 +915,7 @@ gi_fmv_band_v3:
   php
   sep #$20 : .as
   rep #$10 : .xl
+  jsl @cjk_ficha_begin        ; CJK language: the band's empty tiles become its glyph cache
   lda #$10 : sta $2130         ; PALETTED band (gi_dc_show set $11 = DirectColor; D0=0 here)
   ; --- cover region (.gcv) -- only if GI_FLAG_COVER ---
   lda @GI_FLAGS
@@ -924,11 +925,11 @@ gi_fmv_band_v3:
   DMA7(#$00, #$00f0, #^GI_TMAP, #!GI_TMAP, #$22)
   ; cover tiles (paletted 8bpp, idx 48..167) -> window-0 ($2000): 256 tiles ($4000 B) from C9 (16x16,
   ; #256..511 = $2000..$3FFF EXACTLY -- must NOT exceed 256 or it spills into $4000 = body BG2 font)
-  ldx #GI_IMG_VRAM0 : stx $2116
+  ldx gi_cov_vram : stx $2116    ; window 0, or window 1 for a CJK text (cjk_ficha_begin)
   DMA7(#$01, #$4000, #^COVER_C9_TILES, #!COVER_C9_TILES, #$18)
 gfb_no_cover:
   ; zero the FMV band fill tile (#984 @ $7B00): value-0 = transparent -> gradient
-  ldx #GI_FMV_BLANK_VRAM : stx $2116
+  ldx gi_blank_vram : stx $2116
   DMA7(#$09, #$0040, #^zero, #!zero, #$18)
   ; --- screenshot/FMV region (.fmv) -- only if GI_FLAG_FMV (frame 0; 1-frame = static) ---
   lda @GI_FLAGS
@@ -967,7 +968,7 @@ gfbv3_done:
 gi_fmv_build_tmap_v3:
   php
   rep #$30 : .al : .xl
-  lda #GI_FMV_BLANK_CHAR
+  lda gi_blank_char
   ldx #$0000
 gtv3_fill:
   sta @GI_TMAP_BUF, x
@@ -979,7 +980,7 @@ gtv3_fill:
   lda @GI_FLAGS
   and #GI_FLAG_COVER
   beq gtv3_no_cover
-  lda #GI_COVER_CHAR0
+  lda gi_cov_char0
   sta gi_pos                   ; running cover tile char
   ldx #(GI_COVER_ROW0*32+GI_COVER_COL0)*2
   ldy #GI_COVER_H
@@ -988,6 +989,7 @@ gtv3_crow:
   ldy #GI_COVER_W
 gtv3_ccol:
   lda gi_pos
+  jsl @cjk_band_char           ; an empty cover tile given to the glyph cache -> blank
   sta @GI_TMAP_BUF, x
   inc gi_pos
   inx
@@ -1283,6 +1285,7 @@ gif_put:
 gi_dma_body:
   php
   rep #$10 : .xl
+  jsl @cjk_flush_now          ; CJK glyphs the body uses, before the tilemap that shows them
   ldx #GI_BG1_TMAP+GI_BODY_ROW0*32
   stx $2116
   DMA7(#$01, #16*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF+GI_BODY_ROW0*64, #$18)
@@ -1731,6 +1734,7 @@ gi_wrap_one:
   rep #$20 : .al
   lda gi_ls : sta gi_pos
   lda #$ffff : sta gi_lastsp
+  stz gi_lastcj
   sep #$20 : .as
   ldx #$0000
 gw_scan:
@@ -1748,6 +1752,20 @@ gw_scan:
   lda gi_pos : sta gi_lastsp
   sep #$20 : .as
 gw_nosp:
+  cmp #CJK_LEAD0             ; a CJK glyph (cjk.a65): its two bytes are one unit
+  bcc gw_adv
+  rep #$20 : .al
+  lda gi_pos : sta gi_lastcj
+  inc gi_pos
+  sep #$20 : .as
+  inx
+  cpx #GI_DESC_IW
+  bcc gw_adv                 ; the trail fits: it goes with the lead
+  rep #$20 : .al
+  lda gi_lastcj : sta gi_pos ; it does not: the line ends before the glyph
+  sep #$20 : .as
+  bra gw_hardbreak
+gw_adv:
   rep #$20 : .al
   inc gi_pos
   sep #$20 : .as
@@ -1765,7 +1783,10 @@ gw_atwidth:
   rep #$20 : .al
   lda gi_lastsp
   cmp #$ffff
-  bne gw_break_space
+  beq gw_hb16
+  cmp gi_lastcj              ; a glyph after the last space: break at the width instead
+  bcs gw_break_space
+gw_hb16:
   sep #$20 : .as
   bra gw_hardbreak
 gw_break_space:

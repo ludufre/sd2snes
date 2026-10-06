@@ -854,8 +854,11 @@ onb_build_split:
   jsr onb_build_hdma     ; the option bar's channel for this view -> onb_hdma_en
 
   ; build the whole card into the WRAM tile buffers, then DMA it to VRAM (forced blank).
+  ; The CJK glyph cache starts empty for every card and its cells go up here too.
+  jsl @onb_cjk_reset
   jsr onb_build_body
   jsr onb_dma_body
+  jsl @onb_cjk_flush
   jsr onb_font_sync      ; the font this card shows (the font-edge preview, or back to the saved)
 
   ; enable HDMA (ch1+ch2 gradient only) at vblank, then unblank.
@@ -1656,7 +1659,7 @@ onb_ftr_item:
   lda #ONB_PAL_WHITE : sta @onb_print_pal
   lda #10 : sta @onb_print_count
   lda #^onb_strtab_lo
-  jmp onb_puts
+  jmp onb_puts_shift        ; one blank after the key, in CJK too
 
 ; ===========================================================================
 ; onb_puts_center -- print a string centered on the 64 half-column screen.
@@ -1750,6 +1753,13 @@ odk_loop:
   lda [onb_print_ptr], y
   iny
   cmp #$20
+  beq odk_after
+  cmp #ONB_CJK_MARK           ; the first character of a CJK string
+  beq odk_after
+  cmp #$80                    ; right after a glyph of a CJK string (its trail byte)
+  bcc odk_next
+  lda [onb_print_ptr]
+  cmp #ONB_CJK_MARK
   bne odk_next
 odk_after:
   .as : .xl
@@ -1778,6 +1788,17 @@ odk_found:
   tya
   clc
   adc $01, s                  ; column = first column + index
+  pha
+  lda [onb_print_ptr]         ; a CJK marker takes a column only at an odd one
+  cmp #ONB_CJK_MARK
+  bne +
+  lda $02, s
+  lsr
+  bcs +
+  lda $01, s
+  dec
+  sta $01, s
++ pla
   sta @onb_print_x
   pla
   rep #$20 : .al
@@ -1877,7 +1898,7 @@ onb_dov_row:
   lda #ONB_PAL_WHITE : sta @onb_print_pal
   lda #24 : sta @onb_print_count
   pla
-  jsr onb_puts
+  jsr onb_puts_shift        ; a CJK name at this odd column lines up with the Latin ones
   lda @onb_row
   inc
   sta @onb_row
@@ -1947,7 +1968,7 @@ onb_row_label:
   bne +
   lda @onb_row
   rep #$20 : .al
-  and #$0007
+  and #$000f
   asl
   tax
   lda @onb_langname_tbl, x
@@ -2458,6 +2479,22 @@ onb_puts:
   stx onb_print_src
   sta @onb_print_bank
   jsr onb_hiprint
+  plp
+  rts
+
+; onb_puts_shift -- onb_puts for a short label at an odd column: a CJK-only string starts
+; right there (pair cells, onb_hiprint) instead of one column later. In: as onb_puts.
+onb_puts_shift:
+  php
+  sep #$20 : .as
+  pha
+  lda #$01
+  sta @OCJ_SHIFT
+  pla
+  jsr onb_puts
+  sep #$20 : .as
+  lda #$00
+  sta @OCJ_SHIFT
   plp
   rts
 

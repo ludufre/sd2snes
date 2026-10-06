@@ -139,6 +139,13 @@ onb_hp_bg2:
   bne +
   jsr onb_hp_toggle
   bra onb_hp_bg2
++ cmp #ONB_CJK_MARK           ; a CJK string's marker: at an even column it takes none
+  bne +
+  inc onb_print_ptr
+  bra onb_hp_bg2
++ cmp #ONB_CJK_LEAD0          ; a CJK glyph: one BG2 cell over this column and the next
+  bcc +
+  jmp onb_hp2_cjk
 + lda [onb_print_ptr]
   ror
   and #$007f
@@ -158,7 +165,18 @@ onb_hp_bg1:
   bne +
   jsr onb_hp_toggle
   bra onb_hp_bg1
-+ lda [onb_print_ptr]
++ cmp #ONB_CJK_MARK           ; the marker at an odd column: a blank, so the glyphs that
+  bne +                       ; follow start on BG2's even columns -- or, for a label made
+  jsr onb_hp1_pairs           ; only of glyphs, pair cells that start them right here
+  bcs onb_hp1_mark
+  jmp onb_hp_end
+onb_hp1_mark:
+  .al : .xl
+  inc onb_print_ptr
+  bra onb_hp1_blank
++ cmp #ONB_CJK_LEAD0          ; a glyph at an odd column (not aligned): a blank first
+  bcs onb_hp1_blank
+  lda [onb_print_ptr]
   ror
   and #$007f
   beq onb_hp_end
@@ -188,6 +206,138 @@ onb_hp_end:
   pld
   plp
   rts
+
+; onb_hp1_blank: a blank BG1 cell at this odd column, then on to the next (even) one.
+onb_hp1_blank:
+  .al : .xl
+  lda #$0040                  ; ' ' (char 32 = tile 64)
+  ora @onb_print_temp
+  sta !BG1_TILE_BUF, x
+  inx
+  inx
+  dey
+  beq +
+  jmp onb_hp_bg2
++ jmp onb_hp_end
+
+; onb_hp1_pairs: [onb_print_ptr] = a CJK marker at an ODD column. When the caller allows it
+;   (OCJ_SHIFT, onb_puts_shift) and the rest of the string is glyphs only, draw them from
+;   this column: glyph k covers this column + 2k and the next, so BG2's cells (even columns)
+;   each show the right half of one glyph and the left half of the next (onb_cjk_pair), from
+;   the column before the string to its last one; BG1's columns under them go blank. Out:
+;   C clear = drawn (pointer at the end, X/Y moved on), C set = not (nothing changed).
+;   .al/.xl in and out.
+onb_hp1_pairs:
+  .al : .xl
+  lda @OCJ_SHIFT
+  and #$00ff
+  beq ohp_no
+  phy                         ; the columns left
+  ldy #$0001
+ohp_scan:
+  .al : .xl
+  lda [onb_print_ptr], y
+  and #$00ff
+  cmp #$0002
+  bcc ohp_end
+  cmp #ONB_CJK_LEAD0
+  bcc ohp_no_y                ; something else than a glyph
+  iny
+  iny
+  bra ohp_scan
+ohp_end:
+  .al : .xl
+  dey                         ; = 2 * glyphs = the columns they take
+  beq ohp_no_y
+  tya
+  cmp $01, s
+  beq +
+  bcs ohp_no_y                ; more than the count
++ ply
+  inc onb_print_ptr           ; past the marker
+  lda #$0000
+  sta @OCJ_PA
+ohp_cell:
+  .al : .xl
+  lda [onb_print_ptr]
+  and #$00ff
+  cmp #ONB_CJK_LEAD0
+  bcc ohp_last
+  sec
+  sbc #ONB_CJK_LEAD0
+  xba                         ; * 256
+  lsr                         ; * 128
+  sta @onb_cjk_g
+  inc onb_print_ptr
+  lda [onb_print_ptr]
+  and #$007f
+  ora @onb_cjk_g
+  inc onb_print_ptr
+  inc                         ; glyph + 1
+  sta @OCJ_PB
+  jsl @onb_cjk_pair           ; A = the cell (X, Y kept)
+  ora @onb_print_temp
+  sta !BG2_TILE_BUF, x
+  lda #$0040
+  ora @onb_print_temp
+  sta !BG1_TILE_BUF, x
+  inx
+  inx
+  dey
+  dey
+  lda @OCJ_PB
+  sta @OCJ_PA
+  bra ohp_cell
+ohp_last:
+  .al : .xl
+  lda #$0000                  ; the last glyph's right half, a blank after it
+  sta @OCJ_PB
+  jsl @onb_cjk_pair
+  ora @onb_print_temp
+  sta !BG2_TILE_BUF, x
+  clc
+  rts
+ohp_no_y:
+  .al : .xl
+  ply
+ohp_no:
+  .al : .xl
+  sec
+  rts
+
+; onb_hp2_cjk: the pair {lead, trail} at an even column -> glyph (lead - $FA) * 128 +
+;   (trail & $7f); its cell (onb_cjk.a65) on BG2, a blank on BG1's column over its right
+;   half. Needs both columns of the count.
+onb_hp2_cjk:
+  .al : .xl
+  cpy #$0002
+  bcs +
+  jmp onb_hp_end
++ lda [onb_print_ptr]
+  and #$00ff
+  sec
+  sbc #ONB_CJK_LEAD0
+  xba                         ; * 256
+  lsr                         ; * 128
+  sta @onb_cjk_g
+  inc onb_print_ptr
+  lda [onb_print_ptr]
+  and #$007f
+  ora @onb_cjk_g
+  inc onb_print_ptr
+  jsl @onb_cjk_cell           ; A = its tile (X, Y kept)
+  ora @onb_print_temp
+  sta !BG2_TILE_BUF, x
+  lda #$0040
+  ora @onb_print_temp
+  sta !BG1_TILE_BUF, x
+  inx
+  inx
+  dey
+  dey
+  beq +
+  jmp onb_hp_bg2
++ jmp onb_hp_end
 
 ; onb_hp_toggle: step over a BTN_TOGGLE byte and flip the cell palette between the
 ;   line's (white, 0) and the green of the key hints (ONB_PAL_DIM, 2): bit 11 of the

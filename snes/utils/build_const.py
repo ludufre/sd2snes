@@ -87,10 +87,58 @@ DECODE = {v: k for k, v in ACCENTS.items()}
 # `LABEL  .byt  <args>` (args may contain quoted strings and raw byte values).
 LINE_RE = re.compile(r'^(\s*)(\S+)(\s+\.byt\s+)(.*)$')
 
+# CJK (Japanese/Chinese). The 256-tile font cannot hold ideographs, so they are drawn from
+# a glyph cache in VRAM (snes/cjk.a65). A CJK character is encoded as TWO bytes,
+#   lead  = CJK_LEAD0 + index // 128      ($FA..$FF: font codes no Latin string uses)
+#   trail = $80 + index % 128             (never a space, a terminator or a marker)
+# where index is the glyph's position in the sheet build_const emits (cjk_sheet). Two bytes
+# for a glyph two columns wide keeps "one byte = one column", so strlen, window widths and
+# print_count stay right with no change. The glyph is a 16-px cell of BG1, which only owns the
+# ODD columns: every lead is placed at an EVEN byte offset of its string (a space is inserted
+# after an odd-length run of single-byte text), so all of a string's glyphs share a parity and
+# the printer fixes that parity once, at the CJK_MARK the string starts with.
+CJK_LEAD0 = 0xFA
+CJK_MAX = (0x100 - CJK_LEAD0) * 128
+# Every string that has a glyph STARTS with this byte (a free font code). It is one column of
+# the string's width that the printer fills with a blank when the string starts on a BG2
+# column and skips when it starts on a BG1 one: the parity fix happens once, up front, so a
+# list of labels stays aligned and the text inside a string keeps its spacing.
+CJK_MARK = 176
+CJK_FIRST_CP = 0x2E80          # CJK radicals onwards: kana, ideographs, full-width forms
+CJK = None                     # char -> glyph index of the CURRENT encoding context (main())
+# Pad a lead that would land on an odd offset after the marker with a blank. The tour needs it
+# (its glyphs go on BG2 cells only, gen_onb_lang.py); the menu does not (snes/cjk.a65 puts a
+# glyph on a BG1 or a BG2 cell, whichever column it starts on), so main() turns it off: the
+# pad was a blank column the ASCII rows around the string did not have.
+CJK_PAD = True
 
-def encode_string(text):
-    """UTF-8 text (with {NNN} raw-byte placeholders) -> `.byt` argument string."""
-    pieces, cur, i = [], "", 0
+# Two glyph ranges. Indices 0..127 (lead $FA) are the RESIDENT sheet, linked into the menu:
+# the glyphs of text every language shows, i.e. the languages' own names in the language list.
+# Indices 128..767 (leads $FB-$FF) belong to the ACTIVE CJK language: its glyph sheet and its
+# whole string pool are a file on the card (lang_<code>.bin, /sd2snes/lang/) that the menu
+# copies into WRAM bank $7F when that language is selected (cjk.a65 cjk_lang_sync). A CJK
+# language column therefore costs the menu banks only its dispatch-table words.
+CJK_COMMON_MAX = 128
+CJK_LANG_FIRST = 128
+CJK_LANG_LAST = 640            # 640..767 (lead $FF) stay free for glyphs the firmware supplies
+CJK_LANGS = {"ja": "misaki_gothic_2nd.hex", "zh": "fusion8_zh_hans.hex"}   # code -> font
+CJK_FONT_DEFAULT = "misaki_gothic_2nd.hex"
+CJK_BASE = 0x2000              # the file's place in bank $7F (memmap.i65 CJK_LANG_BASE)
+CJK_HDR = 16                   # "SDL1", column, version, pool_len, sheet_addr, nglyphs, total
+CJK_FILE_MAX = 0xDF00          # $7F2000..$7FFEFF; the menu's launch trampoline sits at $7FFFE0
+
+
+def is_cjk(ch):
+    return ord(ch) >= CJK_FIRST_CP
+
+
+def encode_string(text, zero_width=()):
+    """UTF-8 text (with {NNN} raw-byte placeholders) -> `.byt` argument string.
+    zero_width: raw byte values that take no column (the tour's BTN_TOGGLE), left out of the
+    offsets the CJK alignment counts."""
+    pieces, cur, i, off = [], "", 0, 0
+    if CJK_PAD and any(is_cjk(ch) for ch in text):
+        pieces.append(str(CJK_MARK))   # offsets below count from after the marker (the tour)
     while i < len(text):
         ch = text[i]
         if ch == "{":
@@ -98,19 +146,79 @@ def encode_string(text):
             if cur:
                 pieces.append(f'"{cur}"'); cur = ""
             pieces.append(text[i + 1:end])
+            if not (text[i + 1:end].isdigit() and int(text[i + 1:end]) in zero_width):
+                off += 1
             i = end + 1
             continue
         if ch in ENCODE:
             if cur:
                 pieces.append(f'"{cur}"'); cur = ""
             pieces.append(str(ENCODE[ch]))
+        elif is_cjk(ch):
+            if CJK is None or ch not in CJK:
+                sys.exit(f"build_const.py: CJK character {ch!r} (U+{ord(ch):04X}) in {text!r} "
+                         f"has no glyph cache entry (only build_const's menu strings support CJK)")
+            if off & 1 and CJK_PAD:                # keep every lead at an even offset:
+                sp = cur.rfind(" ")                # widen a space of the run before it
+                if sp >= 0:                        # ("A  B:" reads better than "B: X")
+                    cur = cur[:sp] + " " + cur[sp:]
+                else:
+                    if cur:
+                        pieces.append(f'"{cur}"'); cur = ""
+                    pieces.append("32")
+                off += 1
+            if cur:
+                pieces.append(f'"{cur}"'); cur = ""
+            idx = CJK[ch]
+            pieces.append(str(CJK_LEAD0 + idx // 128))
+            pieces.append(str(0x80 + idx % 128))
+            off += 1                               # (+1 below)
         else:
             cur += ch
+        off += 1
         i += 1
     if cur:
         pieces.append(f'"{cur}"')
     pieces.append("0")
     return ", ".join(pieces)
+
+
+def load_cjk_font(path):
+    """snes/fonts/*.hex: one `CODEPOINT:16 hex digits` line per glyph, 8 rows top-down, bit 7
+    = leftmost pixel, row 7 and column 7 blank (the cell's spacing)."""
+    font = {}
+    for line in Path(path).read_text().splitlines():
+        if ":" in line:
+            cp, rows = line.split(":")
+            font[chr(int(cp, 16))] = bytes.fromhex(rows)
+    return font
+
+
+def cjk_glyph_tiles(rows):
+    """8x8 1bpp glyph -> the 64 bytes of its 16-px mode-5 cell: left 8x8 tile then right 8x8
+    tile, 4bpp (planes 0/1 row-interleaved, then planes 2/3 = 0). Each source pixel is two hires pixels wide.
+    Colour 1 = body, colour 2 = the dark contour the menu font draws around its letters
+    (orthogonal neighbours only: diagonal-only gaps stay transparent, as in the font)."""
+    body = [[(rows[y] >> (7 - x // 2)) & 1 for x in range(16)] for y in range(8)]
+    px = [[0] * 16 for _ in range(8)]
+    for y in range(8):
+        for x in range(16):
+            if body[y][x]:
+                px[y][x] = 1
+            elif any(0 <= y + dy < 8 and 0 <= x + dx < 16 and body[y + dy][x + dx]
+                     for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0))):
+                px[y][x] = 2
+    out = bytearray()
+    for half in (0, 8):
+        for y in range(8):
+            p0 = p1 = 0
+            for x in range(8):
+                c = px[y][half + x]
+                p0 |= (c & 1) << (7 - x)
+                p1 |= ((c >> 1) & 1) << (7 - x)
+            out += bytes((p0, p1))
+        out += bytes(16)                   # planes 2/3: BG1 is 4bpp; one DMA writes all of it
+    return bytes(out)
 
 
 def split_args(args):
@@ -149,6 +257,17 @@ def decode_args(args):
             else:
                 text += "{" + str(n) + "}"
     return text
+
+
+def args_to_bytes(args):
+    """`.byt` argument string (encode_string's output) -> the bytes it assembles to."""
+    out = bytearray()
+    for p in split_args(args):
+        if p.startswith('"') and p.endswith('"'):
+            out += p[1:-1].encode("ascii")
+        else:
+            out.append(int(p, 0))
+    return bytes(out)
 
 
 def load_dict(path):
@@ -211,6 +330,63 @@ def main():
     langs = [(lang_code(p), load_dict(p)) for p in lang_paths]
     out_path = Path(sys.argv[sys.argv.index("-o") + 1])
 
+    # CJK glyph registries (see CJK_LANGS). The resident range holds what the menu shows in
+    # every language: CJK in const.a65's neutral lines (a language's own name, drawn in that
+    # language's font) and in non-CJK columns. Each CJK language gets its own range, indexed
+    # in code point order so a sheet is reproducible. Built before anything is encoded.
+    global CJK, CJK_PAD
+    CJK_PAD = False
+    fonts_dir = Path(__file__).resolve().parent.parent / "fonts"
+    font_cache = {}
+
+    def font(name):
+        if name not in font_cache:
+            font_cache[name] = load_cjk_font(fonts_dir / name)
+        return font_cache[name]
+
+    cjk_codes = [code for code, _ in langs if code in CJK_LANGS]
+    if [code for code, _ in langs][len(langs) - len(cjk_codes):] != cjk_codes:
+        sys.exit("build_const.py: the CJK languages (" + ", ".join(CJK_LANGS) + ") must be the "
+                 "LAST dicts on the command line (the in-game readers stop before them)")
+    common = {}                                  # char -> font file
+    for line in base.read_text().splitlines():
+        m = LINE_RE.match(line)
+        if m and any(is_cjk(ch) for ch in m.group(4)):
+            code = m.group(2)[len("text_lang_"):] if m.group(2).startswith("text_lang_") else ""
+            for ch in m.group(4):
+                if is_cjk(ch):
+                    common.setdefault(ch, CJK_LANGS.get(code, CJK_FONT_DEFAULT))
+    for code, d in langs:
+        if code not in CJK_LANGS:
+            for text in d.values():
+                for ch in str(text):
+                    if is_cjk(ch):
+                        common.setdefault(ch, CJK_FONT_DEFAULT)
+    if len(common) > CJK_COMMON_MAX:
+        sys.exit(f"build_const.py: {len(common)} resident CJK glyphs, room for {CJK_COMMON_MAX}")
+    common_map = {ch: i for i, ch in enumerate(sorted(common))}
+    lang_maps = {}
+    for code, d in langs:
+        if code in CJK_LANGS:
+            used = {ch for text in d.values() for ch in str(text) if is_cjk(ch)}
+            if len(used) > CJK_LANG_LAST - CJK_LANG_FIRST:
+                sys.exit(f"build_const.py: [{code}] {len(used)} CJK glyphs, room for "
+                         f"{CJK_LANG_LAST - CJK_LANG_FIRST}")
+            lang_maps[code] = {ch: CJK_LANG_FIRST + i for i, ch in enumerate(sorted(used))}
+    for name, chars in [(f, [c for c, ff in common.items() if ff == f]) for f in set(common.values())] + \
+                       [(CJK_LANGS[c], list(m)) for c, m in lang_maps.items()]:
+        missing = sorted(ch for ch in chars if ch not in font(name))
+        if missing:
+            sys.exit(f"build_const.py: no glyph in {name} for: "
+                     + " ".join(f"{c} (U+{ord(c):04X})" for c in missing))
+
+    def use(code):
+        """Select the glyph range the next encode_string calls draw from."""
+        global CJK
+        CJK = lang_maps[code] if code in lang_maps else common_map
+
+    use(None)
+
     # Item descriptions (mdesc_*) ARE rendered now (the menu draws the selected
     # entry's description), so they get localized too. The localized string pool
     # + dispatch tables are emitted into a SEPARATE bank ($C2, see below) so the
@@ -236,6 +412,10 @@ def main():
             continue                            # igmenu-only label, dead in this link
         if m and m.group(2) in localized:
             order.append(m.group(2))            # moved to the localized block below
+        elif m and any(is_cjk(ch) for ch in m.group(4)):
+            # a neutral label written in CJK (a language's own name): encode its glyphs
+            out.append(f"{m.group(1)}{m.group(2)}{m.group(3)}"
+                       f"{encode_string(decode_args(m.group(4)))}")
         else:
             out.append(line)
 
@@ -273,7 +453,10 @@ def main():
     #                   (cheatmenu.a65); hiprint truncates past that
     # First matching prefix wins, so text_mtl_ (whole lines) must precede text_mt_
     # (fragments printed AFTER a "U501: " chip prefix, hence 8 columns less).
-    WIDTH_LIMITS = (("text_si_", 40), ("text_cheat_noname", 42), ("text_cheat_flag_", 4),
+    #   text_statusbar_keys  browser statusbar, from column 2 up to the clock: 41 columns
+    #   text_gi_year/genre/players  the game-info metadata row: 5/7/10-column fields
+    WIDTH_LIMITS = (("text_gi_year", 5), ("text_gi_genre", 7), ("text_gi_players", 10),
+                    ("text_statusbar_keys", 41), ("text_si_", 40), ("text_cheat_noname", 42), ("text_cheat_flag_", 4),
                     ("text_no_", 22), ("cheat_tab_head", 48),
                     ("text_mtl_", 40), ("text_mt_", 32), ("text_pcm_", 40),
                     ("mtext_", 40),
@@ -297,6 +480,7 @@ def main():
 
     too_wide = []
     for lang_name, d in langs:   # every loaded translation: validate each
+        use(lang_name)
         for label in order:
             text = d.get(label)
             if not text:
@@ -304,6 +488,7 @@ def main():
             n, lim = encoded_len(text), budget_for(label)
             if n > lim:
                 too_wide.append(f"{label} [{lang_name}]: {n} > {lim} bytes: {text!r}")
+    use(None)
     if too_wide:
         sys.exit("build_const.py: translation(s) exceed their UI slot:\n  "
                  + "\n  ".join(too_wide))
@@ -332,6 +517,7 @@ def main():
 
     bad_ph = []
     for lang_name, d in langs:
+        use(lang_name)
         for label in order:
             if not label.startswith("text_si_"):
                 continue
@@ -343,6 +529,7 @@ def main():
             if want != got:
                 bad_ph.append(f"{label} [{lang_name}]: has {fmt_counts(got)}, "
                               f"English base has {fmt_counts(want)}")
+    use(None)
     if bad_ph:
         sys.exit("build_const.py: sysinfo template(s) with mismatched placeholders:\n  "
                  + "\n  ".join(bad_ph))
@@ -369,6 +556,18 @@ def main():
         return pool[args]
 
     col_pool = [0] + [1 if code in POOL_B_LANGS else 0 for code, _ in langs]
+    col_code = [None] + [code for code, _ in langs]
+
+    # A CJK column's strings go to that language's own pool, shipped in lang_<code>.bin and
+    # read from WRAM bank $7F: its table words are absolute addresses there.
+    ext = {code: ({}, bytearray()) for code in lang_maps}
+
+    def intern_ext(code, args):
+        idx, data = ext[code]
+        if args not in idx:
+            idx[args] = CJK_BASE + CJK_HDR + len(data)
+            data += args_to_bytes(args)
+        return f"${idx[args]:04x}"
 
     tabledefs = []
     plaindefs = []   # labels whose languages coincide -> plain string, no table
@@ -379,18 +578,23 @@ def main():
         # English) collapses to a single plain string with NO dispatch
         # table -- resolve_str passes any pointer outside [strtab_lo,strtab_hi)
         # straight through. This keeps the menu inside one 64K bank.
+        use(None)
         en_norm = encode_string(decode_args(en))
         norms = [en_norm]
         strings = [en]
-        for _, d in langs:
+        for code, d in langs:
+            use(code)
             text = d.get(label)
             args = encode_string(text) if text else en
             norms.append(encode_string(text) if text else en_norm)
             strings.append(args)
+        use(None)
         if all(n == en_norm for n in norms):
             plaindefs.append((label, en))
             continue
-        tabledefs.append((label, [intern(args, col_pool[c]) for c, args in enumerate(strings)]))
+        tabledefs.append((label, [intern_ext(col_code[c], args) if col_code[c] in ext
+                                  else "!" + intern(args, col_pool[c])
+                                  for c, args in enumerate(strings)]))
 
     if plaindefs:
         out += ["", "; ==== language-neutral labels (same in all langs): no table ===="]
@@ -422,9 +626,14 @@ def main():
         return bool(text) and (encode_string(text)
                                != encode_string(decode_args(en_args.get(lbl, ""))))
     nlang = 1
-    for idx, (_, d) in enumerate(langs, start=1):
+    for idx, (code, d) in enumerate(langs, start=1):
+        use(code)
         if any(differs(d.get(l), l) for l in order):
             nlang = idx + 1
+    use(None)
+    # The in-game readers (ovl_resolve_str) cannot reach a CJK pool: it is in WRAM, which
+    # in game belongs to the game. They clamp to the columns before the first CJK one.
+    nlatin = next((c for c in range(1, nlang) if col_code[c] in ext), nlang)
 
     lang_names = ", ".join(["EN"] + [code for code, _ in langs])
     tabout = [".link page $c1", "",
@@ -434,14 +643,21 @@ def main():
               "; with ^strtab_lo and the string it names with strpool_bank[lang].",
               "; cur_lang >= strtab_nlang -> EN."]
     tabout.append(f"strtab_nlang .byt {nlang}")
+    tabout.append(f"strtab_nlang_latin .byt {nlatin}   ; columns without a CJK pool (in-game clamp)")
     tabout.append("; bank of each language's pool, indexed by the (clamped) language")
     tabout.append("strpool_bank .byt " + ", ".join(
-        "^strpoolb_lo" if col_pool[c] else "^strpool_lo" for c in range(nlang)))
+        "$7f" if col_code[c] in ext else ("^strpoolb_lo" if col_pool[c] else "^strpool_lo")
+        for c in range(nlang)))
+    tabout.append("; per column: 0, or the two letters of a CJK language whose pool+glyphs are")
+    tabout.append("; /sd2snes/lang/<code>.bin (cjk.a65 cjk_lang_sync), little-endian")
+    tabout.append("cjk_lang_code .word " + ", ".join(
+        f"${ord(col_code[c][1]) << 8 | ord(col_code[c][0]):04x}" if col_code[c] in ext else "$0000"
+        for c in range(nlang)))
     tabout.append("strtab_lo")
     for label, labels in tabledefs:
         cols = labels[:nlang]
         # `label .word ...` (no colon) matches the proven `label .byt ...` style.
-        tabout.append(f"{label} " + " : ".join(f".word !{c}" for c in cols))
+        tabout.append(f"{label} " + " : ".join(f".word {c}" for c in cols))
     tabout.append("strtab_hi")
     # Pool B sits AFTER strtab_hi: resolve_str treats [strtab_lo, strtab_hi) as tables.
     tabout += ["", "; ==== interned language string pool B (" +
@@ -449,7 +665,42 @@ def main():
     for args in pool_orders[1]:
         tabout.append(f"{pools[1][args]} .byt {args}")
 
+    # The RESIDENT glyph sheet (snes/cjk.a65): 32 bytes per glyph, in index order, the
+    # glyphs every language shows (the languages' own names). Emitted even when empty so the
+    # link list is fixed. The CJK languages' sheets go into their lang_<code>.bin.
+    cjkout = [".link page $c1", "",
+              "; ==== resident CJK glyph sheet (build_const.py; fonts: snes/fonts/) ====",
+              "; 64 bytes per glyph: left 8x8 tile then right 8x8 tile of its 16-px cell, 4bpp.",
+              "; Glyph i is the byte pair {$%02X + i/128, $80 + i%%128} in a string." % CJK_LEAD0,
+              f"cjk_nglyphs .word {len(common_map)}",
+              "cjk_sheet"]
+    for ch, idx in common_map.items():
+        tiles = cjk_glyph_tiles(font(common[ch])[ch])
+        cjkout.append(f" .byt {', '.join(f'${b:02x}' for b in tiles)}  ; {idx} U+{ord(ch):04X}")
+    cjkout.append(" .byt 0")                    # keeps the label valid when the sheet is empty
+
+    # lang_<code>.bin: header, the column's string pool, its glyph sheet. Loaded to
+    # $7F:CJK_BASE; every address in it (table words, sheet_addr) is absolute in bank $7F.
+    for code, (idx, data) in ext.items():
+        col = col_code.index(code)
+        if col >= nlang:
+            continue
+        lmap = lang_maps[code]
+        sheet = b"".join(cjk_glyph_tiles(font(CJK_LANGS[code])[ch]) for ch in lmap)
+        sheet_addr = CJK_BASE + CJK_HDR + len(data)
+        total = CJK_HDR + len(data) + len(sheet)
+        if total > CJK_FILE_MAX:
+            sys.exit(f"build_const.py: lang_{code}.bin is {total} bytes, $7F holds {CJK_FILE_MAX}")
+        hdr = (b"SDL1" + bytes((col, 1)) + len(data).to_bytes(2, "little")
+               + sheet_addr.to_bytes(2, "little") + len(lmap).to_bytes(2, "little")
+               + total.to_bytes(2, "little") + bytes(2))
+        out_path.with_name(f"lang_{code}.bin").write_bytes(hdr + bytes(data) + sheet)
+        print(f"  lang_{code}.bin: column {col}, {len(idx)} strings ({len(data)} B), "
+              f"{len(lmap)} glyphs ({len(sheet)} B), {total} B of {CJK_FILE_MAX}")
+
     out_path.write_text("\n".join(out) + "\n")
+    cjk_path = out_path.with_name(out_path.stem + "_cjk" + out_path.suffix)
+    cjk_path.write_text("\n".join(cjkout) + "\n")
     str_path = out_path.with_name(out_path.stem + "_str" + out_path.suffix)
     str_path.write_text("\n".join(strout) + "\n")
     tab_path = out_path.with_name(out_path.stem + "_tab" + out_path.suffix)

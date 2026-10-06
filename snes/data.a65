@@ -30,7 +30,7 @@ print_count     .word 0     ; how many characters may be printed?
 print_done      .word 0     ; how many characters were printed?
 print_over      .byt 0      ; was the string printed incompletely?
 ;----------language selection----------
-cur_lang        .byt 0      ; active menu language (0=EN, 1=BR, 2=ES, 3=DE, 4=FR, 5=IT, 6=RU, 7=NL)
+cur_lang        .byt 0      ; active menu language (0=EN, 1=BR, 2=ES, 3=DE, 4=FR, 5=IT, 6=RU, 7=NL, 8=JA, 9=ZH)
 resolve_ptr     .byt 0,0,0  ; resolve_str: zero-page long ptr to read a dispatch-table entry
 kv_len_tmp      .byt 0      ; menu_kv_value_len: resolved kv-value length out-param
 ;----------parameters for dma----------
@@ -588,5 +588,15 @@ exp_len         .byt 0     ; heading length, markers dropped
 exp_hi0         .byt 0     ; first / past-the-last column of the *green* run ($ff = none)
 exp_hi1         .byt 0
 exp_hbuf        .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; the heading without its markers + NUL + slack
+
+
+; description word-wrap (menu.a65 desc_next_line): index of the last CJK glyph start on the
+; line being scanned -- a line may break right before a glyph, with no space to drop.
+dl_cjkbrk       .word 0
+gi_cov_vram     .word 0     ; game-info band layout, set by cjk_ficha_begin (cjk.a65) on every band:
+gi_cov_char0    .word 0     ;   the cover's VRAM word / first char, the empty cell's VRAM word / char
+gi_blank_vram   .word 0
+gi_blank_char   .word 0
+gi_lastcj       .word 0     ; gi_wrap_one: where the last CJK glyph of the line starts (0 = none)
 
 _END            .byt 0

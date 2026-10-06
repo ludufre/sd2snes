@@ -97,6 +97,8 @@
    place of the menu) stages it, and while the tour runs none of those is in use; the
    menu reload after it rebuilds what it needs. Lockstep with WEL_BASE in
    snes/onboarding/onb_memmap.i65. */
+#define SRAM_LANG_STAGE_ADDR         (0xD00000L) /* SNES_CMD_LOAD_LANG stages /sd2snes/lang/<code>.bin here for the menu to copy into WRAM $7F; time-shared with the cheat records like the welcome clip (menu mode, nothing else live there at that moment). Lockstep with LANG_STAGE in snes/memmap.i65 */
+#define SRAM_LANG_STAGE_MAX          (0xDF00L)   /* = CJK_LANG_MAX: what fits in $7F2000..$7FFEFF */
 #define SRAM_ONB_WELCOME_ADDR        (0xD00000L)
 #define SRAM_ONB_WELCOME_MAX         (0x100000L)
 #define SRAM_DIR_ADDR                (0xDB0000L)
@@ -109,6 +111,7 @@
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 #define SRAM_GAMEINFO_TILES_ADDR     (0xCA0000L) /* bank CA: game-info DirectColor 8bpp tiles (up to ~48KB) */
 #define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
+#define SRAM_GAMEINFO_CJK_ADDR       (0xCBC000L) /* the game-info screen's CJK glyphs (a Japanese/Chinese title or description): 64 bytes each, up to GI_CJK_MAX, drawn by the firmware (gameinfo.c) and uploaded by the menu's glyph cache as glyphs 640+ (lead $FF). Lockstep with GI_CJK_SHEET in snes/memmap.i65 */
 #define SRAM_MENU_SFX_ADDR           (0xCC0000L) /* banks CC..CF (256 KB, free during menu, below cheats @D0):
                                                     one SHARED budget, bump-allocated, holding the preloaded
                                                     nav-SFX PCM bodies the FPGA sfxdma engine streams into the

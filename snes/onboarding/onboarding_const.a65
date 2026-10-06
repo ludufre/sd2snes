@@ -107,7 +107,7 @@ onb_text_startbtn .byt "START", 0
 ; answer gives, the flags on the language card, an icon where nothing changes on screen
 ; (sound, buttons); a "No" is its picture greyed.
 onb_demo_map
-  .byt 0, 1, 2, 3, 4, 5, 6, 7, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  1 language
+  .byt 0, 1, 2, 3, 4, 5, 6, 7, 74, 75, $ff, $ff, $ff, $ff, $ff, $ff   ;  1 language
   .byt 48, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  2 themes: the sd2snes+ theme, a .thm, restoring it or the classic one
   .byt 49, 50, 51, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  3 text outline
   .byt 49, 50, 52, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ;  4 text anti-aliasing
@@ -165,7 +165,8 @@ onb_bar_src
   .byt 1, $00, $e0
   .byt 0
 
-; the languages' native names, indexed by lang 0..7 (CFG_LANGUAGE order)
+; the languages' native names, indexed by lang 0..9 (CFG_LANGUAGE order; 8 and 9, in CJK
+; glyphs, are generated into onb_const_lang_b.a65)
 onb_langname_0  .byt "English", 0
 onb_langname_1  .byt "Portugu", 135, "s", 0
 onb_langname_2  .byt "Espa", 154, "ol", 0
@@ -187,6 +188,7 @@ onb_cc_label_tbl  .word onb_text_cc_3, onb_text_cc_4, onb_text_cc_5, onb_text_cc
 
 onb_langname_tbl  .word onb_langname_0, onb_langname_1, onb_langname_2, onb_langname_3
                   .word onb_langname_4, onb_langname_5, onb_langname_6, onb_langname_7
+                  .word onb_langname_8, onb_langname_9   ; Japanese, Chinese (gen_onb_lang.py)
 
 ; ===========================================================================
 ; onb_feat_table -- the ONB_NUM_CARDS cards in tour order (the base tour, "and more"
