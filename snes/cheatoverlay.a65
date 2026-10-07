@@ -728,6 +728,11 @@ ss_ovl_exit_classic:
 ;      Bounded at 180 frames (~3 s): a physically stuck button must never strand the game --
 ;      hitting the ceiling just degrades to the old leak.  Reads with the same START-then-DONE
 ;      idiom as the input loop; a stale $4218 could read idle with a button still down.
+;      BOTH ports, with the controller-ID filter of the shell's input loop (igmenu.a65): the
+;      shell takes its B from either pad, so a B still held on controller 2 leaks the same
+;      way, and a non-standard controller (low nibble != 0) counts as idle. Without the
+;      filter a MOUSE in port 1 never reads zero -- its signature lives in that nibble -- and
+;      every close sat out the full 3 s ceiling.
 ;      Entry .as, X width not assumed.  Restores P. ----
 ss_ovl_pad_drain:
 	php
@@ -739,8 +744,23 @@ ss_ovl_pd_frame:
 	- lda @$004212 : and #$01 : beq -      ; auto-joypad read STARTED (bit0 set)
 	- lda @$004212 : and #$01 : bne -      ; ...and FINISHED -> $4218 is fresh
 	rep #$20 : .al
-	lda @$004218
-	beq ss_ovl_pd_done                     ; pad idle -> nothing left to leak
+	lda @$00421a                           ; controller 2...
+	bit #$000f
+	beq ss_ovl_pd_p2
+	lda #$0000                             ; not a standard pad: no buttons to drain
+ss_ovl_pd_p2:
+	.al
+	pha
+	lda @$004218                           ; ...and controller 1, same filter
+	bit #$000f
+	beq ss_ovl_pd_p1
+	lda #$0000
+ss_ovl_pd_p1:
+	.al
+	ora 1,s
+	sta 1,s
+	pla                                    ; Z = both pads idle
+	beq ss_ovl_pd_done                     ; pads idle -> nothing left to leak
 	sep #$20 : .as
 	- lda @$004212 : bmi -                 ; wait out of vblank: one sample per frame
 	rep #$30 : .al : .xl
