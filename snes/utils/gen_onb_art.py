@@ -1167,7 +1167,7 @@ def sd2snes_dir():
 
 
 def clear_ppu():
-    """A patched intro before and after: the menu's leftovers as garbage, then clean."""
+    """An intro before and after: the menu's leftovers as garbage, then clean."""
     import random
     rnd = random.Random(7)
     im = Image.new("RGBA", (W, H), (0, 0, 0, 0))

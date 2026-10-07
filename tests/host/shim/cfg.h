@@ -7,7 +7,6 @@
 #include <stdint.h>
 
 typedef struct {
-  uint8_t patch_verify_integrity;  /* src/patch.c */
   uint8_t a26_video_width;         /* src/atari.c: feat16[5] of CHIPFEAT */
 } cfg_t;
 

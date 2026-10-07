@@ -60,7 +60,7 @@ _Static_assert(offsetof(cfg_t, enable_autosave) == 0xB4, "cfg_t.enable_autosave 
 _Static_assert(offsetof(cfg_t, enable_autosave_msu1) == 0xB5, "cfg_t.enable_autosave_msu1 must stay at CFG_ADDR+$B5");
 _Static_assert(offsetof(cfg_t, show_covers) == 0xB6, "cfg_t.show_covers must stay at CFG_ADDR+$B6");
 _Static_assert(offsetof(cfg_t, language) == 0xB7, "cfg_t.language must stay at CFG_ADDR+$B7");
-_Static_assert(offsetof(cfg_t, patch_verify_integrity) == 0xB8, "cfg_t.patch_verify_integrity must stay at CFG_ADDR+$B8");
+_Static_assert(offsetof(cfg_t, patch_verify_rsvd) == 0xB8, "cfg_t.patch_verify_rsvd must stay at CFG_ADDR+$B8");
 _Static_assert(offsetof(cfg_t, enable_menu_music) == 0xB9, "cfg_t.enable_menu_music must stay at CFG_ADDR+$B9");
 _Static_assert(offsetof(cfg_t, covers_in_lists) == 0xBA, "cfg_t.covers_in_lists must stay at CFG_ADDR+$BA");
 _Static_assert(offsetof(cfg_t, enable_menu_sfx) == 0xBB, "cfg_t.enable_menu_sfx must stay at CFG_ADDR+$BB");
@@ -72,7 +72,7 @@ _Static_assert(offsetof(cfg_t, enable_wifi) == 0x13F, "cfg_t.enable_wifi must st
 _Static_assert(offsetof(cfg_t, game_info_video) == 0x140, "cfg_t.game_info_video must stay at CFG_ADDR+$140");
 _Static_assert(offsetof(cfg_t, game_info_music) == 0x141, "cfg_t.game_info_music must stay at CFG_ADDR+$141");
 _Static_assert(offsetof(cfg_t, enable_bps_copier) == 0x142, "cfg_t.enable_bps_copier must stay at CFG_ADDR+$142");
-_Static_assert(offsetof(cfg_t, clear_ppu_on_boot) == 0x143, "cfg_t.clear_ppu_on_boot must stay at CFG_ADDR+$143");
+_Static_assert(offsetof(cfg_t, clear_ppu_rsvd) == 0x143, "cfg_t.clear_ppu_rsvd must stay at CFG_ADDR+$143");
 _Static_assert(offsetof(cfg_t, bus_compat) == 0x144, "cfg_t.bus_compat must stay at CFG_ADDR+$144");
 _Static_assert(offsetof(cfg_t, enable_game_manual) == 0x145, "cfg_t.enable_game_manual must stay at CFG_ADDR+$145");
 _Static_assert(offsetof(cfg_t, enable_sram_slots) == 0x146, "cfg_t.enable_sram_slots must stay at CFG_ADDR+$146");
@@ -136,7 +136,6 @@ const cfg_t CFG_DEFAULT = {
   .enable_autosave_msu1 = 1,
   .show_covers = 1,
   .language = 0,
-  .patch_verify_integrity = 0,
   .enable_menu_music = 1,
   .covers_in_lists = 1,
   .enable_menu_sfx = 1,
@@ -148,7 +147,6 @@ const cfg_t CFG_DEFAULT = {
   .game_info_video = 1,
   .game_info_music = 1,
   .enable_bps_copier = 1,
-  .clear_ppu_on_boot = 0,
   .bus_compat = 0,
   .enable_game_manual = 1,
   .enable_sram_slots = 1,
@@ -309,14 +307,12 @@ static const cfg_item_t cfg_items[] = {
   /* An unclamped value leaves cur_lang past the last column of every dispatch
      table in the menu. */
   CFGI(CFG_LANGUAGE,                    language,                   CK_NUM,     0x70),
-  CFGI(CFG_PATCH_VERIFY_INTEGRITY,      patch_verify_integrity,     CK_BOOL,    0),
   CFGI(CFG_ENABLE_MENU_MUSIC,           enable_menu_music,          CK_BOOL,    0),
   CFGI(CFG_ENABLE_MENU_SFX,             enable_menu_sfx,            CK_BOOL,    0),
   CFGI(CFG_SORT_FAVORITES,              sort_favorites,             CK_BOOL,    0),
   CFGI(CFG_ENABLE_CHEAT_OVERLAY,        enable_cheat_overlay,       CK_BOOL,    0),
   CFGI(CFG_INGAME_BUTTONS_MENU,         ingame_buttons_menu,        CK_BUTTONS, 0),
   CFGI(CFG_ENABLE_BPS_COPIER,           enable_bps_copier,          CK_BOOL,    0),
-  CFGI(CFG_CLEAR_PPU_ON_BOOT,           clear_ppu_on_boot,          CK_BOOL,    0),
   CFGI(CFG_BUS_COMPAT,                  bus_compat,                 CK_BOOL,    0),
   CFGI(CFG_A26_VIDEO_WIDTH,             a26_video_width,            CK_NUM,     0x10),
   CFGI(CFG_CC_TIME_LIMIT,               cc_time_limit,              CK_NUM,     0xf3),

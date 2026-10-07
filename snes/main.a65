@@ -628,39 +628,50 @@ clear_vram:
   plp
   rts
 
-; fork: zero the PPU (VRAM 64KB + CGRAM + OAM) right before launching a game, so a
+; fork: zero the PPU (VRAM 64KB + CGRAM + OAM) right before launching EVERY game, so a
 ; romhack that draws its intro WITHOUT initializing VRAM (relying on an emulator's
-; zeroed memory) boots clean instead of showing leftover menu/garbage tiles on real
-; hardware -- the sd2snes leaves the menu's VRAM behind, the emulator zeros it.  The
-; soft-reset that boots the game preserves the cleared PPU.  Caller must have NMI off.
+; zeroed memory) boots clean instead of showing leftover menu tiles -- the sd2snes
+; leaves the menu's VRAM behind and the boot reset preserves it.  Unconditional: no
+; game depends on the menu's leftovers, and zero is the state every emulator boots in.
+; Fixed-source DMA from `zero` on channel 0 (~24 ms for the 64 KB, the CPU loop it
+; replaced took ~110 ms).  Caller must have NMI and HDMA off (game_handshake: iris_out
+; leaves $420c = 0).  DBR forced to 0 so $21xx/$43xx resolve from any caller.
 clear_ppu_on_boot:
   php
+  phb
   sep #$20 : .as
   rep #$10 : .xl
+  lda #$00
+  pha
+  plb
   lda #$80
-  sta $2100         ; force blank (hide the clear in progress)
-; VRAM: 32768 words = 64 KB
-  sta $2115         ; VMAIN = $80: increment after writing $2119, +1 word
+  sta $2100         ; force blank
+  sta $2115         ; VMAIN = $80: +1 word after the $2119 write
   ldx #$0000
   stx $2116         ; VMADD = 0
-  ldy #$0000
-  ldx #$8000
-- sty $2118         ; 16-bit sty writes $2118(lo)+$2119(hi)=word 0; VMAIN auto-incs
-  dex
-  bne -
-; CGRAM: 512 bytes
+  stx $4305         ; size 0 = 65536 bytes
+  ldx #!zero
+  stx $4302
+  lda #^zero
+  sta $4304
+  ldx #$1809        ; fixed A-bus, $2118/$2119 pairs
+  stx $4300
+  lda #$01
+  sta $420b
   stz $2121         ; CGADD = 0
+  ldx #$2208        ; fixed A-bus, $2122
+  stx $4300
   ldx #$0200
-- stz $2122
-  dex
-  bne -
-; OAM: 544 bytes
+  stx $4305
+  sta $420b
   stz $2102
   stz $2103         ; OAMADD = 0
+  ldx #$0408        ; fixed A-bus, $2104
+  stx $4300
   ldx #$0220
-- stz $2104
-  dex
-  bne -
+  stx $4305
+  sta $420b
+  plb
   plp
   rts
 
@@ -952,15 +963,9 @@ gh_wait_cmd:
   beq game_handshake_error
   bra gh_wait
 +
-; fork: zero VRAM/CGRAM/OAM so a romhack that skips PPU init boots clean (no leftover
-; VRAM garbage; the reset preserves it).  The firmware armed PPU_CLEAR_GATE=1 in load_rom
-; iff the "Clear PPU on Boot" option is ON *and* an IPS/BPS patch was applied this load
-; (all paths: browser/recents/favorites/autoboot).  A is 8-bit here (.as since line 756)
-; and is overwritten by lda #$55 below, so it may be clobbered.
-  lda @PPU_CLEAR_GATE
-  beq gh_skip_ppuclear
+; fork: zero VRAM/CGRAM/OAM on every launch so a romhack that skips PPU init boots
+; clean (the reset preserves the menu's leftovers).  A is clobbered; lda #$55 follows.
   jsr clear_ppu_on_boot
-gh_skip_ppuclear:
   lda #$55
   sta @MCU_CMD
 ; jump to WRAM

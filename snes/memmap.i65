@@ -215,7 +215,7 @@
 #define SS_SCENE_FRESH              $F90720 /* FPGA-served scene-liveness bit (bit0; the rest reads 0). Decoded by verilog/sd2snes_sa1/main.v inside the IS_PATCH identity window, so it is only readable while the hook holds the snescmd unlock -- exactly when the probe runs. Read only when SS_SCENE_GATE is 1; on cores that do not decode it the address reads back PSRAM. */
 #define CHEAT_WIN_BASE              $FF0708 /* absolute base index of the 64-name window RESIDENT in CHEAT_NAMES ($FF8000). MCU-owned (published = 0 at game load and on each CMD_CHEAT_NAMES_WINDOW). The overlay maps an absolute cheat index to its window slot: (idx - CHEAT_WIN_BASE)*CHEAT_NAME_LEN. Free $FF0702..$FF070F gap. Lockstep with SRAM_CHEAT_WIN_BASE_ADDR in src/memmap.h. */
 #define CHEAT_OVL_GATE              $FF0710 /* in-game cheat overlay arm flag, set by firmware at game load (= CFG.enable_cheat_overlay && !special_chip). The savestate-handler probe reads it; 0 => don't open. Free $FF0701..$FF07FF gap. */
-#define PPU_CLEAR_GATE             $FF0711 /* pre-boot PPU-clear arm flag, set by firmware in load_rom (= CFG.clear_ppu_on_boot && a patch was applied this load). game_handshake reads it; 1 => jsr clear_ppu_on_boot. Lockstep with SRAM_PPU_CLEAR_GATE_ADDR in src/memmap.h; same free gap. */
+/* $FF0711 is FREE (was PPU_CLEAR_GATE: the PPU is now cleared on every launch). Lockstep with SRAM_FLAGROW_FREE_ADDR in src/memmap.h. */
 #define SS_DSP_GATE                 $FF0712 /* DSP1-4 savestate present flag (firmware-armed = fpga_conf==FPGA_DSP && !ST0010). Handler reads it to decide whether to capture/restore the DSP. Same $FF0701..$FF07FF gap. Lockstep with SS_DSP_GATE_ADDR in src/memmap.h. */
 #define SS_DSP_WINDOW               $E80000 /* DSP1-4 data-RAM + scan register-file window (banks $E8-$EF, off $0000-$07FF). $07FF = halt control (write bit0=halt, read bit0=halted). Live only while the handler holds map/snescmd unlock. */
 #define SS_DSP_SCRATCH              $F47000 /* PSRAM scratch for the DSP snapshot (0x700 B), inside the persisted F0..F4 region. NOT bank F3: copier op2 (F8F3, ARAM) rewrites all of F3 while it drains during the VRAM readback, so a snapshot there is silently overwritten with ARAM. $F47000 is the coprocessor scratch slot shared with SA-1 IRAM / GSU cache (a game never has two chips); the overlay scratch starts at $F48100 and op2 stops at $F404FF, so nothing else touches this range during a DSP save/load. */
@@ -853,7 +853,7 @@
 #define CFG_ENABLE_AUTOSAVE_MSU1        CFG_ADDR+$00B5
 #define CFG_SHOW_COVERS                 CFG_ADDR+$00B6
 #define CFG_LANGUAGE                    CFG_ADDR+$00B7
-#define CFG_PATCH_VERIFY_INTEGRITY      CFG_ADDR+$00B8
+#define CFG_PATCH_VERIFY_RSVD           CFG_ADDR+$00B8 /* RETIRED in 2.17 (was PatchVerifyIntegrity); the byte only keeps the offsets. Lockstep with src/cfg.h. */
 #define CFG_ENABLE_MENU_MUSIC           CFG_ADDR+$00B9
 #define CFG_COVERS_IN_LISTS             CFG_ADDR+$00BA
 #define CFG_ENABLE_MENU_SFX             CFG_ADDR+$00BB
@@ -865,7 +865,7 @@
 #define CFG_GAME_INFO_VIDEO             CFG_ADDR+$0140 /* play the .fmv clip on the game info screen (off -> static .gss snapshot) */
 #define CFG_GAME_INFO_MUSIC             CFG_ADDR+$0141 /* play the clip's .pcm soundtrack (requires CFG_GAME_INFO_VIDEO) */
 #define CFG_ENABLE_BPS_COPIER           CFG_ADDR+$0142 /* apply BPS via FPGA copier; lockstep with src/cfg.h */
-#define CFG_CLEAR_PPU_ON_BOOT           CFG_ADDR+$0143 /* clear VRAM/CGRAM/OAM before a patched ROM boots (romhacks that skip PPU init); lockstep with src/cfg.h */
+#define CFG_CLEAR_PPU_RSVD              CFG_ADDR+$0143 /* RETIRED in 2.17 (was ClearPpuOnBoot: the PPU is now cleared before every launch); the byte only keeps the offsets. Lockstep with src/cfg.h. */
 #define CFG_BUS_COMPAT                  CFG_ADDR+$0144 /* bus-timing compat: narrow databus window (v1.11.0) for timing-sensitive 1-CHIP consoles; drives featurebits[13]; lockstep with src/cfg.h */
 #define CFG_ENABLE_SRAM_SLOTS           CFG_ADDR+$0146 /* multi-slot battery SRAM -- ALWAYS ON since 2.15 (the EnableSramSlots YAML flag + menu toggle were retired; cfg.c forces the byte to 1, kept at $0146 for offset stability). The SAVES tab is the 4-slot selector. Lockstep with src/cfg.h. */
 #define CFG_INGAME_BUTTONS_MENU         CFG_ADDR+$0147 /* WORD: pad combo that opens the in-game menu (IngameButtonsMenu, default $4230 = L+R+Y+Left). YAML-only -- the menu has no entry for it and never reads this offset; mapped here purely to RESERVE it, so the next field does not land on $0147 and so the _Static_assert block in src/cfg.c has a counterpart (same reason CFG_SHOW_TRIBUTE $B3 and CFG_ENABLE_WIFI $13F are mapped). What the in-game handler acts on is the BSRAM copy at MENU_COMBO $FF0704, armed by cheat_program(). Lockstep with src/cfg.h. */

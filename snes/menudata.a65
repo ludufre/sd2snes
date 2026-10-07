@@ -60,43 +60,6 @@
 ; menu before it: its only reader is the MTYPE_SUBMENU row in menu_enttab_mm, which
 ; carries the bank.
 
-; ---- Patch Options submenu (IPS/BPS soft-patching) ----
-menu_enttab_patch:
-; HEADER
- .byt  1
- .word !mtext_cfg_patch
- .byt  ^mtext_cfg_patch
-; ENTRIES
- .byt  MTYPE_VALUE
- .word !mtext_patch_verify
- .byt  ^mtext_patch_verify
- .word !kv_onoff
- .byt  ^kv_onoff
- .byt  OPTTYPE_KVBYTE
- .word !CFG_PATCH_VERIFY_INTEGRITY
- .byt  ^CFG_PATCH_VERIFY_INTEGRITY
- .word !mdesc_patch_verify
- .byt  ^mdesc_patch_verify
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt  MTYPE_VALUE
- .word !mtext_patch_clearppu
- .byt  ^mtext_patch_clearppu
- .word !kv_onoff
- .byt  ^kv_onoff
- .byt  OPTTYPE_KVBYTE
- .word !CFG_CLEAR_PPU_ON_BOOT
- .byt  ^CFG_CLEAR_PPU_ON_BOOT
- .word !mdesc_patch_clearppu
- .byt  ^mdesc_patch_clearppu
- .byt  0,0,0
- .byt  0,0,0
- .byt  0,0,0
-
- .byt 0
-
 ; ---- Game Info submenu (pre-boot info screen options) ----
 menu_enttab_gameinfo:
 ; HEADER

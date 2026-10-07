@@ -279,7 +279,7 @@ onb_feat_table:
   .byt ONB_PAL_RED, ONB_OPT_INFO : .word 0
   .word 0, 1, onb_f40_name, onb_f40_text, 0, 0   ; 40 2.17: cheats from the game info card
   .byt ONB_PAL_PURPLE, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f41_name, onb_f41_text, 0, 0   ; 41 and more: clear PPU on boot
+  .word 0, 1, onb_f41_name, onb_f41_text, 0, 0   ; 41 and more: the PPU is cleared before every game
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
   .word 0, 1, onb_f42_name, onb_f42_text, 0, 0   ; 42 and more: bus timing compat
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0

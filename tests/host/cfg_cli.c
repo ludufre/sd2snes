@@ -406,7 +406,6 @@ static void cfg_make_allchanged(void) {
   CFG.enable_autosave_msu1 = 0;
   CFG.show_covers = 2;                           /* small */
   CFG.language = 3;                              /* German; survives the >5 clamp */
-  CFG.patch_verify_integrity = 1;
   CFG.enable_menu_music = 0;
   CFG.menu_music_random = 0;   /* default is 1 */
   CFG.covers_in_lists = 0;
@@ -419,7 +418,6 @@ static void cfg_make_allchanged(void) {
   CFG.game_info_video = 0;
   CFG.game_info_music = 0;
   CFG.enable_bps_copier = 0;
-  CFG.clear_ppu_on_boot = 1;
   CFG.bus_compat = 1;
   /* L+R+X+Right: 4 buttons, includes a shoulder, and no subset of any reserved
      gesture -- cfg_check_menu_combo() has to accept it verbatim ("rXLR"). */

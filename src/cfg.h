@@ -61,7 +61,6 @@
 #define CFG_ENABLE_AUTOSAVE_MSU1         ("EnableMSU1AutoSave")
 #define CFG_SHOW_COVERS                  ("ShowCovers")
 #define CFG_LANGUAGE                     ("Language")
-#define CFG_PATCH_VERIFY_INTEGRITY       ("PatchVerifyIntegrity")
 #define CFG_ENABLE_MENU_MUSIC            ("EnableMenuMusic")
 #define CFG_COVERS_IN_LISTS              ("ShowCoversInLists")
 #define CFG_ENABLE_MENU_SFX              ("EnableMenuSFX")
@@ -73,7 +72,6 @@
 #define CFG_GAME_INFO_MUSIC             ("GameInfoMusic")
 #define CFG_ENABLE_CHEAT_OVERLAY         ("EnableCheatOverlay")
 #define CFG_ENABLE_BPS_COPIER            ("EnableBpsCopier")
-#define CFG_CLEAR_PPU_ON_BOOT            ("ClearPpuOnBoot")
 #define CFG_BUS_COMPAT                   ("BusCompat")
 #define CFG_A26_VIDEO_WIDTH              ("A26VideoWidth")
 #define CFG_CC_TIME_LIMIT                ("CompCartTimeLimit")
@@ -147,7 +145,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  enable_autosave_msu1;    /* enable opportunistic auto saving when SRAM contents change for MSU1 games */
   uint8_t  show_covers;             /* per-ROM cover preview (Game.cov) in the browser (0: off, 1: large, 2: small) */
   uint8_t  language;                /* menu/firmware language (0: English, 1: Portugues BR, 2: Spanish, 3: German, 4: French, 5: Italian, 6: Russian, 7: Dutch) */
-  uint8_t  patch_verify_integrity;  /* CFG @ $B8: re-read+CRC the patched ROM after IPS/BPS (slow) */
+  uint8_t  patch_verify_rsvd;       /* CFG @ $B8: RETIRED in 2.17 (was PatchVerifyIntegrity, the BPS CRC re-read; a mismatch still booted the image). The byte stays at $B8 for CFG offset stability; nothing reads it. */
   uint8_t  enable_menu_music;       /* CFG @ $B9: play background menu music (bgm_name if it is an absolute path, else /sd2snes/menu.spc) */
   uint8_t  covers_in_lists;         /* CFG @ $BA: also show covers in the Recent/Favorite lists (sub-option of show_covers) */
   uint8_t  enable_menu_sfx;         /* CFG @ $BB: menu navigation sound effects (MSU-1 DAC, /sd2snes/sfx_*.pcm) */
@@ -159,7 +157,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
   uint8_t  game_info_video;         /* CFG @ $140: play the animated .fmv clip on the game info screen (off -> static .gss snapshot) */
   uint8_t  game_info_music;         /* CFG @ $141: play the clip's .pcm soundtrack (only while the .fmv clip is shown; requires game_info_video) */
   uint8_t  enable_bps_copier;       /* CFG @ $142: apply BPS via the FPGA copier (fast) instead of byte-by-byte. Only LoROM/HiROM, no special chip, and output+source-backup fit below the menu; everything else falls back to byte-by-byte. Default ON (hardware-validated; the core probe falls back safely on cores without the copier). */
-  uint8_t  clear_ppu_on_boot;       /* CFG @ $143: zero VRAM/CGRAM/OAM right before booting a PATCHED ROM, so a romhack that draws its intro without initializing the PPU boots clean (no leftover menu tiles) on real hardware. Only fires when an IPS/BPS patch was applied this load (all launch paths); armed MCU-side via SRAM_PPU_CLEAR_GATE_ADDR. Default OFF. */
+  uint8_t  clear_ppu_rsvd;          /* CFG @ $143: RETIRED in 2.17 (was ClearPpuOnBoot: the menu now clears VRAM/CGRAM/OAM before EVERY launch, game_handshake). The byte stays at $143 for CFG offset stability; nothing reads it. */
   uint8_t  bus_compat;              /* CFG @ $144: bus-timing compat mode. ON restores the pre-1.11.1 (56dd166-reverted) pulse-end-strobe time sharing -> releases the cart databus EARLIER, avoiding bus contention on timing-sensitive 1-CHIP consoles (fixes games that hang or glitch there, e.g. DKC — the Nintendo-logo freeze is just the easiest repro; = v1.11.0 behavior). Default OFF (the wider window mrehkopf reverted TO, which most units need). Drives FPGA featurebits[13] via fpga_set_features. */
   uint8_t  enable_game_manual;      /* CFG @ $145: RETIRED in 2.17 (the EnableGameManual YAML flag and the "Game manual" menu toggle are gone: the guides are always on whenever a <rom>.man exists). The byte stays at $145 for CFG offset stability; nothing reads it. */
   uint8_t  enable_sram_slots;       /* CFG @ $146: multi-slot battery SRAM -- ALWAYS ON since 2.15 (the EnableSramSlots YAML flag and menu toggle were retired; the byte stays at $146 for CFG offset stability and is forced to 1). The in-game SAVES tab selects an active slot (deferred: applies on the next game load), saves route to <stem>.srm (slot 1) / <stem>.0N.srm (slots 2-4) via the /sd2snes/saves/<stem>.slot sidecar. The live session slot is IMMUTABLE (set once at game load) so an in-game switch can never misroute an autosave. */

@@ -203,7 +203,7 @@ NAMES = [
   ('Icons in the list', 'Ícones na lista', 'Iconos en la lista', 'Symbole in der Liste', 'Icônes dans la liste', 'Icone nella lista', 'Значки в списке', 'Pictogrammen in de lijst'),
   # 40 the cheat list from the game info card (2.17)
   ('Cheats from the game info', 'Cheats pela ficha do jogo', 'Cheats desde la ficha', 'Cheats aus der Infokarte', 'Cheats depuis la fiche', 'Cheat dalla scheda', 'Читы в окне Об игре', 'Cheats vanuit spelinfo'),
-  # 41 clear the PPU before a patched game boots
+  # 41 the PPU is cleared before every game boots
   ('Clear PPU on boot', 'Limpar PPU no boot', 'Limpiar PPU al arrancar', 'PPU beim Start löschen', 'Effacer le PPU au boot', "Pulisci PPU all'avvio", 'Очистка PPU при старте', 'Leeg PPU bij starten'),
   # 42 bus timing compat
   ('Bus timing compat', 'Compat. de barramento', 'Compat. de bus', 'Bus-Timing-Kompat.', 'Compat. timing bus', 'Compat. timing bus', 'Совместимость шины', 'Compat. bustiming'),
@@ -583,15 +583,15 @@ TEXTS = [
    '[SELECT] sulla scheda del gioco apre la sua lista di cheat: attiva e disattiva i codici, aggiungi o modifica, poi avvia il gioco con quelli pronti.',
    '[SELECT] в окне Об игре открывает список читов этой игры: включай и выключай коды, добавляй или меняй их и запускай игру уже с ними.',
    '[SELECT] op de spelinfo opent de cheatlijst van het spel: zet codes aan en uit, voeg toe of wijzig, en start het spel er direct mee.'),
-  # 41 clear the PPU before a patched game boots
-  ("Some romhacks draw their intro without clearing the video memory, and on a real console the menu's leftovers show as garbage. {clearppu} in {patchopts} wipes it before a patched game starts.",
-   'Alguns romhacks desenham a abertura sem limpar a memória de vídeo, e num console de verdade as sobras do menu aparecem como lixo. {clearppu} em {patchopts} limpa tudo antes de um jogo com patch começar.',
-   'Algunos romhacks dibujan su intro sin limpiar la memoria de vídeo, y en una consola real los restos del menú salen como basura. {clearppu} en {patchopts} la borra antes de que empiece un juego parcheado.',
-   'Manche Romhacks zeichnen ihr Intro, ohne den Videospeicher zu leeren, und auf echter Hardware erscheinen Menüreste als Müll. {clearppu} in {patchopts} löscht ihn, bevor ein gepatchtes Spiel startet.',
-   "Certains romhacks dessinent leur intro sans vider la mémoire vidéo, et sur une vraie console les restes du menu s'affichent en vrac. {clearppu} dans {patchopts} la vide avant le lancement d'un jeu patché.",
-   "Alcune romhack disegnano l'intro senza pulire la memoria video, e su una console vera gli avanzi del menu appaiono come spazzatura. {clearppu} in {patchopts} la pulisce prima che parta un gioco patchato.",
-   'Некоторые ромхаки рисуют заставку, не очищая видеопамять, и на настоящей консоли остатки меню видны как мусор. {clearppu} в {patchopts} очищает её перед запуском пропатченной игры.',
-   'Sommige romhacks tekenen hun intro zonder het videogeheugen te wissen, en op een echte console verschijnen restjes van het menu als rommel. {clearppu} in {patchopts} wist het voordat een gepatcht spel start.'),
+  # 41 the PPU is cleared before every game boots
+  ("Some romhacks draw their intro without clearing the video memory, and on a real console the menu's leftovers show as garbage. The sd2snes+ wipes it before every game starts.",
+   'Alguns romhacks desenham a abertura sem limpar a memória de vídeo, e num console de verdade as sobras do menu aparecem como lixo. O sd2snes+ limpa tudo antes de qualquer jogo começar.',
+   'Algunos romhacks dibujan su intro sin limpiar la memoria de vídeo, y en una consola real los restos del menú salen como basura. El sd2snes+ la borra antes de que empiece cualquier juego.',
+   'Manche Romhacks zeichnen ihr Intro, ohne den Videospeicher zu leeren, und auf echter Hardware erscheinen Menüreste als Müll. Der sd2snes+ löscht ihn vor jedem Spielstart.',
+   "Certains romhacks dessinent leur intro sans vider la mémoire vidéo, et sur une vraie console les restes du menu s'affichent en vrac. Le sd2snes+ la vide avant le lancement de chaque jeu.",
+   "Alcune romhack disegnano l'intro senza pulire la memoria video, e su una console vera gli avanzi del menu appaiono come spazzatura. L'sd2snes+ la pulisce prima che parta qualsiasi gioco.",
+   'Некоторые ромхаки рисуют заставку, не очищая видеопамять, и на настоящей консоли остатки меню видны как мусор. sd2snes+ очищает её перед запуском любой игры.',
+   'Sommige romhacks tekenen hun intro zonder het videogeheugen te wissen, en op een echte console verschijnen restjes van het menu als rommel. De sd2snes+ wist het voordat elk spel start.'),
   # 42 bus timing compat
   ('A game that freezes or glitches right after the logo on some consoles, mostly 1-CHIP ones? Try {cfg} > {ingame} > {buscompat}: it frees the cartridge bus a little earlier, like firmware 1.11.0 did.',
    'Um jogo trava ou dá glitch logo depois do logo em alguns consoles, quase sempre 1-CHIP? Tente {cfg} > {ingame} > {buscompat}: ela libera o barramento do cartucho um pouco antes, como a firmware 1.11.0 fazia.',
@@ -698,7 +698,6 @@ _MENU_LABELS = {"cfg": "mtext_mm_cfg", "sgbmenu": "mtext_cfg_sgb", "auto": "text
                 "createrom": "mtext_patch_create_rom", "setbgm": "text_filesel_set_as_bgm",
                 "restoremusic": "mtext_browser_restoremusic", "ingame": "mtext_cfg_ingame",
                 "buscompat": "mtext_scic_buscompat", "askclock": "mtext_cfg_ask_clock",
-                "clearppu": "mtext_patch_clearppu", "patchopts": "mtext_cfg_patch",
                 "chipopts": "mtext_cfg_chip", "a26w": "mtext_a26_width",
                 "sysinfo": "mtext_mm_sysinfo", "memtest": "mtext_mm_memtest",
                 "trainer": "text_igm_tab_trainer", "unknown": "text_igm_tr_unknown",

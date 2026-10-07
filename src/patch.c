@@ -15,21 +15,9 @@
 #include "cheat.h"
 #include "savestate.h"
 #include "timer.h"
-#include "crc32.h"
-#include "cfg.h"
 
 #include <stddef.h>
 #include <string.h>
-
-extern cfg_t CFG;
-
-/* Whether to re-read the whole patched image back from SDRAM and verify it
-   against the BPS-embedded CRC32 after applying.  This is a pure sanity check:
-   if the per-byte writes completed without patch_io_err the image is already
-   correct.  The re-read walks target_size bytes byte-by-byte over the slow
-   MCU<->SDRAM link (~8 s extra for a 4 MB BPS), so it is exposed as the runtime
-   menu option "Verify Integrity" (Configuracao > Patch Options), default ON. */
-#define BPS_VERIFY_CRC (CFG.patch_verify_integrity)
 
 uint8_t ips_pending_index = 0;
 
@@ -203,8 +191,8 @@ int patch_ext_type(const char *name) {
    "create patched ROM" writes <patch stem>.sfc, so the .ips that made it ends up
    sitting next to it under exactly that stem, and it would be offered again on every
    launch.  Re-applying an IPS over an already-patched image corrupts it -- IPS carries
-   no checksum, source size or target size to defend itself (unlike BPS, whose CRCs are
-   only read when CFG.patch_verify_integrity is on, and it is off by default).
+   no checksum, source size or target size to defend itself (BPS has CRCs, but the
+   firmware never checks them).
    The legitimate "Foo.sfc + Foo.ips" convention loses out here; the Web Manager renames
    those to "Foo - Patch 1.ips" during its 2.15 card migration so nothing is lost.
 
@@ -1295,21 +1283,6 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
         err = 1;
     }
 
-    /* Read the BPS-embedded target CRC32 (at fsize-8..fsize-5) before closing,
-       only when integrity verification is enabled. */
-    uint32_t bps_target_crc32 = 0;
-    if (BPS_VERIFY_CRC) {
-        uint8_t crc_bytes[4];
-        UINT br2;
-        f_lseek(&file_handle, file_handle.fsize - 8);
-        f_read(&file_handle, crc_bytes, 4, &br2);
-        if (br2 == 4) {
-            bps_target_crc32 = (uint32_t)crc_bytes[0]
-                             | ((uint32_t)crc_bytes[1] << 8)
-                             | ((uint32_t)crc_bytes[2] << 16)
-                             | ((uint32_t)crc_bytes[3] << 24);
-        }
-    }
     file_close();
     if (patch_io_err) err = 1; /* PR#292 fix #1: treat a stalled write as failure */
     tick_t t_act_elapsed   = getticks() - t_actions;
@@ -1325,31 +1298,6 @@ uint32_t bps_apply(uint32_t sram_addr, uint8_t index, uint32_t rom_base_addr,
                patch_io_err ? " (FPGA MCU_RDY timeout - enhancement chip?)" : "");
     } else {
         printf("bps_apply: done, target_size=0x%lx\n", (unsigned long)target_size);
-      if (BPS_VERIFY_CRC) {
-        /* Verify CRC32 of the patched SRAM against the BPS-embedded expected value.
-         * Re-reads the whole target image byte-by-byte (~8 s for 4 MB) — gated by
-         * the "Verify Integrity" menu option (BPS_VERIFY_CRC).  In copier mode the
-         * image is fully patched here (the copier ops are synchronous), so this is
-         * a real end-to-end check of the copier path: on MISMATCH we FAIL the apply
-         * (err=1 -> load aborts with the error popup) rather than boot a bad ROM. */
-        uint32_t crc = crc32_init();
-        uint32_t remaining = target_size, addr_off = 0;
-        while (remaining > 0) {
-            uint16_t chunk = (remaining > (uint32_t)sizeof(file_buf))
-                             ? (uint16_t)sizeof(file_buf) : (uint16_t)remaining;
-            psram_readblock(file_buf, rom_base_addr + addr_off, chunk);
-            for (uint16_t i = 0; i < chunk; i++)
-                crc = crc32_update(crc, file_buf[i]);
-            addr_off  += chunk;
-            remaining -= chunk;
-        }
-        crc = crc32_finalize(crc);
-        printf("bps CRC32: expected=%08lx got=%08lx %s\n",
-               (unsigned long)bps_target_crc32,
-               (unsigned long)crc,
-               crc == bps_target_crc32 ? "OK" : "MISMATCH");
-        if (use_copier && bps_target_crc32 && crc != bps_target_crc32) err = 1;
-      }
     }
     return err ? 0 : target_size;
 }
