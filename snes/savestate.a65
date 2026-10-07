@@ -1355,7 +1355,15 @@ ss_obc1_cap_done:
 saveinputloop
 	- bit $4212 : bpl -
 	- bit $4212 : bmi -
+	lda @HX_PAD_SRC              ; the combo came from controller 2: wait on THAT port,
+	bne sil_pad2                 ;   or a still-held combo saves again on the next frame
 	lda @$4218
+	bra sil_have
+sil_pad2:
+	.as
+	lda @$421A
+sil_have:
+	.as
 	and @CS_SAVE_INPUT
 	cmp @CS_SAVE_INPUT
 	beq saveinputloop
@@ -1978,6 +1986,10 @@ ss_pad_reject
 ss_pad_confirm
 	.al : .xl
 	sta @CS_PAD_INV                    ; scratch
+	lda @HX_PAD_SRC                    ; the match came from controller 2 (hx_pad): the
+	bne ss_pad_confirm_yes2            ;   live $4218 below is controller 1, so comparing
+	                                   ;   would reject every port-2 save/load. hx_pad
+	                                   ;   already waited the fill out: its word is whole.
 	sep #$20 : .as
 	lda @$004212
 	lsr                                ; C = auto-joypad still filling
