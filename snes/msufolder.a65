@@ -53,3 +53,73 @@ mfa_plain:
   rep #$20 : .al
   clc
   rtl
+
+
+; ---------------------------------------------------------------------------
+; Back from the game info screen to the browser. gi_dc_restore rebuilds the menu graphics
+; with empty tile buffers and the browser repaints them only in fileselloop's next pass --
+; row by row on a lit screen, the bar on the first row until the cursor is placed: the
+; list was seen building up. Now the screen stays black through that and fades in once
+; the list is complete.
+; ---------------------------------------------------------------------------
+
+; gi_back_dark: B on the game info screen opened from the BROWSER (gi_query_fill = 1; the
+; Recents/Favorites returns repaint their own windows). Before gi_dc_restore. Any widths. rtl.
+gi_back_dark:
+  php
+  sep #$20 : .as
+  lda @gi_query_fill
+  beq gbd_out
+  lda #$01
+  sta @gi_relight
+gbd_out:
+  .as
+  plp
+  rtl
+
+; gi_light: gi_dc_restore's last step, A = the menu brightness. Lit at once, or held black
+; (forced blank) for gi_relight_check. Any widths in (A's low byte used). rtl.
+gi_light:
+  php
+  sep #$20 : .as
+  pha
+  lda @gi_relight
+  cmp #$01
+  beq gli_dark
+  pla
+  sta @cur_bright
+  sta @tgt_bright
+  sta @$002100
+  plp
+  rtl
+gli_dark:
+  .as
+  pla
+  lda #$00
+  sta @cur_bright
+  sta @tgt_bright           ; the NMI's fade holds it at 0
+  lda #$80
+  sta @$002100
+  plp
+  rtl
+
+; gi_relight_check: fileselloop finished a repaint. Its buffers go up in the next VBlank,
+; before the NMI's fade takes its first step: fade in from black over the whole list.
+; Any widths. rtl.
+gi_relight_check:
+  php
+  sep #$20 : .as
+  lda @gi_relight
+  cmp #$01
+  bne grc_out
+  lda #$00
+  sta @gi_relight
+  sta @fade_count
+  lda @menu_brightness
+  sta @tgt_bright
+  lda #$01
+  sta @fade_speed
+grc_out:
+  .as
+  plp
+  rtl

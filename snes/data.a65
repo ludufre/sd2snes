@@ -599,4 +599,6 @@ gi_blank_vram   .word 0
 gi_blank_char   .word 0
 gi_lastcj       .word 0     ; gi_wrap_one: where the last CJK glyph of the line starts (0 = none)
 
+gi_relight      .byt 0      ; 1 = back from game info to the browser: fade in once it is repainted
+                            ;   (read as == 1 only, so the $55 of clear_wram is harmless)
 _END            .byt 0

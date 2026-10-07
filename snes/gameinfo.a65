@@ -189,6 +189,7 @@ gms_common:
   clc
   rts
 gms_cancel:
+  jsl @gi_back_dark         ; back to the BROWSER: stay black until it is repainted
   jsr gi_dc_restore         ; BACK only: rebuild the menu graphics, reinstall the WRAM routines,
                             ; clear screen_dma_disable. Moved here from the shared path so PLAY
                             ; can keep the ficha; this restore was what erased the list pre-iris.
@@ -1921,10 +1922,8 @@ gi_dc_restore:
   sep #$20 : .as
   rep #$10 : .xl
   lda @CFG_BRIGHTNESS_LIMIT
-  sta cur_bright
-  sta tgt_bright
   sta menu_brightness
-  sta $2100
+  jsl @gi_light             ; on now, or after the browser repaint (gi_back_dark)
   stz screen_dma_disable
   stz screen_dma_disable+1
   rep #$20 : .al

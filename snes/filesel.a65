@@ -65,6 +65,7 @@ fileselloop_redraw
   jsr filesel_statusbar
   jsr filesel_redraw
   jsr filesel_cleanup ; update phase 2
+  jsl @gi_relight_check   ; back from game info: fade in over the finished list
   jsr export_result_check ; fork: report a finished "create patched ROM" (self-gating;
                           ; one byte load unless the MCU actually left a result). Here,
                           ; after the repaint, so the modal sits on the real browser.
