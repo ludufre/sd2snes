@@ -59,13 +59,32 @@ hx_pad:
 ; later, which lands INSIDE the fill, and a register being shifted reads back as
 ; $0000 -- so the gesture was thrown away on most frames and never fired.
 ;   $4212 bit0 says the fill is running right now (same bit ss_input arbitrates on).
-; When it is, keep the last sample taken outside a fill: a gesture is HELD for many
-; frames, so one clean frame in four is all the FPGA's exact compare needs, and the
-; saved word costs nothing on the frames it is not used. A is 16-bit, so the load
-; also picks up $4213; the lsr shifts it out of the way.
+; When it is, WAIT for it to end and read then. Reusing the last clean sample instead
+; (the first version) depended on where the game's NMI lands: a game whose NMI always
+; arrives at the same point -- one waiting in WAI -- could hit the fill every frame,
+; never refresh the sample, and controller 2 then barely worked in it. The fill lasts
+; ~3 scanlines (4224 master cycles), so the wait costs at most that, on the frames
+; that collide, and only for someone who turned the feature on. The poll count is a
+; safety bound (well past the fill even at SlowROM speed); running out of it keeps the
+; last clean sample, as before. The counter lives on the stack because X and Y are the
+; game's. A is 16-bit, so each load also picks up $4213; the lsr shifts it out.
 	lda @$004212
 	lsr
-	bcs hx_have                  ; fill running -> reuse the saved sample
+	bcc hx_read                  ; no fill running: the register is complete now
+	pea $0030                    ; bounded wait for the fill to end
+hx_wait:
+	lda @$004212
+	lsr
+	bcc hx_waited
+	lda 1,s
+	dec
+	sta 1,s
+	bne hx_wait
+	pla                          ; bound reached: keep the saved sample
+	bra hx_have
+hx_waited:
+	pla
+hx_read:
 	lda @$00421A
 	sta @HX_PAD2                 ; clean sample: this one can be trusted
 hx_have:
