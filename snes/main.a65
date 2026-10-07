@@ -136,6 +136,7 @@ cb_apu_done:
   ; fork: msu_inside is read by the info screen's Up/Down and on every return from it;
   ; left at $55 the first one would back out of a folder the browser never entered.
   sta @msu_inside
+  sta @msu_probe_wait     ; fork: msufolder.a65 -- $55 would cost one spurious repaint
   ; fork: settings-menu scrolling viewport gates. menu_scroll_active is read by
   ; menu_select_noinit; left at $55 (clear_wram fills the $7E data segment with $55,
   ; not 0) a Recents/Favorites list opened before any show_menu would take the

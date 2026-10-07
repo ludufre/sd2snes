@@ -52,7 +52,6 @@ enum {
   SCR_MANUAL,
   SCR_IGMENU,
   SCR_A26,
-  SCR_DIRSCAN,
   SCR_GI_CJK
 };
 

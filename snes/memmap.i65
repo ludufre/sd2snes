@@ -740,6 +740,7 @@
 #define CMD_SET_VIDMODE_MENU        $09
 #define CMD_READDIR                 $0A
 #define CMD_MSU_PROBE               $10 /* info screen Up/Down stepping onto a folder (gnav_msu_dir): MCU_PARAM = cwd+direntry like LOADROM, +7 zeroed; the firmware writes +7 = 'M' when the folder may open as its MSU-1 game. A cheap filter -- the READDIR that follows a yes has the last word. Lockstep with src/snes.h. */
+#define CMD_MSU_PROBE_PAGE          $11 /* browser, before drawing a page (msu_probe_visible): MCU_PARAM+0..2 = the page's first entry in the directory table, +3 = row count; the firmware settles the MSU-1 icon mark ('?' -> 'M' or ' ') of the subfolders among them. Lockstep with src/snes.h. */
 #define CMD_FPGA_RECONF             $0B
 #define CMD_LOAD_CHT                $0C
 #define CMD_SAVE_CHT                $0D

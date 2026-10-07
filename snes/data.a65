@@ -601,4 +601,9 @@ gi_lastcj       .word 0     ; gi_wrap_one: where the last CJK glyph of the line 
 
 gi_relight      .byt 0      ; 1 = back from game info to the browser: fade in once it is repainted
                             ;   (read as == 1 only, so the $55 of clear_wram is harmless)
+
+;----------MSU-1 icons of the folders on the page (snes/msufolder.a65) ----------
+msu_probe_wait  .byt 0     ; 1 = a page still has unprobed folders, left for when the d-pad
+                           ;   stops (msu_probe_idle); zeroed in coldboot ($55 fill)
+
 _END            .byt 0

@@ -171,6 +171,7 @@ typedef struct {
 	WORD	ftime;			/* Last modified time */
 	BYTE	fattrib;		/* Attribute */
 	TCHAR	fname[13];		/* Short file name (8.3 format) */
+	DWORD	fclust;			/* Start cluster (sd2snes: lets f_opendir_at open a sub directory just read) */
 #if _USE_LFN
 	TCHAR*	lfname;			/* Pointer to the LFN buffer */
 	UINT 	lfsize;			/* Size of LFN buffer in TCHAR */
@@ -218,6 +219,7 @@ FRESULT f_lseek (FIL* fp, DWORD ofs);								/* Move file pointer of a file obje
 FRESULT f_truncate (FIL* fp);										/* Truncate file */
 FRESULT f_sync (FIL* fp);											/* Flush cached data of a writing file */
 FRESULT f_opendir (DIR* dp, const TCHAR* path);						/* Open a directory */
+FRESULT f_opendir_at (DIR* dp, const DIR* parent, DWORD clust);		/* Open a sub directory of parent by the fclust f_readdir gave (sd2snes) */
 FRESULT f_closedir (DIR* dp);										/* Close an open directory */
 FRESULT f_readdir (DIR* dp, FILINFO* fno);							/* Read a directory item */
 FRESULT f_findfirst (DIR* dp, FILINFO* fno, const TCHAR* path, const TCHAR* pattern);	/* Find first file */

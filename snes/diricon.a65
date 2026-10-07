@@ -3,7 +3,8 @@
 ; print_direntry calls dirent_icon for every row it draws: the icon goes in the two cells at
 ; cursor_x and the name starts one blank after it. The type comes from the directory entry;
 ; a ROM is told apart by its extension (.gb/.gbc/.sms/.a26 share TYPE_ROM with the SNES
-; formats), and a folder that opens as its MSU-1 game by the 'M' scan_dir leaves in it. The glyphs are two font tiles each (utils/fontedit.py BROWSER_ICONS) and the
+; formats), and a folder that opens as its MSU-1 game by the 'M' the firmware leaves in it (msu_probe_page,
+; asked for the page by msu_probe_visible in msufolder.a65). The glyphs are two font tiles each (utils/fontedit.py BROWSER_ICONS) and the
 ; colour is the row's print palette, so one shape can serve two types.
 
 .link page $c1
@@ -66,7 +67,7 @@ di_parent:
   ldx #DI_PARENT
   bra di_print
 di_folder:                  ; a folder that opens as its MSU-1 game: the firmware put 'M'
-  .as : .xl                 ; in the first byte of its size string (scan_dir)
+  .as : .xl                 ; in the first byte of its size string (msu_probe_page)
   rep #$20 : .al
   lda dirent_addr
   sta print_ptr

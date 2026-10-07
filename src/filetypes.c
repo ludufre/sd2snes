@@ -39,7 +39,6 @@
 #include "msu1.h"   /* menu_sfx_pump: keep a playing effect fed during dir scans */
 
 #include "timer.h"
-#include "scratch.h"
 
 extern cfg_t CFG;
 
@@ -115,9 +114,7 @@ static uint8_t path_is_sysdir(const uint8_t *path) {
   return p[n] == 0 || p[n] == '/';
 }
 
-/* scan_dir's MSU-1 folder probe builds "<dir>/<subfolder>" here (the LEAF scratch) */
-typedef struct { char path[512]; } scan_probe_t;
-SCRATCH_FITS(scan_probe_t, SCRATCH_LEAF_BYTES);
+static uint8_t msu_probe_walk(DIR *dir, uint32_t self);
 
 uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYPE *filetypes, uint16_t *msu_rom) {
   DIR dir;
@@ -131,11 +128,13 @@ uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYP
   uint16_t rom_seen = 0;
   uint8_t msu_seen = 0;
   const uint8_t in_sysdir = path_is_sysdir(path);
-  /* Each subfolder that may open as its MSU-1 game gets 'M' in the first byte of its size
-     string (the menu prints its own " <dir>" mark for a folder, never this string): the browser draws a game
-     icon there instead of a folder.  A bare walk per subfolder, stopping at its second ROM;
-     the same probe as SNES_CMD_MSU_PROBE, so a "yes" is optimistic (no stem check). */
-  const uint8_t probe = CFG.open_msu_folders && scratch_leaf_take(SCR_DIRSCAN);
+  /* A subfolder may open as its MSU-1 game, and the browser draws a game icon for it. That
+     takes a walk through the subfolder, so it is NOT done here: walking every subfolder of a
+     folder of 300 MSU-1 games took seconds before the listing showed up. The size string of
+     a subfolder (the menu prints its own " <dir>" mark for a folder, never this string) is
+     left as DIR_MARK_UNPROBED + the subfolder's start cluster, and the menu asks for the
+     subfolders it is about to show (SNES_CMD_MSU_PROBE_PAGE, msu_probe_page below). */
+  const uint8_t probe = CFG.open_msu_folders;
 
   fno.lfsize = 255;
   fno.lfname = (TCHAR*)file_lfn;
@@ -206,6 +205,10 @@ printf("start\n");
               /* omit sd2snes directory specifically, unless the user asked for it */
               if(!CFG.show_sd2snes_folder && strstr(fn, "sd2snes")) continue;
               snprintf(buf, sizeof(buf), " <dir>");
+              if(probe && type == TYPE_SUBDIR) {
+                buf[0] = DIR_MARK_UNPROBED;
+                memcpy(buf + 1, &fno.fclust, 4);   /* little endian, read back the same way */
+              }
             } else {
               if(fn[0]=='.') continue; /* omit dot files */
               make_filesize_string(buf, fno.fsize);
@@ -236,18 +239,6 @@ printf("start\n");
             sram_writeblock(fn, file_tbl_off+6, fnlen+1);
             /* link file string entry in directory table */
             sram_writelong((file_tbl_off-SRAM_MENU_ADDR) | ((uint32_t)type << 24), ptr_tbl_off);
-            if(probe && type == TYPE_SUBDIR) {
-              char *p = SCRATCH_LEAF(scan_probe_t)->path;
-              size_t pl = strlen((const char*)path);
-              if(pl + fnlen + 2 <= sizeof(scan_probe_t)) {
-                memcpy(p, path, pl);
-                if(!pl || p[pl-1] != '/') p[pl++] = '/';
-                memcpy(p + pl, fn, fnlen - 1);          /* without the trailing '/' */
-                p[pl + fnlen - 1] = 0;
-                /* the probe reuses file_lfn: fn is already written out above */
-                if(dir_may_open_as_msu((const uint8_t*)p)) sram_writebyte('M', file_tbl_off);
-              }
-            }
             file_tbl_off += fnlen+7;
             ptr_tbl_off += 4;
             numentries++;
@@ -269,7 +260,6 @@ dir_full:
 printf("end\n");
 printf("%d entries, time: %d\n", numentries, getticks()-ticks);
   f_closedir(&dir);
-  if(probe) scratch_leaf_drop();
   *msu_rom = (CFG.open_msu_folders && rom_seen == 1 && msu_seen)
            ? scan_dir_msu_rom(path, base_addr, numentries) : DIR_NO_MSU_ROM;
   return numentries;
@@ -284,15 +274,57 @@ printf("%d entries, time: %d\n", numentries, getticks()-ticks);
    where scan_dir_msu_rom has the last word.  path has no trailing '/'. */
 uint8_t dir_may_open_as_msu(const uint8_t *path) {
   DIR dir;
+
+  if(f_opendir(&dir, (TCHAR*)path) != FR_OK) return 0;
+  return msu_probe_walk(&dir, 0);
+}
+
+/* The browser is about to show the entries of the directory table at tbl (SNES_CMD_MSU_PROBE_PAGE):
+   settle the icon of each subfolder among them that scan_dir left unprobed -- 'M' when it may
+   open as its MSU-1 game, DIR_MARK_PROBED otherwise. The subfolder is opened by the start
+   cluster scan_dir stored, never by path: that would scan the listed directory again from
+   the top for every subfolder. A cluster that no longer holds that directory (the card
+   changed under the listing) reads as "no". */
+void msu_probe_page(uint32_t tbl, uint8_t count) {
+  DIR root, sub;
+  uint8_t mark[5];
+  uint32_t cl;
+
+  if(!CFG.open_msu_folders || count > MSU_PROBE_PAGE_MAX
+     || tbl < SRAM_DIR_ADDR || tbl + 4 * count > SRAM_DIR_ADDR + 0x10000) return;
+  if(f_opendir(&root, (TCHAR*)"/") != FR_OK) return;   /* only lends its volume to f_opendir_at */
+  for(; count; count--, tbl += 4) {
+    uint32_t e = sram_readlong(tbl);
+    if(!e) break;                                      /* end of the table */
+    if((e >> 24) != TYPE_SUBDIR) continue;
+    uint32_t str = SRAM_MENU_ADDR + (e & 0xffffff);
+    if(str < SRAM_DIR_ADDR + 0x10000 || str + sizeof(mark) > SRAM_DIR_STRINGS_END) continue;
+    sram_readblock(mark, str, sizeof(mark));
+    if(mark[0] != DIR_MARK_UNPROBED) continue;
+    memcpy(&cl, mark + 1, 4);
+    sram_writebyte(cl && f_opendir_at(&sub, &root, cl) == FR_OK && msu_probe_walk(&sub, cl)
+                   ? 'M' : DIR_MARK_PROBED, str);
+  }
+  f_closedir(&root);
+}
+
+/* dir_may_open_as_msu's walk over an open directory; closes it. self != 0: the directory was
+   opened by that cluster, and its first entry must be its own "." -- anything else means the
+   cluster is stale, and the answer is "no". */
+static uint8_t msu_probe_walk(DIR *dir, uint32_t self) {
   FILINFO fno;
   uint8_t roms = 0, msu = 0;
 
   fno.lfsize = 255;
   fno.lfname = (TCHAR*)file_lfn;
-  if(f_opendir(&dir, (TCHAR*)path) != FR_OK) return 0;
   while(roms < 2) {
     menu_sfx_pump();
-    if(f_readdir(&dir, &fno) != FR_OK || !fno.fname[0]) break;
+    if(f_readdir(dir, &fno) != FR_OK || !fno.fname[0]) break;
+    if(self) {
+      if(fno.fname[0] != '.' || fno.fname[1] || fno.fclust != self) break;
+      self = 0;
+      continue;
+    }
     if(fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
     SNES_FTYPE type = determine_filetype(fno);
     if(type == TYPE_ROM) {
@@ -302,8 +334,8 @@ uint8_t dir_may_open_as_msu(const uint8_t *path) {
       if(ext && !strcasecmp(ext + 1, "MSU")) msu = 1;
     }
   }
-  f_closedir(&dir);
-  return roms == 1 && msu;
+  f_closedir(dir);
+  return !self && roms == 1 && msu;
 }
 
 SNES_FTYPE determine_filetype(FILINFO fno) {

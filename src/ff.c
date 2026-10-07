@@ -1691,6 +1691,9 @@ void get_fileinfo (		/* No return code */
 		fno->fsize = LD_DWORD(dir + DIR_FileSize);	/* Size */
 		fno->fdate = LD_WORD(dir + DIR_WrtDate);	/* Date */
 		fno->ftime = LD_WORD(dir + DIR_WrtTime);	/* Time */
+		fno->fclust = ld_clust(dp->fs, dir);		/* Start cluster */
+	} else {
+		fno->fclust = 0;
 	}
 	*p = 0;		/* Terminate SFN string by a \0 */
 
@@ -3223,6 +3226,37 @@ FRESULT f_opendir (
 	if (res != FR_OK) dp->fs = 0;		/* Invalidate the directory object if function faild */
 
 	LEAVE_FF(fs, res);
+}
+
+
+
+/*-----------------------------------------------------------------------*/
+/* Open a sub directory by its start cluster (sd2snes)                   */
+/*-----------------------------------------------------------------------*/
+/* A sub directory that f_readdir just returned from parent, opened by the
+   fno.fclust it reported: f_opendir would follow the whole path again, i.e.
+   scan parent from its first entry down to this one. */
+
+FRESULT f_opendir_at (
+	DIR* dp,			/* Pointer to directory object to create */
+	const DIR* parent,	/* The open directory the entry was read from */
+	DWORD clust			/* fno.fclust of that entry (0 = root) */
+)
+{
+	FRESULT res;
+
+
+	if (!dp) return FR_INVALID_OBJECT;
+	res = validate((void*)parent);
+	if (res == FR_OK) {
+		dp->fs = parent->fs;
+		dp->id = parent->id;
+		dp->sclust = clust;
+		res = dir_sdi(dp, 0);			/* Rewind directory */
+	}
+	if (res != FR_OK) dp->fs = 0;
+
+	LEAVE_FF(parent->fs, res);
 }
 
 

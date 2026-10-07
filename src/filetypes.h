@@ -70,6 +70,13 @@ SNES_FTYPE filetype_by_ext(const char *name);
 #define DIR_NO_MSU_ROM (0xffff)
 uint16_t scan_dir(const uint8_t *path, uint32_t base_addr, const SNES_FTYPE *filetypes, uint16_t *msu_rom);
 uint8_t dir_may_open_as_msu(const uint8_t *path);
+/* scan_dir leaves a subfolder's size string as DIR_MARK_UNPROBED + its start cluster (LE);
+   msu_probe_page turns the mark into 'M' (opens as its MSU-1 game) or DIR_MARK_PROBED.
+   Lockstep with snes/msufolder.a65. */
+#define DIR_MARK_UNPROBED  '?'
+#define DIR_MARK_PROBED    ' '
+#define MSU_PROBE_PAGE_MAX 32
+void msu_probe_page(uint32_t tbl, uint8_t count);
 int get_num_dirent(uint32_t addr);
 void sort_all_dir(uint32_t endaddr);
 void make_filesize_string(char *buf, uint32_t size);

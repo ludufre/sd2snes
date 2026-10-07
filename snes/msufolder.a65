@@ -123,3 +123,128 @@ grc_out:
   .as
   plp
   rtl
+
+; ---------------------------------------------------------------------------
+; msu_probe_visible: the browser loop's repaint, right before filesel_redraw draws the page.
+; A folder that opens as its MSU-1 game gets the game icon (diricon.a65), and telling one
+; takes a walk through the folder. scan_dir does not walk them -- a folder of 300 MSU-1 games
+; took seconds to list -- it leaves each subfolder's size string as '?' + the folder's start
+; cluster. Here, when a row about to be drawn still holds '?', one CMD_MSU_PROBE_PAGE asks the
+; firmware to settle the rows of the page ('M' = game icon, ' ' = folder), so only the
+; folders anybody looks at are ever walked. Older firmware never leaves a '?': no command.
+; While a direction is held (pad1delay counting the auto-repeat) nothing is asked: each
+; folder costs a walk of its entries (~40 ms for an MSU-1 game folder on a Mk.III), and
+; asking for every row that scrolls in made a held d-pad crawl. The rows keep the folder
+; icon until the d-pad stops, then msu_probe_idle repaints and this asks for the page once.
+; A cover load in flight owns the command channel: the same, asked again on the next frame.
+; jsl from fileselloop (DP = 0); preserves P, DP and DBR.
+msu_probe_visible:
+  php
+  phd
+  rep #$30 : .al : .xl
+  pea $0000
+  pld
+  sep #$20 : .as
+  lda @CFG_OPEN_MSU_FOLDERS
+  beq mpv_out
+  lda @filesel_state        ; 0 = the file list (what filesel_redraw draws)
+  bne mpv_out
+  ldx #$0000                ; row
+  ldy #$0000                ; its entry in the directory table (4 bytes each)
+mpv_row:
+  .as : .xl
+  txa
+  cmp @listdisp
+  bcs mpv_out               ; every row of the page is settled
+  iny
+  iny
+  lda [dirptr_addr], y      ; the name's bank in the table, 0 = end of the directory
+  beq mpv_out
+  clc
+  adc #$c0
+  sta print_ptr+2
+  iny
+  lda [dirptr_addr], y      ; type
+  cmp #TYPE_SUBDIR
+  bne mpv_next
+  rep #$20 : .al
+  dey
+  dey
+  dey
+  lda [dirptr_addr], y
+  sta print_ptr             ; -> the size string, first byte = the icon mark
+  iny
+  iny
+  iny
+  sep #$20 : .as
+  lda [print_ptr]
+  cmp #$3f                  ; '?' = DIR_MARK_UNPROBED (src/filetypes.h)
+  beq mpv_ask
+mpv_next:
+  .as : .xl
+  iny
+  inx
+  bra mpv_row
+mpv_ask:
+  .as : .xl
+  lda @pad1delay            ; scrolling
+  bne mpv_later
+  lda @cover_request_pending
+  bne mpv_later
+  lda #$00                  ; wait_mcu_ready: the firmware back at its command poll
+  sta @MCU_CMD
+  ldx #$0000
+mpv_ready:
+  .as : .xl
+  lda @SNES_CMD
+  cmp #$55
+  beq mpv_send
+  dex
+  bne mpv_ready
+mpv_send:
+  .as : .xl
+  rep #$20 : .al
+  lda dirptr_addr           ; the page's first entry: bank:addr is also its PSRAM address
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda dirptr_addr+2
+  sta @MCU_PARAM+2
+  lda @listdisp
+  sta @MCU_PARAM+3
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_MSU_PROBE_PAGE
+  sta @MCU_CMD
+  jsl @WRAM_WAIT_MCU
+mpv_out:
+  .as : .xl
+  pld
+  plp
+  rtl
+mpv_later:
+  .as : .xl
+  lda #$01
+  sta @msu_probe_wait
+  bra mpv_out
+
+; ---------------------------------------------------------------------------
+; msu_probe_idle: every pass of the browser loop that does not repaint. Once the d-pad is
+; released (and no cover load is in flight), the page msu_probe_visible left unprobed is
+; repainted, which asks for it. jsl from fileselloop; preserves P.
+msu_probe_idle:
+  php
+  sep #$20 : .as
+  lda @msu_probe_wait
+  beq mpi_out
+  lda @pad1delay
+  bne mpi_out
+  lda @cover_request_pending
+  bne mpi_out
+  lda #$00
+  sta @msu_probe_wait
+  lda #$01
+  sta @filesel_dirty
+mpi_out:
+  .as
+  plp
+  rtl

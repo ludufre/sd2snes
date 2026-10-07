@@ -58,11 +58,13 @@ fileselloop:
   jsr bgm_update      ; fork: start/stop menu music. Only here (not-dirty branch)
                       ; so the list is already painted before the ~1s SPC upload
                       ; freezes NMI; also stops music when toggled off.
+  jsl @msu_probe_idle ; fork: MSU-1 icons left for when the d-pad stops (msufolder.a65)
   jsr scroll_direntry
   bra fileselloop
 fileselloop_redraw
   stz filesel_dirty
   jsr filesel_statusbar
+  jsl @msu_probe_visible  ; settle the MSU-1 game icons of the folders on this page (msufolder.a65)
   jsr filesel_redraw
   jsr filesel_cleanup ; update phase 2
   jsl @gi_relight_check   ; back from game info: fade in over the finished list

@@ -891,6 +891,12 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
     case SNES_CMD_MSU_PROBE:
       msu_probe();
       return 0;
+    case SNES_CMD_MSU_PROBE_PAGE:
+      /* the browser is about to draw a page: MCU_PARAM+0..2 = its first entry in the
+         directory table, +3 = the number of rows (snes/msufolder.a65, msu_probe_visible) */
+      msu_probe_page(snescmd_readlong(SNESCMD_MCU_PARAM) & 0xffffff,
+                     snescmd_readbyte(SNESCMD_MCU_PARAM + 3));
+      return 0;
     case SNES_CMD_PLAY_PCM:
       /* A .pcm was picked in the browser: play it on the cartridge DAC.  MCU_PARAM was
          set up like a ROM launch (cwd + selected entry), so get_selected_name yields the
