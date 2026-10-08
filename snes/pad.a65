@@ -5,6 +5,7 @@ pad_init:
   rep #$30 : .xl : .al
   stz pad1mem
   stz pad1trig
+  jsl @mouse_init  ; fork: SNES Mouse state (mouse.a65)
   plp
   rts
 
@@ -26,15 +27,11 @@ read_pad:
 read_pad1         ; byetUDLRaxlriiii
     ldx pad1mem   ; save previous state of the buttons for later
     lda $4218     ; Controller 1
-    and #$000f    ; ignore non-standard controllers (ID != 0)
-    bne +
-    lda $4218
-+   sta pad1mem
+    jsl @mouse_pad1 ; fork: a pad as is, another controller as its ID nibble, the
+    sta pad1mem     ; SNES Mouse read in full (mouse.a65)
     lda $421a     ; Controller 2
-    and #$000f    ; ignore non-standard controllers (ID != 0)
-    bne +
-    lda $421a
-+   ora pad1mem   ; combine buttons of both controllers
+    jsl @mouse_pad2 ; same, plus the mouse's translated buttons
+    ora pad1mem   ; combine buttons of both controllers
     sta pad1mem
     and #$0f00    ; UDLR = directional buttons support auto-repeat
     bne read_pad1_count

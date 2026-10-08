@@ -1,0 +1,3037 @@
+.link page $c2
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include: re-declare the page after it. Bank $C2
+; (the string pool's, which has room): everything but the key-legend part, which hint_keys
+; reaches with jsr and so lives next to it in $C1 (mouselegend.a65).
+.link page $c2
+
+; ======================================================================
+;  SNES Mouse in the menu.
+;
+;  THE READ.  The auto-joypad read only shifts the first 16 bits: the buttons (right in
+;  bit 7 of $4218, left in bit 6) and the signature (low nibble = 0001, which read_pad used
+;  to drop as "not a pad"). The motion is in bits 17-32 -- Y sign + 7-bit magnitude, then
+;  X -- and has to be clocked out by hand from $4016 (port 1) / $4017 (port 2) after the
+;  auto-read is done. No strobe of our own: the mouse latched its counters at the auto-read
+;  and clears them there, so a re-latch would throw this frame's motion away. Reads past
+;  bit 32 return 1s, so a second read_pad in the same frame sees $FFFF and counts no motion.
+;  Byte-wide reads only: a 16-bit read of $4016 also reads $4017 and clocks port 2.
+;
+;  THE BUTTONS ARE THE SAME KEYS EVERYWHERE: left click = A, right click = B, both = X,
+;  right held alone = Y (in the browser: the context menu). The key legends show them
+;  (hint_keys prints the mouse-button glyphs, font 250-255 and 176, in place of A/B/X/Y and
+;  their ':' while a mouse is in).
+;
+;  CLICKS ACT ON RELEASE.  A click is what was pressed between "all buttons up" and "all
+;  buttons up" again (mouse_sess), so both buttons together are a click of their own
+;  (mouse_click 3). A long right press and a drag act while held and cancel the click.
+;  A press that began before the screen changed counts only after it is released
+;  (mouse_tok): the click that closed a menu must not reach the browser. The modes
+;  (browser, lists, game info, other) are described at mouse_post.
+;
+;  ONE MOUSE.  Port 1 wins; a second mouse in port 2 is ignored (its ID nibble goes out
+;  as read_pad always did).
+; ======================================================================
+
+#define MOUSE_SPEED     0        ; the sensitivity the menu keeps the mouse at (0 slow)
+#define MOUSE_ACC_T     4        ; |motion| >= this in one frame moves double
+#define MOUSE_STEP      12       ; counts per Up/Down step (translator, edge scroll)
+#define MOUSE_RHOLD     24       ; frames of right button = back
+#define MOUSE_ZRATE     5        ; frames per scroll step with the pointer on the list's edge
+#define MOUSE_ZDELAY    20       ; frames before the first one (time to click the edge row)
+#define MOUSE_FHIDE     120      ; game info: idle frames before the pointer hides
+#define MOUSE_FTILE     $5FF0    ; game info: the pointer's tile, VRAM nobody shows there
+#define MOUSE_FOBSEL    $02      ; game info: OBJ base $4000, name $1FF = $5FF0
+#define MOUSE_FDESC0    23       ; game info: the short description's rows
+#define MOUSE_FDESC1    24
+#define MOUSE_FFOOT     26       ; game info: the key legend's row
+#define MOUSE_FDFULL0   17       ; game info: the full description's first and last rows
+#define MOUSE_FDFULL1   24
+#define MOUSE_FTILES    $5FD0    ; game info: button halves $1FD/$1FE, then the arrow $1FF
+#define MOUSE_FBTN_Y    56       ; game info: the previous / next buttons (16x16, mid-band)
+#define MOUSE_FBTN_PX   4
+#define MOUSE_FBTN_NX   236
+#define MOUSE_DRAG      24       ; drag counts per step on screens that own the PPU
+#define MOUSE_WAIT      $0800    ; bound on the waits for VBlank / the auto-joypad read
+#define MOUSE_VGATE     205      ; from this line on, the read waits for VBlank
+#define MOUSE_STEP_UP   $fff5    ; -(MOUSE_STEP-1): accumulator above it = no up step yet
+#define MOUSE_VARS_LEN  271      ; mouse_ptr_on .. mouse_vars_end (data.a65)
+#define MOUSE_C9_PAL7   COVER_C9_PAL+$e0   ; the cover's OBJ palette 7 in bank C9
+#define MOUSE_FATTR     $31      ; game info: priority 3, OBJ palette 0, name table 2
+#define MOUSE_FCGADD    $80      ; game info: OBJ palette 0 (| the entry)
+
+; ----------------------------------------------------------------------
+;  mouse_pad1 / mouse_pad2: read_pad's controller filter (pad.a65).
+;  In: A = $4218 / $421A (16-bit A and X, DB = $80). Out: A = the word read_pad merges
+;  into pad1mem. X and Y preserved. mouse_pad2 runs last and adds the translator's word.
+; ----------------------------------------------------------------------
+mouse_pad1:
+  .al : .xl
+  pha
+  sep #$20 : .as
+  lda #$00
+  sta @mouse_seen
+  rep #$20 : .al
+  pla
+  bit #$000f
+  bne mp1_ns
+  rtl                            ; a standard pad: its word as is
+mp1_ns:
+  .al : .xl
+  and #$000f
+  cmp #$0001
+  beq mp1_mouse
+  rtl                            ; another device: its ID nibble, as before
+mp1_mouse:
+  .al : .xl
+  phx
+  phy
+  lda $4218
+  ldy #$0000
+  jsr mouse_serve
+  ply
+  plx
+  lda #$0000
+  rtl
+
+mouse_pad2:
+  .al : .xl
+  phx
+  phy
+  bit #$000f
+  beq mp2_word                   ; a standard pad
+  and #$000f
+  cmp #$0001
+  bne mp2_word                   ; another device: its ID nibble
+  sep #$20 : .as
+  lda @mouse_seen
+  rep #$20 : .al
+  bne mp2_none                   ; port 1 has the mouse
+  lda $421a
+  ldy #$0001
+  jsr mouse_serve
+mp2_none:
+  .al : .xl
+  lda #$0000
+mp2_word:
+  .al : .xl
+  pha
+  jsr mouse_post
+  ora $01, s
+  sta $01, s
+  pla
+  ply
+  plx
+  rtl
+
+; mouse_serve: A = the auto-read word of the mouse's port, Y = 0 (port 1) / 1 (port 2).
+; Buttons, then bits 17-32, then the pointer. X clobbered.
+mouse_serve:
+  .al : .xl
+  sep #$20 : .as
+  pha
+  lsr
+  lsr
+  lsr
+  lsr
+  and #$03                       ; bits 4-5: the sensitivity (a game may have left it fast)
+  sta @mouse_spd
+  pla
+  ldx #$0000
+  bit #$40
+  beq ms_noleft
+  inx
+ms_noleft:
+  .as : .xl
+  bit #$80
+  beq ms_noright
+  inx
+  inx
+ms_noright:
+  .as : .xl
+  txa
+  sta @mouse_btn
+  lda #$01
+  sta @mouse_seen
+  sta @mouse_ptr_on
+  ; Never start the read just before VBlank: the auto-read of line 225 shifts the same
+  ; register, the two interleave and this frame AND the next come out misaligned (seen as
+  ; a stray jump). From line MOUSE_VGATE on, wait for VBlank; then for the auto-read.
+  lda $2137                      ; latch the counters ($4201 bit 7 is set: snes_init)
+  lda $213f                      ; reset the OPVCT flip-flop
+  lda $213d                      ; V, low 8 bits
+  xba
+  lda $213d                      ; V bit 8
+  lsr
+  bcs ms_gated                   ; 256+: already in VBlank
+  xba
+  cmp #MOUSE_VGATE
+  bcc ms_gated
+  cmp #228                       ; the auto-read may not have started yet at 225-227
+  bcs ms_gated
+  ldx #MOUSE_WAIT
+ms_vbl:
+  .as : .xl
+  lda $4212
+  bmi ms_inauto
+  dex
+  bne ms_vbl
+ms_inauto:
+  .as : .xl
+  ldx #$0100                     ; then for it to start (it begins a few dots into 225)
+ms_autostart:
+  .as : .xl
+  lda $4212
+  lsr
+  bcs ms_gated
+  dex
+  bne ms_autostart
+ms_gated:
+  .as : .xl
+  ldx #MOUSE_WAIT
+ms_wait:
+  .as : .xl
+  lda $4212                      ; bit 0: auto-joypad read in progress
+  lsr
+  bcc ms_read
+  dex
+  bne ms_wait
+ms_read:
+  .as : .xl
+  lda $4212                      ; VBlank flag now: if it rises during the read, the auto-
+  and #$80                       ; read began in the middle of it and the bits are mixed
+  pha
+  ldx #$0000
+  lda #$10
+  pha
+ms_bit:
+  .as : .xl
+  lda $4016, y                   ; bit 0: the port's data line
+  lsr
+  rep #$20 : .al
+  txa
+  rol
+  tax
+  sep #$20 : .as
+  lda $01, s
+  dec
+  sta $01, s
+  bne ms_bit
+  pla
+  lda $4212
+  lsr                            ; auto-read running now?
+  bcs ms_torn
+  rol
+  and #$80
+  beq ms_whole                   ; not in VBlank now: nothing started during the read
+  cmp $01, s
+  bne ms_torn                    ; VBlank (and its auto-read) began during the read
+ms_whole:
+  .as : .xl
+  pla
+  rep #$20 : .al
+  txa
+  cmp #$ffff
+  bne ms_fresh
+ms_none:
+  .al : .xl
+  lda #$0000                     ; read already this frame: no motion
+  bra ms_fresh
+ms_torn:
+  .as : .xl
+  pla
+  rep #$20 : .al
+  bra ms_none
+ms_fresh:
+  .al : .xl
+  sta @mouse_raw
+  and #$00ff
+  jsr mouse_axis
+  sta @mouse_dx
+  lda @mouse_raw
+  xba
+  and #$00ff
+  jsr mouse_axis
+  sta @mouse_dy
+  lda @mouse_x
+  clc
+  adc @mouse_dx
+  bpl ms_x_pos
+  lda #$0000
+ms_x_pos:
+  .al : .xl
+  cmp #$0100
+  bcc ms_x_ok
+  lda #$00ff
+ms_x_ok:
+  .al : .xl
+  sta @mouse_x
+  lda @mouse_y
+  clc
+  adc @mouse_dy
+  bpl ms_y_pos
+  lda #$0000
+ms_y_pos:
+  .al : .xl
+  cmp #MOUSE_YMAX+1
+  bcc ms_y_ok
+  lda #MOUSE_YMAX
+ms_y_ok:
+  .al : .xl
+  sta @mouse_y
+  ; The mouse keeps the sensitivity the last game set (Mario Paint sets its own) until it
+  ; loses power: step it to MOUSE_SPEED, one step a frame. A clock with the latch up is
+  ; a step; the bits of this frame are read already and the next auto-read latches anew.
+  sep #$20 : .as
+  lda @mouse_spd
+  cmp #MOUSE_SPEED
+  beq ms_spd_ok
+  lda #$01
+  sta $4016                      ; latch up
+  lda $4016, y                   ; one clock on the mouse's port: next sensitivity
+  lda #$00
+  sta $4016                      ; latch down
+ms_spd_ok:
+  .as : .xl
+  rep #$20 : .al
+  rts
+
+; mouse_axis: A = sign (bit 7) + magnitude (bits 0-6). Out: A = signed motion, accelerated.
+mouse_axis:
+  .al : .xl
+  pha
+  and #$007f
+  cmp #MOUSE_ACC_T
+  bcc ma_slow
+  asl
+ma_slow:
+  .al : .xl
+  tax
+  pla
+  and #$0080
+  beq ma_pos
+  txa
+  eor #$ffff
+  inc
+  rts
+ma_pos:
+  .al : .xl
+  txa
+  rts
+
+; ----------------------------------------------------------------------
+;  mouse_post: once per read_pad. This frame's mode, button edges, screensaver, the
+;  pointer's OAM bytes. Out: A = the mouse's pad word for read_pad (0 in the browser).
+;  Modes, by who reads the pad:
+;    1 the browser (mouse_browser raised mouse_brw last frame): its own pointer logic
+;    2 a list (mouse_listmode: menus, Recents, Favorites): the bar follows the pointer
+;      inside the window, left click = A on the row under it, right click = B
+;    3 a screen that owns the PPU (screen_dma_disable: game info, the manual): no
+;      pointer; left click = A, left drag up/left = Down (next), down/right = Up,
+;      right click = B
+;    4 game info's own loop (mouse_fichamode): mode 3, plus a pointer that hides when idle,
+;      a click on the short description = Y (the full one), on the footer = that key
+;    0 anything else (dialogs, popups): left click = A, right click = B, no motion
+; ----------------------------------------------------------------------
+mouse_post:
+  .al : .xl
+  sep #$20 : .as
+  lda @mouse_mode
+  sta @mouse_lmode
+  lda @mouse_brw
+  beq mpo_notbrw
+  lda #$01
+  bra mpo_setmode
+mpo_notbrw:
+  .as : .xl
+  lda @mouse_lst
+  beq mpo_notlst
+  lda #$02
+  bra mpo_setmode
+mpo_notlst:
+  .as : .xl
+  lda @mouse_val
+  beq mpo_notval
+  lda #$05
+  bra mpo_setmode
+mpo_notval:
+  .as : .xl
+  lda @mouse_kbd
+  beq mpo_notkbd
+  lda #$06
+  bra mpo_setmode
+mpo_notkbd:
+  .as : .xl
+  lda @mouse_fic
+  beq mpo_notfic
+  lda #$04
+  bra mpo_setmode
+mpo_notfic:
+  .as : .xl
+  lda @screen_dma_disable
+  beq mpo_setmode                ; 0: other
+  lda #$03
+mpo_setmode:
+  .as : .xl
+  sta @mouse_mode
+  bne mpo_bselhook
+  lda @mouse_lhassel             ; a screen without a hook: as its legend says
+  ora @mouse_bothsel
+  bra mpo_bselset
+mpo_bselhook:
+  .as : .xl
+  lda @mouse_bothsel
+mpo_bselset:
+  .as : .xl
+  sta @mouse_bsel                ; this frame's
+  lda #$00
+  sta @mouse_brw
+  sta @mouse_lst
+  sta @mouse_fic
+  sta @mouse_val
+  sta @mouse_kbd
+  sta @mouse_bothsel
+  sta @mouse_mchg
+  lda @mouse_seen
+  cmp @mouse_lseen
+  beq mpo_samepresence
+  sta @mouse_lseen
+  lda #$01                       ; plugged in / pulled out: the browser redraws its legend
+  sta @filesel_dirty
+mpo_samepresence:
+  .as : .xl
+  lda @mouse_seen
+  bne mpo_have
+  sta @mouse_hold
+  ; no mouse: nothing held, pointer hidden, no word
+  sta @mouse_btn
+  sta @mouse_beff
+  sta @mouse_bprev
+  sta @mouse_bedge
+  sta @mouse_bfall
+  sta @mouse_rhold
+  sta @mouse_sess
+  sta @mouse_click
+  lda #MOUSE_OAM_HIDDEN
+  sta @mouse_oam+1
+  rep #$20 : .al
+  lda #$0000
+  rts
+mpo_have:
+  .as : .xl
+  ; A mode change starts clean: buttons still held count only after release (the click
+  ; that closed a menu must not reach the browser), no edge, nothing pending.
+  lda @mouse_mode
+  cmp @mouse_lmode
+  beq mpo_samemode
+  lda #$01
+  sta @mouse_mchg
+  lda #$00
+  sta @mouse_vseq
+  lda @mouse_mode
+  cmp #$05
+  bne mpo_novseq
+  lda @mouse_lclick
+  beq mpo_novseq
+  lda #$01                       ; a click on the list opened this value: the next one
+  sta @mouse_vseq
+mpo_novseq:
+  .as : .xl
+  lda #$00
+  sta @mouse_lclick
+  lda @mouse_btn
+  eor #$03
+  sta @mouse_tok
+  lda #$00
+  sta @mouse_pend
+  sta @mouse_lpend
+  sta @mouse_rhold
+  sta @mouse_pulse
+  sta @mouse_sess
+  sta @mouse_fsetup
+  sta @mouse_fpal
+  sta @mouse_fidle               ; a new screen shows the pointer
+  sta @mouse_accy
+  sta @mouse_accy+1
+  sta @mouse_accx
+  sta @mouse_accx+1
+mpo_samemode:
+  .as : .xl
+  lda @mouse_btn                 ; a released button counts again
+  eor #$03
+  ora @mouse_tok
+  sta @mouse_tok
+  and @mouse_btn
+  sta @mouse_beff
+  lda @mouse_mchg
+  beq mpo_edges
+  lda @mouse_beff
+  sta @mouse_bprev
+mpo_edges:
+  .as : .xl
+  lda @mouse_beff
+  eor #$ff                       ; edges against last frame
+  and @mouse_bprev
+  sta @mouse_bfall
+  lda @mouse_bprev
+  eor #$ff
+  and @mouse_beff
+  sta @mouse_bedge
+  lda @mouse_beff
+  sta @mouse_bprev
+  ; right-button hold counter (mouse_browser reads it on the release)
+  lda @mouse_beff
+  and #$02
+  beq mpo_rup
+  lda @mouse_rhold
+  inc
+  beq mpo_rdone                  ; saturate at 255
+  sta @mouse_rhold
+  bra mpo_rdone
+mpo_rup:
+  .as : .xl
+  lda @mouse_bfall
+  and #$02
+  bne mpo_rdone                  ; released this frame: mouse_browser still needs it
+  lda #$00
+  sta @mouse_rhold
+mpo_rdone:
+  .as : .xl
+  ; the press session: what a click was is known when every button is up again
+  lda #$00
+  sta @mouse_click
+  lda @mouse_beff
+  beq mpo_allup
+  ora @mouse_sess
+  sta @mouse_sess
+  bra mpo_sessdone
+mpo_allup:
+  .as : .xl
+  lda @mouse_sess
+  bmi mpo_sessclr                ; it already acted (long right press, drag)
+  and #$03
+  sta @mouse_click
+mpo_sessclr:
+  .as : .xl
+  lda #$00
+  sta @mouse_sess
+mpo_sessdone:
+  .as : .xl
+  ; the right button alone held long enough: Y, now (its release then does nothing)
+  lda #$00
+  sta @mouse_hold
+  lda @mouse_sess
+  cmp #$02
+  bne mpo_nohold
+  lda @mouse_rhold
+  cmp #MOUSE_RHOLD
+  bcc mpo_nohold
+  lda #$82
+  sta @mouse_sess
+  lda #$01
+  sta @mouse_hold
+mpo_nohold:
+  .as : .xl
+  lda @mouse_lclick              ; a list click's chance to open a value dialog runs out
+  beq mpo_nolc
+  dec
+  sta @mouse_lclick
+mpo_nolc:
+  .as : .xl
+  jsr mouse_wake
+  lda @mouse_mode
+  cmp #$04
+  bne mpo_notficha
+  jmp mouse_ficha_word
+mpo_notficha:
+  .as : .xl
+  cmp #$03
+  bne mpo_visible
+  lda #MOUSE_OAM_HIDDEN          ; the screen owns the PPU: no pointer
+  sta @mouse_oam+1
+  jmp mouse_drag_word
+mpo_visible:
+  .as : .xl
+  jsr mouse_gfx_check
+  lda @mouse_x
+  sta @mouse_oam
+  lda @mouse_y
+  dec                            ; an OBJ shows one line below its Y
+  sta @mouse_oam+1
+  lda #$00
+  sta @mouse_oam+2
+  lda #MOUSE_ATTR
+  sta @mouse_oam+3
+  lda @mouse_mode
+  cmp #$02
+  bne mpo_notlist
+  jmp mouse_list_word
+mpo_notlist:
+  .as : .xl
+  cmp #$05
+  bne mpo_notvalue
+  jmp mouse_value_word
+mpo_notvalue:
+  .as : .xl
+  cmp #$06
+  bne mpo_notkbdw
+  jmp mouse_kbd_word
+mpo_notkbdw:
+  .as : .xl
+  cmp #$01
+  bne mpo_other
+  rep #$20 : .al
+  lda #$0000                     ; the browser: mouse_browser sets the flags itself
+  rts
+mpo_other:
+  .as : .xl
+  jsr mouse_ab_word              ; dialogs: A / B while held
+  rep #$20 : .al
+  lda @mouse_tmp
+  rts
+
+; mouse_kbd_word: the cheat editor's keyboard. Its keys sit two half-columns apart from
+; MOUSE_CEK_COL, one text row per key row from MOUSE_CEK_HEXROW (codes) or MOUSE_CEK_ALNROW
+; (names) -- cheatedit.a65's CEK_KEY_COL / CEK_HEX_ROW / CEK_ALN_ROW0, kept in step by hand.
+; The pointer moving over a key puts the cursor (ce_krow / ce_kcol and its bar, as
+; ce_kbd_bar draws it) there; a left click puts it there and types it (A).
+#define MOUSE_CEK_COL     12
+#define MOUSE_CEK_HEXROW  16
+#define MOUSE_CEK_ALNROW  15
+mouse_kbd_word:
+  .as : .xl
+  jsr mouse_b_word
+  lda @mouse_tmp+1               ; here a right click deletes (Y) and a held right cancels
+  and #$c0                       ; (B): trade the two (the legend: ce_kbd_draw_hint)
+  beq mkw_swapped
+  cmp #$c0
+  beq mkw_swapped
+  lda @mouse_tmp+1
+  eor #$c0
+  sta @mouse_tmp+1
+mkw_swapped:
+  .as : .xl
+  jsr mouse_trow_calc
+  jsr mouse_kbd_key              ; carry set: on a key, row in mouse_raw, column in mouse_raw+1
+  bcc mkw_out
+  lda @mouse_click
+  cmp #$01
+  beq mkw_put
+  rep #$20 : .al
+  lda @mouse_dx
+  ora @mouse_dy
+  sep #$20 : .as
+  beq mkw_out
+mkw_put:
+  .as : .xl
+  lda @mouse_raw
+  sta @ce_krow
+  lda @mouse_raw+1
+  sta @ce_kcol
+  asl                            ; the bar: ce_kbd_bar's own placement
+  clc
+  adc #MOUSE_CEK_COL
+  sta @bar_xl
+  lda #$01
+  sta @bar_wl
+  lda @mouse_trow
+  dec
+  sta @bar_yl
+  lda @mouse_click
+  cmp #$01
+  bne mkw_out
+  lda #$80                       ; A: type it
+  ora @mouse_tmp
+  sta @mouse_tmp
+mkw_out:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_tmp
+  rts
+
+; mouse_kbd_key: carry set when the pointer is on a key of the editor's keyboard.
+mouse_kbd_key:
+  .as : .xl
+  lda @ce_kmode
+  bne mkk_aln
+  lda @mouse_trow
+  sec
+  sbc #MOUSE_CEK_HEXROW
+  bcc mkk_no
+  cmp #$02                       ; two rows of codes
+  bcs mkk_no
+  bra mkk_row
+mkk_aln:
+  .as : .xl
+  lda @mouse_trow
+  sec
+  sbc #MOUSE_CEK_ALNROW
+  bcc mkk_no
+  cmp #$06                       ; six rows of letters
+  bcs mkk_no
+mkk_row:
+  .as : .xl
+  sta @mouse_raw
+  lda @mouse_x
+  lsr
+  lsr
+  sec
+  sbc #MOUSE_CEK_COL
+  bcc mkk_no
+  lsr                            ; the key (or the gap after it)
+  sta @mouse_raw+1
+  rep #$20 : .al
+  lda @mouse_raw
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda @ce_kmode
+  bne mkk_alnlen
+  lda @ce_kbd_hex_len, x
+  bra mkk_len
+mkk_alnlen:
+  .as : .xl
+  lda @ce_kbd_aln_len, x
+mkk_len:
+  .as : .xl
+  cmp @mouse_raw+1
+  beq mkk_no
+  bcc mkk_no
+  sec
+  rts
+mkk_no:
+  .as : .xl
+  clc
+  rts
+
+; mouse_value_word: a value dialog (menu.a65). Right click = B; a left click -- or the list
+; click that opened the dialog -- runs the next-value sequence, one step every other frame
+; (each a fresh edge), watching the value's row to see whether a step changed it:
+;   1 Up (the next value)          -> 2 changed? -> 6 A; unchanged (the last one) -> 3
+;   3 L (the first value, in one step: both dialogs take it) -> 6
+;   6 A: set it
+mouse_value_word:
+  .as : .xl
+  jsr mouse_b_word
+  lda @mouse_click
+  cmp #$01
+  bne mvw_seq
+  lda #$01
+  sta @mouse_vseq
+mvw_seq:
+  .as : .xl
+  lda @mouse_vseq
+  bne mvw_on
+  jmp mvw_out
+mvw_on:
+  .as : .xl
+  cmp #$01
+  bne mvw_s2
+  jsr mouse_vrowsum              ; 1: Up, and remember the row
+  lda #$08
+  ora @mouse_tmp+1
+  sta @mouse_tmp+1
+  lda #$02
+  sta @mouse_vseq
+  jmp mvw_out
+mvw_s2:
+  .as : .xl
+  cmp #$02
+  bne mvw_s3
+  jsr mouse_vchanged             ; 2: did it move?
+  bcs mvw_toa
+  lda #$03
+  sta @mouse_vseq
+  jmp mvw_out
+mvw_s3:
+  .as : .xl
+  cmp #$03
+  bne mvw_s5
+  lda #$20                       ; 3: L, the first value
+  ora @mouse_tmp
+  sta @mouse_tmp
+  lda #$05
+  sta @mouse_vseq
+  bra mvw_out
+mvw_s5:
+  .as : .xl
+  cmp #$05
+  bne mvw_s6
+mvw_toa:
+  .as : .xl
+  lda #$06                       ; (a frame without keys, then A)
+  sta @mouse_vseq
+  bra mvw_out
+mvw_s6:
+  .as : .xl
+  lda #$80                       ; 6: A
+  ora @mouse_tmp
+  sta @mouse_tmp
+  lda #$00
+  sta @mouse_vseq
+mvw_out:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_tmp
+  rts
+
+; mouse_vrowsum: mouse_vsum = a checksum of the value's row (bar_yl+1, both BG buffers).
+; mouse_vchanged: carry set when the row is not what mouse_vrowsum saw.
+mouse_vrowsum:
+  .as : .xl
+  jsr mouse_vsum_calc
+  sta @mouse_vsum
+  sep #$20 : .as
+  rts
+mouse_vchanged:
+  .as : .xl
+  jsr mouse_vsum_calc
+  cmp @mouse_vsum
+  sep #$20 : .as
+  clc
+  beq mvc_same
+  sec
+mvc_same:
+  .as : .xl
+  rts
+mouse_vsum_calc:
+  .as : .xl
+  lda @bar_yl
+  inc
+  rep #$20 : .al
+  and #$00ff
+  xba
+  lsr
+  lsr                            ; row * 64
+  tax
+  lda #$0000
+  ldy #$0020
+mvs_loop:
+  .al : .xl
+  clc
+  adc @BG1_TILE_BUF, x
+  clc
+  adc @BG2_TILE_BUF, x
+  asl                            ; position counts too
+  adc #$0000
+  inx
+  inx
+  dey
+  bne mvs_loop
+  rts
+
+; mouse_ab_word: mouse_tmp = A ($0080) on a left click, B ($8000) on a right click, for
+; the one frame of the release (a fresh edge for read_pad).
+mouse_ab_word:
+  .as : .xl
+  jsr mouse_b_word
+  lda @mouse_click
+  cmp #$01
+  bne mab_out
+  lda #$80
+  sta @mouse_tmp
+mab_out:
+  .as : .xl
+  rts
+
+; mouse_b_word: mouse_tmp = B ($8000) on a right click, X ($0040) on both buttons, Y
+; ($4000) when the right one has been held, else 0. (A is each mode's own business.)
+mouse_b_word:
+  .as : .xl
+  lda #$00
+  sta @mouse_tmp
+  sta @mouse_tmp+1
+  lda @mouse_click
+  cmp #$02
+  bne mbw_notb
+  lda #$80
+  sta @mouse_tmp+1
+mbw_notb:
+  .as : .xl
+  cmp #$03
+  bne mbw_notx
+  lda @mouse_bsel
+  bne mbw_sel
+  lda #$40                       ; X
+  sta @mouse_tmp
+  bra mbw_notx
+mbw_sel:
+  .as : .xl
+  lda #$20                       ; Select
+  ora @mouse_tmp+1
+  sta @mouse_tmp+1
+mbw_notx:
+  .as : .xl
+  lda @mouse_hold
+  beq mbw_out
+  lda #$40
+  ora @mouse_tmp+1
+  sta @mouse_tmp+1
+mbw_out:
+  .as : .xl
+  rts
+
+; mouse_listmode*: a list loop calls one right before its read_pad, and the mouse drives it
+; like the d-pad (the bar follows the pointer inside the window, left click = A on that row,
+; the first / last row scrolls). What a list needs: its bar at bar_yl (text row bar_yl+1),
+; its window in window_x/y/w/h, its Up/Down. The variant says how far apart its rows are and
+; where its position lives (a scroll step must move it, or the edge scroll stops):
+;   mouse_listmode      menu_select_noinit (menus, Recents): listsel_step, listsel_sel+menu_top
+;   mouse_listmode1     Favorites: 1, listsel_sel+fav_top
+;   mouse_listmode_pat  the patch selector: 1, listsel_sel+pat_top
+;   mouse_listmode_cm   the cheat list: 1, cm_sel+cm_top
+mouse_listmode:
+  php
+  sep #$20 : .as
+  lda #$00
+  sta @mouse_lkind
+  lda @listsel_step
+  bne mlm_set
+  inc
+  bra mlm_set
+mouse_listmode1:
+  php
+  sep #$20 : .as
+  lda #$01
+  bra mlm_kind
+mouse_listmode_pat:
+  php
+  sep #$20 : .as
+  lda #$02
+  bra mlm_kind
+mouse_listmode_cm:
+  php
+  sep #$20 : .as
+  lda #$01
+  sta @mouse_bothsel             ; both buttons: Sel (Add)
+  lda #$03
+mlm_kind:
+  .as
+  sta @mouse_lkind
+  lda #$01
+mlm_set:
+  .as
+  sta @mouse_lstep
+  lda #$01
+  sta @mouse_lst
+  plp
+  rtl
+
+; mouse_lpos: A (8-bit) = the list's position (selection + first visible row): any Up/Down
+; that does something moves it.
+mouse_lpos:
+  .as : .xl
+  lda @mouse_lkind
+  beq mlp_menu
+  cmp #$02
+  bcc mlp_fav
+  beq mlp_pat
+  lda @cm_sel
+  clc
+  adc @cm_top
+  rts
+mlp_menu:
+  .as : .xl
+  lda @listsel_sel
+  clc
+  adc @menu_top
+  rts
+mlp_fav:
+  .as : .xl
+  lda @listsel_sel
+  clc
+  adc @fav_top
+  rts
+mlp_pat:
+  .as : .xl
+  lda @listsel_sel
+  clc
+  adc @pat_top
+  rts
+
+; mouse_list_word: the list's pad word. The bar is at text row bar_yl+1 (window_y + its
+; place); a target row above it is Up, one past its step is Down, one step per two frames
+; (a pulse, then a gap, so each step is a fresh edge). A click becomes A once the bar
+; reaches the clicked row; a bar that does not move after a few steps (blank row, end of the
+; list) gives up. Only rows inside the window (window_x/y/w/h, the list's) count.
+mouse_list_word:
+  .as : .xl
+  jsr mouse_b_word
+  jsr mouse_trow_calc
+  jsr mouse_in_window            ; carry set = inside
+  bcc mlw_target
+  lda @mouse_click
+  cmp #$01
+  bne mlw_nopress
+  lda @mouse_trow
+  sta @mouse_ltgt
+  lda #$01
+  sta @mouse_lpend
+  bra mlw_target
+mlw_nopress:
+  .as : .xl
+  lda @mouse_lpend
+  cmp #$01
+  beq mlw_target                 ; a click is on its way
+  lda @mouse_mchg
+  bne mlw_follow                 ; the list just (re)appeared: the bar goes to the pointer now
+  rep #$20 : .al
+  lda @mouse_dx
+  ora @mouse_dy
+  sep #$20 : .as
+  beq mlw_target
+mlw_follow:
+  .as : .xl
+  lda @mouse_trow                ; moved onto a row: the bar follows
+  sta @mouse_ltgt
+  lda #$03
+  sta @mouse_lpend
+  lda #$00                       ; and an edge that ran out may scroll again
+  sta @mouse_lzdone
+mlw_target:
+  .as : .xl
+  lda @mouse_pulse
+  beq mlw_step
+  lda #$00                       ; last frame stepped: this one is the gap
+  sta @mouse_pulse
+  bra mlw_out
+mlw_step:
+  .as : .xl
+  lda @mouse_lpend
+  bne mlw_pend
+  jsr mouse_lzone                ; resting on the window's first / last row: scroll
+  bra mlw_out
+mlw_pend:
+  .as : .xl
+  lda @bar_yl
+  inc                            ; the bar's text row
+  cmp @mouse_ltgt
+  beq mlw_there
+  bcs mlw_up                     ; target above the bar
+  clc
+  adc @mouse_lstep
+  dec                            ; last text row of the bar's item
+  cmp @mouse_ltgt
+  bcs mlw_there                  ; target inside the bar's item (step > 1)
+  lda #$04                       ; Down
+  bra mlw_go
+mlw_up:
+  .as : .xl
+  lda #$08                       ; Up
+mlw_go:
+  .as : .xl
+  jsr mouse_ljump                 ; far: the bar jumps next to the row first (A kept)
+  ora @mouse_tmp+1
+  sta @mouse_tmp+1
+  lda #$01
+  sta @mouse_pulse
+  jsr mouse_lpos                  ; did the last step move the list?
+  cmp @mouse_lbar
+  sta @mouse_lbar
+  bne mlw_moved
+  lda @mouse_ltry
+  inc
+  sta @mouse_ltry
+  cmp #$04
+  bcc mlw_out
+  lda #$00                       ; stuck: give up (no A for a click past the list)
+  sta @mouse_lpend
+  sta @mouse_ltry
+  lda @mouse_tmp+1
+  and #$f3
+  sta @mouse_tmp+1
+  bra mlw_out
+mlw_moved:
+  .as : .xl
+  lda #$00
+  sta @mouse_ltry
+  bra mlw_out
+mlw_there:
+  .as : .xl
+  lda @mouse_lpend
+  cmp #$01
+  bne mlw_done
+  lda #$80                       ; the clicked row: A
+  sta @mouse_tmp
+  lda #$03                       ; a value dialog opening now came from this click
+  sta @mouse_lclick
+mlw_done:
+  .as : .xl
+  lda #$00
+  sta @mouse_lpend
+  sta @mouse_ltry
+mlw_out:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_tmp
+  rts
+
+; mouse_ljump: A = the step about to go out ($04 Down / $08 Up), toward mouse_ltgt. On a
+; menu (menu_select_noinit) or Favorites, a target two rows away or more puts the selection
+; and the bar right next to it first, so the list's own Up/Down takes only the last step (and
+; redraws what it redraws, the description box): no walk down the list after every redraw.
+; The other lists walk. A kept.
+mouse_ljump:
+  .as : .xl
+  pha
+  sta @mouse_ljdir
+  lda @mouse_lkind
+  cmp #$02
+  bcs mlj_out
+  lda @mouse_lstep
+  cmp #$03
+  bcs mlj_out
+  lda @mouse_ltgt
+  sec
+  sbc @window_y
+  dec                            ; the target's row offset inside the list
+  bmi mlj_out
+  pha
+  lda @mouse_lstep
+  cmp #$02
+  pla
+  bcc mlj_idx
+  lsr                            ; two rows per item
+mlj_idx:
+  .as : .xl
+  sta @mouse_raw                 ; on-screen item
+  lda @mouse_lkind
+  bne mlj_fav
+  lda @menu_scroll_active
+  beq mlj_top0
+  lda @menu_top
+  bra mlj_top
+mlj_top0:
+  .as : .xl
+  lda #$00
+  bra mlj_top
+mlj_fav:
+  .as : .xl
+  lda @fav_top
+mlj_top:
+  .as : .xl
+  clc
+  adc @mouse_raw
+  sta @mouse_raw+1               ; the target's selection
+  cmp @listsel_max
+  bcs mlj_out
+  lda @mouse_ljdir
+  cmp #$04
+  bne mlj_up
+  lda @mouse_raw+1               ; Down: at least two below?
+  sec
+  sbc @listsel_sel
+  bcc mlj_out
+  cmp #$02
+  bcc mlj_out
+  lda @mouse_raw+1
+  dec
+  sta @listsel_sel
+  lda @mouse_raw
+  dec
+  bra mlj_bar
+mlj_up:
+  .as : .xl
+  lda @listsel_sel               ; Up: at least two above?
+  sec
+  sbc @mouse_raw+1
+  bcc mlj_out
+  cmp #$02
+  bcc mlj_out
+  lda @mouse_raw+1
+  inc
+  sta @listsel_sel
+  lda @mouse_raw
+  inc
+mlj_bar:
+  .as : .xl
+  pha                            ; bar_yl = window_y + item * step (favorites recompute it)
+  lda @mouse_lstep
+  cmp #$02
+  pla
+  bcc mlj_step1
+  asl
+mlj_step1:
+  .as : .xl
+  clc
+  adc @window_y
+  sta @bar_yl
+mlj_out:
+  .as : .xl
+  pla
+  rts
+
+; mouse_lzone: a list's edge scroll, the same rule as the browser's (mouse_zone): the pointer
+; resting on the window's first item row scrolls up, on its last one (within lstep of the
+; bottom border) down -- after MOUSE_ZDELAY frames, one step every MOUSE_ZRATE, as pulses.
+; Any list loop that calls mouse_listmode before its read_pad gets it: the steps are its own
+; Up/Down. A step that leaves listsel_sel unchanged twice (the end of the list) stops it until
+; the pointer leaves the row.
+mouse_lzone:
+  .as : .xl
+  jsr mouse_in_window
+  bcc mlz_none
+  lda @bar_yl                    ; only with the bar on the pointer's row: a list redrawn
+  inc                            ; with its bar on top must not walk it down to the pointer
+  cmp @mouse_trow
+  beq mlz_onbar
+  bcs mlz_none
+  clc
+  adc @mouse_lstep
+  dec
+  cmp @mouse_trow
+  bcc mlz_none
+mlz_onbar:
+  .as : .xl
+  lda @mouse_trow
+  sec
+  sbc @window_y
+  sta @mouse_t2                  ; row inside the window (1 = the first item row)
+  cmp #$01
+  beq mlz_up
+  lda @window_h
+  dec
+  sec
+  sbc @mouse_lstep
+  cmp @mouse_t2
+  beq mlz_down
+  bcc mlz_down
+mlz_none:
+  .as : .xl
+  lda #MOUSE_ZDELAY
+  sta @mouse_ztimer
+  lda #$00
+  sta @mouse_lzdone
+  rts
+mlz_up:
+  .as : .xl
+  lda #$08
+  bra mlz_go
+mlz_down:
+  .as : .xl
+  lda #$04
+mlz_go:
+  .as : .xl
+  pha
+  lda @mouse_lzdone
+  bne mlz_skip
+  jsr mouse_ztick
+  bcc mlz_skip
+  jsr mouse_lpos
+  cmp @mouse_lsel
+  sta @mouse_lsel
+  bne mlz_moved
+  lda @mouse_ltry
+  inc
+  sta @mouse_ltry
+  cmp #$02
+  bcc mlz_step
+  lda #$01
+  sta @mouse_lzdone
+  bra mlz_skip
+mlz_moved:
+  .as : .xl
+  lda #$00
+  sta @mouse_ltry
+mlz_step:
+  .as : .xl
+  pla
+  ora @mouse_tmp+1
+  sta @mouse_tmp+1
+  lda #$01
+  sta @mouse_pulse
+  rts
+mlz_skip:
+  .as : .xl
+  pla
+  rts
+
+; mouse_in_window: carry set when the pointer's text row and half-column are inside the
+; last window drawn (its border excluded).
+mouse_in_window:
+  .as : .xl
+  lda @mouse_trow
+  sec
+  sbc @window_y
+  beq miw_no
+  bcc miw_no
+  sta @mouse_t2
+  lda @window_h
+  dec
+  cmp @mouse_t2
+  beq miw_no
+  bcc miw_no
+  lda @mouse_x
+  lsr
+  lsr
+  sec
+  sbc @window_x
+  beq miw_no
+  bcc miw_no
+  sta @mouse_t2
+  lda @window_w
+  dec
+  cmp @mouse_t2
+  beq miw_no
+  bcc miw_no
+  sec
+  rts
+miw_no:
+  .as : .xl
+  clc
+  rts
+
+; mouse_drag_word: a screen that owns the PPU (game info). Left click = A; left held and dragged = one Up/Down per MOUSE_DRAG counts, the way a
+; touch screen swipes: up or left = Down (next game, scroll on), down or right = Up.
+mouse_drag_word:
+  .as : .xl
+  jsr mouse_b_word
+  lda @mouse_bedge
+  and #$01
+  beq mdw_held
+  lda #$00                       ; a new press: no drag yet
+  sta @mouse_accx
+  sta @mouse_accx+1
+  sta @mouse_accy
+  sta @mouse_accy+1
+mdw_held:
+  .as : .xl
+  lda @mouse_pulse
+  beq mdw_motion
+  lda #$00
+  sta @mouse_pulse
+  bra mdw_release
+mdw_motion:
+  .as : .xl
+  lda @mouse_beff
+  and #$01
+  beq mdw_release
+  rep #$20 : .al
+  lda @mouse_accx
+  clc
+  adc @mouse_dx
+  sta @mouse_accx
+  lda @mouse_accy
+  clc
+  adc @mouse_dy
+  sta @mouse_accy
+  jsr mouse_drag_axis            ; Y first
+  bne mdw_step
+  lda @mouse_accx
+  jsr mouse_drag_axis
+  beq mdw_release_l
+mdw_step:
+  .al : .xl
+  sep #$20 : .as
+  ora @mouse_tmp+1
+  sta @mouse_tmp+1
+  lda #$01
+  sta @mouse_pulse
+  lda @mouse_sess
+  ora #$80                       ; a drag, not a click
+  sta @mouse_sess
+  rep #$20 : .al
+  lda #$0000
+  sta @mouse_accx
+  sta @mouse_accy
+mdw_release_l:
+  .al : .xl
+  sep #$20 : .as
+mdw_release:
+  .as : .xl
+  lda @mouse_click
+  cmp #$01
+  bne mdw_out
+  lda #$80                       ; a click, not a drag: A on the release
+  sta @mouse_tmp
+mdw_out:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_tmp
+  rts
+
+; mouse_fichamode: game info's input loop, right before its read_pad (gin_syncread).
+mouse_fichamode:
+  php
+  sep #$20 : .as
+  lda #$01
+  sta @mouse_fic
+  sta @mouse_fsafe
+  sta @mouse_bothsel             ; both buttons: Sel (the cheat list)
+  plp
+  rtl
+
+; mouse_kbdmode: the cheat editor's keyboard (cheatedit.a65 ce_kbd_loop), before its pad
+; read: the pointer on a key moves the cursor there, a click types it.
+mouse_kbdmode:
+  php
+  sep #$20 : .as
+  pha
+  lda #$01
+  sta @mouse_kbd
+  pla
+  plp
+  rtl
+
+; mouse_valuemode_kv / _num: a value dialog of menu.a65, right before its read_pad: a click
+; sets the next value (Up, wrapping around with L). A in and out.
+mouse_valuemode_kv:
+  php
+  sep #$20 : .as
+  pha
+  lda #$01
+  bra mvm_set
+mouse_valuemode_num:
+  php
+  sep #$20 : .as
+  pha
+  lda #$02
+mvm_set:
+  .as
+  sta @mouse_val
+  pla
+  plp
+  rtl
+
+; mouse_ficha_word: game info. The drag / click word of mode 3, a click on the short
+; description = Y and on the footer = the key it names. The pointer itself is drawn by the
+; NMI (mouse_nmi_off -> mouse_ficha_draw): from the main loop, on the console, some of the
+; OAM writes landed outside VBlank and scattered the pointer's bytes over other slots.
+mouse_ficha_word:
+  .as : .xl
+  lda @mouse_btn                 ; shown while the mouse does anything, hidden when idle
+  bne mfw_active
+  rep #$20 : .al
+  lda @mouse_dx
+  ora @mouse_dy
+  sep #$20 : .as
+  bne mfw_active
+  lda @mouse_fidle
+  cmp #MOUSE_FHIDE
+  bcs mfw_shown
+  inc
+  sta @mouse_fidle
+  bra mfw_shown
+mfw_active:
+  .as : .xl
+  lda #$00
+  sta @mouse_fidle
+mfw_shown:
+  .as : .xl
+  lda @mouse_y
+  lsr
+  lsr
+  lsr                            ; game info scrolls nothing: row = line / 8
+  sta @mouse_trow
+  rep #$20 : .al
+  lda #$0000
+  sta @mouse_fkey
+  sep #$20 : .as
+  jsr mouse_ficha_pal             ; the pointer's two colours, once the NMI read them
+  jsr mouse_ficha_oam             ; the arrow and the buttons, for the NMI
+  lda @mouse_click
+  cmp #$01
+  bne mfw_drag
+  jsr mouse_ficha_btn            ; on a button? A = $08 (Up: previous) / $04 (Down: next)
+  beq mfw_nobtn
+  rep #$20 : .al
+  and #$00ff
+  xba                            ; the pad word's high byte
+  bra mfw_take
+mfw_nobtn:
+  .as : .xl
+  lda #MOUSE_FFOOT
+  jsr mouse_legend_key
+  beq mfw_notkey
+  dec
+  asl
+  rep #$20 : .al
+  and #$00ff
+  tax
+  lda @mouse_keyword, x
+  bra mfw_take
+mfw_notkey:
+  .as : .xl
+  lda @gi_desc_full
+  bne mfw_swallow                ; the full description: a click does nothing
+  lda @mouse_trow
+  cmp #MOUSE_FDESC0
+  bcc mfw_drag
+  cmp #MOUSE_FDESC1+1
+  bcs mfw_drag
+  rep #$20 : .al
+  lda #$4000                     ; Y: the full description
+mfw_take:
+  .al : .xl
+  sta @mouse_fkey
+  sep #$20 : .as
+mfw_swallow:
+  .as : .xl
+  lda #$00                       ; the click is spoken for: no A
+  sta @mouse_click
+mfw_drag:
+  .as : .xl
+  jsr mouse_fzone                ; the full description: its first / last row scrolls
+  jsr mouse_drag_word
+  rep #$20 : .al
+  ora @mouse_fkey
+  rts
+
+; mouse_ficha_pal: the pointer's and the buttons' colours: black and white, always the same.
+; They live in OBJ palette 0 = CGRAM 128-143. Without a .gcv cover nobody else uses those:
+; entries 1 and 2. With one they are 16 of its colours (CGRAM 48-167): its pixels are counted
+; (1 KB a frame, the screen stays live) and the two entries it uses least become black and
+; white -- most covers leave some unused, so nothing on it changes. Borrowing the cover's own
+; colours instead gave a pointer of another colour on every game. mouse_fpal: 0 -> 3 or 4
+; (here, on entry), 3 counting, 2 chosen (the NMI writes them every frame).
+#define MOUSE_COVER_PX  COVER_C9_TILES     ; the .gcv cover's 8bpp tiles (bank C9, 16 KB)
+mouse_ficha_pal:
+  .as : .xl
+  jsr mouse_cover_sig            ; another game's cover (Up / Down): count again
+  cmp @mouse_fsig
+  sta @mouse_fsig
+  beq mfp_same
+  lda #$00
+  sta @mouse_fpal
+mfp_same:
+  .as : .xl
+  lda @mouse_fpal
+  bne mfp_started
+  lda @GI_FLAGS                  ; on entry: count the cover, or take 1 and 2
+  and #GI_FLAG_COVER
+  beq mfp_free
+  lda #$03
+  sta @mouse_fpal
+  rep #$20 : .al
+  lda #$0000
+  sta @mouse_hpos
+  sep #$20 : .as
+  ldx #$000f
+mfp_clr:
+  .as : .xl
+  sta @mouse_hist, x
+  dex
+  bpl mfp_clr
+  rts
+mfp_free:
+  .as : .xl
+  lda #$01
+  sta @mouse_tmp
+  inc
+  sta @mouse_tmp+1
+  bra mfp_build
+mfp_started:
+  .as : .xl
+  cmp #$03
+  beq mfp_count
+  rts
+mfp_count:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_hpos
+  tax
+  clc
+  adc #$0400
+  sta @mouse_hpos
+  sep #$20 : .as
+mfp_px:
+  .as : .xl
+  lda @MOUSE_COVER_PX, x
+  sec
+  sbc #$80
+  cmp #$10
+  bcs mfp_next                   ; not one of ours
+  phx
+  rep #$20 : .al
+  and #$000f
+  tax
+  sep #$20 : .as
+  lda @mouse_hist, x
+  inc
+  beq mfp_sat
+  sta @mouse_hist, x
+mfp_sat:
+  .as : .xl
+  plx
+mfp_next:
+  .as : .xl
+  inx
+  txa
+  and #$ff                       ; (low byte) a 1 KB block ends on a $400 boundary
+  bne mfp_px
+  rep #$20 : .al
+  txa
+  and #$03ff
+  sep #$20 : .as
+  bne mfp_px
+  rep #$20 : .al
+  txa
+  cmp #$4000
+  sep #$20 : .as
+  bcs mfp_counted
+  rts                            ; the rest next frame
+mfp_counted:
+  .as : .xl
+  jsr mouse_least_two            ; -> mouse_tmp / mouse_tmp+1
+mfp_build:
+  .as : .xl
+  lda @mouse_tmp
+  sta @mouse_cgo
+  lda @mouse_tmp+1
+  sta @mouse_cgb
+  jsr mouse_build_tile
+  lda #$02
+  sta @mouse_fpal
+  rts
+
+; mouse_cover_sig: A = a byte summing 16 samples of the staged cover and its flags.
+mouse_cover_sig:
+  .as : .xl
+  lda @GI_FLAGS
+  ldx #$0000
+mcs_loop:
+  .as : .xl
+  clc
+  adc @MOUSE_COVER_PX+$0137, x
+  rol
+  rep #$20 : .al
+  txa
+  clc
+  adc #$0400
+  tax
+  sep #$20 : .as
+  cpx #$4000
+  bcc mcs_loop
+  rts
+
+; mouse_least_two: mouse_tmp = the entry (1-15) of mouse_hist used least, mouse_tmp+1 the
+; next one.
+mouse_least_two:
+  .as : .xl
+  lda #$ff
+  sta @mouse_tmp+1               ; (pass 1 skips nothing yet)
+  jsr mlt_least
+  sta @mouse_tmp
+  sta @mouse_tmp+1               ; pass 2 skips it
+  jsr mlt_least
+  sta @mouse_tmp+1
+  rts
+; A = the entry used least, mouse_tmp+1 excluded
+mlt_least:
+  .as : .xl
+  lda #$ff
+  sta @mouse_t2                  ; best count so far
+  lda #$01
+  sta @mouse_lmin                ; best entry so far
+  ldx #$0001
+mlt_scan:
+  .as : .xl
+  txa
+  cmp @mouse_tmp+1
+  beq mlt_skip
+  lda @mouse_hist, x
+  cmp @mouse_t2
+  bcs mlt_skip
+  sta @mouse_t2
+  txa
+  sta @mouse_lmin
+mlt_skip:
+  .as : .xl
+  inx
+  cpx #$0010
+  bcc mlt_scan
+  lda @mouse_lmin
+  rts
+
+; mouse_fzone: game info's full description (Y): the pointer resting on its first or its last
+; row scrolls it (the browser's rule, mouse_zone): Up / Down pulses after MOUSE_ZDELAY, one
+; every MOUSE_ZRATE.
+mouse_fzone:
+  .as : .xl
+  lda @gi_desc_full
+  beq mfz_none
+  lda @mouse_pulse
+  bne mfz_out                    ; a step went out last frame: mouse_drag_word makes the gap
+  lda @mouse_trow
+  cmp #MOUSE_FDFULL0
+  beq mfz_up
+  cmp #MOUSE_FDFULL1
+  beq mfz_down
+mfz_none:
+  .as : .xl
+  lda #MOUSE_ZDELAY
+  sta @mouse_ztimer
+mfz_out:
+  .as : .xl
+  rts
+mfz_up:
+  .as : .xl
+  lda #$08
+  bra mfz_go
+mfz_down:
+  .as : .xl
+  lda #$04
+mfz_go:
+  .as : .xl
+  pha
+  jsr mouse_ztick
+  pla
+  bcc mfz_out
+  ora @mouse_fkey+1
+  sta @mouse_fkey+1
+  lda #$01
+  sta @mouse_pulse
+  rts
+
+; mouse_ficha_btns_on: carry set when game info shows its previous / next buttons: the
+; pointer is up, the browser opened the screen (Up/Down move through its list) and the
+; short description is on.
+mouse_ficha_btns_on:
+  .as : .xl
+  lda @mouse_fidle
+  cmp #MOUSE_FHIDE
+  bcs mfbo_no
+  lda @gi_query_fill
+  beq mfbo_no
+  lda @gi_desc_full
+  bne mfbo_no
+  sec
+  rts
+mfbo_no:
+  .as : .xl
+  clc
+  rts
+
+; mouse_ficha_btn: A = $08 when the pointer is on the previous button, $04 on the next one,
+; 0 otherwise (Z).
+mouse_ficha_btn:
+  .as : .xl
+  jsr mouse_ficha_btns_on
+  bcc mfb_no
+  lda @mouse_y
+  sec
+  sbc #MOUSE_FBTN_Y
+  cmp #$10
+  bcs mfb_no
+  lda @mouse_x
+  sec
+  sbc #MOUSE_FBTN_PX
+  cmp #$10
+  bcc mfb_prev
+  lda @mouse_x
+  sec
+  sbc #MOUSE_FBTN_NX
+  cmp #$10
+  bcs mfb_no
+  lda #$04
+  rts
+mfb_prev:
+  .as : .xl
+  lda #$08
+  rts
+mfb_no:
+  .as : .xl
+  lda #$00
+  rts
+
+; mouse_ficha_oam: mouse_foam = OAM slots 64-72 for the NMI: the arrow, then the previous
+; button's quarters and the next one's (one round arrow half per tile pair, flipped into
+; the other three quarters and into the other button).
+mouse_ficha_oam:
+  .as : .xl
+  ldx #$0000
+  lda @mouse_fpal
+  cmp #$02
+  bne mfo_hide                   ; colours not chosen yet
+  lda @mouse_fidle
+  cmp #MOUSE_FHIDE
+  bcs mfo_hide
+  lda @mouse_x
+  sta @mouse_foam
+  lda @mouse_y
+  dec                            ; an OBJ shows one line below its Y
+  sta @mouse_foam+1
+  lda #$ff                       ; name $1FF
+  sta @mouse_foam+2
+  lda #MOUSE_FATTR
+  sta @mouse_foam+3
+  ldx #$0004
+  jsr mouse_ficha_btns_on
+  bcc mfo_hide
+mfo_btn:
+  .as : .xl
+  lda @mouse_fbtn_tbl-4, x
+  sta @mouse_foam, x
+  inx
+  cpx #$0024
+  bcc mfo_btn
+  rts
+mfo_hide:
+  .as : .xl
+  lda #MOUSE_OAM_HIDDEN
+mfo_hide_loop:
+  .as : .xl
+  sta @mouse_foam+1, x
+  inx
+  inx
+  inx
+  inx
+  cpx #$0024
+  bcc mfo_hide_loop
+  rts
+
+; the buttons: x, y, name ($1FD / $1FE: left / right half of the top), attr (MOUSE_FATTR
+; + flips: $40 horizontal, $80 vertical). OAM Y is one line above the screen line.
+mouse_fbtn_tbl:
+  .byt MOUSE_FBTN_PX,   MOUSE_FBTN_Y-1, $fd, MOUSE_FATTR
+  .byt MOUSE_FBTN_PX+8, MOUSE_FBTN_Y-1, $fe, MOUSE_FATTR
+  .byt MOUSE_FBTN_PX,   MOUSE_FBTN_Y+7, $fd, MOUSE_FATTR+$80
+  .byt MOUSE_FBTN_PX+8, MOUSE_FBTN_Y+7, $fe, MOUSE_FATTR+$80
+  .byt MOUSE_FBTN_NX,   MOUSE_FBTN_Y-1, $fe, MOUSE_FATTR+$40
+  .byt MOUSE_FBTN_NX+8, MOUSE_FBTN_Y-1, $fd, MOUSE_FATTR+$40
+  .byt MOUSE_FBTN_NX,   MOUSE_FBTN_Y+7, $fe, MOUSE_FATTR+$c0
+  .byt MOUSE_FBTN_NX+8, MOUSE_FBTN_Y+7, $fd, MOUSE_FATTR+$c0
+
+; mouse_vline: carry set when the beam is early in VBlank (lines 225-245): time left for a
+; few VRAM / OAM / CGRAM writes from the main loop.
+mouse_vline:
+  .as : .xl
+  lda $2137                      ; latch the counters
+  lda $213f
+  lda $213d                      ; V low
+  xba
+  lda $213d                      ; V bit 8
+  lsr
+  bcs mvl_no
+  xba
+  cmp #225
+  bcc mvl_no
+  cmp #246
+  bcs mvl_no
+  sec
+  rts
+mvl_no:
+  .as : .xl
+  clc
+  rts
+
+; mouse_ficha_draw: game info's pointer, from its NMI (DB = 0). Once: the browser cover's sprites (slots 0-63, still
+; in OAM, their tiles now band data) off. Every frame: the arrow's tile to VRAM $5FF0 -- the
+; lower half of BG1's 32x64 map, which game info never shows but its redraws clear -- reached
+; with OBSEL $02 as name $1FF; OBJ on (game info turns it off on every redraw); black and
+; white in OBJ palette 7 entries 1-2 (a .fmv rewrites that palette with its frames); slot 64.
+mouse_ficha_draw:
+  .as : .xl
+  jsr mouse_vline
+  bcs mfd_time
+  rts                            ; too late in the frame: next one
+mfd_time:
+  .as : .xl
+  ; Forced blank around the writes, past the first lines of VBlank: on the console, OAM
+  ; written by this NMI at line 225 without it scattered bytes over other slots (the
+  ; emulator took them fine). Invisible: VBlank shows nothing anyway.
+  ldx #$0400
+mfd_vwait:
+  .as : .xl
+  lda $2137
+  lda $213f
+  lda $213d                      ; V low (an on-time NMI: 225..)
+  xba
+  lda $213d
+  xba
+  cmp #228
+  bcs mfd_blank
+  dex
+  bne mfd_vwait
+mfd_blank:
+  .as : .xl
+  lda #$80
+  sta $2100
+  jsr mfd_body
+  lda @cur_bright
+  sta $2100
+  rts
+mfd_body:
+  .as : .xl
+  lda @mouse_fidle
+  cmp #MOUSE_FHIDE
+  bcc mfd_show
+  lda @mouse_oam_y
+  cmp #MOUSE_OAM_HIDDEN
+  beq mfd_out
+  jmp mfd_colours_done           ; idle: mouse_foam is all hidden, write it once
+mfd_out:
+  .as : .xl
+  rts
+mfd_show:
+  .as : .xl
+  lda @mouse_fsetup
+  bne mfd_ready
+  lda #$01
+  sta @mouse_fsetup
+  lda #$ff
+  sta @mouse_gfx_key             ; the browser builds its own again
+
+  ldx #$0000                     ; every sprite off, not just the cover's: with the OBJ base
+  stx $2102                      ; moved to the font, an old sprite parked on screen with a
+  lda #$08                       ; blank tile would turn into a letter
+  sta $4370
+  lda #$04
+  sta $4371
+  ldx #!oamhide
+  stx $4372
+  lda #^oamhide
+  sta $4374
+  ldx #$0200                     ; low table: $F0 everywhere
+  stx $4375
+  lda #$80
+  sta $420b
+  ldx #!zero                     ; high table: small, X bit 8 clear
+  stx $4372
+  lda #^zero
+  sta $4374
+  ldx #$0020
+  stx $4375
+  lda #$80
+  sta $420b
+mfd_ready:
+  .as : .xl
+  ldx #MOUSE_FTILES              ; every frame: a redraw of game info may clear that VRAM
+  stx $2116
+  lda #$01
+  sta $4370
+  lda #$18
+  sta $4371
+  ldx #!mouse_btiles
+  stx $4372
+  lda #^mouse_btiles
+  sta $4374
+  ldx #$0060
+  stx $4375
+  lda #$80
+  sta $420b
+  lda #MOUSE_FOBSEL
+  sta $2101
+  lda #$13                       ; BG1 + BG2 + OBJ, main and sub (game info: $03)
+  sta $212c
+  sta $212d
+  lda @mouse_fpal
+  cmp #$02
+  bne mfd_colours_done           ; not chosen yet
+  lda @mouse_cgo
+  ora #MOUSE_FCGADD
+  sta $2121
+  lda #$00                       ; outline: black
+  sta $2122
+  sta $2122
+  lda @mouse_cgb
+  ora #MOUSE_FCGADD
+  sta $2121
+  lda #$ff                       ; body: white
+  sta $2122
+  lda #$7f
+  sta $2122
+mfd_colours_done:
+  .as : .xl
+  ldx #MOUSE_OAM_ADDR            ; slots 64-72 from mouse_foam (mouse_ficha_oam)
+  stx $2102
+  ldx #$0000
+mfd_oam:
+  .as : .xl
+  lda @mouse_foam, x
+  sta $2104
+  inx
+  cpx #$0024
+  bcc mfd_oam
+  lda @mouse_foam+1
+  sta @mouse_oam_y
+  ldx #MOUSE_OAM_HI              ; slots 64-75: small, X bit 8 clear
+  stx $2102
+  lda #$00
+  sta $2104
+  sta $2104
+  sta $2104
+  rts
+
+; mouse_drag_axis: A (16-bit) = an accumulated drag. Out: A = $04 (Down) past -MOUSE_DRAG,
+; $08 (Up) past +MOUSE_DRAG, else 0; Z set when 0. 16-bit A on both sides.
+mouse_drag_axis:
+  .al : .xl
+  bmi mda_neg
+  cmp #MOUSE_DRAG
+  bcc mda_none
+  lda #$0008
+  rts
+mda_neg:
+  .al : .xl
+  eor #$ffff
+  inc
+  cmp #MOUSE_DRAG
+  bcc mda_none
+  lda #$0004
+  rts
+mda_none:
+  .al : .xl
+  lda #$0000
+  rts
+
+; mouse_trow_calc: mouse_trow = the text row under the pointer. The menu's text rows scroll
+; by 13 lines down to line 206 and by 15 below (const.a65 hdma_bg*scroll_src).
+mouse_trow_calc:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_y
+  cmp #207
+  bcc mtc_upper
+  inc
+  inc
+mtc_upper:
+  .al : .xl
+  clc
+  adc #13
+  lsr
+  lsr
+  lsr
+  sep #$20 : .as
+  sta @mouse_trow
+  rts
+
+; mouse_steps: adds mouse_dy to mouse_accy; once it reaches a step, takes it off and
+; answers in A (8-bit): $04 = down, $08 = up (the high-byte bits of the pad word), 0 = none.
+mouse_steps:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_accy
+  clc
+  adc @mouse_dy
+  bmi mst_up
+  cmp #MOUSE_STEP
+  bcc mst_none
+  sec
+  sbc #MOUSE_STEP
+  sta @mouse_accy
+  sep #$20 : .as
+  lda #$04
+  rts
+mst_up:
+  .al : .xl
+  cmp #MOUSE_STEP_UP
+  bcs mst_none
+  clc
+  adc #MOUSE_STEP
+  sta @mouse_accy
+  sep #$20 : .as
+  lda #$08
+  rts
+mst_none:
+  .al : .xl
+  sta @mouse_accy
+  sep #$20 : .as
+  lda #$00
+  rts
+
+; mouse_wake: motion or a button is input for the screensaver too. The NMI only watches
+; pad1mem, which never sees the mouse in browser mode.
+mouse_wake:
+  .as : .xl
+  lda @mouse_btn
+  bne mw_input
+  rep #$20 : .al
+  lda @mouse_dx
+  ora @mouse_dy
+  sep #$20 : .as
+  beq mw_out
+mw_input:
+  .as : .xl
+  lda #$00
+  sta @idle_count
+  sta @idle_count+1
+  lda @fade_speed
+  cmp #$10                       ; the NMI's dim fade (reset.a65 nobuttonspressed)
+  bne mw_out
+  lda @menu_brightness
+  sta @tgt_bright
+  lda #$01
+  sta @fade_speed
+  sta @fade_count
+mw_out:
+  .as : .xl
+  rts
+
+; ----------------------------------------------------------------------
+;  mouse_browser: the file browser's turn (filesel_updates, right after read_pad). Turns
+;  the pointer into the browser's own pad flags, so every action runs through the same
+;  filesel_key_* handlers as the d-pad. Any DB, any widths in; all preserved.
+; ----------------------------------------------------------------------
+mouse_browser:
+  php
+  rep #$30 : .al : .xl
+  phx
+  phy
+  sep #$20 : .as
+  lda @mouse_seen
+  bne mb_have
+  jmp mb_out
+mb_have:
+  .as : .xl
+  lda #$01
+  sta @mouse_brw                 ; the pointer is ours from the next read_pad on
+  lda @mouse_mode
+  bne mb_on
+  jmp mb_out                     ; this frame was still translated
+mb_on:
+  .as : .xl
+  jsr mouse_rows
+  ; the right button held: the context menu of the row under the pointer (Y)
+  lda @mouse_hold
+  beq mb_noback
+  lda @mouse_hrow
+  cmp #$ff
+  bne mb_hold_row
+  jmp mb_out
+mb_hold_row:
+  .as : .xl
+  sta @mouse_prow
+  lda #$02
+  sta @mouse_pend
+  jmp mb_pending
+mb_noback:
+  .as : .xl
+  lda @mouse_click
+  beq mb_pending
+  cmp #$03
+  bne mb_single
+  lda #$01                       ; both buttons: the main menu (X)
+  sta @pad_x
+  lda #$00
+  sta @mouse_pend
+  jmp mb_out
+mb_single:
+  .as : .xl
+  cmp #$01
+  bne mb_rclick
+  ; left click: A on the row under the pointer, or the legend key under it
+  lda @mouse_hrow
+  cmp #$ff
+  beq mb_left_legend
+  sta @mouse_prow
+  lda #$01
+  sta @mouse_pend
+  bra mb_pending
+mb_left_legend:
+  .as : .xl
+  jsr mouse_legend
+  jmp mb_out
+mb_rclick:
+  .as : .xl
+  ; right click: back (B)
+  lda #$01
+  sta @pad_b
+  lda #$00
+  sta @mouse_pend
+  jmp mb_out
+mb_pending:
+  .as : .xl
+  lda @mouse_pend
+  dec
+  cmp #$02
+  bcc mb_follow                  ; a click (1, 2) on its way: no zone
+  jsr mouse_zone                 ; the list's edge rows: scroll (carry set = done)
+  bcc mb_follow
+  jmp mb_out
+mb_follow:
+  .as : .xl
+  ; the bar follows the pointer while it moves over the entries: the row it moved onto
+  ; becomes the target (a click's target is not overridden)
+  rep #$20 : .al
+  lda @mouse_dx
+  ora @mouse_dy
+  sep #$20 : .as
+  beq mb_target
+  lda @mouse_hrow
+  cmp #$ff
+  bne mb_hover
+  lda @mouse_pend
+  bne mb_target
+  jmp mb_edges
+mb_hover:
+  .as : .xl
+  lda @mouse_pend
+  beq mb_settarget
+  cmp #$03
+  bcc mb_target                  ; 1 / 2: a click is on its way
+mb_settarget:
+  .as : .xl
+  lda @mouse_hrow
+  sta @mouse_prow
+  lda #$03
+  sta @mouse_pend
+mb_target:
+  .as : .xl
+  ; toward the target row; a click fires once the bar is there
+  lda @mouse_pend
+  bne mb_haspend
+  sta @mouse_jmp
+  jmp mb_out
+mb_haspend:
+  .as : .xl
+  lda @mouse_prow
+  cmp @filesel_sel
+  bne mb_steptoward
+  lda @mouse_pend
+  cmp #$02
+  beq mb_fire_y
+  bcs mb_fired                   ; 3: hover, nothing to press
+  lda #$01
+  sta @pad_a
+  bra mb_fired
+mb_fire_y:
+  .as : .xl
+  lda #$01
+  sta @pad_y
+mb_fired:
+  .as : .xl
+  lda #$00
+  sta @mouse_pend
+  sta @mouse_jmp
+  jmp mb_out
+mb_steptoward:
+  .as : .xl
+  ; The first step goes through the d-pad handler as is (it restores the row the bar
+  ; leaves, whose long name may be scrolling); from the second one the bar jumps next to
+  ; the target and the handler takes the last step -- no visible walk down the list.
+  bcc mb_up                      ; target above the bar
+  lda @mouse_jmp
+  beq mb_down_step
+  lda @mouse_prow
+  dec
+  cmp @filesel_sel
+  bcc mb_down_step
+  beq mb_down_step
+  sta @filesel_sel
+mb_down_step:
+  .as : .xl
+  lda #$01
+  sta @pad_down
+  sta @mouse_jmp
+  bra mb_out
+mb_up:
+  .as : .xl
+  lda @mouse_jmp
+  beq mb_up_step
+  lda @mouse_prow
+  inc
+  cmp @filesel_sel
+  bcs mb_up_step
+  sta @filesel_sel
+mb_up_step:
+  .as : .xl
+  lda #$01
+  sta @pad_up
+  sta @mouse_jmp
+  bra mb_out
+mb_edges:
+  .as : .xl
+  ; pushing against the top / bottom edge of the screen scrolls the list
+  rep #$20 : .al
+  lda @mouse_y
+  beq mb_edge
+  cmp #MOUSE_YMAX
+  beq mb_edge
+  lda #$0000
+  sta @mouse_accy
+  sep #$20 : .as
+  bra mb_out
+mb_edge:
+  .al : .xl
+  sep #$20 : .as
+  jsr mouse_steps
+  beq mb_out
+  cmp #$04
+  beq mb_down
+  lda #$01
+  sta @pad_up
+  bra mb_out
+mb_down:
+  .as : .xl
+  lda #$01
+  sta @pad_down
+mb_out:
+  .as : .xl
+  rep #$30 : .al : .xl
+  ply
+  plx
+  plp
+  rtl
+
+; mouse_zone: the pointer resting on the first or the last entry on screen scrolls the list
+; once the list goes on that way: after MOUSE_ZDELAY frames (time to click the row), one
+; step every MOUSE_ZRATE. Carry set = the zone owns the bar this frame.
+mouse_zone:
+  .as : .xl
+  lda @mouse_trow
+  cmp #$09
+  beq mz_top                     ; the first entry's row
+  lda @listdisp
+  clc
+  adc #$08                       ; the last entry's row
+  cmp @mouse_trow
+  bne mz_none
+mz_bottom:
+  .as : .xl
+  ; below: the last entry on the page
+  lda @dirend_onscreen
+  bne mz_end                     ; the list ends on this page: nothing to scroll
+  lda @dirend_onscreen
+  beq mz_full
+  lda @dirend_idx
+  lsr
+  lsr
+  bra mz_last
+mz_full:
+  .as : .xl
+  lda @listdisp
+  dec
+mz_last:
+  .as : .xl
+  cmp @filesel_sel
+  beq mz_bottom_edge
+  sta @mouse_prow                ; the bar goes there first
+  lda #$03
+  sta @mouse_pend
+  clc
+  rts
+mz_bottom_edge:
+  .as : .xl
+  lda @dirend_onscreen
+  bne mz_end                     ; the list ends here
+  jsr mouse_ztick
+  bcc mz_wait
+  lda #$01
+  sta @pad_down
+  sec
+  rts
+mz_top:
+  .as : .xl
+  rep #$20 : .al
+  lda @dirptr_addr
+  cmp @dirstart_addr
+  sep #$20 : .as
+  beq mz_end                     ; the list starts on this page: nothing to scroll
+  lda @filesel_sel
+  beq mz_top_edge
+  lda #$00
+  sta @mouse_prow
+  lda #$03
+  sta @mouse_pend
+  clc
+  rts
+mz_top_edge:
+  .as : .xl
+  rep #$20 : .al
+  lda @dirptr_addr
+  cmp @dirstart_addr
+  sep #$20 : .as
+  beq mz_end                     ; the list starts here
+  jsr mouse_ztick
+  bcc mz_wait
+  lda #$01
+  sta @pad_up
+  sec
+  rts
+mz_none:
+  .as : .xl
+  lda #MOUSE_ZDELAY
+  sta @mouse_ztimer
+  clc
+  rts
+mz_end:
+  .as : .xl
+  lda #MOUSE_ZDELAY              ; nothing to scroll: the row is an ordinary row
+  sta @mouse_ztimer
+  clc
+  rts
+mz_wait:
+  .as : .xl
+  sec                            ; in the zone: nothing else moves the bar
+  rts
+
+; mouse_ztick: carry set when the zone's timer runs out (then it reloads).
+mouse_ztick:
+  .as : .xl
+  lda @mouse_ztimer
+  beq mzt_fire
+  dec
+  sta @mouse_ztimer
+  clc
+  rts
+mzt_fire:
+  .as : .xl
+  lda #MOUSE_ZRATE
+  sta @mouse_ztimer
+  sec
+  rts
+
+; mouse_rows: mouse_trow = text row under the pointer; mouse_hrow = browser entry under it
+; ($ff = none). Entry i sits on text row 9+i.
+mouse_rows:
+  .as : .xl
+  jsr mouse_trow_calc
+  sec
+  sbc #9
+  bcc mr_none
+  cmp @listdisp
+  bcs mr_none
+  sta @mouse_tmp
+  lda @dirend_onscreen
+  beq mr_entry
+  lda @dirend_idx                ; the list ends on this page: its last entry index
+  lsr
+  lsr
+  cmp @mouse_tmp
+  bcc mr_none
+mr_entry:
+  .as : .xl
+  lda @mouse_tmp
+  sta @mouse_hrow
+  rts
+mr_none:
+  .as : .xl
+  lda #$ff
+  sta @mouse_hrow
+  rts
+
+; mouse_legend: a left click off the list, on the browser's status bar.
+mouse_legend:
+  .as : .xl
+  lda @listdisp
+  clc
+  adc #$0a                       ; filesel_statusbar's row
+  jsr mouse_legend_key
+  beq ml_out
+  rep #$20 : .al
+  and #$00ff                     ; TAX with 16-bit X takes the hidden high byte too
+  tax
+  sep #$20 : .as
+  lda @mouse_keyflag-1, x        ; offset of the key's pad flag from pad_b
+  rep #$20 : .al
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda #$01
+  sta @pad_b, x
+ml_out:
+  .as : .xl
+  rts
+
+; mouse_legend_key: A = the key-legend row. When the pointer is on it, the key of the item
+; under it, read back from the tilemap buffer like hint_keys (manhost.a65) reads it to paint
+; it -- language-independent, no layout constants. An item is "Key:Label" or "Key: Label";
+; a click on the label counts. Out: A (8-bit) = 1 A, 2 B, 3 X, 4 Y, 5 Select, 0 none (Z).
+mouse_legend_key:
+  .as : .xl
+  cmp @mouse_trow
+  beq mlk_row
+  lda #$00
+  rts
+mlk_row:
+  .as : .xl
+  rep #$20 : .al
+  lda @mouse_x
+  lsr
+  lsr                            ; half-column under the pointer
+  tax
+  jsr mouse_cell
+  cmp #$0020
+  beq mlk_none                   ; between two items
+  jsr mouse_word_key             ; this word a key ("B:")?
+  bne mlk_have
+  ; a label: the key is the word before it ("A: Play" -> the word "A:")
+mlk_prev:
+  .al : .xl
+  jsr mouse_word_start
+  cpx #$0003
+  bcc mlk_none
+  dex                            ; the space before this word
+  dex
+  jsr mouse_cell
+  cmp #$0020
+  beq mlk_none                   ; two spaces: another item
+  jsr mouse_word_key
+  bne mlk_have
+mlk_none:
+  .al : .xl
+  sep #$20 : .as
+  lda #$00
+  rts
+mlk_have:
+  .al : .xl
+  sep #$20 : .as
+  rts
+
+; mouse_word_start: X = half-column in a word; X = its first half-column (>= 2). A clobbered.
+mouse_word_start:
+  .al : .xl
+mws_loop:
+  .al : .xl
+  cpx #$0003
+  bcc mws_out
+  dex
+  jsr mouse_cell
+  cmp #$0020
+  bne mws_loop
+  inx
+mws_out:
+  .al : .xl
+  rts
+
+; mouse_word_key: X = half-column in a word. When the word is "<key>:", A = the key
+; (1-5, Z clear), else 0 (Z set). 16-bit A; X preserved.
+mouse_word_key:
+  .al : .xl
+  phx
+  jsr mouse_word_start
+  txa
+  sta @mouse_lmin                ; the word's first column (scratch)
+  jsr mouse_cell_word            ; a mouse glyph first (hint_keys swapped "K:" for it)?
+  pha
+  and #$03ff
+  lsr
+  cmp #250
+  beq mwk_gl
+  cmp #254
+  beq mwk_gb
+  cmp #252
+  bne mwk_noglyph
+  pla                            ; the right button: held when its second cell is 176
+  inx
+  jsr mouse_cell
+  cmp #176
+  beq mwk_gy
+  lda #$0002
+  bra mwk_ret
+mwk_gy:
+  .al : .xl
+  lda #$0004
+  bra mwk_ret
+mwk_gl:
+  .al : .xl
+  pla
+  lda #$0001
+  bra mwk_ret
+mwk_gb:
+  .al : .xl
+  pla
+  lda #$0003
+  bra mwk_ret
+mwk_noglyph:
+  .al : .xl
+  pla
+  lda @mouse_lmin
+  tax
+mwk_scan:
+  .al : .xl
+  jsr mouse_cell
+  cmp #$003a
+  beq mwk_colon
+  cmp #$0020
+  beq mwk_no
+  cmp #$0000
+  beq mwk_no
+  inx
+  cpx #$0040
+  bcc mwk_scan
+mwk_no:
+  .al : .xl
+  lda #$0000
+  bra mwk_ret
+mwk_colon:
+  .al : .xl
+  txa
+  sec
+  sbc @mouse_lmin                ; the key's length
+  pha
+  lda @mouse_lmin
+  tax
+  jsr mouse_cell                 ; its first character
+  ply
+  cpy #$0001
+  beq mwk_letter
+  cmp #$0053                     ; longer: "Sel"/"Select" is the only one
+  bne mwk_no
+  lda #$0005
+  bra mwk_ret
+mwk_letter:
+  .al : .xl
+  ldx #$0000
+mwk_find:
+  .al : .xl
+  cmp @mouse_keys, x
+  beq mwk_hit
+  inx
+  inx
+  cpx #$0008
+  bcc mwk_find
+  bra mwk_no
+mwk_hit:
+  .al : .xl
+  txa
+  lsr
+  inc                            ; 1..4
+mwk_ret:
+  .al : .xl
+  plx
+  ora #$0000                     ; Z from the result, not from X
+  rts
+
+; mouse_cell_word: A = the raw tile word at half-column X of the trow. X preserved.
+mouse_cell_word:
+  .al : .xl
+  phx
+  lda @mouse_trow
+  and #$00ff
+  xba
+  lsr
+  lsr
+  sta @mouse_tmp
+  txa
+  lsr
+  php
+  asl
+  clc
+  adc @mouse_tmp
+  tax
+  plp
+  bcs mcw_bg1
+  lda @BG2_TILE_BUF, x
+  plx
+  rts
+mcw_bg1:
+  .al : .xl
+  lda @BG1_TILE_BUF, x
+  plx
+  rts
+
+; mouse_cell: A (16-bit) = character in half-column X of the trow. X preserved.
+mouse_cell:
+  .al : .xl
+  phx
+  lda @mouse_trow
+  and #$00ff
+  xba
+  lsr
+  lsr                            ; row * 64
+  sta @mouse_tmp
+  txa
+  lsr                            ; carry = odd half-column (BG1)
+  php
+  asl
+  clc
+  adc @mouse_tmp
+  tax
+  plp
+  bcs mc_bg1
+  lda @BG2_TILE_BUF, x
+  bra mc_char
+mc_bg1:
+  .al : .xl
+  lda @BG1_TILE_BUF, x
+mc_char:
+  .al : .xl
+  and #$03ff
+  lsr                            ; tile = character * 2
+  plx
+  rts
+
+; ----------------------------------------------------------------------
+;  mouse_gfx_check: the pointer's tile and colours, always black and white. They live in
+;  OBJ palette 7, which a box-art cover uses too when it has all 8 palettes (the
+;  converter's default): then the pointer takes over the darkest and the brightest of the
+;  cover's palette 7 and makes them black and white (the cover's blocks on palette 7 move
+;  by at most those two shades), otherwise entries 1 and 2 of the free palette. Rebuilt when that case changes, and on every return to
+;  the browser (other screens reuse VRAM $3000 and CGRAM).
+; ----------------------------------------------------------------------
+mouse_gfx_check:
+  .as : .xl
+  lda @cover_loaded
+  beq mg_key
+  lda @cover_npal
+  cmp #$08
+  lda #$01
+  bcc mg_key
+  inc                            ; 2: the cover needs palette 7
+mg_key:
+  .as : .xl
+  ldx #$0000
+  sta @mouse_tmp
+  lda @mouse_lmode
+  cmp #$03
+  beq mg_build                   ; back from a screen that owns the PPU (VRAM, CGRAM):
+  cmp #$04                       ; drag or game info, not the dialogs (5, 6) -- with those
+  beq mg_build                   ; the tile went up every frame and the pointer never moved
+  lda @mouse_tmp
+  cmp @mouse_gfx_key
+  bne mg_build
+  rts
+mg_build:
+  .as : .xl
+  lda @mouse_tmp
+  sta @mouse_gfx_key
+  cmp #$02
+  beq mg_borrow
+  lda #$02                       ; palette 7 is free: outline 1, body 2
+  sta @mouse_tmp+1
+  lda #$01
+  sta @mouse_tmp
+  bra mg_tile
+mg_borrow:
+  .as : .xl
+  ldx #$001f                     ; 32 bytes: entries 0-15
+mg_copy:
+  .as : .xl
+  lda @MOUSE_C9_PAL7, x
+  sta @mouse_pal, x
+  dex
+  bpl mg_copy
+  jsr mouse_pick_colours         ; -> mouse_tmp = darkest entry, mouse_tmp+1 = brightest
+mg_tile:
+  .as : .xl
+  lda @mouse_tmp
+  sta @mouse_cgo
+  lda @mouse_tmp+1
+  sta @mouse_cgb
+  jsr mouse_build_tile
+  lda #$03                       ; tile + its black and white
+  sta @mouse_gfx_dirty
+  rts
+
+; mouse_build_tile: mouse_btiles = game info's two button halves, then mouse_tile = the
+; arrow; outline in colour mouse_tmp, body in mouse_tmp+1. The row index runs across the
+; three shapes (24 rows), each 8 a tile of 32 bytes.
+mouse_build_tile:
+  .as : .xl
+  ; 4bpp: bytes 2r / 2r+1 = planes 0/1 of row r, bytes 16+2r / 17+2r = planes 2/3
+  ldx #$0000
+mg_row:
+  .as : .xl
+  ldy #$0000                     ; plane
+mg_plane:
+  .as : .xl
+  lda #$00
+  sta @mouse_raw
+  tya
+  jsr mouse_bit_of_tmp           ; outline colour has this plane's bit?
+  beq mg_no_o
+  lda @mouse_shape_o, x
+  sta @mouse_raw
+mg_no_o:
+  .as : .xl
+  tya
+  jsr mouse_bit_of_tmp1          ; body colour?
+  beq mg_no_b
+  lda @mouse_shape_b, x
+  ora @mouse_raw
+  sta @mouse_raw
+mg_no_b:
+  .as : .xl
+  phx
+  txa
+  and #$07
+  asl                            ; 2r
+  sta @mouse_raw+1
+  tya
+  and #$01
+  ora @mouse_raw+1
+  sta @mouse_raw+1
+  tya
+  and #$02
+  beq mg_lowplanes
+  lda @mouse_raw+1
+  ora #$10
+  sta @mouse_raw+1
+mg_lowplanes:
+  .as : .xl
+  lda $01, s                     ; the row (0-23): its shape's 32-byte tile
+  and #$18
+  asl
+  asl
+  ora @mouse_raw+1
+  sta @mouse_raw+1
+  rep #$20 : .al
+  lda @mouse_raw+1
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda @mouse_raw
+  sta @mouse_btiles, x
+  plx
+  iny
+  cpy #$0004
+  bcc mg_plane
+  inx
+  cpx #$0018
+  bcc mg_row
+  rts
+
+; A = plane (0-3). Z clear when that bit of the outline / body index is set.
+mouse_bit_of_tmp:
+  .as : .xl
+  phx
+  rep #$20 : .al
+  and #$00ff                     ; TAX with 16-bit X takes the hidden high byte too
+  tax
+  sep #$20 : .as
+  lda @mouse_tmp
+  bra mbo_shift
+mouse_bit_of_tmp1:
+  .as : .xl
+  phx
+  rep #$20 : .al
+  and #$00ff
+  tax
+  sep #$20 : .as
+  lda @mouse_tmp+1
+mbo_shift:
+  .as : .xl
+  cpx #$0000
+  beq mbo_done
+  lsr
+  dex
+  bra mbo_shift
+mbo_done:
+  .as : .xl
+  plx
+  and #$01
+  rts
+
+; mouse_pick_colours: darkest and brightest of the palette in mouse_pal, colours 1-15 (a copy
+; of what is in OBJ palette 7: a cover's, a .fmv frame's). Brightness = R + 2G + B.
+mouse_pick_colours:
+  .as : .xl
+  lda #$01
+  sta @mouse_tmp
+  sta @mouse_tmp+1
+  rep #$20 : .al
+  lda #$ffff
+  sta @mouse_lmin                ; darkest so far
+  lda #$0000
+  sta @mouse_lmax                ; brightest so far
+  ldy #$0001
+mpc_loop:
+  .al : .xl
+  tya
+  asl
+  tax
+  lda @mouse_pal, x
+  pha
+  and #$001f                     ; R
+  sta @mouse_raw
+  lda $01, s
+  lsr
+  lsr
+  lsr
+  lsr
+  lsr
+  and #$001f                     ; G
+  asl
+  clc
+  adc @mouse_raw
+  sta @mouse_raw
+  pla
+  xba
+  lsr
+  lsr
+  and #$001f                     ; B
+  clc
+  adc @mouse_raw
+  sta @mouse_raw                 ; brightness
+  cmp @mouse_lmin
+  bcs mpc_notdark
+  sta @mouse_lmin
+  sep #$20 : .as
+  tya
+  sta @mouse_tmp
+  rep #$20 : .al
+mpc_notdark:
+  .al : .xl
+  lda @mouse_raw
+  cmp @mouse_lmax
+  bcc mpc_next
+  sta @mouse_lmax
+  sep #$20 : .as
+  tya
+  sta @mouse_tmp+1
+  rep #$20 : .al
+mpc_next:
+  .al : .xl
+  iny
+  cpy #$0010
+  bcc mpc_loop
+  sep #$20 : .as
+  rts
+
+; the shapes, 8 rows each, bit 7 = leftmost pixel: outline and body. Game info's round
+; button (16x16, arrow pointing left): its top-left and top-right quarters (the bottom is
+; the top flipped); then the pointer's arrow.
+mouse_shape_o:
+  .byt $01, $0f, $18, $30, $60, $40, $43, $c7
+  .byt $80, $f0, $18, $0c, $66, $e2, $e2, $e3
+  .byt $80
+  .byt $c0
+  .byt $a0
+  .byt $90
+  .byt $88
+  .byt $84
+  .byt $9c
+  .byt $e0
+mouse_shape_b:
+  .byt $00, $00, $07, $0f, $1f, $3f, $3c, $38
+  .byt $00, $00, $e0, $f0, $98, $1c, $1c, $1c
+  .byt $00
+  .byt $00
+  .byt $40
+  .byt $60
+  .byt $70
+  .byt $78
+  .byt $60
+  .byt $00
+
+; ----------------------------------------------------------------------
+;  mouse_nmi: from the NMI, after the tile uploads of an on-time VBlank (reset.a65). One
+;  thing per frame: the pointer's tile (+ colours) when mouse_gfx_check asked, else its OAM
+;  slot. CPU writes but for the 32-byte tile; DB = 0.
+; ----------------------------------------------------------------------
+mouse_nmi:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @mouse_gfx_dirty
+  beq mn_oam
+  ldx #MOUSE_VRAM
+  stx $2116
+  lda #$01
+  sta $4370
+  lda #$18
+  sta $4371
+  ldx #!mouse_tile
+  stx $4372
+  lda #^mouse_tile
+  sta $4374
+  ldx #$0020
+  stx $4375
+  lda #$80
+  sta $420b
+  lda @mouse_gfx_dirty
+  and #$02
+  beq mn_gfx_done
+  lda @mouse_cgo
+  ora #MOUSE_CGADD
+  sta $2121
+  lda #$00                       ; outline: black
+  sta $2122
+  sta $2122
+  lda @mouse_cgb
+  ora #MOUSE_CGADD
+  sta $2121
+  lda #$ff                       ; body: white
+  sta $2122
+  lda #$7f
+  sta $2122
+mn_gfx_done:
+  .as : .xl
+  lda #$00
+  sta @mouse_gfx_dirty
+  plp
+  rtl
+mn_oam:
+  .as : .xl
+  ldx #MOUSE_OAM_ADDR
+  stx $2102
+  lda @mouse_oam
+  sta $2104
+  lda @mouse_oam+1
+  sta $2104
+  sta @mouse_oam_y
+  lda @mouse_oam+2
+  sta $2104
+  lda @mouse_oam+3
+  sta $2104
+  ldx #MOUSE_OAM_HI
+  stx $2102
+  lda #$00                       ; slots 64-67: small, X bit 8 clear
+  sta $2104
+  ldx #MOUSE_OAM_ROT
+  stx $2102
+  plp
+  rtl
+
+; mouse_nmi_off: from the NMI of a screen that owns the PPU (screen_dma_disable: game
+; info and friends). Only hides a pointer still on screen, and only in an on-time VBlank.
+mouse_nmi_off:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda @mouse_mode
+  cmp #$04
+  bne mno_hide
+  ; game info: its pointer, but only while its loop waits for this NMI (gin_syncread) --
+  ; at any other time it may be in the middle of its own VRAM / CGRAM uploads
+  lda @mouse_fsafe
+  beq mno_out
+  lda #$00
+  sta @mouse_fsafe
+  jsr mouse_ficha_draw
+  bra mno_out
+mno_hide:
+  .as : .xl
+  lda @mouse_oam_y
+  cmp #MOUSE_OAM_HIDDEN
+  beq mno_out
+  lda $2137                      ; latch the counters
+  lda $213f
+  lda $213d                      ; V low
+  xba
+  lda $213d                      ; V bit 8
+  lsr
+  bcs mno_out
+  xba
+  cmp #225
+  bcc mno_out
+  cmp #246
+  bcs mno_out
+  ldx #MOUSE_OAM_ADDR
+  stx $2102
+  lda @mouse_oam
+  sta $2104
+  lda #MOUSE_OAM_HIDDEN
+  sta $2104
+  sta @mouse_oam_y
+mno_out:
+  .as : .xl
+  plp
+  rtl
+
+; mouse_init: pad_init (both boot paths). Pointer centred and hidden, tile rebuilt.
+mouse_init:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #MOUSE_VARS_LEN-1
+  lda #$00
+mi_clear:
+  .as : .xl
+  sta @mouse_ptr_on, x
+  dex
+  bpl mi_clear
+  lda #$80
+  sta @mouse_x
+  lda #$70
+  sta @mouse_y
+  lda #MOUSE_OAM_HIDDEN
+  sta @mouse_oam_y
+  sta @mouse_oam+1
+  lda #$ff
+  sta @mouse_gfx_key
+  sta @mouse_hrow
+  plp
+  rtl

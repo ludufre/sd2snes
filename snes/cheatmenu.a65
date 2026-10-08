@@ -753,6 +753,7 @@ cheatmenu_input_loop:
   stz isr_done
   jsr printtime
   jsr cheatmenu_scroll_tick
+  jsl @mouse_listmode_cm     ; fork: the mouse points at the rows (mouse.a65)
   jsr read_pad
 
 ; DiagG: dispatch via beq+jmp instead of bne to avoid any 8-bit

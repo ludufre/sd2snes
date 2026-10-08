@@ -32,6 +32,19 @@
 #define COVER_OAM_FIRST             0          /* first OAM slot used by the cover */
 #define COVER_OAM_LO_BYTES          256        /* 64 sprites * 4 bytes (whole cover OAM low table) */
 #define COVER_OAM_HI_BYTES          16         /* 64 sprites / 4 (whole cover OAM high table) */
+/* SNES Mouse pointer (mouse.a65): one 8x8 OBJ in the slot right after the cover's 64. OAM
+   priority rotation (MOUSE_OAM_ROT) puts it in front of them. Its tile is OBJ name $100 =
+   VRAM $3000 (second name table, between the cover's $2000-$2FFF and CJK region A at $3400),
+   colours from OBJ palette 7 (attr $3F = priority 3, palette 7, name table 2). */
+#define MOUSE_OAM_SLOT              64
+#define MOUSE_OAM_ADDR              $0080      /* OAMADD (words) of the slot: 2 words per sprite */
+#define MOUSE_OAM_HI                $0108      /* OAMADD of the high-table byte of slots 64-67 */
+#define MOUSE_OAM_ROT               $8080      /* $2102/$2103: rotation on, slot 64 first */
+#define MOUSE_VRAM                  $3000
+#define MOUSE_ATTR                  $3F
+#define MOUSE_CGADD                 $F0        /* OBJ palette 7 (| the entry) */
+#define MOUSE_YMAX                  223
+#define MOUSE_OAM_HIDDEN            $E0
 #define COVER_DEBOUNCE              6          /* frames to settle before requesting (must stay
                                                   > the 3-frame d-pad auto-repeat so held scrolling
                                                   never fires a cover; 6 = faster load, still safe) */

@@ -606,4 +606,88 @@ gi_relight      .byt 0      ; 1 = back from game info to the browser: fade in on
 msu_probe_wait  .byt 0     ; 1 = a page still has unprobed folders, left for when the d-pad
                            ;   stops (msu_probe_idle); zeroed in coldboot ($55 fill)
 
+;---------- SNES Mouse (snes/mouse.a65) ----------
+; Every byte from mouse_ptr_on to mouse_vars_end is zeroed by mouse_init (pad_init, both
+; boot paths): clear_wram leaves $55 here, and a warm boot brings back stale values.
+mouse_ptr_on    .byt 0     ; 1 once a mouse was seen: the NMI keeps the pointer's OAM slot
+mouse_seen      .byt 0     ; read_pad: a mouse was served this frame
+mouse_brw       .byt 0     ; mouse_browser: the browser owns the mouse on the next read_pad
+mouse_mode      .byt 0     ; this frame: 1 = browser (pointer), 0 = translator
+mouse_lmode     .byt 0     ; last frame's mouse_mode
+mouse_x         .word 0    ; pointer, OBJ pixels (0..255)
+mouse_y         .word 0    ; pointer, screen line (0..MOUSE_YMAX)
+mouse_dx        .word 0    ; this frame's motion, signed, after acceleration
+mouse_dy        .word 0
+mouse_raw       .word 0    ; bits 17-32 of the last read: Y byte | X byte (sign + magnitude)
+mouse_btn       .byt 0     ; buttons held (bit 0 left, bit 1 right)
+mouse_tok       .byt 0     ; buttons allowed: a press that began before a mode change is ignored
+mouse_beff      .byt 0     ; mouse_btn & mouse_tok
+mouse_bprev     .byt 0     ; last frame's mouse_beff
+mouse_bedge     .byt 0     ; pressed this frame
+mouse_bfall     .byt 0     ; released this frame
+mouse_rhold     .byt 0     ; frames the right button has been held (saturates)
+mouse_rfire     .byt 0     ; the long right press already went back
+mouse_accy      .word 0    ; translator / edge-scroll accumulator
+mouse_pulse     .byt 0     ; translator: a direction went out last frame (re-arms the edge)
+mouse_pend      .byt 0     ; browser: the bar is on its way to mouse_prow (1 then A, 2 then Y, 3 hover)
+mouse_prow      .byt 0
+mouse_hrow      .byt 0     ; browser row under the pointer ($ff = not on an entry)
+mouse_trow      .byt 0     ; text row under the pointer
+mouse_tmp       .word 0
+mouse_lmin      .word 0    ; mouse_pick_colours: darkest / brightest so far
+mouse_lmax      .word 0
+mouse_oam       .byt 0,0,0,0  ; x, y, tile, attr: what the NMI writes to the pointer's slot
+mouse_oam_y     .byt 0     ; Y last written to OAM ($e0 = hidden)
+mouse_gfx_key   .byt 0     ; palette case the tile was built for ($ff = rebuild)
+mouse_gfx_dirty .byt 0     ; bit 0: the NMI uploads mouse_tile, bit 1: and the pointer's own colours
+mouse_btiles    .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; game info's
+                .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; button halves,
+mouse_tile      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; then the arrow
+mouse_lst       .byt 0     ; a list loop (menu_select_noinit, favsel_navigate) reads the pad now
+mouse_lstep     .byt 0     ;   and its rows are this many text rows apart
+mouse_lpend     .byt 0     ; list: the bar is on its way to mouse_ltgt (1 then A, 3 hover)
+mouse_ltgt      .byt 0     ; list: target text row
+mouse_lbar      .byt 0     ; list: bar row at the last step (a bar that stops moving = give up)
+mouse_ltry      .byt 0     ; list: steps that did not move the bar
+mouse_accx      .word 0    ; game info: horizontal drag accumulator
+mouse_sess      .byt 0     ; buttons pressed since all were up (bit 7: the press already acted)
+mouse_click     .byt 0     ; this frame, every button just came up: 1 left, 2 right, 3 both
+mouse_cgo       .byt 0     ; OBJ palette 7 entries of the pointer: outline (black), body (white)
+mouse_cgb       .byt 0
+mouse_t2        .byt 0     ; scratch
+mouse_jmp       .byt 0     ; browser: the bar's walk to mouse_prow already took its first step
+mouse_ztimer    .byt 0     ; browser: frames to the next scroll step in the zone past the list
+mouse_fic       .byt 0     ; game info's input loop reads the pad now (gin_syncread)
+mouse_fidle     .byt 0     ; game info: frames since the mouse last did anything (hides it)
+mouse_fsetup    .byt 0     ; game info: OAM cleared + the pointer's tile in VRAM $5FF0
+mouse_fkey      .word 0    ; game info: pad bits of a click on the text (Y, a footer key)
+mouse_pal       .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; an OBJ palette 7 copy (mouse_pick_colours)
+mouse_spd       .byt 0     ; the sensitivity the mouse reports (0 slow, 1 normal, 2 fast)
+mouse_fmvrdy    .byt 0     ; game info: the next .fmv frame's pointer colours and tile are ready
+mouse_fsafe     .byt 0     ; game info waits for the NMI (gin_syncread): it may draw the pointer
+mouse_hold      .byt 0     ; this frame the right button, alone, has been held MOUSE_RHOLD frames
+mouse_lsel      .byt 0     ; list edge scroll: listsel_sel at its last step
+mouse_lzdone    .byt 0     ; list edge scroll: the list stopped moving (until the pointer leaves)
+mouse_lseen     .byt 0     ; a mouse was there at the last read (legends follow it)
+mouse_lkind     .byt 0     ; the list reading the pad: 0 menu, 1 favorites, 2 patches, 3 cheats
+mouse_bothsel   .byt 0     ; this screen's key for both buttons is Select (game info, cheats)
+mouse_bsel      .byt 0     ; ... as seen by this frame's read
+mouse_lhassel   .byt 0     ; the key legend being drawn has a Sel key (both buttons show there)
+mouse_byswap    .byt 0     ; the legend being drawn trades B and Y (the cheat keyboard)
+mouse_val       .byt 0     ; a value dialog reads the pad now: 1 key/value list, 2 number
+mouse_vseq      .byt 0     ; value dialog: where the next-value sequence is (0 idle)
+mouse_vsum      .word 0    ; value dialog: checksum of the value's row before a step
+mouse_lclick    .byt 0     ; frames left in which a list click may open a value dialog
+mouse_fpal      .byt 0     ; game info: pointer colours 0 not known yet, 2 known (written each
+                           ;   frame at mouse_cgo / mouse_cgb), 3 counting the cover, 4 free
+mouse_hpos      .word 0    ; game info: how far the count of the cover's pixels got
+mouse_hist      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; ... uses of CGRAM 128-143 (saturating)
+mouse_kbd       .byt 0     ; the cheat editor's keyboard reads the pad now
+mouse_ljdir     .byt 0     ; list jump scratch
+mouse_fsig      .byt 0     ; game info: the cover the colours were chosen for
+mouse_foam      .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  ; game
+                           ; info: OAM slots 64-72 (the arrow, then the two buttons' quarters)
+mouse_mchg      .byt 0     ; read_pad scratch: the mode changed this frame
+mouse_vars_end  .byt 0
+
 _END            .byt 0

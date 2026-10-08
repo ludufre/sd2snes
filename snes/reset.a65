@@ -10,7 +10,7 @@ NMI_ROUTINE:
   pha
   plb
   lda screen_dma_disable
-  bne nmi_skip_upload
+  bne nmi_no_upload
 ; A late NMI must not upload.  S-CPU version 1 (early consoles) can crash when a
 ; DMA ends right before HDMA runs, and the three transfers below take all of NTSC
 ; VBlank: started on line 225 they end on line 261 (measured), just short of the
@@ -32,6 +32,13 @@ NMI_ROUTINE:
   beq do_screen_dma
 nmi_skip_upload:
   jmp skip_screen_dma
+; fork: a screen that owns the PPU (game info...) gets no upload, but a mouse pointer the
+; browser left on screen still has to go (mouse.a65 checks for an on-time VBlank itself).
+nmi_no_upload:
+  lda @mouse_ptr_on
+  beq nmi_skip_upload
+  jsl @mouse_nmi_off
+  bra nmi_skip_upload
 do_screen_dma:
 ; CJK glyphs waiting for VRAM go up first, in place of this frame's tilemaps: the
 ; buffers may already point at them, so the tilemaps wait for a VBlank with none left.
@@ -39,19 +46,24 @@ do_screen_dma:
   beq +
   jsl @cjk_nmi
   jmp skip_screen_dma
-; rows 9..31: the HDMA scroll shows nothing below row 29, and rows 32..63 (each tilemap's
-; lower screen) hold the CJK BG2 cells (cjk.a65), which these uploads would overwrite
+; rows 9..29: the HDMA scroll shows nothing below row 29 (const.a65 hdma_bg*scroll_src:
+; line 223 + 15 = row 29), rows 30/31 are never seen, and rows 32..63 (each tilemap's lower
+; screen) hold the CJK BG2 cells (cjk.a65), which these uploads would overwrite. Leaving
+; rows 30/31 out pays for the mouse pointer's OAM write below.
 + ldx #BG1_TILE_BASE+32*9
   stx $2116
-  DMA7(#$01, #23*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF+64*9, #$18)
+  DMA7(#$01, #21*64, #^BG1_TILE_BUF, #!BG1_TILE_BUF+64*9, #$18)
 
   ldx #BG2_TILE_BASE+32*9
   stx $2116
-  DMA7(#$01, #23*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF+64*9, #$18)
+  DMA7(#$01, #21*64, #^BG2_TILE_BUF, #!BG2_TILE_BUF+64*9, #$18)
 
   ldx #BG2_TILE_BASE
   stx $2116
   DMA7(#$01, #64*9, #^BG2_TILE_BUF, #!BG2_TILE_BUF, #$18)
+  lda @mouse_ptr_on          ; fork: the SNES Mouse pointer (mouse.a65)
+  beq skip_screen_dma
+  jsl @mouse_nmi
 skip_screen_dma:
   lda bar_yl
   dec

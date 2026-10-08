@@ -1081,6 +1081,7 @@ ce_kbd_loop:
   lda isr_done
   beq ce_kbd_loop
   stz isr_done
+  jsl @mouse_kbdmode          ; the mouse points at the keys (mouse.a65)
   jsl @ui_call_pad
   lda pad_b
   beq +
@@ -1547,7 +1548,17 @@ ce_kbd_draw_hint:
   ldx #!ce_kbd_hint_aln
 + stx print_src
   jsr ce_print_centered
+  php
+  sep #$20 : .as
+  lda #$01                    ; the mouse: right click = Del, held = Cancel (mouse.a65)
+  sta @mouse_byswap
+  plp
   jsl @hint_keys
+  php
+  sep #$20 : .as
+  lda #$00
+  sta @mouse_byswap
+  plp
   rts
 
 ; ---- on the CODE keyboard only, show the two accepted formats with example

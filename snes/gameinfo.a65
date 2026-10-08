@@ -355,6 +355,7 @@ gin_nav_prev:
 ; $4218 serially with A (low byte) LAST, so reading at vblank start catches B but misses A.
 ; Then read_pad. .as/.xl in, returns whatever read_pad left.
 gin_syncread:
+  jsl @mouse_fichamode       ; fork: the NMI may draw the mouse pointer while we wait (mouse.a65)
 gsr_nmi:
   lda isr_done
   lsr

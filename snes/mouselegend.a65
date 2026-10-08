@@ -1,0 +1,255 @@
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include: re-declare $c1 after it.
+.link page $c1
+
+; ======================================================================
+;  The SNES Mouse in the key legends: the part of the mouse driver (mouse.a65, bank $C2)
+;  that hint_keys (manhost.a65) calls with jsr and that calls its cell helpers (gfk_cell,
+;  gfk_store) back, so it lives in $C1 with them. Plus the key tables both use.
+; ======================================================================
+
+; the one-letter keys, in key-number order
+mouse_keys:
+  .word $41, $42, $58, $59       ; A B X Y
+; their mouse glyphs as tile words (character * 2): first cells, then second cells
+; (fontedit.py MOUSE_GLYPHS: the held right button shares the right button's first cell)
+mouse_keypair:
+  .word 250*2, 252*2, 254*2, 252*2
+  .word 251*2, 253*2, 255*2, 176*2
+; per key number 1-5: the browser's pad flag (offset from pad_b, data.a65 order) ...
+mouse_keyflag:
+  .byt 8, 0, 9, 1, 2             ; pad_a pad_b pad_x pad_y pad_select
+; ... and the bit in a pad word (low byte, high byte)
+mouse_keyword:
+  .word $0080, $8000, $0040, $4000, $2000
+
+; mouse_legend_scan: hint_keys, before it walks a line ([X, the end on the stack)): where do
+; both buttons go on it? On Sel when the line has a Sel key and either no X key or it is game
+; info's footer (game info and the cheat lists take both buttons as Select: mouse_b_word);
+; else on X. mouse_lhassel holds the answer for the line and, for the input side of the
+; screens without a hook of their own, until the next legend. 16-bit A/X/Y in; X, Y kept.
+mouse_legend_scan:
+  .al : .xl
+  phx
+  lda #$0000
+  sta @mouse_tmp                 ; low: a Sel key, high: an X key
+mls_loop:
+  .al : .xl
+  txa
+  cmp $05, s                     ; the end column (hint_keys' push, under our X and return)
+  bcs mls_done
+  jsr gfk_cell
+  and #$03ff
+  lsr
+  cmp #$0053                     ; 'S' then 'e' (Sel / Select)
+  beq mls_s
+  cmp #$0058                     ; 'X' then ':'
+  bne mls_next
+  inx
+  jsr gfk_cell
+  dex
+  and #$03ff
+  lsr
+  cmp #$003a
+  bne mls_next
+  lda @mouse_tmp
+  ora #$0100
+  sta @mouse_tmp
+  bra mls_next
+mls_s:
+  .al : .xl
+  inx
+  jsr gfk_cell
+  dex
+  and #$03ff
+  lsr
+  cmp #$0065
+  bne mls_next
+  lda @mouse_tmp
+  ora #$0001
+  sta @mouse_tmp
+mls_next:
+  .al : .xl
+  inx
+  bra mls_loop
+mls_done:
+  .al : .xl
+  sep #$20 : .as
+  lda @mouse_tmp
+  beq mls_set                    ; no Sel: X (A = 0)
+  lda @mouse_tmp+1
+  bne mls_both
+  lda #$01                       ; Sel and no X: Sel
+  bra mls_set
+mls_both:
+  .as : .xl
+  lda @screen_dma_disable        ; both keys: Sel only on game info's footer
+  beq mls_set
+  lda #$01
+mls_set:
+  .as : .xl
+  sta @mouse_lhassel
+  rep #$20 : .al
+  plx
+  rts
+
+; mouse_key_cell: hint_keys (manhost.a65), about to paint a key [X, gfk_colon) green. With a
+; mouse in, the key and its ':' become the two-cell glyph of the mouse button that does the
+; same on this screen -- one-letter A/B/X/Y: left, right, both, right held; on a line with a
+; Sel key, Sel gets "both" (the rest of its word moves left over the cells it freed) and X
+; keeps its letter -- and gfk_colon moves to the glyph's end so only it goes green.
+; 16-bit A/X in; X, Y kept.
+#define gfk_colon_m     $F483BC    ; hint_keys' gfk_colon (manhost.a65)
+mouse_key_cell:
+  .al : .xl
+  lda @mouse_lseen
+  and #$00ff
+  bne mkc_mouse
+  rts
+mkc_mouse:
+  .al : .xl
+  txa
+  inc
+  cmp @gfk_colon_m
+  beq mkc_one
+  jmp mouse_key_sel              ; longer: maybe Sel
+mkc_one:
+  .al : .xl
+  jsr gfk_cell
+  and #$03ff
+  lsr                            ; the character
+  phx
+  ldx #$0000
+mkc_find:
+  .al : .xl
+  cmp @mouse_keys, x
+  beq mkc_hit
+  inx
+  inx
+  cpx #$0008
+  bcc mkc_find
+  plx
+  rts
+mkc_hit:
+  .al : .xl
+  cpx #$0004                     ; X on a line with Sel: both buttons are Sel there
+  bne mkc_glyph
+  lda @mouse_lhassel
+  and #$00ff
+  beq mkc_glyph
+  plx
+  rts
+mkc_glyph:
+  .al : .xl
+  lda @mouse_byswap              ; the cheat keyboard: B shows the held right button, Y the
+  and #$00ff                     ; click (mouse_kbd_word trades them)
+  beq mkc_pair
+  txa
+  bit #$0002                     ; B (2) or Y (6)
+  beq mkc_pair
+  eor #$0004
+  tax
+mkc_pair:
+  .al : .xl
+  lda @mouse_keypair+8, x
+  sta @mouse_lmin                ; (scratch)
+  lda @mouse_keypair, x          ; the two cells' tile words
+  plx
+  jsr mouse_put_glyph
+  rts
+
+; mouse_put_glyph: A = first cell's tile word, mouse_lmin = second's; written at X and X+1
+; (keeping each cell's priority bit), gfk_colon = X+2. X kept.
+mouse_put_glyph:
+  .al : .xl
+  sta @mouse_tmp
+  jsr gfk_cell
+  and #$2000
+  ora @mouse_tmp
+  jsr gfk_store
+  inx
+  jsr gfk_cell
+  and #$2000
+  ora @mouse_lmin
+  jsr gfk_store
+  inx
+  txa
+  sta @gfk_colon_m
+  dex
+  dex
+  rts
+
+; mouse_key_sel: a key of 2+ letters at X ("Sel", "Select"); on a line with Sel, it and its
+; ':' become the both-buttons glyph and the rest of the word shifts left. X kept.
+mouse_key_sel:
+  .al : .xl
+  lda @mouse_lhassel
+  and #$00ff
+  beq mks_out
+  jsr gfk_cell
+  and #$03ff
+  lsr
+  cmp #$0053                     ; 'S'
+  bne mks_out
+  ; shift the word left: cells [colon+1 ..) -> [X+2 ..) while not a space
+  phy
+  phx
+  lda @gfk_colon_m
+  inc
+  sta @mouse_vsum                ; (scratch: source column)
+  txa
+  inc
+  inc
+  tay                            ; destination column
+mks_shift:
+  .al : .xl
+  lda @mouse_vsum
+  tax
+  cpx #$0040
+  bcs mks_blank
+  jsr gfk_cell
+  pha
+  and #$03ff
+  lsr
+  cmp #$0020
+  beq mks_space
+  cmp #$0000
+  beq mks_space
+  tya
+  tax
+  pla
+  jsr gfk_store
+  iny
+  lda @mouse_vsum
+  inc
+  sta @mouse_vsum
+  bra mks_shift
+mks_space:
+  .al : .xl
+  pla
+mks_blank:
+  .al : .xl
+  ; blank what the word left behind: [Y, source)
+  tya
+  cmp @mouse_vsum
+  bcs mks_glyph
+  tax
+  jsr gfk_cell
+  and #$fc00
+  ora #$0040                     ; the space (character $20 * 2)
+  jsr gfk_store
+  iny
+  bra mks_blank
+mks_glyph:
+  .al : .xl
+  plx
+  ply
+  lda #255*2
+  sta @mouse_lmin
+  lda #254*2
+  jsr mouse_put_glyph
+mks_out:
+  .al : .xl
+  rts
+

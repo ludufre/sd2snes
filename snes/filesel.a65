@@ -130,6 +130,7 @@ filesel_updates:
   sta bar_xl
 ; get input
   jsr read_pad
+  jsl @mouse_browser  ; fork: the SNES Mouse pointer turns into these same flags (mouse.a65)
   lda pad_down
   bne key_down
   lda pad_up
@@ -2811,6 +2812,7 @@ favsel_loop:
   beq favsel_loop
   stz isr_done
   jsr printtime
+  jsl @mouse_listmode1       ; fork: the mouse points at the rows (mouse.a65)
   jsr read_pad
   lda listcover_active       ; Recent/Favorite cover-on-highlight
   beq +

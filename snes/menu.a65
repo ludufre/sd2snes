@@ -259,6 +259,7 @@ menu_select_loop1
   beq menu_select_loop1
   stz isr_done
   jsr printtime
+  jsl @mouse_listmode        ; fork: the mouse points at this list's rows (mouse.a65)
   jsr read_pad
   lda listcover_active       ; Recent/Favorite cover-on-highlight (no-op elsewhere)
   beq mslc_skip
@@ -2057,6 +2058,7 @@ menu_value_dialog_u8:
     sep #$20 : .as
     phb
 -     jsr waitblank
+      jsl @mouse_valuemode_num ; fork: a click sets the next value (mouse.a65)
       jsr read_pad
       jsr printtime
       lda @pad_up
@@ -2186,6 +2188,7 @@ menu_value_dialog_u16:
 ; adjust selection bar to highlight parameter area
       rep #$20 : .al
 -     jsr waitblank
+      jsl @mouse_valuemode_num ; fork: a click sets the next value (mouse.a65)
       jsr read_pad
       jsr printtime
       lda @pad_up
@@ -2332,6 +2335,7 @@ menu_value_dialog_kv8:
 menu_value_dialog_kv8_loop:
       phy
         jsr waitblank
+        jsl @mouse_valuemode_kv ; fork: a click sets the next value (mouse.a65)
         jsr read_pad
         jsr printtime
       ply
@@ -2343,6 +2347,8 @@ menu_value_dialog_kv8_loop:
       bne menu_value_dialog_kv8_set
       lda @pad_b
       bne menu_value_dialog_kv8_cancel
+      lda @pad_l                 ; fork: L = the first value (the mouse wraps with it)
+      bne menu_value_dialog_kv8_first
       bra menu_value_dialog_kv8_loop
 menu_value_dialog_kv8_up:
       ldx !$5, y
@@ -2364,6 +2370,10 @@ menu_value_dialog_kv8_down:
       dey
       dey
       dey
+      bra +
+menu_value_dialog_kv8_first:
+      jsr snd_fx_cursor
+      ldy w_preset_addr
       bra +
 menu_value_dialog_kv8_set:
       lda !$0, y

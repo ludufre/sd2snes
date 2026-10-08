@@ -15,6 +15,7 @@ Usage:
     python3 fontedit.py addgerman          Insert German chars (ä ö ß Ä Ö)
     python3 fontedit.py addtourglyphs      Insert the onboarding tour's glyphs (241-243)
     python3 fontedit.py addbrowsericons    Insert the browser's file-type icons
+    python3 fontedit.py addmouseglyphs     Insert the mouse-button glyphs (250-253)
     python3 fontedit.py fixcircumflex      Redraw the 8 circumflex tiles
     python3 fontedit.py addrussian         Insert Cyrillic (codes 177-223)
     python3 fontedit.py clearkatakana      Blank the leftover katakana (161-176)
@@ -728,6 +729,63 @@ def add_tour_glyphs():
         print(render_ascii(tile_to_pixels(new_tiles[code])))
 
 
+# The mouse's buttons, printed in place of a key and its ':' in the key legends while a SNES
+# Mouse is plugged in (hint_keys, manhost.a65): left click = A, right click = B, both = X,
+# right held = Y (snes/mouse.a65 maps them so everywhere). A mouse seen from above, two
+# cells (16 hi-res pixels; one cell is too narrow to tell the buttons apart), strokes two
+# pixels wide like the letters, the pressed button filled and the rest dark. No H flip: in
+# mode 5 a tilemap entry spans 16 pixels and flipping it moves the glyph onto its neighbour.
+# The held right button shares the right button's first cell; its second is slot 176.
+# Legend: '#' stroke (colour 1), 'o' dark (2), '.' transparent. Columns 14-15: the gap
+# before the label.
+def _mouse_art(left, right, body_right="oooo"):
+    lb, rb = left * 4, right * 4
+    return ["..##########....",
+            "##" + lb + "##" + rb + "##..",
+            "##" + lb + "##" + rb + "##..",
+            "##############..",
+            "##oooooo" + body_right + "##..",
+            "##oooooo" + body_right + "##..",
+            "..##########....",
+            "................"]
+
+
+def _mouse_cells(art):
+    px = [[{"#": 1, "o": 2}.get(ch, 0) for ch in row] for row in art]
+    return [r[:8] for r in px], [r[8:] for r in px]
+
+
+_ML = _mouse_cells(_mouse_art("#", "o"))
+_MR = _mouse_cells(_mouse_art("o", "#"))
+_MB = _mouse_cells(_mouse_art("#", "#"))
+_MH = _mouse_cells(_mouse_art("o", "#", "####"))
+# code -> (the char a screen reader decodes it as, the tile's pixels)
+MOUSE_GLYPHS = {
+    250: ("\u24c1", _ML[0]), 251: ("", _ML[1]),      # left click (A)
+    252: ("\u24c7", _MR[0]), 253: ("", _MR[1]),      # right click (B); held: 252 + 176
+    254: ("\u24b7", _MB[0]), 255: ("", _MB[1]),      # both (X)
+    176: ("\u24bd", _MH[1]),                         # right held (Y), after 252
+}
+
+
+def add_mouse_glyphs():
+    header, tiles = load_font()
+    new_tiles = dict(enumerate(tiles))  # code -> tile
+    for code, (_, px) in MOUSE_GLYPHS.items():
+        new_tiles[code] = pixels_to_tile(px)
+    out_lines = list(header)
+    total = max(len(tiles), max(new_tiles) + 1)
+    for code in range(total):
+        tile = new_tiles.get(code, [0] * 16)
+        label = "font" if code == 0 else None
+        out_lines.extend(encode_tile_lines(tile, label=label))
+    FONT.write_text("\n".join(out_lines) + "\n")
+    print(f"Updated {FONT}")
+    for code in MOUSE_GLYPHS:
+        print(f"  mouse glyph {code}:")
+        print(render_ascii(tile_to_pixels(new_tiles[code])))
+
+
 # The browser's file-type icons: two tiles each (16x8 hires pixels, about square on the
 # screen), drawn at 8 logical columns that are doubled horizontally (the font's own strokes
 # are 2 hires pixels wide). Row 7 stays empty like every glyph. The menu prints the pair
@@ -1300,6 +1358,8 @@ def main():
         add_tour_glyphs()
     elif cmd == "addbrowsericons":
         add_browser_icons()
+    elif cmd == "addmouseglyphs":
+        add_mouse_glyphs()
     elif cmd == "addprogressbar":
         add_progressbar()
     elif cmd == "export":

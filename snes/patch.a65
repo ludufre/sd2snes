@@ -644,6 +644,7 @@ psn_loop:
     beq psn_loop
     stz isr_done
     jsr printtime
+    jsl @mouse_listmode_pat     ; fork: the mouse points at the rows (mouse.a65)
     jsr read_pad
     lda pad_up
     bne psn_up

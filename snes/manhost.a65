@@ -311,6 +311,7 @@ hint_keys:
 	adc @gfk_colon
 	pha                                        ; ...end = print_x + print_done, on the stack
 	txy                                        ; Y = this word's first column
+	jsr mouse_legend_scan                      ; fork: does this line have a Sel key? (mouselegend.a65)
 	lda #$ffff
 	sta @gfk_colon
 gfk_loop:
@@ -358,6 +359,7 @@ gfk_paint:
 	beq gfk_p_out
 	phx
 	tyx
+	jsr mouse_key_cell                         ; fork: with a mouse in, keys -> its buttons (mouselegend.a65)
 gfk_p_loop:
 	.al : .xl
 	txa

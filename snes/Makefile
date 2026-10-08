@@ -9,7 +9,7 @@ IPS = header.ips
 # fonts/misaki_gothic_2nd.hex. The CJK languages (ja, zh: LAST on the command line) do not
 # go into the image: each column, with its glyphs, is a lang_<code>.bin that ships in
 # /sd2snes/lang/ and that the menu loads into WRAM when the language is selected.
-O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 const_lang_tab.o65 const_lang_cjk.o65 cjk.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 diricon.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 hookxlate.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 expwarn.o65 cheatmenu.o65 cheatedit.o65 iris.o65 bootintro.o65 onboarding/onboarding_gate.o65 # gfx.o65 # vars.o65
+O65 = reset.o65 main.o65 font.o65 palette.o65 data.o65 const_lang.o65 const_lang_str.o65 const_lang_tab.o65 const_lang_cjk.o65 cjk.o65 logo.o65 dma.o65 filesel.o65 cover.o65 gameinfo.o65 sfx.o65 pad.o65 time.o65 sysinfo.o65 sysinfo_render.o65 memtest.o65 pcmplay.o65 msufolder.o65 diricon.o65 spc700.o65 spcplay.o65 menu.o65 menudata.o65 contextdata.o65 ui.o65 nmihook.o65 hookxlate.o65 mouse.o65 mouselegend.o65 common.o65 savestate.o65 savestate_cx4.o65 cheatoverlay.o65 manhost.o65 near.o65 patch.o65 stdlg.o65 ghlaunch.o65 expwarn.o65 cheatmenu.o65 cheatedit.o65 iris.o65 bootintro.o65 onboarding/onboarding_gate.o65 # gfx.o65 # vars.o65
 
 OBJS = $(IPS) $(O65)
 # stopgap measure to create both files as long as they are identical...
