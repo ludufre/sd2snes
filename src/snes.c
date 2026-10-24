@@ -508,7 +508,8 @@ uint8_t snes_main_loop() {
  * would re-wrap the last buffer audibly.  Both are no-ops when nothing is playing,
  * which is always the case outside an MSU-1 game.
  */
-uint8_t game_cmd_serve(uint8_t cmd) {
+/* noinline: ovl/ovlreach.py checks the overlay rules from this function as a root */
+uint8_t __attribute__((noinline)) game_cmd_serve(uint8_t cmd) {
   switch(cmd) {
     case SNES_CMD_SAVESTATE:
       msu_dac_hold();
@@ -746,11 +747,21 @@ static void vsnes_bootprint(int line, int center, void *fmt, va_list arglist) {
   if(!snes_boot_configured) {
     fpga_rompgm();
     snes_reset(1);
+#ifdef CONFIG_MK2
+    /* the program is a card file on this board (load_bootrle): without it, or without
+       fpga_mini, the SNES stays in reset -- it would run whatever the PSRAM holds -- and
+       the LED siren tells why (led_error) */
+    if(!load_bootrle(SRAM_MENU_ADDR) && !fpga_boot_led) fpga_boot_led = 2;
+#else
     load_bootrle(SRAM_MENU_ADDR);
+#endif
     sram_memset(SRAM_CMD_ADDR, SNES_BOOTPRINT_MAX_LINES*33, 0);
     set_saveram_mask(0x1fff);
     set_rom_mask(0x3fffff);
     set_mapper(0x7);
+#ifdef CONFIG_MK2
+    if(!fpga_boot_led)
+#endif
     snes_reset(0);
     snes_boot_configured = 1;
     sleep_ms(200);

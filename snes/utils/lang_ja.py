@@ -292,6 +292,8 @@ TRANSLATIONS = {
     'text_err_noimpl': '未対応のチップ:',
     'text_err_nohw': 'Mk.IIIが必要です:',
     'text_err_generic': '読み込みエラー:',
+    'text_ovl_build': 'ファームウェアと共に更新:',
+    'text_ovl_sysinfo': 'ovl1 が無いか互換性がありません',
     'text_exp_title': '*試験的*なコア',
     'text_exp_l1': 'このコアはまだ開発中です:',
     'text_exp_l2': '- 動作が遅かったり、音や画面が',

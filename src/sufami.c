@@ -57,7 +57,7 @@ static int slotb_sidecar_name(char *buf, int buflen, const uint8_t *rom_path) {
   return path_asset(buf, buflen, SAVE_BASEDIR, (const char*)rom_path, ".stb");
 }
 
-static void slotb_sidecar_load(const uint8_t *rom_path) {
+void slotb_sidecar_load(const uint8_t *rom_path) {
   char sc[256];
   UINT br = 0;
   sufami_slotb_path[0] = 0;
@@ -99,98 +99,6 @@ void sufami_slotb_empty(void) {
      ROM mask at 0 every Slot B read collapses onto this byte range, so blanking it
      is what makes the slot read as empty rather than as a corrupt cart. */
   sram_memset(SUFAMI_SLOTB_ROM_ADDR, 0x40, 0x00);
-}
-
-void sufami_query_slotb(const uint8_t *rom_path) {
-  const char *path = (const char *)rom_path;
-  const char *last_slash = NULL, *leaf;
-  char dirpath[256], entry[IPS_PATH_LEN];
-  DIR dir;
-  FILINFO fno;
-  uint8_t count = 0, preselect = 0;
-  size_t dirlen = 0;
-
-  sram_writebyte(0, SRAM_IPS_LIST_ADDR);
-  sram_writebyte(IPS_DLGMODE_PATCH, SRAM_IPS_LIST_ADDR + IPS_DLGMODE_OFFSET);
-  if(!path_is_st(path)) return;
-
-  /* The pair remembered for THIS Slot A cart decides where the dialog opens. */
-  slotb_sidecar_load(rom_path);
-
-  for(const char *p = path; *p; p++) if(*p == '/') last_slash = p;
-  leaf = last_slash ? last_slash + 1 : path;
-  if(last_slash && last_slash != path) {
-    dirlen = (size_t)(last_slash - path);
-    if(dirlen >= sizeof(dirpath)) dirlen = sizeof(dirpath) - 1;
-    memcpy(dirpath, path, dirlen);
-    dirpath[dirlen] = 0;
-  } else {
-    dirpath[0] = '/';
-    dirpath[1] = 0;
-  }
-
-  /* Same caution as patch_scan_dir: f_readdir writes through fno.lfname into the
-     global file_lfn, so `path` must be a buffer of the caller's own. */
-  fno.lfsize = 255;
-  fno.lfname = (TCHAR *)file_lfn;
-  if(f_opendir(&dir, dirpath) != FR_OK) {
-    DBG_SUFAMI printf("sufami_query_slotb: opendir(%s) failed\n", dirpath);
-    return;
-  }
-
-  for(;;) {
-    const char *fn;
-    size_t n;
-    if(f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
-    if(fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
-    fn = fno.lfname[0] ? fno.lfname : fno.fname;
-    if(fn[0] == '.') continue;
-    if(!path_is_st(fn)) continue;
-    /* The Slot A cart itself is not a candidate: a real Sufami Turbo has two
-       physical slots, and the same cartridge cannot be in both. */
-    if(!strcasecmp(fn, leaf)) continue;
-    if(count >= IPS_MAX_PATCHES) break;
-
-    n = strlen(fn);
-    if(dirlen + 1 + n >= IPS_PATH_LEN) {
-      DBG_SUFAMI printf("sufami_query_slotb: name too long, skipping %s\n", fn);
-      continue;
-    }
-    memcpy(entry, dirpath, dirlen);
-    entry[dirlen] = '/';
-    memcpy(entry + dirlen + 1, fn, n + 1);
-    if(sufami_slotb_path[0] && !strcasecmp(entry, sufami_slotb_path)) preselect = count + 1;
-    sram_writeblock(entry, SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE
-                           + (uint32_t)count * IPS_PATH_LEN, dirlen + 1 + n + 1);
-
-    /* Display slot.  A patch entry reserves IPS_NAME_BADGE.. for the IPS/BPS badge,
-       but every entry in THIS list is a minicart, so the badge would say nothing --
-       the dialog skips that column for Slot B (dlg_badge) and the name gets the whole
-       slot, IPS_NAME_LEN-1 characters instead of IPS_NAME_BADGE-1.
-       The ".st" is dropped too: it is the same on every row, and those three columns
-       are worth more to a No-Intro filename than to an extension nobody is comparing. */
-    {
-      size_t shown = n;
-      if(shown > 3 && !strcasecmp(fn + shown - 3, ".st")) shown -= 3;
-      if(shown > IPS_NAME_LEN - 1) shown = IPS_NAME_LEN - 1;
-      memset(entry, 0, IPS_NAME_LEN);
-      memcpy(entry, fn, shown);
-    }
-    sram_writeblock(entry, SRAM_IPS_TEXT_ADDR + IPS_NAME_BASE
-                           + (uint32_t)count * IPS_NAME_LEN, IPS_NAME_LEN);
-    /* PATCH_TYPE_BPS, deliberately: it is the type the dialog draws NO header-mode
-       marker for (a .bps has no header convention), which is what a cart entry
-       needs -- and the Y context menu is switched off for this list anyway. */
-    sram_writebyte(PATCH_TYPE_BPS, SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE + count);
-    count++;
-  }
-  f_closedir(&dir);
-
-  sram_writebyte(count, SRAM_IPS_LIST_ADDR);
-  sram_writebyte(IPS_DLGMODE_SLOTB, SRAM_IPS_LIST_ADDR + IPS_DLGMODE_OFFSET);
-  /* The dialog opens on listsel_sel 0 ("no cart"); a remembered pair is reported
-     so a future revision can pre-select it. */
-  DBG_SUFAMI printf("Sufami Slot B candidates: %d (remembered #%d)\n", count, preselect);
 }
 
 void sufami_stage_slotb_rom(void) {

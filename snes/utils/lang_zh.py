@@ -292,6 +292,8 @@ TRANSLATIONS = {
     'text_err_noimpl': '不支持此芯片:',
     'text_err_nohw': '需要Mk.III硬件:',
     'text_err_generic': '载入错误:',
+    'text_ovl_build': '请与固件一同更新:',
+    'text_ovl_sysinfo': 'ovl1 缺失或不兼容',
     'text_exp_title': '*实验性*核心',
     'text_exp_l1': '此核心仍在开发中：',
     'text_exp_l2': '- 可能运行缓慢，并出现声音和',

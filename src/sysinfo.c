@@ -24,23 +24,29 @@ extern cfg_t CFG;
 
 static uint32_t sd_tacc_max, sd_tacc_avg;
 
+/* the measured SNES master clock count (this screen is its only reader) */
+uint32_t get_snes_sysclk() {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(FPGA_CMD_GETSYSCLK);
+  FPGA_TX_BYTE(0x00); /* dummy (copy current sysclk count to register) */
+  uint32_t result = (FPGA_RX_BYTE()) << 24;
+  result |= (FPGA_RX_BYTE()) << 16;
+  result |= (FPGA_RX_BYTE()) << 8;
+  result |= (FPGA_RX_BYTE());
+  FPGA_DESELECT();
+  return result;
+}
+
 static int write_sysinfo(int sd_measured);
 static void write_sysinfo_legacy(void);
 
-/* noinline: under LTO this is inlined into its single caller and its path buffer
-   would sit in that caller's frame for the whole menu loop, under every call chain. */
-void __attribute__((noinline)) sysinfo_loop() {
+/* The screen's setup (sysinfo_loop runs the screen, see sysloop.c).  Returns 1 when the
+   menu reads the binary sysinfo_blk_t, 0 for an older one (handed the legacy line here). */
+int sysinfo_open(void) {
   uint8_t caps[4];
   int v2;
   sd_tacc_max = 0;
   sd_tacc_avg = 0;
-  int sd_measured = 0;
-  echo_mcu_cmd();
-  /* sysinfo measures raw SD access times, which races a playing effect's
-     sd_offload streaming (the DAC then loops stale buffer content - a stuck
-     tone for the whole measurement). Cut any effect cleanly on entry; the
-     screen has no sounds of its own. */
-  menu_sfx_stop();
   /* Which screen is on the other side? A menu that carries the capability marker reads the
      binary sysinfo_blk_t; anything older still expects 13 formatted text lines it cannot get
      any more. Probed once here, not per pass: the menu image cannot change while the screen
@@ -51,14 +57,12 @@ void __attribute__((noinline)) sysinfo_loop() {
   if(!v2) {
     write_sysinfo_legacy();
   }
-  while(snes_get_mcu_cmd() == SNES_CMD_SYSINFO) {
-    if(v2) {
-      sd_measured = write_sysinfo(sd_measured);
-    }
-    delay_ms(100);
-    usbint_handler();
-  }
-  echo_mcu_cmd();
+  return v2;
+}
+
+/* One pass of the screen (every 100 ms): refresh the block */
+int sysinfo_pass(int sd_measured) {
+  return write_sysinfo(sd_measured);
 }
 
 /* Firmware newer than the menu: the old screen renders 13 fixed 40-char lines straight out of

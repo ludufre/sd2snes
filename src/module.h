@@ -170,6 +170,7 @@ int  module_open(uint8_t id, const char *path);   /* start()'s answer, or MODULE
 int  module_session(uint8_t id, const char *path);/* the same, for a module that lives with the game */
 void module_drop(void);                           /* stop and forget whatever is open */
 void module_ctl(uint32_t param);
+int  module_live(void);                           /* a module is started (its code may be running) */
 void module_gate(uint8_t cmd);                    /* before every menu command */
 int  module_idle(void);                           /* once per menu- or game-loop pass; 1 = the
                                                      module asked to be called again at once */

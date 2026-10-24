@@ -297,6 +297,8 @@ TRANSLATIONS = {
     'text_err_noimpl': 'Puce non prise en charge :',
     'text_err_nohw': 'Matériel Mk.III requis :',
     'text_err_generic': 'Erreur de chargement :',
+    'text_ovl_build': 'Copier avec le firmware :',
+    'text_ovl_sysinfo': 'ovl1 absent ou incompatible',
     'text_exp_title': 'Core *expérimental*',
     'text_exp_l1': 'Il est encore en développement :',
     'text_exp_l2': '- lenteurs possibles, défauts de son',

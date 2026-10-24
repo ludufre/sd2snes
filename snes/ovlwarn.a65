@@ -1,0 +1,82 @@
+; ===========================================================================
+; ovl_warn: the card-overlay popup. jsl from the coldboot (snes/main.a65), with the browser
+; on the screen, right before the first-boot tour gate.
+;
+; The firmware keeps part of the menu's code on the card (/sd2snes/ovl1.<img|im3|stm>: themes,
+; covers, System Information, patch sidecars, protected bootlegs, the menu's .spc) and only
+; runs it when the file comes from the same build as the firmware. At every menu load it
+; writes OVL_STATUS (src/main.c): 0 = loaded, MENU_ERR_SUPPLFILE = the file is missing,
+; MENU_ERR_OVL = it is there but refused (corrupt, or left by another firmware: an update of
+; the firmware file alone), with the file name in OVL_NAME. Without the file those features just go quiet, so say it, once:
+; the byte is zeroed here, and the warm resets of the menu (music, players, the launch wipe)
+; come back through this same coldboot without repeating it.
+;
+; The popup is show_error_msg's (filesel.a65): line 1 = the template of the code, line 2 =
+; the file name, copied to MCU_ERR_MSG. MENU_ERR_OVL's line 1 lives in bank $C3's string pool
+; (ovlwtext.a65), reached through fm_bank_ok like the rest of $C3; without the bank the
+; generic "load error" line is shown instead.
+; ===========================================================================
+
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it.
+.link page $c1
+
+ovl_warn:
+  php
+  sep #$20 : .as
+  lda @OVL_STATUS
+  beq ow_none
+  rep #$20 : .al            ; and the name the firmware wrote with it: a firmware without this
+  lda @OVL_NAME             ; check never writes either byte, and this region survives resets,
+  cmp #$766f                ; so a nonzero status alone proves nothing ("ov")
+  bne ow_none
+  lda @OVL_NAME+2
+  and #$f0ff                ; "l" + a digit: ovl1, ovl2, ...
+  cmp #$306c
+  beq ow_go
+ow_none:
+  plp
+  rtl
+ow_go:
+  .al
+  sep #$20 : .as
+  phb
+  phd
+  rep #$10 : .xl
+  pea $0000
+  pld
+  lda @OVL_STATUS
+  pha                       ; the code
+  lda #$7e
+  pha
+  plb
+  lda #$00
+  sta @OVL_STATUS           ; once per menu load
+  ldx #$0000
+ow_name:
+  .as : .xl
+  lda @OVL_NAME, x
+  sta @MCU_ERR_MSG, x
+  inx
+  cpx #OVL_NAME_LEN
+  bne ow_name
+  pla
+  sta @MCU_ERR_CODE
+  cmp #MENU_ERR_OVL
+  bne ow_show
+  jsl @fm_bank_ok
+  bcs ow_text
+  lda #$01                  ; MENU_ERR_FS: show_error_msg's generic line
+  sta @MCU_ERR_CODE
+  bra ow_show
+ow_text:
+  .as : .xl
+  jsl @ovl_warn_text
+ow_show:
+  .as : .xl
+  jsl @ui_call_errmsg
+  pld
+  plb
+  plp
+  rtl

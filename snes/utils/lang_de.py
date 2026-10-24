@@ -301,6 +301,8 @@ TRANSLATIONS = {
     'text_err_noimpl': 'Nicht unterstuetzt:',
     'text_err_nohw': 'Nur mit Mk.III-Hardware:',
     'text_err_generic': 'Ladefehler:',
+    'text_ovl_build': 'Mit der Firmware updaten:',
+    'text_ovl_sysinfo': 'ovl1 fehlt oder passt nicht',
     'text_exp_title': '*Experimenteller* Kern',
     'text_exp_l1': 'Er ist noch in Entwicklung:',
     'text_exp_l2': '- es kann langsam laufen, mit Ton- und',

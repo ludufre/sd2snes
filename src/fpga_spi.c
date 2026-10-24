@@ -450,18 +450,6 @@ uint32_t get_msu_offset() {
   return result;
 }
 
-uint32_t get_snes_sysclk() {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_GETSYSCLK);
-  FPGA_TX_BYTE(0x00); /* dummy (copy current sysclk count to register) */
-  uint32_t result = (FPGA_RX_BYTE()) << 24;
-  result |= (FPGA_RX_BYTE()) << 16;
-  result |= (FPGA_RX_BYTE()) << 8;
-  result |= (FPGA_RX_BYTE());
-  FPGA_DESELECT();
-  return result;
-}
-
 void set_bsx_regs(uint8_t set, uint8_t reset) {
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_BSXSETBITS);

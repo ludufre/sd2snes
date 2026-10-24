@@ -35,6 +35,7 @@
 #define SYSINFO_FLAG_CLK_MEASURING   (0x08)  /* SNES master clock not sampled yet; snes_clk_hz is zero */
 #define SYSINFO_FLAG_U16             (0x10)  /* an Ultra16 was detected; u16_serial is valid */
 #define SYSINFO_FLAG_U16_AUTOBOOT    (0x20)  /* Ultra16 autoboot is on (only meaningful with SYSINFO_FLAG_U16) */
+#define SYSINFO_FLAG_NOOVL           (0x80)  /* card overlay 1 missing or from another build: the block code did not run and every other field is zero (ovl_stub.c); the menu prints one line saying so */
 
 /* Canonical SGB BIOS state, ordered by severity so the menu can index its word table
    directly. Deliberately NOT the SGB_BIOS_* order of sgb.h (CHECK=0 OK=1 MISMATCH=2
@@ -83,6 +84,8 @@ _Static_assert(sizeof(sysinfo_blk_t) == 128, "sysinfo_blk_t must stay 128 bytes 
 /* the block replaces the 13x40 text layout in place, so it can never outgrow it */
 _Static_assert(sizeof(sysinfo_blk_t) <= 13 * 40, "sysinfo_blk_t must fit the old 13-line text region");
 
-void sysinfo_loop(void);
+void sysinfo_loop(void);              /* sysloop.c: the System Information screen */
+int  sysinfo_open(void);              /* 1 = the menu reads sysinfo_blk_t */
+int  sysinfo_pass(int sd_measured);   /* refresh the block; returns the new sd_measured */
 
 #endif

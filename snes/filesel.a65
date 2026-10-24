@@ -2087,6 +2087,8 @@ show_error_msg:
   beq show_error_tpl_noimpl
   cmp #MENU_ERR_NOHW
   beq show_error_tpl_nohw
+  cmp #MENU_ERR_OVL
+  beq show_error_tpl_ovl
   rep #$20 : .al
   lda #!text_err_generic
   sta print_src
@@ -2116,6 +2118,15 @@ show_error_tpl_nohw:
   sta print_src
   sep #$20 : .as
   lda #^text_err_nohw
+  sta print_bank
+  bra show_error_tpl_done
+show_error_tpl_ovl:       ; the card-overlay popup: line 1 already resolved into MCU_ERR_TPL
+  .as                     ; (snes/ovlwarn.a65, from bank $C3's string pool)
+  rep #$20 : .al
+  lda #!MCU_ERR_TPL
+  sta print_src
+  sep #$20 : .as
+  lda #^MCU_ERR_TPL
   sta print_bank
 show_error_tpl_done:
   lda print_bank          ; resolve language + measure to center (as show_empty_msg)

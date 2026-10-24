@@ -45,6 +45,7 @@
 #include "cfgware.h"   /* generated: fpga_mini.bi3 re-packed as ZX0 (Makefile) */
 #include "zx0.h"
 #include "module.h"
+#include "ovl.h"
 /* The ZX0 window is the READDIR sort cache (8 KB): fpga_rompgm only runs for the boot
    diagnostics, before any menu exists, and module_gate() takes it back from a module first. */
 extern uint32_t ptrcache[QSORT_MAXELEM];
@@ -216,6 +217,7 @@ void fpga_rompgm() {
     uart_putc('p');
 
     module_gate(0);                 /* ptrcache is the ZX0 window */
+    ovl_forget();
     FPGA_DIN_MASK();
     zx0_stream(cfgware, (uint8_t *)ptrcache, 8191, rompgm_out);
     FPGA_DIN_UNMASK();

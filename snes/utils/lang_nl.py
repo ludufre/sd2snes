@@ -290,6 +290,8 @@ TRANSLATIONS = {
     'text_err_noimpl': 'Chip niet ondersteund:',
     'text_err_nohw': 'Vereist Mk.III hardware:',
     'text_err_generic': 'Laadfout:',
+    'text_ovl_build': 'Bijwerken met de firmware:',
+    'text_ovl_sysinfo': 'ovl1 ontbreekt of past niet',
     'text_exp_title': '*Experimentele* core',
     'text_exp_l1': 'Deze is nog in ontwikkeling:',
     'text_exp_l2': '- kan traag zijn, met geluids- en',

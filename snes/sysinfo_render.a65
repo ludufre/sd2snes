@@ -87,8 +87,29 @@ si_render_all:
   stz si_nomagic
   lda @SYSINFO_BLK+SI2_FLAGS
   sta si_flags
+  bmi si_ra_noovl           ; SI2_F_NOOVL is bit 7
   jsr si_draw_block
   bra si_ra_out
+si_ra_noovl:
+  ; One line, from bank $C3's pool (text_ovl_*).  A guide page may have borrowed that
+  ; bank: without its magic, the firmware line.  Not fm_bank_ok -- its restage is an MCU
+  ; command, and the MCU stays in this screen's own loop until the menu leaves it.
+  .as
+  rep #$20 : .al
+  lda @FM_BANK_MAGIC
+  cmp #$4d46                ; "FM"
+  bne si_ra_nobank
+  lda @FM_BANK_MAGIC+2
+  cmp #$3142                ; "B1"
+  bne si_ra_nobank
+  sep #$20 : .as
+  jsl @ovl_si_text          ; print_src/print_bank = the line (si_line passes it through)
+  lda print_bank
+  ldx print_src
+  bra si_ra_msg
+si_ra_nobank:
+  sep #$20 : .as
+  bra si_ra_oldfw
 si_ra_nomagic:
   ; The block only appears after the first command round trip, so stay blank for a
   ; moment before concluding that the firmware is too old to publish it at all.
@@ -99,6 +120,11 @@ si_ra_nomagic:
   jsr si_draw_empty
   bra si_ra_out
 si_ra_oldfw:
+  .as : .xl
+  lda #^text_si_updatefw
+  ldx #!text_si_updatefw
+si_ra_msg:
+  .as : .xl
   jsr si_draw_oldfw
 si_ra_out:
   ; longptr first (it is direct-page, so DP must still be 0 and DB still $7E here),
@@ -292,14 +318,17 @@ si_de_loop:
   rts
 
 ; ----------------------------------------------------------------------
-;  si_draw_oldfw -- same, but row 4 says the firmware is too old to feed
-;  this screen.  That line is localized, which is the whole point of the
+;  si_draw_oldfw -- same, but row 4 holds one message: A (bank) / X the line
+;  for si_line -- the firmware is too old to feed this screen, or ovl1 is not
+;  on the card.  That line is localized, which is the whole point of the
 ;  grace period: the message only makes sense once we are sure.
 ; ----------------------------------------------------------------------
 si_draw_oldfw:
   php
   sep #$20 : .as
   rep #$10 : .xl
+  phx
+  pha
   stz si_row
 si_do_loop:
   lda si_row
@@ -308,10 +337,15 @@ si_do_loop:
   jsr si_blank
   bra si_do_flush
 si_do_msg:
-  lda #^text_si_updatefw
-  ldx #!text_si_updatefw
+  .as : .xl
+  rep #$20 : .al
+  lda 2,s                   ; the line's address (pushed first)
+  tax
+  sep #$20 : .as
+  lda 1,s                   ; its bank
   jsr si_line
 si_do_flush:
+  .as : .xl
   jsr si_flush
   lda si_row
   cmp #$0c
@@ -320,6 +354,8 @@ si_do_flush:
   sta si_row
   jsr si_blank
   jsr si_flush
+  pla
+  plx
   plp
   .as : .xl
   rts

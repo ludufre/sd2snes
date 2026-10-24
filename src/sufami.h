@@ -74,6 +74,8 @@ void     sufami_stage_slotb_rom(void);
    .st never carries a patch, so the two never both apply.
    `rom_path` must NOT be file_lfn -- f_readdir overwrites that buffer. */
 void     sufami_query_slotb(const uint8_t *rom_path);
+/* the A+B pair remembered for a Slot A cart -> sufami_slotb_path ("" = none) */
+void     slotb_sidecar_load(const uint8_t *rom_path);
 
 /* Seed the CRC baseline right after the Slot B .srm has been staged, so an
    untouched cart is never rewritten.  Safe to call with no Slot B. */

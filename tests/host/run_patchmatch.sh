@@ -11,7 +11,8 @@ CC="${CC:-cc}"
 . ./sanitizers.sh   # ASAN_OPTIONS/UBSAN_OPTIONS + san_report(); see the file
 mkdir -p build
 
-SRC=../../src/patch.c
+SRC=../../src/patchui.c     # the patch dialog (menu side)
+SRC_EXT=../../src/patch.c   # patch_ext_type: the loader uses it too
 OUT=build/patchmatch_under_test.c
 
 # patch_belongs_to_rom leans on both of these, so all three come along.
@@ -20,13 +21,13 @@ OUT=build/patchmatch_under_test.c
   # Keep the type constants in lockstep with the header instead of restating them.
   grep -E '^#define PATCH_TYPE_(IPS|BPS)[[:space:]]' ../../src/patch.h
   awk '/^static int istartswith/{p=1} p; /^}/{if(p) exit}'      "$SRC"
-  awk '/^int patch_ext_type/{p=1} p; /^}/{if(p) exit}'          "$SRC"
+  awk '/^int patch_ext_type/{p=1} p; /^}/{if(p) exit}'          "$SRC_EXT"
   awk '/^int patch_belongs_to_rom/{p=1} p; /^}/{if(p) exit}'    "$SRC"
 } > "$OUT"
 
 for fn in istartswith patch_ext_type patch_belongs_to_rom; do
   if ! grep -q "$fn" "$OUT"; then
-    echo "!! extraction failed -- did $fn move or get renamed in patch.c?" >&2
+    echo "!! extraction failed -- did $fn move or get renamed in patchui.c/patch.c?" >&2
     exit 1
   fi
 done

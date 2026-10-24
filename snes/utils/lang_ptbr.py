@@ -297,6 +297,8 @@ TRANSLATIONS = {
     'text_err_noimpl': 'Chip não suportado:',
     'text_err_nohw': 'Requer hardware Mk.III:',
     'text_err_generic': 'Erro ao carregar:',
+    'text_ovl_build': 'Atualize com a firmware:',
+    'text_ovl_sysinfo': 'ovl1 ausente ou incompatível',
     'text_exp_title': 'Núcleo *experimental*',
     'text_exp_l1': 'Ele ainda está em desenvolvimento:',
     'text_exp_l2': '- pode haver lentidão, falhas no som',

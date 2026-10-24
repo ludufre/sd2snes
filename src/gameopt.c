@@ -359,7 +359,9 @@ void gameopt_restore(void) {
   go_active = 0;
 }
 
-void gameopt_apply(const char *src) {
+/* noinline: called once, from load_rom; inlined, its path buffer and file image would
+   sit in load_rom's frame under every phase of the load */
+void __attribute__((noinline)) gameopt_apply(const char *src) {
   gameopt_file_t f;
   char path[256];
   gameopt_restore();

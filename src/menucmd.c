@@ -29,6 +29,7 @@
 #include "menucmd.h"
 #include "fileman.h"
 #include "gameopt.h"
+#include "ovl.h"      /* a patched list launch needs ovl2 (menucmd_launch_rom) */
 #include "util.h"
 #include "timer.h"    /* getticks: seed for the random menu-music draw */
 #include "rtc.h"      /* get_bcdtime: mixed into that seed when the RTC is valid */
@@ -54,52 +55,6 @@ void revalidate_game_lists(void) {
   cfg_validity_check_listed_games(FAVORITES_FILE);
   STM.num_favorite_games = cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
   status_load_to_menu();
-}
-
-/* Patch-aware Recents/Favorites: a list entry may be "<rom>\t<patch_basename>".
-   Given such a raw entry, recover the patch, stage it where load_rom() expects
-   it and arm ips_pending_index so the relaunch re-applies the patch (reusing the
-   same path as a normal LOADROM after ips_find_patches).  `entry` is truncated to
-   the bare base ROM path on return (ready to hand to load_rom).  A patch deleted
-   since launch degrades to a clean vanilla boot instead of failing. */
-static void stage_patch_from_entry(char *entry) {
-  char patchpath[256];
-  const char *pbase;
-  ips_pending_index = 0;
-  current_ips_srm_source[0] = '\0';
-  current_ips_flags = 0;
-  if(!cfg_parse_patch_entry(entry, patchpath, sizeof(patchpath))) {
-    return; /* no patch tag -> plain base ROM */
-  }
-  FILINFO fno;
-  fno.lfname = NULL;
-  if(f_stat((TCHAR*)patchpath, &fno) != FR_OK) {
-    printf("stage_patch: patch gone (%s) -> vanilla\n", patchpath);
-    return; /* patch deleted -> boot base vanilla */
-  }
-  /* A path that does not fit the staging slot would be truncated and then opened
-     as some OTHER file, so refuse it the same way the directory scan does. */
-  if(strlen(patchpath) >= IPS_PATH_LEN) {
-    printf("stage_patch: path too long (%s) -> vanilla\n", patchpath);
-    return;
-  }
-  strlcpy_nul((char*)current_ips_srm_source, patchpath, sizeof(current_ips_srm_source));
-  /* Stage the patch path where patch_apply()/bps_probe_header() read it, exactly
-     as ips_find_patches() would have for a normal LOADROM (slot index 1).  No
-     directory scan runs on this path, so drop whatever scan was live: its scratch
-     describes some other ROM, and CMD_PATCH_META_SAVE reads basenames from it. */
-  ips_scan_count = 0;
-  sram_writeblock(current_ips_srm_source, SRAM_IPS_TEXT_ADDR + IPS_PATH_BASE,
-                  (uint16_t)(strlen((char*)current_ips_srm_source) + 1));
-  /* No directory scan happens on this path, so the header-mode override has to
-     come straight from the sidecar -- `entry` is the base ROM path by now, which
-     is exactly the key the sidecar is filed under. */
-  pbase = path_leaf(patchpath);
-  current_ips_flags = patchmeta_flags_for((const uint8_t*)entry, pbase,
-                                          patch_ext_type(pbase) == PATCH_TYPE_BPS
-                                            ? PATCH_TYPE_BPS : PATCH_TYPE_IPS);
-  sram_writebyte(current_ips_flags, SRAM_IPS_LIST_ADDR + IPS_FLAGS_BASE);
-  ips_pending_index = 1;
 }
 
 /* Resolve the Recents/Favorites entry at the index in MCU_PARAM (low byte) to
@@ -420,6 +375,9 @@ static uint8_t patch_export_command(uint8_t xidx) {
       rom_export_active = 1;   /* keep the SNES in reset across the dump */
       rom_bytes = load_rom(file_lfn, SRAM_ROM_ADDR, LOADROM_WITH_RESET);
       rom_export_active = 0;
+      /* A game's session module (the SPC7110 RTC) holds the block the export's card
+         overlay loads into: stop it now, as the menu reload that follows would. */
+      module_drop();
 
       /* load_rom boots on through a failed patch by design; the export must not.
          Writing the .sfc from an unpatched (or half-patched) image hands the user a
@@ -452,37 +410,6 @@ static uint8_t patch_export_command(uint8_t xidx) {
   current_ips_srm_source[0] = '\0';
   current_ips_flags = 0;
   return result;
-}
-
-/* SNES_CMD_QUERY_IPS_PATCHES: list the patches (or, for a .st, the Slot B carts) that
-   go with the selected ROM.  Its own function so the 256-byte path below never lands in
-   menucmd_dispatch's frame.
-   Under -flto this is a tempting inline target, and LTO answers by pulling
-   ips_find_patches AND patch_scan_dir in -- merging the scan's frame with qpath and
-   keeping both live under patch_publish, the nesting patch.c's "three SIBLING frames"
-   note warns about.  patch_scan_dir wants noinline for the same reason patch_publish
-   has it; until then this is the deepest path in the file. */
-static NO_INLINE void query_ips_patches(void) {
-  /* MUST be its own buffer, never file_lfn: patch_scan_dir points the
-     FatFs long-name buffer AT file_lfn (fno.lfname), so the first
-     f_readdir would overwrite the ROM path we are scanning for -- the
-     stem stops matching, the scan returns 0 patches, and the dialog
-     silently never opens.  patch_publish/patchmeta_apply read the same
-     pointer afterwards and would key the sidecar off whatever directory
-     entry happened to be read last. */
-  uint8_t qpath[256];
-  get_selected_name(qpath);
-  current_ips_srm_source[0] = '\0';
-  current_ips_flags = 0;
-  /* A Sufami Turbo minicart takes over this query: the very same dialog
-     picks its Slot B companion cart, so the firmware publishes the carts
-     through the patch contract and flags the list as IPS_DLGMODE_SLOTB.
-     A .st never carries a patch, so nothing is lost by not scanning. */
-  if(path_is_st((const char*)qpath)) {
-    sufami_query_slotb(qpath);
-  } else {
-    ips_find_patches(qpath, SRAM_IPS_LIST_ADDR);
-  }
 }
 
 /* The info screen's Up/Down stepped onto a folder (snes/gameinfo.a65, gnav_msu_dir): answer
@@ -683,6 +610,12 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
     }
     /* RAW entry, tag intact -- a favorite lands in recents too */
     cfg_add_listed_game(LAST_FILE, file_lfn, true);
+    /* the patch restage lives in ovl2: without it a patched entry would boot vanilla
+       into the base ROM's save, so refuse it with the missing-file popup instead */
+    if(strchr((char*)file_lfn, '\t') && !ovl_ensure(OVL_ID_MENU2)) {
+      load_abort_missing(LOADROM_WAIT_SNES, MENU_ERR_SUPPLFILE, path_leaf(ovl2_file));
+      goto aborted;
+    }
     /* re-applies the patch load_rom is about to want; truncates file_lfn to base */
     stage_patch_from_entry((char*)file_lfn);
   }
@@ -701,6 +634,7 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
   /* load aborted (missing chip BIOS etc.): clear the file error state -- or the LED
      blinks -- and NACK, so game_handshake_error shows the message.  The game's per-game
      values leave CFG with it: the menu is back. */
+aborted:
   gameopt_restore();
   file_res = FR_OK;
   /* Republish Recents.  The write above happens BEFORE the pre-check, so a refused game
@@ -716,118 +650,6 @@ uint32_t menucmd_launch_rom(uint8_t cmd) {
   return 0;
 }
 
-/* Random menu music (CFG.menu_music_random + CFG.menu_music_folder).
-   There is no rand() in this firmware and pulling one in would drag stdlib's
-   reentrancy state along, which is flash the mk2 does not have; xorshift32 costs a
-   handful of instructions and is far beyond what "pick a file" needs.
-   Seeded lazily, once: the tick counter alone starts from about the same value on
-   every power-on, so the first draw of a session would keep landing on the same
-   track -- the wall clock is mixed in whenever the RTC has one (STM.rtc_valid == 0
-   means valid, 0xff means it is not; see main.c). */
-static uint32_t menu_spc_rnd_state = 0;
-
-static uint32_t menu_spc_rnd(void) {
-  uint32_t x = menu_spc_rnd_state;
-  if(!x) {
-    x = (uint32_t)getticks() * 2654435761u;
-    if(!STM.rtc_valid) {
-      uint64_t bcd = get_bcdtime();
-      x ^= (uint32_t)bcd ^ (uint32_t)(bcd >> 32);
-    }
-    if(!x) x = 0x1a2b3c4du;   /* zero is xorshift32's fixed point: it never leaves it */
-  }
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-  menu_spc_rnd_state = x;
-  return x;
-}
-
-/* Fingerprint of the previous draw, so two BGM loads in a row (a boot and the return
-   from the first game, say) do not land on the same track.  A HASH and not the name:
-   it only has to answer "the same file as last time?", a collision costs at worst one
-   redundant re-draw, and the .bss on this MCU is the same pool the stack eats into --
-   4 bytes instead of a name buffer is the whole reason this is not a strncmp. */
-static uint32_t menu_spc_prev_hash;
-
-/* FNV-1a: a couple of instructions per byte and no table. */
-static uint32_t menu_spc_hash(const char *s) {
-  uint32_t h = 2166136261u;
-  while(*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
-  return h;
-}
-
-/* Draw a random .spc from CFG.menu_music_folder and write its full SD path to `out`.
-   Returns 1 when it wrote one and 0 when there is nothing to draw from -- folder not
-   configured, missing, unreadable, or holding no .spc -- so the caller falls back to
-   its fixed choice and the feature can never leave the menu silent.
-
-   ONE f_opendir/f_readdir pass, with a reservoir of a single element: keeping the
-   n-th candidate with probability 1/n leaves every file equally likely without ever
-   building a list, so the folder may hold any number of tracks and this still costs
-   one name's worth of RAM.
-
-   `out` doubles as the FatFs long-name buffer for the scan.  That is what keeps this
-   down to a single path buffer, and it works precisely BECAUSE f_readdir overwrites
-   it on every entry: nothing may survive there across the loop, which is why the
-   winner is copied out to `pick` and the path is only assembled at the very end.
-   (Same trap patch_scan_dir documents, from the other side.)
-
-   noinline: menucmd_dispatch sits under EVERY menu command, so this frame would
-   otherwise be paid by all the commands that never touch music (see NO_INLINE). */
-static NO_INLINE int menu_spc_pick_random(uint8_t *out, int outsize) {
-  /* CFG is volatile only because it is the shared BSRAM mirror; reading the folder
-     name as a plain string is what every other CFG string consumer does. */
-  const char *folder = (const char*)CFG.menu_music_folder;
-  char pick[256];
-  DIR dir;
-  FILINFO fno;
-  size_t flen;
-  int attempt;
-
-  if(folder[0] != '/') return 0;                   /* not configured -> caller falls back */
-  flen = strlen(folder);
-  while(flen && folder[flen - 1] == '/') flen--;   /* the join below adds exactly one */
-  if(flen + 2 >= (size_t)outsize) return 0;        /* no room for even a 1-char name */
-
-  for(attempt = 0; attempt < 2; attempt++) {
-    unsigned n = 0;
-    pick[0] = 0;
-    fno.lfsize = (UINT)((outsize > 256) ? 255 : outsize - 1);
-    fno.lfname = (TCHAR*)out;
-    if(f_opendir(&dir, (const TCHAR*)folder) != FR_OK) return 0;
-    for(;;) {
-      const char *fn, *ext;
-      size_t len;
-      if(f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0) break;
-      if(fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
-      fn = fno.lfname[0] ? fno.lfname : fno.fname;
-      /* macOS leaves a "._<name>.spc" beside every file it copies; those pass the
-         extension test below and would be drawn as if they were tracks. */
-      if(fn[0] == '.') continue;
-      ext = strrchr(fn, '.');
-      if(!ext || strcasecmp(ext + 1, "SPC")) continue;
-      len = strlen(fn);
-      /* Never draw a name the join could not hold: a truncated path opens some OTHER
-         file, which is why patch_scan_dir refuses over-long names too. */
-      if(len >= sizeof(pick) || flen + 1 + len >= (size_t)outsize) continue;
-      if((menu_spc_rnd() % ++n) == 0) memcpy(pick, fn, len + 1);
-    }
-    f_closedir(&dir);
-    if(!n) return 0;                               /* no .spc in there */
-    /* Do not repeat the previous track -- but draw again AT MOST once.  Retrying
-       until it differs is an unbounded coin flip as soon as the folder holds only
-       two files, and this runs while the SNES waits on the command. */
-    if(n < 2 || menu_spc_hash(pick) != menu_spc_prev_hash) break;
-  }
-
-  menu_spc_prev_hash = menu_spc_hash(pick);
-  memcpy(out, folder, flen);
-  out[flen] = '/';
-  memcpy(out + flen + 1, pick, strlen(pick) + 1);
-  printf("Random menu music: %s\n", out);
-  return 1;
-}
 
 uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
   switch(cmd) {

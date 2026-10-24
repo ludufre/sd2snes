@@ -139,6 +139,10 @@
    partial-sample gate breadcrumbs + the fill-wait throttle counter), owned and zeroed
    by the menu handler (ss_init, snes/savestate.i65). Reserved here so MCU-side
    allocations skip the range. */
+/* 0xFF0C40-0xFF0C4F: the card overlay load timing probe of a measurement build
+   (make OVL_TIMING=1, ovl.c): 4 words the MCU publishes for USB, nothing on the SNES side
+   reads them.  Comment-only lockstep note in snes/memmap.i65. */
+#define SRAM_OVL_TIMING_ADDR         (0xFF0C40L)
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SS_SCENE_GATE_ADDR           (0xFF0702L) /* 1 byte armed on EVERY game load (savestate.c, before the core gate, so it is never stale) = "this game needs the overlay probe gated on scene liveness". Keyed by core+checksum; today only Super Mario RPG (US) on the SA-1 core. When 1, the probe in snes/savestate.a65 additionally requires the FPGA's scene_fresh bit at $F90720 (cheat.v: the S-CPU wrote the pad to SA-1 IRAM $3010/$3011 or polled $4218/$4219 in the last ~49-73ms) before it opens the overlay -- the NMI hook also fires during scene transitions where the frame loop is parked mid-RPC, and opening there hangs the game on resume (proven in hardware on Mk.II). Takes the first byte of the $FF0702..$FF0707 gap (NUM_CHEATS is a short at $FF0700-01; CHEAT_WIN_BASE follows at $FF0708); $FF0704..$FF0707 now hold the in-game menu combo pair, so the gap is FULL. Lockstep with SS_SCENE_GATE in snes/memmap.i65. */
 #define SS_OVL_APUFIX_GATE_ADDR      (0xFF0703L) /* 1 byte armed on EVERY game load (savestate.c) = "re-run this game's savestate_fixes.yml code when the in-game overlay CLOSES". Keyed by header checksum only, like the yml itself; today only Star Ocean (13B8). The fix blobs re-sync a WRAM shadow of the APU handshake with the live $214x port, but until now they only ran on savestate save/load (audio_fix in snes/savestate.a65). Star Ocean spins on that shadow with an UNBOUNDED loop inside its V-IRQ handler (LDA $2140 : CMP $2140 : BNE : EOR $4A : BPL, three sites reached from $C0:0221), so any drift across an overlay open/close deadlocks the handler on resume -- the picture stays exactly as the overlay restored it and the game never repopulates OAM (its sprites vanish), which is the reported field-scene freeze. Running the blob once more on close makes the spin pass. Opt-in per game on purpose: a blob is free-form code (some entries write immediates, one writes $2140 itself), so firing it on every overlay close for the whole library would be a far wider behaviour change. MERGE HAZARD: the v2.16 branch uses 0xFF0703 as the savestate-thumbnail validity mask -- whichever side merges second must move one of the two. Lockstep with SS_OVL_APUFIX_GATE in snes/memmap.i65. */
@@ -155,6 +159,9 @@
 #define SRAM_SRM_SLOT_STATUS_ADDR    (0xFF0717L) /* 1 byte: bitmask of existing battery-SRAM slot files. When EnableSramSlots is ON, bit i = slot i (i=0..3: <stem>.srm, <stem>.02/03/04.srm) exists on SD; when OFF, bit0 = the legacy <stem>.srm exists (bits1-3 clear). Staged by saveinfo_stage() at game load and refreshed after autosave; read by the in-game SAVES tab (igmenu.bin). Free $FF0701..$FF07FF gap, after SS_SLOT_STATUS. Lockstep with SRM_SLOT_STATUS in snes/memmap.i65. */
 #define SRAM_HX_PAD_SRC_ADDR         (0xFF07E2L) /* 2 bytes (high byte always 0). Which controller port the nmihook stub published in NMI_PAD this frame: 0 = port 1 or the feature is off, 1 = port 2. Written by hx_pad (snes/hookxlate.a65) on every hook entry when EnableIngamePad2 patched the stub, read by ss_input so the savestate matcher looks at the same port. The MCU only ZEROES it, at every game load (cheat.c), because this region survives resets and a stale 1 would aim the matcher at the wrong pad. Lockstep with HX_PAD_SRC in snes/memmap.i65. */
 #define SRAM_HX_PAD2_ADDR            (0xFF07E4L) /* 2 bytes: the last $421A sample hx_pad took outside the auto-joypad fill window (see HX_PAD2 in snes/memmap.i65 for why a live read is not usable inside the stub). The MCU only zeroes it, at every game load, together with SRAM_HX_PAD_SRC_ADDR. */
+#define SRAM_OVL_STATUS_ADDR         (0xFF07EAL) /* 1 byte, written at every menu load (main.c) before the SNES runs: 0 = both card overlays (/sd2snes/ovl1.<img|im3|stm>, ovl2.*) loaded, MENU_ERR_SUPPLFILE = a file is missing, MENU_ERR_OVL = present but refused (corrupt or from another firmware build). The menu shows a popup with SRAM_OVL_NAME_ADDR once and zeroes this byte (snes/ovlwarn.a65), so warm resets inside the menu do not repeat it. Lockstep with OVL_STATUS in snes/memmap.i65. */
+#define SRAM_OVL_NAME_ADDR           (0xFF07EBL) /* 9 bytes: the overlay's file name ("ovl1.im3", NUL-terminated), written with SRAM_OVL_STATUS_ADDR when that is not 0. Lockstep with OVL_NAME in snes/memmap.i65. */
+#define SRAM_OVL_NAME_LEN            9
 #define SRAM_PAD1_ID_ADDR            (0xFF07FEL) /* 1 byte the MENU writes every frame: the ID nibble of controller port 1; PAD_ID_NTT = an NTT Data keypad (NDK10). Read at game load by snescmd_prepare_nmihook: the stub's pad store then goes through hx_pad, which drops the keypad's ID nibble so the hook gestures match. Zeroed here at every menu load, since an older menu never writes it and this region survives resets. Lockstep with PAD1_ID in snes/memmap.i65. */
 #define PAD_ID_NTT                   (0x04) /* the NTT Data keypad's controller ID nibble (serial bits 13-16 = 0100). Lockstep with snes/memmap.i65. */
 #define SRAM_EXP_ASK_ADDR            (0xFF07E6L) /* 1 byte: EXP_ASK_MAGIC while the firmware waits, inside the
@@ -287,6 +294,8 @@
 #define SRAM_CFG_PLAYER_REPEAT_ADDR  (0xFF02D9L)
 #define SRAM_CMD_ADDR                (0xFF1000L)
 #define SRAM_PARAM_ADDR              (0xFF1004L)
+/* $FF1010..$FF103F (inside the snes_menu_errmsg string, $FF1001..$FF1040): the menu copies the localized first line of the
+   card-overlay popup here (MCU_ERR_TPL in snes/memmap.i65, ovlwarn.a65) -- menu only, while no command is pending. */
 #define SRAM_MCU_STATUS_ADDR         (0xFF1100L)
 #define SRAM_SNES_STATUS_ADDR        (0xFF1110L)
 #define SRAM_SYSINFO_ADDR            (0xFF1200L) /* System Information screen: the packed sysinfo_blk_t defined below (128 B of the 544 B free up to LAST_GAME $FF1420). Lockstep with SYSINFO_BLK / SI2_* in snes/memmap.i65. */
@@ -431,6 +440,9 @@ _Static_assert(SRAM_HX_PAD2_ADDR + 2 <= SRAM_EXP_ASK_ADDR && SRAM_EXP_ANSWER_ADD
                "EXP_ASK/EXP_ANSWER/ONB_START must stay after HX_PAD2, inside the free $FF0701..$FF07FF gap");
 _Static_assert(SRAM_ONB_START_ADDR + 2 <= SRAM_PAD1_ID_ADDR && SRAM_PAD1_ID_ADDR + 1 <= 0xFF0800L,
                "PAD1_ID (1 B) must stay after ONB_START, inside the free $FF0701..$FF07FF gap");
+_Static_assert(SRAM_ONB_START_ADDR + 2 <= SRAM_OVL_STATUS_ADDR && SRAM_OVL_STATUS_ADDR + 1 <= SRAM_OVL_NAME_ADDR
+               && SRAM_OVL_NAME_ADDR + SRAM_OVL_NAME_LEN <= SRAM_PAD1_ID_ADDR,
+               "OVL_STATUS (1 B) and OVL_NAME (9 B) must stay between ONB_START and PAD1_ID");
 _Static_assert(SRAM_HX_PAD_SRC_ADDR + 2 <= SRAM_HX_PAD2_ADDR && SRAM_HX_PAD2_ADDR + 2 <= 0xFF0800L,
                "HX_PAD_SRC and HX_PAD2 (2 B each, written as words by the hook stub) must stay inside the free $FF0701..$FF07FF gap");
 /* The one-byte flags packed at $FF0710..$FF071F. The port-2 words above once sat on top of

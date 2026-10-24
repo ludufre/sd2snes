@@ -235,6 +235,9 @@ coldboot_autoboot_out:
   ; First-boot tour question (onboarding/onboarding_gate.a65, $C1). Self-gated on
   ; CFG_ONBOARDING_VERSION; on "yes" the firmware cold-boots the tour ROM and this
   ; never returns.
+  ; The card overlay (/sd2snes/ovl1.*) missing or from another firmware build: one popup per
+  ; menu load (snes/ovlwarn.a65, $C1), before the tour question.
+  jsl @ovl_warn
   jsl @onboarding_gate
   jsr fileselloop
   sei

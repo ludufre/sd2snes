@@ -17,6 +17,7 @@
 #include "module.h"
 #include "gameinfo.h"
 #include "menucmd.h"
+#include "ovl.h"
 
 /* sort.c: the READDIR sort cache, idle while a module's screen is open (module_gate) */
 extern uint32_t ptrcache[QSORT_MAXELEM];
@@ -106,6 +107,7 @@ static int module_load(uint8_t id)
   uint32_t crc = crc32_init(), size, i;
   UINT br = 0;
   if(!id || id > MODULE_COUNT) return 0;
+  ovl_forget();                     /* the image goes over any card overlay */
   if(f_open(&file_handle, file[id - 1], FA_READ) != FR_OK) return 0;
   size = f_size(&file_handle);
   if(size < sizeof(*h) || size > MOD_END - (uint32_t)img
@@ -164,6 +166,11 @@ void module_drop(void)
   mod_live = 0;
 }
 
+int module_live(void)
+{
+  return mod_live;
+}
+
 void module_ctl(uint32_t param)
 {
   if(mod_live) mod.ctl(scratch_frame, param);
@@ -179,6 +186,7 @@ void module_gate(uint8_t cmd)
 
 int module_idle(void)
 {
+  ovl_timing_tick();                /* measurement builds only (OVL_TIMING) */
   mod_hurry = 0;
   if(mod_live) mod.idle(scratch_frame);
   return mod_hurry;

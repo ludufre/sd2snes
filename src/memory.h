@@ -52,11 +52,14 @@ extern char current_filename[];
  _a < _b ? _a : _b; })
 
 uint32_t load_rom(uint8_t* filename, uint32_t base_addr, uint8_t flags);
+/* abort a game load with the menu's popup (code + basename) and the NACK; returns 0 */
+uint32_t load_abort_missing(uint8_t flags, int err, const char *name);
 extern uint8_t exp_warn_dismissed;   /* the experimental-core box said "don't warn again"; see menucmd_launch_rom */
 void assert_reset(void);
 void init(uint8_t *filename);
 void deassert_reset(void);
 uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header_addr);
+int menu_spc_pick_random(uint8_t *out, int outsize);   /* spcload.c: 1 = a track drawn */
 /* Multi-slot battery SRAM (CICLO 2). SRM_SLOT_COUNT slots: internal index 0..3,
    UI "SLOT 1..4". Slot 0 = the legacy <stem>.srm (byte-identical); slots 1..3 =
    <stem>.02/03/04.srm. Gated by CFG.enable_sram_slots (OFF -> srm_slot forced 0). */
@@ -110,6 +113,8 @@ void slot_sidecar_state_set(const char *src, uint8_t ss);
 #define SAVES_RES_OK        0
 #define SAVES_RES_FAIL      1
 uint8_t saves_stage(const char *src, uint8_t states, uint8_t result);
+/* the file of slot `slot` (0..3) of `kind` for the saves keyed off src; -1 = no name */
+int saves_path(char *p, int n, const char *src, uint8_t kind, uint8_t slot);
 void saves_command(const char *src, uint8_t op, uint8_t kind, uint8_t slot, uint8_t dst);
 
 uint32_t migrate_and_load_srm(uint8_t *filename, uint32_t base_addr);

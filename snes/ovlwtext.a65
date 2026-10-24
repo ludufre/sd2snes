@@ -1,0 +1,51 @@
+; ===========================================================================
+; ovl_warn_text: line 1 of the card-overlay popup (snes/ovlwarn.a65) when ovl1.* is on the
+; card but refused. The string is in bank $C3's pool (text_ovl_*, build_const.py
+; FM_PREFIXES): fm_str resolves it for the current language and it is copied to MCU_ERR_TPL,
+; which show_error_msg prints as is. Called by jsl only after fm_bank_ok, with DB = $7E and
+; DP = 0 (fm_str and the [print_src] read need both); P kept.
+; ===========================================================================
+
+.link page $c3
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c3 AFTER it.
+.link page $c3
+
+#define OWT_MAX 47                  /* MCU_ERR_TPL..$FF103F, the NUL included */
+
+ovl_warn_text:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #!text_ovl_build
+  jsr fm_str                ; print_src/print_bank = this language's line
+  .as : .xl
+  ldy #$0000
+owt_copy:
+  .as : .xl
+  tyx
+  lda [print_src], y
+  sta @MCU_ERR_TPL, x
+  beq owt_done
+  iny
+  cpy #OWT_MAX
+  bne owt_copy
+  lda #$00
+  sta @MCU_ERR_TPL+OWT_MAX
+owt_done:
+  .as : .xl
+  plp
+  rtl
+
+; ovl_si_text: the System Information line for a block without ovl1 (SI2_F_NOOVL,
+; sysinfo_render.a65) -> print_src/print_bank, resolved for the current language.  Called
+; by jsl once the bank's magic is there, with DB = $7E and DP = 0; P kept.
+ovl_si_text:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #!text_ovl_sysinfo
+  jsr fm_str
+  .as : .xl
+  plp
+  rtl

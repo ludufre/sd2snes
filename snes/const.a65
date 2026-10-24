@@ -597,6 +597,12 @@ text_err_supplfile  .byt "Required file not found:", 0
 text_err_noimpl     .byt "Chip not supported:", 0
 text_err_nohw       .byt "Requires Mk.III hardware:", 0
 text_err_generic    .byt "Load error:", 0
+; card-overlay popup (snes/ovlwarn.a65), line 1 when ovl1.* is on the card but refused (corrupt or
+; from another firmware build); line 2 = the file name. Lives in bank $C3's pool (FM_PREFIXES).
+text_ovl_build      .byt "Update with the firmware:", 0
+; System Information row 4 when the firmware runs without ovl1 (SI2_F_NOOVL,
+; sysinfo_render.a65); also bank $C3's pool. <= 40 cols (text_ovl_sysinfo in WIDTH_LIMITS).
+text_ovl_sysinfo    .byt "ovl1 missing or from another build", 0
 ; experimental-core warning (snes/expwarn.a65): two lines of the Yes/No box, <= 40 cols each
 text_exp_title          .byt "*Experimental* core", 0
 text_exp_l1             .byt "This core is still in development:", 0

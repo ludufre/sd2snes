@@ -190,3 +190,6 @@ bin/*.fnt
 
 # NES renderer: measurement build tree (make -C snes/nes perf)
 snes/nes/perf_build/
+# card overlays + the Mk.II boot-screen program (src/ovl, built with the firmware)
+bin/ovl[0-9].*
+bin/bootscr.img

@@ -299,6 +299,8 @@ TRANSLATIONS = {
     'text_err_noimpl': 'Чип не поддерживается:',
     'text_err_nohw': 'Нужна плата Mk.III:',
     'text_err_generic': 'Ошибка загрузки:',
+    'text_ovl_build': 'Обновить с прошивкой:',
+    'text_ovl_sysinfo': 'ovl1 отсутствует или несовместим',
     'text_exp_title': '*Экспериментальное* ядро',
     'text_exp_l1': 'Оно ещё в разработке:',
     'text_exp_l2': '- возможны тормоза, сбои звука',

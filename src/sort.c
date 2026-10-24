@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "filetypes.h"
 #include "sort.h"
+#include "ovl.h"
 
 /*
    heap sort algorithm for data located outside RAM
@@ -198,6 +199,7 @@ stat_getstring=0;
     ext_heapsort(addr, size);
   } else {
     /* retrieve, sort, and store dir table */
+    ovl_forget();                   /* the table goes over any card overlay */
     sram_readblock(ptrcache, addr, size*4);
     int sorted = sort_ptrs(ptrcache, size);
     sram_writeblock(ptrcache, addr, size*4);

@@ -2,7 +2,7 @@
 # Conformance test for the patch-selector display name (patch_display_name).
 #
 # Like run_bucket.sh, this compiles the function straight out of the REAL source
-# instead of shimming all of patch.c (FatFs, the FPGA SPI window, ...): the
+# instead of shimming all of patchui.c (FatFs, the FPGA SPI window, ...): the
 # function is pure string code, so extracting it keeps the test honest without
 # duplicating a line of it.
 set -u
@@ -12,9 +12,9 @@ CC="${CC:-cc}"
 mkdir -p build
 
 awk '/^int patch_display_name/{p=1} p; /^}/{if(p) exit}' \
-    ../../src/patch.c > build/patchname_under_test.c
+    ../../src/patchui.c > build/patchname_under_test.c
 if ! grep -q "^int patch_display_name" build/patchname_under_test.c; then
-  echo "!! extraction failed -- did patch_display_name move or get renamed in patch.c?" >&2
+  echo "!! extraction failed -- did patch_display_name move or get renamed in patchui.c?" >&2
   exit 1
 fi
 printf '#include <string.h>\n' | cat - build/patchname_under_test.c > build/.t \

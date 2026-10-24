@@ -137,6 +137,12 @@ extern uint8_t ips_pending_index;
  */
 uint8_t ips_find_patches(const uint8_t *rom_path, uint32_t sram_addr);
 
+/* SNES_CMD_QUERY_IPS_PATCHES: the patch list (or, for a .st, the Slot B carts) of the
+   selected ROM; and the patch restage of a Recents/Favorites entry, which truncates
+   the "<rom>\t<patch>" entry to the base ROM path (patchui.c, card overlay). */
+void query_ips_patches(void);
+void stage_patch_from_entry(char *entry);
+
 /* How many entries the most recent ips_find_patches() staged, so
    CMD_PATCH_META_SAVE can write the sidecar back without touching the card
    again.  Valid only until the next scan. */
@@ -375,5 +381,9 @@ int patch_unlink_rom_assets(const uint8_t *rom_path);
 /* Copies the file open in file_handle to dst_path (created or truncated) and closes both;
    a failed copy deletes dst_path.  Returns 1 on success.  Also the saves screen's copy. */
 int patch_copy_to(const char *dst_path);
+
+/* patch.c's timeout-bounded PSRAM string read (the export reads its landing path back
+   with it after a load under a chip core) */
+uint16_t psram_readstrn(void *buf, uint32_t addr, uint16_t size);
 
 #endif /* IPS_H */

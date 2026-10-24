@@ -153,7 +153,8 @@ void led_error() {
      Signal it from HERE -- runs on SysTick every 10 ms no
      matter where the boot code is stuck -- as a two-colour siren:
        fpga_boot_led == 1  no SD card           -> green<->red
-       fpga_boot_led == 2  fpga_mini missing    -> green<->yellow                  */
+       fpga_boot_led == 2  fpga_mini or the SNES boot program (bootscr.img, snes.c)
+                           missing or stale -> green<->yellow                   */
   static int nosd_frame = 0, nosd_phase = 0;
   if(fpga_boot_led == 1) {              /* no SD card: green<->red siren */
     readled(0);                         /* yellow off */

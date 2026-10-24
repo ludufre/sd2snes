@@ -46,7 +46,8 @@ memory.c: RAM operations
 #include "timer.h"
 #include "rle.h"
 #include "diskio.h"
-#include "bootzx0.h"    /* generated: snesboot.h re-packed as ZX0 (Makefile) */
+#include "bootzx0.h"    /* generated: snesboot.h re-packed as ZX0 (Makefile); on the Mk.II
+                           only the size and CRC of the card file /sd2snes/bootscr.img */
 #include "msu1.h"
 #include "sufami.h"
 #include "cli.h"
@@ -72,6 +73,7 @@ memory.c: RAM operations
 #include <string.h>
 #include "util.h"
 #include "dirindex.h"
+#include "ovl.h"
 char* hex = "0123456789ABCDEF";
 
 uint8_t current_ips_srm_source[256];
@@ -321,8 +323,9 @@ static int file_exists(const char *path) {
 /* Abort a game load: push the message to the menu's error region ($FF1000 code,
    $FF1001 string) and NACK, so game_handshake_error shows it without a reset.
    A menu load (no LOADROM_WAIT_SNES) only clears the FS error. `name` must be a
-   basename -- the popup is two lines. Always returns 0. */
-static uint32_t load_abort_missing(uint8_t flags, int err, const char *name) {
+   basename -- the popup is two lines. Always returns 0.  Also menucmd_launch_rom's, for a
+   list launch refused before load_rom. */
+uint32_t load_abort_missing(uint8_t flags, int err, const char *name) {
   printf("load aborted: err=%d missing=%s\n", err, name ? name : "");
   if(flags & LOADROM_WAIT_SNES) {
     snes_menu_errmsg(err, (void*)(name ? name : ""));
@@ -1917,83 +1920,6 @@ void deassert_reset() {
   snes_reset_loop();
 }
 
-uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header_addr) {
-  DWORD filesize;
-  UINT bytes_read;
-  uint8_t data;
-  UINT j;
-
-  printf("%s\n", filename);
-
-  file_open(filename, FA_READ); /* Open SPC file */
-  if(file_res) return 0;
-  filesize = file_handle.fsize;
-  if (filesize < 65920) { /* At this point, we care about filesize only */
-    file_close(); /* since SNES decides if it is an SPC file */
-    sram_writebyte(0, spc_header_addr); /* If file is too small, destroy previous SPC header */
-    return 0;
-  }
-
-  set_mcu_addr(spc_data_addr);
-  f_lseek(&file_handle, 0x100L); /* Load 64K data segment */
-
-  for(;;) {
-    bytes_read = file_read();
-    if (file_res || !bytes_read) break;
-    FPGA_SELECT();
-    FPGA_TX_BYTE(0x98);
-    for(j=0; j<bytes_read; j++) {
-      FPGA_TX_BYTE(file_buf[j]);
-      FPGA_WAIT_RDY_INLINE();
-    }
-    FPGA_DESELECT();
-  }
-
-  file_close();
-  file_open(filename, FA_READ); /* Reopen SPC file to reset file_getc state*/
-
-  set_mcu_addr(spc_header_addr);
-  f_lseek(&file_handle, 0x0L); /* Load 256 bytes header */
-
-  FPGA_SELECT();
-  FPGA_TX_BYTE(0x98);
-  for (j = 0; j < 256; j++) {
-    data = file_getc();
-    FPGA_TX_BYTE(data);
-    FPGA_WAIT_RDY_INLINE();
-  }
-  FPGA_DESELECT();
-
-  file_close();
-  file_open(filename, FA_READ); /* Reopen SPC file to reset file_getc state*/
-
-  set_mcu_addr(spc_header_addr+0x100);
-  f_lseek(&file_handle, 0x10100L); /* Load 128 DSP registers */
-
-  FPGA_SELECT();
-  FPGA_TX_BYTE(0x98);
-  for (j = 0; j < 128; j++) {
-    data = file_getc();
-    FPGA_TX_BYTE(data);
-    FPGA_WAIT_RDY_INLINE();
-  }
-  FPGA_DESELECT();
-  file_close(); /* Done ! */
-
-  /* clear echo buffer to avoid artifacts */
-  uint8_t esa = sram_readbyte(spc_header_addr+0x100+0x6d);
-  uint8_t edl = sram_readbyte(spc_header_addr+0x100+0x7d);
-  uint8_t flg = sram_readbyte(spc_header_addr+0x100+0x6c);
-  if(!(flg & 0x20) && (edl & 0x0f)) {
-    int echo_start = esa << 8;
-    int echo_length = (edl & 0x0f) << 11;
-    printf("clearing echo buffer %04x-%04x...\n", echo_start, echo_start+echo_length-1);
-    sram_memset(spc_data_addr+echo_start, echo_length, 0);
-  }
-
-  return (uint32_t)filesize;
-}
-
 uint32_t load_sram_offload(uint8_t* filename, uint32_t base_addr, uint8_t flags) {
   set_mcu_addr(base_addr);
   UINT bytes_read;
@@ -2116,12 +2042,39 @@ static void bootrle_out(uint8_t data) {
 }
 uint32_t load_bootrle(uint32_t base_addr) {
   extern uint32_t ptrcache[];
+#ifdef CONFIG_MK2
+  /* Mk.II: the program is a card file next to fpga_mini.bit, which this screen already
+     needs (no card = no boot display on this board anyway).  It is read whole into the
+     module block right after the 8 KB ZX0 window and must be the exact file this build
+     made (size + CRC): missing, short or stale returns 0, and the caller keeps the SNES
+     in reset and signals it on the LED. */
+  uint8_t *src = (uint8_t *)ptrcache + 8192;
+  uint32_t crc = crc32_init(), i;
+  UINT br = 0;
+  module_gate(0);                   /* ptrcache is the ZX0 window (8 KB, see fpga_rompgm) */
+  ovl_forget();
+  file_open((const uint8_t *)"/sd2snes/bootscr.img", FA_READ);
+  if(file_res) return 0;
+  if(file_handle.fsize != BOOTSCR_SIZE || BOOTSCR_SIZE > 0x20080000UL - (uint32_t)src
+     || f_read(&file_handle, src, BOOTSCR_SIZE, &br) != FR_OK || br != BOOTSCR_SIZE) {
+    file_close();
+    return 0;
+  }
+  file_close();
+  for(i = 0; i < BOOTSCR_SIZE; i++) crc = crc32_update(crc, src[i]);
+  if(crc32_finalize(crc) != BOOTSCR_CRC) return 0;
+  set_mcu_addr(base_addr);
+  bootrle_n = 0;
+#else
+  const uint8_t *src = bootzx0;
   set_mcu_addr(base_addr);
   bootrle_n = 0;
   module_gate(0);                   /* ptrcache is the ZX0 window (8 KB, see fpga_rompgm) */
+  ovl_forget();
+#endif
   FPGA_SELECT();
   FPGA_TX_BYTE(0x98);
-  zx0_stream(bootzx0, (uint8_t *)ptrcache, 8191, bootrle_out);
+  zx0_stream(src, (uint8_t *)ptrcache, 8191, bootrle_out);
   FPGA_DESELECT();
   return bootrle_n;
 }
@@ -2245,7 +2198,7 @@ static const uint8_t saves_date_fmt[] = {   /* bit 7 = day first; low 7 bits = s
 };
 
 /* The file of slot `slot` (0..3) of `kind` for the saves keyed off src; -1 = no name. */
-static int saves_path(char *p, int n, const char *src, uint8_t kind, uint8_t slot) {
+int saves_path(char *p, int n, const char *src, uint8_t kind, uint8_t slot) {
   char ext[10];
   if(kind == SAVES_KIND_SRM) {
     srm_slot_ext(ext, sizeof(ext), slot);
@@ -2309,40 +2262,6 @@ uint8_t saves_stage(const char *src, uint8_t states, uint8_t result) {
                    | (states ? SAVES_HF_STATES : 0);
   sram_writeblock(h, SRAM_SAVES_ADDR, sizeof(h));
   return mask;
-}
-
-/* The saves screen's actions on slot `slot` of `kind` (SAVES_OP_*): make it the slot the
-   game starts with, copy it over slot `dst`, or delete it.  Returns SAVES_RES_*. */
-static uint8_t saves_do(const char *src, uint8_t op, uint8_t kind, uint8_t slot, uint8_t dst) {
-  char path[256];
-  uint8_t srm, ss;
-  if(kind > SAVES_KIND_STATE || slot >= SAVES_SLOTS) return SAVES_RES_FAIL;
-  if(op == SAVES_OP_USE) {
-    if(!(kind == SAVES_KIND_SRM ? CFG.enable_sram_slots : CFG.enable_savestate_slots))
-      return SAVES_RES_FAIL;
-    slot_sidecar_read(src, &srm, &ss);
-    if(kind == SAVES_KIND_SRM) srm = slot; else ss = slot;
-    return slot_sidecar_write(src, srm, ss) ? SAVES_RES_OK : SAVES_RES_FAIL;
-  }
-  if(saves_path(path, sizeof(path), src, kind, slot) < 0) return SAVES_RES_FAIL;
-  if(op == SAVES_OP_DELETE)
-    return f_unlink((TCHAR *)path) == FR_OK ? SAVES_RES_OK : SAVES_RES_FAIL;
-  if(op != SAVES_OP_COPY || dst >= SAVES_SLOTS || dst == slot) return SAVES_RES_FAIL;
-  file_open((uint8_t *)path, FA_READ);
-  if(file_res) { file_res = 0; return SAVES_RES_FAIL; }
-  /* the source is open: its name is dead, build the destination over it */
-  if(saves_path(path, sizeof(path), src, kind, dst) < 0) {
-    file_close();
-    file_res = 0;
-    return SAVES_RES_FAIL;
-  }
-  path_asset_mkdir(path);
-  return patch_copy_to(path) ? SAVES_RES_OK : SAVES_RES_FAIL;
-}
-
-void saves_command(const char *src, uint8_t op, uint8_t kind, uint8_t slot, uint8_t dst) {
-  uint8_t res = op == SAVES_OP_INFO ? SAVES_RES_OK : saves_do(src, op, kind, slot, dst);
-  saves_stage(src, 1, res);
 }
 
 /* is there a <rom>.mpk?  cheap f_stat that gates the ROM scan below */

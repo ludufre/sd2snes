@@ -448,7 +448,7 @@ def main():
     FM_PREFIXES = ("text_fm_", "mtext_fm_", "mdesc_fm_",
                    "text_gopt_", "mtext_gopt_", "mdesc_gopt_",
                    "mtext_gims_", "mdesc_gims_", "mtext_sfn_", "mdesc_sfn_",
-                   "text_lock_", "mtext_lock_", "mdesc_lock_")
+                   "text_lock_", "mtext_lock_", "mdesc_lock_", "text_ovl_")
     out, order, fm_neutral = [], [], []
     for line in lines:
         m = LINE_RE.match(line)
@@ -509,6 +509,13 @@ def main():
                     ("text_mtl_", 40), ("text_mt_", 32), ("text_pcm_", 40), ("text_nsf_", 40),
                     ("mtext_", 40),
                     ("mdesc_", 160), ("text_err_", 26),
+                    ("text_ovl_sysinfo", 40),   # a System Information row (sysinfo_render.a65)
+                    ("text_ovl_", 26),
+                    # the file manager's yes/no box centres these in FMC_W-4 = 40 columns
+                    # (fm_center, fileman.a65); its error popups (text_fm_err_*) size their
+                    # own box and are not limited here
+                    ("text_fm_ren_ask", 40), ("text_fm_ren_note", 40), ("text_fm_rm_note", 40),
+                    ("text_fm_sdel_ask", 40),
                     ("text_ce_ed_keys", 48), ("text_lock_", 32), ("text_ce_kbd_keys_", 42), ("text_ce_", 6))
     WIDTH_DEFAULT = 56
 

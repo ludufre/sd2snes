@@ -42,6 +42,10 @@
 #include "cdcuser.h"
 #include "usbinterface.h"
 #include "fileman.h"
+#include "ovl.h"
+_Static_assert(OVL_ERR_MISSING == MENU_ERR_SUPPLFILE && OVL_ERR_REFUSED == MENU_ERR_OVL,
+               "ovl_err is published as the menu's popup code");
+_Static_assert(sizeof("/sd2snes/ovl1.im3") - 9 == SRAM_OVL_NAME_LEN, "the overlay's file name fills OVL_NAME");
 
 int sd_offload = 0, ff_sd_offload = 0, sd_offload_tgt = 0;
 int sd_offload_partial = 0;
@@ -274,6 +278,10 @@ int main(void) {
       onboarding_pending = 0;
       load_rom((uint8_t*)MENU_FILENAME, SRAM_MENU_ADDR, 0);
     }
+    /* card overlays: an image still in RAM must not vouch for a file that is gone or
+       replaced, and a file refused before may have been fixed: re-read both from the
+       card on every menu load (theme_apply below is the first ovl1 user) */
+    ovl_recheck();
     /* apply the selected menu theme (if any) by patching the gfxptr regions of
        the just-loaded image in PSRAM, before the SNES runs setup_gfx.  The tour
        carries a _GFXPTR_ table too (logo, gradient, selection bar), so it looks
@@ -287,6 +295,23 @@ int main(void) {
        toggles apply with or without a theme. Must run after theme_apply, which
        publishes the flags of the theme it just applied. */
     theme_font_edges();
+    /* card overlay check, once per menu load: the menu shows a popup when an ovl*.* file is
+       missing or refused (corrupt, or from another firmware build -- an update of the
+       firmware file alone), instead of the theme, covers, System Information, patches and
+       saves just going quiet.  The theme already read ovl1 fresh from the card (after
+       ovl_recheck above), so its answer costs nothing here, good or bad; ovl2 is read once
+       (the next ovl1 user reloads ovl1, a few ms). The first bad file is the one named. */
+    {
+      const char *name = ovl1_file;
+      uint8_t st;
+      st = ovl_ensure(OVL_ID_MENU1) ? 0 : ovl_err;
+      if(!st) {
+        name = ovl2_file;
+        st = ovl_ensure(OVL_ID_MENU2) ? 0 : ovl_err;
+      }
+      sram_writebyte(st, SRAM_OVL_STATUS_ADDR);
+      if(st) sram_writeblock((void *)(name + 9), SRAM_OVL_NAME_ADDR, SRAM_OVL_NAME_LEN);
+    }
     /* force memory size + mapper */
     set_rom_mask(0x3fffff);
     set_mapper(0x7);
