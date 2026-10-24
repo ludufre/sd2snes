@@ -40,6 +40,12 @@
 
 #include "timer.h"
 
+/* strstr(fn, "sd2snes") without newlib's two-way strstr (~1 KB): a short fixed needle. */
+static int has_sd2snes(const char *s) {
+  for(; *s; s++) if(!strncmp(s, "sd2snes", 7)) return 1;
+  return 0;
+}
+
 extern cfg_t CFG;
 
 /*
@@ -224,12 +230,12 @@ printf("start\n");
                only one of the two would leave it invisible on most cards. No
                other hidden/system entry is affected. */
             if(type != TYPE_PARENT && (fno.fattrib & (AM_HID | AM_SYS))
-               && !(CFG.show_sd2snes_folder && type == TYPE_SUBDIR && strstr(fn, "sd2snes"))) continue;
+               && !(CFG.show_sd2snes_folder && type == TYPE_SUBDIR && has_sd2snes(fn))) continue;
             if(fno.fattrib & AM_DIR) {
               /* omit dot directories except '..' */
               if(fn[0]=='.' && fn[1]!='.') continue;
               /* omit sd2snes directory specifically, unless the user asked for it */
-              if(!CFG.show_sd2snes_folder && strstr(fn, "sd2snes")) continue;
+              if(!CFG.show_sd2snes_folder && has_sd2snes(fn)) continue;
               snprintf(buf, sizeof(buf), " <dir>");
               if(probe && type == TYPE_SUBDIR) {
                 buf[0] = DIR_MARK_UNPROBED;
@@ -311,7 +317,9 @@ uint8_t dir_may_open_as_msu(const uint8_t *path) {
    cluster scan_dir stored, never by path: that would scan the listed directory again from
    the top for every subfolder. A cluster that no longer holds that directory (the card
    changed under the listing) reads as "no". */
-void msu_probe_page(uint32_t tbl, uint8_t count) {
+/* noinline: under LTO this is inlined into its single caller and its path buffer
+   would sit in that caller's frame for the whole menu loop, under every call chain. */
+void __attribute__((noinline)) msu_probe_page(uint32_t tbl, uint8_t count) {
   DIR root, sub;
   uint8_t mark[5];
   uint32_t cl;

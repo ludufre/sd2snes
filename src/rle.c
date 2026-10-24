@@ -2,10 +2,6 @@
 #include "rle.h"
 #include "fileops.h"
 
-const uint8_t *rle_mem_ptr;
-const uint8_t *rle_mem_endptr;
-uint8_t rle_state;
-
 uint8_t rle_file_getc() {
   static uint16_t rle_filled = 0;
   static uint8_t data;
@@ -31,40 +27,4 @@ uint8_t rle_file_getc() {
   }
   if(file_status || file_res) rle_filled = 0;
   return data;
-}
-
-void rle_mem_init(const uint8_t* address, uint32_t len) {
-  rle_mem_ptr = address;
-  rle_mem_endptr = address+len;
-  rle_state = 0;
-}
-
-uint8_t rle_mem_getc() {
-  static uint16_t rle_mem_filled = 0;
-  static uint8_t rle_mem_data;
-  if(!rle_mem_filled) {
-    rle_mem_data = *(rle_mem_ptr++);
-    switch(rle_mem_data) {
-      case RLE_RUN:
-        rle_mem_data = *(rle_mem_ptr)++;
-        rle_mem_filled = *(rle_mem_ptr)++ - 1;
-        break;
-      case RLE_RUNLONG:
-        rle_mem_data = *(rle_mem_ptr)++;
-        rle_mem_filled = *(rle_mem_ptr)++;
-        rle_mem_filled |= *(rle_mem_ptr)++ << 8;
-        rle_mem_filled--;
-        break;
-      case RLE_ESC:
-        rle_mem_data = *(rle_mem_ptr)++;
-        break;
-    }
-  } else {
-    rle_mem_filled--;
-  }
-  if(rle_mem_ptr>=rle_mem_endptr){
-    rle_mem_filled = 0;
-    rle_state = 1;
-  }
-  return rle_mem_data;
 }

@@ -103,86 +103,69 @@ _Static_assert(offsetof(cfg_t, stop_music_game_info) == 0x1db, "cfg_t.stop_music
 _Static_assert(offsetof(cfg_t, lock_code) == 0x1dc, "cfg_t.lock_code must stay at CFG_ADDR+$1DC");
 _Static_assert(offsetof(cfg_t, font_name) == 0x1e1, "cfg_t.font_name must stay at CFG_ADDR+$1E1");
 
-const cfg_t CFG_DEFAULT = {
-  .vidmode_menu = VIDMODE_60,
-  .vidmode_game = VIDMODE_AUTO,
-  .pair_mode_allowed = 0,
-  .bsx_use_usertime = 0,
-  .bsx_time = {0x0, 0x3, 0x5, 0x0, 0x8, 0x1, 0x1, 0x0, 0x3, 0x7, 0x9, 0x9},
-  .r213f_override = 1,
-  .enable_ingame_hook = 1,      /* on out of the box: savestates and the in-game menu need it */
-  .enable_ingame_buttons = 1,
-  .enable_hook_holdoff = 0,
-  .enable_screensaver = 1,
-  .screensaver_timeout = 600,
-  .sort_directories = 1,
-  .hide_extensions = 0,
-  .cx4_speed = 0,
-  .skin_name = "sd2snes.skin",
-  .control_type = 0,
-  .msu_volume_boost = 0,
-  .onechip_transient_fixes = 0,
-  .brightness_limit = 15,
-  .gsu_speed = 0,
-  .reset_to_menu = 3,        /* ROM: back to the menu in the last game's folder, on the game */
-  .led_brightness = 15,
-  .enable_cheats = 1,
-  .reset_patch = 1,
-  .enable_ingame_savestate = 1,
-  .loadstate_delay = 10,
-  .enable_savestate_slots = 1,
-  .ingame_buttons_savestate = SNES_BUTTON_START | SNES_BUTTON_R,
-  .ingame_buttons_loadstate = SNES_BUTTON_START | SNES_BUTTON_L,
-  .ingame_buttons_changestate = SNES_BUTTON_SELECT,
-  .sgb_enable_ingame_hook = 0,
-  .sgb_enable_state = 0,
-  .sgb_volume_boost = 0,
-  .sgb_enh_override = 0,
-  .sgb_clock_fix = 1,
-  .sgb_bios_version = 2,
-  .show_tribute = 0,
-  .enable_autosave = 1,
-  .enable_autosave_msu1 = 1,
-  .show_covers = 1,
-  .language = 0,
-  .enable_menu_music = 1,
-  .covers_in_lists = 1,
-  .enable_menu_sfx = 1,
-  .bgm_name = "",
-  .sort_favorites = 1,
-  .enable_cheat_overlay = 1,
-  .show_game_info = 1,
-  .enable_wifi = 0,
-  .game_info_video = 1,
-  .game_info_music = 1,
-  .bps_copier_rsvd = 1,      /* retired, keeps the byte the old default had */
-  .bus_compat = 0,
-  .enable_game_manual = 1,
-  .enable_sram_slots = 1,
-  .ingame_buttons_menu = SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_Y | SNES_BUTTON_LEFT,
-  .a26_video_width = 0,
-  .cc_time_limit = 3,  /* 6 minutes, the event setting */
-  .menu_music_random = 1,
-  .menu_music_folder = "/sd2snes/music",
-  .text_outline_mode = 0,    /* follow the theme */
-  .text_antialias_mode = 0,
-  .ask_clock_on_boot = 1,
-  .open_msu_folders = 1,
-  .show_sd2snes_folder = 0,
-  .gbc_mode = 0,             /* Auto: .gbc / $0143 bit 7 -> GBC core */
-  .gbc_sync = 0,             /* Genlock */
-  .enable_ingame_pad2 = 0,   /* in-game gestures stay controller-1 only */
-  .gbc_stretch = 0,          /* hi-colour screens stay 160x144 */
-  .onboarding_version = 0,   /* never seen: the first boot after an update shows the tour prompt */
-  .boot_intro = 1,           /* the power-on screen is on out of the box */
-  .warn_experimental = 1,    /* ask before an experimental console core starts */
-  .browser_icons = 1,        /* the file-type icons in the browser */
-  .player_repeat = 0,        /* the music players move on to the next track */
-  .gb_rotate_buttons = 0,    /* Game Boy buttons as wired: SNES B = GB B */
-  .stop_music_game_info = 0, /* the menu music keeps playing behind the game info screen */
-  .lock_code = {0},          /* no parental lock */
-  .font_name = ""            /* the menu's own font */
-};
+/* The defaults, as code: a const cfg_t image cost 609 bytes of flash, 512 of them the
+   zeros of the four path fields.  memset gives every field not set below its default 0:
+   pair_mode_allowed, bsx_use_usertime, enable_hook_holdoff, hide_extensions, cx4_speed,
+   control_type, msu_volume_boost, onechip_transient_fixes, gsu_speed, the sgb_* boosts and
+   overrides, show_tribute, language, bgm_name, enable_wifi, bus_compat, a26_video_width,
+   text_outline_mode / text_antialias_mode (follow the theme), show_sd2snes_folder,
+   gbc_mode (Auto: .gbc / $0143 bit 7 -> GBC core), gbc_sync (Genlock), enable_ingame_pad2
+   (in-game gestures stay controller-1 only), gbc_stretch (hi-colour screens stay 160x144),
+   onboarding_version (never seen: the first boot after an update shows the tour prompt),
+   player_repeat (the music players move on to the next track), gb_rotate_buttons (Game Boy
+   buttons as wired), stop_music_game_info (the menu music keeps playing behind the game
+   info), lock_code (no parental lock), font_name (the menu's own font). */
+#define CFG_DEFAULT_IGM_BUTTONS (SNES_BUTTON_L | SNES_BUTTON_R | SNES_BUTTON_Y | SNES_BUTTON_LEFT)
+void cfg_defaults(cfg_t *c) {
+  static const uint8_t bsx_time[] = {0x0, 0x3, 0x5, 0x0, 0x8, 0x1, 0x1, 0x0, 0x3, 0x7, 0x9, 0x9};
+  memset(c, 0, sizeof(*c));
+  c->vidmode_menu = VIDMODE_60;
+  c->vidmode_game = VIDMODE_AUTO;
+  memcpy(c->bsx_time, bsx_time, sizeof(bsx_time));
+  c->r213f_override = 1;
+  c->enable_ingame_hook = 1;      /* on out of the box: savestates and the in-game menu need it */
+  c->enable_ingame_buttons = 1;
+  c->enable_screensaver = 1;
+  c->screensaver_timeout = 600;
+  c->sort_directories = 1;
+  memcpy(c->skin_name, "sd2snes.skin", sizeof("sd2snes.skin"));
+  c->brightness_limit = 15;
+  c->reset_to_menu = 3;           /* ROM: back to the menu in the last game's folder, on the game */
+  c->led_brightness = 15;
+  c->enable_cheats = 1;
+  c->reset_patch = 1;
+  c->enable_ingame_savestate = 1;
+  c->loadstate_delay = 10;
+  c->enable_savestate_slots = 1;
+  c->ingame_buttons_savestate = SNES_BUTTON_START | SNES_BUTTON_R;
+  c->ingame_buttons_loadstate = SNES_BUTTON_START | SNES_BUTTON_L;
+  c->ingame_buttons_changestate = SNES_BUTTON_SELECT;
+  c->sgb_clock_fix = 1;
+  c->sgb_bios_version = 2;
+  c->enable_autosave = 1;
+  c->enable_autosave_msu1 = 1;
+  c->show_covers = 1;
+  c->enable_menu_music = 1;
+  c->covers_in_lists = 1;
+  c->enable_menu_sfx = 1;
+  c->sort_favorites = 1;
+  c->enable_cheat_overlay = 1;
+  c->show_game_info = 1;
+  c->game_info_video = 1;
+  c->game_info_music = 1;
+  c->bps_copier_rsvd = 1;         /* retired, keeps the byte the old default had */
+  c->enable_game_manual = 1;
+  c->enable_sram_slots = 1;
+  c->ingame_buttons_menu = CFG_DEFAULT_IGM_BUTTONS;
+  c->cc_time_limit = 3;           /* 6 minutes, the event setting */
+  c->menu_music_random = 1;
+  memcpy(c->menu_music_folder, "/sd2snes/music", sizeof("/sd2snes/music"));
+  c->ask_clock_on_boot = 1;
+  c->open_msu_folders = 1;
+  c->boot_intro = 1;              /* the power-on screen is on out of the box */
+  c->warn_experimental = 1;       /* ask before an experimental console core starts */
+  c->browser_icons = 1;           /* the file-type icons in the browser */
+}
 
 cfg_t CFG;
 extern mcu_status_t STM;
@@ -219,8 +202,8 @@ static uint16_t cfg_check_menu_combo(uint16_t combo) {
   }
   if(why) {
     printf("cfg: menu combo %04X rejected (%s), using %04X\n",
-           combo, why, CFG_DEFAULT.ingame_buttons_menu);
-    return CFG_DEFAULT.ingame_buttons_menu;
+           combo, why, CFG_DEFAULT_IGM_BUTTONS);
+    return CFG_DEFAULT_IGM_BUTTONS;
   }
   if((CFG.ingame_buttons_savestate   & combo) == combo
   || (CFG.ingame_buttons_loadstate   & combo) == combo
@@ -267,10 +250,10 @@ typedef struct {
   uint8_t     clamp;
 } cfg_item_t;
 
-#define CFG_STR_LEN (sizeof(CFG_DEFAULT.skin_name))
-_Static_assert(sizeof(CFG_DEFAULT.bgm_name) == CFG_STR_LEN
-               && sizeof(CFG_DEFAULT.menu_music_folder) == CFG_STR_LEN
-               && sizeof(CFG_DEFAULT.font_name) == CFG_STR_LEN,
+#define CFG_STR_LEN (sizeof(CFG.skin_name))
+_Static_assert(sizeof(CFG.bgm_name) == CFG_STR_LEN
+               && sizeof(CFG.menu_music_folder) == CFG_STR_LEN
+               && sizeof(CFG.font_name) == CFG_STR_LEN,
                "every CK_STR field must share one length");
 
 /* The favorites mirror is 20 x 256 bytes and the game info block starts right after
@@ -453,8 +436,8 @@ int cfg_save() {
 
 int cfg_load() {
   int err = 0;
-  /* pre-load defaults: a key missing from the file keeps its CFG_DEFAULT value */
-  memcpy(&CFG, &CFG_DEFAULT, sizeof(cfg_t));
+  /* pre-load defaults: a key missing from the file keeps its default (cfg_defaults) */
+  cfg_defaults(&CFG);
   yaml_file_open(CFG_FILE, FA_READ);
   if(file_res) {
     err = file_res;
@@ -482,7 +465,19 @@ int cfg_load() {
           break;
         }
         case CK_BSXTIME:
-          bcdtime2srtctime(strtoll(tok.stringvalue, NULL, 16), p);
+          {
+          /* hex digits, by shifting: strtoll(..., 16) pulled the 64-bit division routines
+             into the image.  The "0x" prefix strtoll accepted is still accepted. */
+          uint64_t v = 0;
+          const char *h = tok.stringvalue;
+          if(h[0] == '0' && (h[1] | 0x20) == 'x') h += 2;
+          for(; ; h++) {
+            unsigned d = (unsigned)*h - '0';
+            if(d > 9) { d = ((unsigned)*h | 0x20) - 'a'; if(d > 5) break; d += 10; }
+            v = (v << 4) | d;
+          }
+          bcdtime2srtctime(v, p);
+          }
           break;
         case CK_SEQ: {
           const char *s = tok.stringvalue;

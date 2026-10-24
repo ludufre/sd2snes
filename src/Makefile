@@ -79,7 +79,7 @@ include version.mk
 SRC  = main.c ff.c ccsbcs.c
 SRC += printf.c fileops.c fpga.c fpga_spi.c snes.c smc.c bootleg.c
 SRC += memory.c filetypes.c faulthandler.c sort.c crc32.c cic.c cover.c patch.c patchmeta.c patch_copier.c theme.c
-SRC += cli.c ymodem.c rle.c msu1.c crc16.c sysinfo.c
+SRC += cli.c ymodem.c rle.c zx0.c msu1.c crc16.c sysinfo.c
 SRC += nesave.c cfg.c cheat.c yaml.c savestate.c sgb.c gbc.c sms.c atari.c nes.c nes_chr.c hwinfo.c gameinfo.c igmenu.c manual.c
 # Shared helpers: menu command handlers, file->PSRAM streaming, string/path
 # utilities and the YAML sidecar writer.
@@ -104,6 +104,9 @@ SRC += sufami.c
 SRC += xc.c
 
 SRC += usbdesc.c usbcore.c usbuser.c cdcuser.c usbinterface.c
+
+# C library: newlib-nano (see LDFLAGS), with its malloc-backed strtok replaced.
+SRC += strtok.c
 
 # Wedge diagnostic instrument (wdiag.h): only a private diagnostic config sets
 # GBC_WEDGE_DIAG = y; every shipped config leaves it out.
@@ -171,6 +174,7 @@ CC = $(ARCH)-gcc
 OBJCOPY = $(ARCH)-objcopy
 OBJDUMP = $(ARCH)-objdump
 SIZE = $(ARCH)-size
+AR = $(ARCH)-ar
 NM = $(ARCH)-nm
 REMOVE = rm -f
 COPY = cp
@@ -193,23 +197,36 @@ CFLAGS += -Wall -Wstrict-prototypes -Werror -Wno-strict-aliasing
 CFLAGS += -I$(OBJDIR) -I$(CONFIG_ARCH)
 CFLAGS += $(patsubst %,-I%,$(EXTRAINCDIRS))
 CFLAGS += $(CSTANDARD)
-CFLAGS += -ffunction-sections -fdata-sections
-# Per-function stack frames (<obj>.su): the LPC175x main SRAM leaves only a few KB
-# between .bss and the stack.
+# Sections per function (gc-sections drops the unused ones).  Data stays in one section per
+# object: the per-variable sections cost padding and literal-pool reach (~0.5 KB measured),
+# and the little data gc could still drop is not worth that.
+CFLAGS += -ffunction-sections
+# Per-function stack frames: the LPC175x main SRAM leaves only a few KB between .bss and
+# the stack.  Under LTO the frames are those of the final code, written at link time as
+# $(OBJDIR)/*.ltrans.su (the per-object .su files only show the pre-LTO view).
 CFLAGS += -fstack-usage
 
-# Link-Time Optimization: mk2 ONLY (LPC1754, 128 KB flash). LTO shrinks the build
-# ~2 KB so it fits; mk3/mk3-stm32 have room to spare and stay non-LTO (no LTO risk on
-# the configs that don't need it, incl. the untested stm32). Under -flto the per-C
-# assembler listing (-Wa,-adhlns) must be OFF: the compile emits GIMPLE (no asm) and
-# at link $< is an object, so the LTO codegen step would write the listing over a .o.
-# (-flto also needs `used` on the .fwhdr placeholder in main.c so it survives
-# whole-program GC; KEEP() in the linker script protects only against --gc-sections.)
-ifeq ($(CONFIG_MK2),y)
-  CFLAGS += -flto
-else
-  CFLAGS += -Wa,-adhlns=$(OBJDIR)/$(<:.c=.lst)
-endif
+# Link-Time Optimization, every config: ~4 KB on each board (the mk2 would not fit without
+# it).  Under -flto the per-C assembler listing (-Wa,-adhlns) must be OFF: the compile emits
+# GIMPLE (no asm) and at link $< is an object, so the LTO codegen step would write the
+# listing over a .o; `make lss` gives the disassembly of the final image instead.
+# (-flto also needs `used` on the .fwhdr placeholder in main.c so it survives whole-program
+# GC; KEEP() in the linker script protects only against --gc-sections.  The FPGA_* helpers
+# that are functions are noinline on purpose: LTO would inline them back.)
+CFLAGS += -flto
+
+# Size-first code generation outside the hot paths: these turn off optimizations that, under
+# -Os, still trade bytes for speed (loop-invariant motion, jump threading, sibling calls,
+# scheduling, ...) -- 1-1.5 KB of flash per board.  The files that move data byte by byte
+# between the SD card, the FPGA/PSRAM, USB and the DAC keep the plain -Os code: there the
+# hoisted invariants are register addresses inside per-byte loops, and the transfer rates
+# (ROM load, file copy, MSU-1 / QOA streaming) depend on them.
+SIZE_CFLAGS = -fno-move-loop-invariants -fno-tree-loop-im -fno-thread-jumps -fno-caller-saves \
+  -fno-schedule-insns2 -fno-tree-dominator-opts -fno-optimize-sibling-calls -fno-tree-copy-prop \
+  --param max-inline-insns-auto=5
+HOT_SRC = fpga_spi.c memory.c psram_io.c msu1.c usbinterface.c ff.c crc32.c patch.c patch_copier.c \
+  sort.c qoa.c $(CONFIG_ARCH)/sdnative.c $(CONFIG_ARCH)/spi.c $(CONFIG_ARCH)/usbhw.c
+CFLAGS += $(SIZE_CFLAGS)
 
 #---------------- Assembler Options ----------------
 #  -Wa,...:   tell GCC to pass this to the assembler.
@@ -229,9 +246,14 @@ LDFLAGS += -T$(LINKERSCRIPT)
 LDFLAGS += -Wl,--gc-sections
 # Print flash/ram/ahbram usage per link (the mk2 flash is the budget to watch).
 LDFLAGS += -Wl,--print-memory-usage
-ifeq ($(CONFIG_LINKER_RELAX),y)
-  LDFLAGS += -Wl,-O9,--relax
-endif
+# Input sections sorted by alignment: less padding between them.
+LDFLAGS += -Wl,--sort-section=alignment -Wl,--sort-common
+# newlib-nano: the full newlib's routines are built for speed and its reentrancy block
+# (_impure_data + the stdio FILEs) costs ~500 B of RAM; nano saves ~4 KB of flash.  Its
+# strtok is replaced (strtok.c), and memcpy/memmove/memset are taken from the full newlib
+# of the same multilib (FASTMEM_OBJ): nano's copy a byte at a time, and they move every
+# USB packet and SD/PSRAM buffer.
+LDFLAGS += --specs=nano.specs
 
 # OpenOCD options
 # -s <path>:      set additional script search path
@@ -245,6 +267,13 @@ CSRC := $(sort $(SRC))
 
 # Define all object files.
 OBJ := $(patsubst %,$(OBJDIR)/%,$(CSRC:.c=.o) $(ASRC:.S=.o))
+
+# The full newlib's word-at-a-time memcpy/memmove/memset, linked ahead of newlib-nano's
+LIBC_FULL := $(shell $(CC) $(CPUFLAGS) -print-file-name=libc.a)
+FASTMEM_OBJ := $(addprefix $(OBJDIR)/libc_full/libc_a-,memcpy.o memmove.o memset.o)
+
+# The hot paths keep the plain -Os code (see SIZE_CFLAGS).
+$(patsubst %.c,$(OBJDIR)/%.o,$(HOT_SRC)): SIZE_CFLAGS :=
 
 # Define all listing files.
 LST := $(patsubst %,$(OBJDIR)/%,$(CSRC:.c=.lst) $(ASRC:.S=.lst))
@@ -338,11 +367,37 @@ $(OBJDIR)/autoconf.h: $(CONFIG) | $(OBJDIR)
 	$(E) "  CONF2H $(CONFIG)"
 	$(Q)$(AWK) -f conf2h.awk $(CONFIG) > $(OBJDIR)/autoconf.h
 
-# Generate embedded FPGA config from finished bitfile
+# Embedded images re-packed as ZX0 (zx0.c): the boot bitstream (mk3/mk3-stm32) and the SNES
+# boot program.  Both start from the RLE images the tree has always had (fpga_mini.bi3,
+# snesboot.h), expanded by utils/rled exactly as the firmware's old RLE reader did, so the
+# FPGA and the SNES receive the same bytes as before.  The decoder's window is ptrcache
+# (8 KB), so the compressor must not reach further back than that.
+ZX0_WINDOW = 8192
+ZX0_PACK = utils/zx0c -f -w $(ZX0_WINDOW)
+utils/rled utils/bootimg utils/zx0c:
+	$(Q)$(MAKE) -s -C utils $(@F)
+
 .PRECIOUS : $(OBJDIR)/cfgware.h
+ifeq ($(CONFIG_MK2),y)
+# mk2 loads fpga_mini.bit from the card (fpga.c does not include this)
 $(OBJDIR)/cfgware.h: $(CONFIG_CFGWARE) | $(OBJDIR) $(OBJDIR)/autoconf.h
 	$(E) "  BIN2C $(CONFIG_CFGWARE)"
 	$(Q)$(BIN2C) "$(CONFIG_CFGWARE)" cfgware > $(OBJDIR)/cfgware.h
+else
+$(OBJDIR)/cfgware.h: $(CONFIG_CFGWARE) utils/rled utils/zx0c | $(OBJDIR) $(OBJDIR)/autoconf.h
+	$(E) "  ZX0    $(CONFIG_CFGWARE)"
+	$(Q)utils/rled "$(CONFIG_CFGWARE)" $(OBJDIR)/cfgware.raw
+	$(Q)$(ZX0_PACK) $(OBJDIR)/cfgware.raw $(OBJDIR)/cfgware.zx0 >/dev/null
+	$(Q)$(BIN2C) $(OBJDIR)/cfgware.zx0 cfgware > $(OBJDIR)/cfgware.h
+endif
+
+.PRECIOUS : $(OBJDIR)/bootzx0.h
+$(OBJDIR)/bootzx0.h: snesboot.h utils/bootimg utils/rled utils/zx0c | $(OBJDIR)
+	$(E) "  ZX0    snesboot.h"
+	$(Q)utils/bootimg $(OBJDIR)/bootrle.rle
+	$(Q)utils/rled $(OBJDIR)/bootrle.rle $(OBJDIR)/bootrle.raw
+	$(Q)$(ZX0_PACK) $(OBJDIR)/bootrle.raw $(OBJDIR)/bootrle.zx0 >/dev/null
+	$(Q)$(BIN2C) $(OBJDIR)/bootrle.zx0 bootzx0 > $(OBJDIR)/bootzx0.h
 
 # Create final output files from ELF output file.
 # --gap-fill 0xff is important to match the padding values as they end up
@@ -369,11 +424,16 @@ $(OBJDIR)/%.sym: $(OBJDIR)/%.elf
 	$(E) "  SYM    $<"
 	$(E)$(NM) -n $< > $@
 
+# The full newlib's mem* routines, out of its archive (see FASTMEM_OBJ)
+$(FASTMEM_OBJ): $(LIBC_FULL) | $(OBJDIRS)
+	$(Q)mkdir -p $(OBJDIR)/libc_full
+	$(Q)cd $(OBJDIR)/libc_full && $(AR) x $(LIBC_FULL) $(notdir $@)
+
 # Link: create ELF output file from object files.
 .SECONDARY : $(TARGET)-intermediate.elf
 .PRECIOUS : $(OBJ)
 $(TARGET)-intermediate.elf: .EXTRA_PREREQS = $(LINKERSCRIPT)
-$(TARGET)-intermediate.elf : $(OBJ)
+$(TARGET)-intermediate.elf : $(OBJ) $(FASTMEM_OBJ)
 	$(E) "  LINK   $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $^ --output $@ $(LDFLAGS)
 
@@ -392,12 +452,12 @@ $(OBJDIR)/$(CONFIG_FW_FILE): $(TARGET).elf
 	cat $^ > $(OBJDIR)/$(CONFIG_FW_FILE)
 
 # Compile: create object files from C source files.
-$(OBJDIR)/%.o : %.c | $(OBJDIRS) $(OBJDIR)/autoconf.h $(OBJDIR)/cfgware.h $(OBJDIR)/version.h
+$(OBJDIR)/%.o : %.c | $(OBJDIRS) $(OBJDIR)/autoconf.h $(OBJDIR)/cfgware.h $(OBJDIR)/bootzx0.h $(OBJDIR)/version.h
 	$(E) "  CC     $<"
 	$(Q)$(CC) -c $(ALL_CFLAGS) $< -o $@
 
 # Compile: create assembler files from C source files.
-$(OBJDIR)/%.s : %.c | $(OBJDIR) $(OBJDIR)/autoconf.h $(OBJDIR)/cfgware.h $(OBJDIR)/version.h
+$(OBJDIR)/%.s : %.c | $(OBJDIR) $(OBJDIR)/autoconf.h $(OBJDIR)/cfgware.h $(OBJDIR)/bootzx0.h $(OBJDIR)/version.h
 	$(CC) -S $(ALL_CFLAGS) $< -o $@
 
 # Assemble: create object files from assembler source files.
@@ -406,7 +466,7 @@ $(OBJDIR)/%.o : %.S | $(OBJDIRS) $(OBJDIR)/autoconf.h
 	$(Q)$(CC) -c $(ALL_ASFLAGS) $< -o $@
 
 # Create preprocessed source for use in sending a bug report.
-$(OBJDIR)/%.i : %.c | $(OBJDIR) $(OBJDIR)/autoconf.h $(OBJDIR)/cfgware.h $(OBJDIR)/version.h
+$(OBJDIR)/%.i : %.c | $(OBJDIR) $(OBJDIR)/autoconf.h $(OBJDIR)/cfgware.h $(OBJDIR)/bootzx0.h $(OBJDIR)/version.h
 	$(CC) -E -mmcu=$(MCU) -I. $(CFLAGS) $< -o $@
 
 # Create the output directory
@@ -429,13 +489,15 @@ clean_list :
 	$(Q)$(REMOVE) $(TARGET).lss
 	$(Q)$(REMOVE) $(OBJ)
 	$(Q)$(REMOVE) $(OBJDIR)/autoconf.h
-	$(Q)$(REMOVE) $(OBJDIR)/cfgware.h
+	$(Q)$(REMOVE) $(OBJDIR)/cfgware.h $(OBJDIR)/cfgware.raw $(OBJDIR)/cfgware.zx0
+	$(Q)$(REMOVE) $(OBJDIR)/bootzx0.h $(OBJDIR)/bootrle.rle $(OBJDIR)/bootrle.raw $(OBJDIR)/bootrle.zx0
 	$(Q)$(REMOVE) $(OBJDIR)/version.h
 	$(Q)$(REMOVE) $(OBJDIR)/${CONFIG_FW_FILE}
 	$(Q)$(REMOVE) $(OBJDIR)/fw.hdr
 	$(Q)$(REMOVE) -r $(OBJDIR)/xc_soc_build $(OBJDIR)/xc_soc.bin $(OBJDIR)/xc_fw.bin $(OBJDIR)/xc_bootrom.bin \
 	  $(OBJDIR)/modules_build $(OBJDIR)/nsfplay.bin $(OBJDIR)/memtest.bin $(OBJDIR)/pcmplay.bin $(OBJDIR)/rtc7110.bin
 	$(Q)$(REMOVE) $(OBJDIR)/.DS_Store
+	$(Q)$(REMOVE) -r $(OBJDIR)/libc_full
 	$(Q)$(REMOVE) $(LST)
 	$(Q)$(REMOVE) $(CSRC:.c=.s)
 	$(Q)$(REMOVE) $(CSRC:.c=.d)

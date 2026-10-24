@@ -121,7 +121,7 @@ fi
 
 $CC -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation -fsanitize=address,undefined -DMODULE_HOST_LINKED \
     -I "$B" -I shim_fileops -I "$S" \
-    fileops_cli.c "$M" "$B/ff.c" "$B/ccsbcs.c" "$B/asset_under_test.c" "$S/strutil.c" \
+    fileops_cli.c "$M" "$B/ff.c" "$B/ccsbcs.c" "$B/asset_under_test.c" "$S/strutil.c" hexup_shim.c \
     -o "$B/fileops_cli" 2> "$B/cc.log" || { cat "$B/cc.log"; exit 1; }
 grep -v "ff.c\|ccsbcs.c\|asset_under_test.c" "$B/cc.log" | grep -q "warning" && { cat "$B/cc.log"; exit 1; }
 

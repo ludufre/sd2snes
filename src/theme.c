@@ -219,7 +219,9 @@ static __attribute__((noinline)) int theme_open(const char *path, uint8_t *hdr, 
   return 1;
 }
 
-void theme_apply(void) {
+/* noinline: under LTO this is inlined into its single caller and its path buffer
+   would sit in that caller's frame for the whole menu loop, under every call chain. */
+void __attribute__((noinline)) theme_apply(void) {
   const char *skin = (const char*)CFG.skin_name;
   /* Every exit below leaves the font untouched, so start from "no theme flags":
      theme_font_edges then sees the user toggles only. */

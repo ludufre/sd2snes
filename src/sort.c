@@ -144,6 +144,52 @@ void sort_heapify(uint32_t addr, unsigned int i, unsigned int heapsize)
   }
 }
 
+
+/* Compact quicksort over the 32-bit pointer table (replaces newlib's qsort, ~1.5 KB):
+   median-of-three pivot, insertion sort below 8 elements, the smaller side first so the
+   explicit stack stays at log2(n) entries.  sort_cmp_elem is not a strict order for names
+   that start with '.' (they compare "less" from either side), so the scans are bounded and
+   always compare the element against the pivot, in that order -- the form in which such
+   names still partition consistently.  A table of nothing but such names would still make
+   every partition degenerate (quadratic): past a budget of comparisons this gives up and
+   sort_dir falls back to the heapsort, O(n log n) whatever the comparator answers.
+   Returns 0 when it gave up (the table is then a permutation of the input, unsorted). */
+static void sort_swap(uint32_t *a, uint32_t *b) { uint32_t t = *a; *a = *b; *b = t; }
+static int sort_cmp(uint32_t a, uint32_t b) { return sort_cmp_elem(&a, &b); }
+static int sort_ptrs(uint32_t *v, unsigned int n) {
+  uint16_t stk[2*16];               /* n <= QSORT_MAXELEM fits; depth <= log2(n) pairs */
+  unsigned int sp = 0, lo = 0, hi = n, lg = 1;
+  while((1u << lg) < n) lg++;
+  long budget = (3L * lg + 4) * n;  /* a few times what a sorted or random table takes */
+#define SORT_LT(a, b) (budget--, sort_cmp(a, b) < 0)
+#define SORT_GT(a, b) (budget--, sort_cmp(a, b) > 0)
+  for(;;) {
+    while(hi - lo > 8) {
+      if(budget < 0) return 0;
+      unsigned int mid = lo + (hi - lo) / 2, i = lo, j = hi - 1;
+      if(SORT_LT(v[mid], v[lo])) sort_swap(&v[mid], &v[lo]);
+      if(SORT_LT(v[j], v[mid])) { sort_swap(&v[j], &v[mid]);
+        if(SORT_LT(v[mid], v[lo])) sort_swap(&v[mid], &v[lo]); }
+      uint32_t p = v[mid];
+      for(;;) {
+        do i++; while(i < hi - 1 && SORT_LT(v[i], p));
+        do j--; while(j > lo && SORT_GT(v[j], p));
+        if(i >= j) break;
+        sort_swap(&v[i], &v[j]);
+      }
+      j++;                          /* lo < j < hi: both sides shrink */
+      if(j - lo < hi - j) { stk[sp++] = j; stk[sp++] = hi; hi = j; }
+      else { stk[sp++] = lo; stk[sp++] = j; lo = j; }
+    }
+    for(unsigned int i = lo + 1; i < hi; i++)
+      for(unsigned int k = i; k > lo && SORT_LT(v[k], v[k-1]); k--) sort_swap(&v[k], &v[k-1]);
+    if(!sp) return 1;
+    hi = stk[--sp]; lo = stk[--sp];
+  }
+#undef SORT_LT
+#undef SORT_GT
+}
+
 void sort_dir(uint32_t addr, unsigned int size)
 {
 stat_getstring=0;
@@ -153,8 +199,9 @@ stat_getstring=0;
   } else {
     /* retrieve, sort, and store dir table */
     sram_readblock(ptrcache, addr, size*4);
-    qsort((void*)ptrcache, size, 4, sort_cmp_elem);
+    int sorted = sort_ptrs(ptrcache, size);
     sram_writeblock(ptrcache, addr, size*4);
+    if(!sorted) ext_heapsort(addr, size);
   }
 }
 

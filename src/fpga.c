@@ -42,7 +42,14 @@
 #ifndef CONFIG_MK2
 /* mk2 loads the boot bitstream from SD (see fpga_rompgm), so it does NOT bake the
    ~21 KB cfgware blob into the firmware. mk3/mk3-stm32 keep it embedded. */
-#include "cfgware.h"
+#include "cfgware.h"   /* generated: fpga_mini.bi3 re-packed as ZX0 (Makefile) */
+#include "zx0.h"
+#include "module.h"
+/* The ZX0 window is the READDIR sort cache (8 KB): fpga_rompgm only runs for the boot
+   diagnostics, before any menu exists, and module_gate() takes it back from a module first. */
+extern uint32_t ptrcache[QSORT_MAXELEM];
+_Static_assert(sizeof(ptrcache) >= 8192, "cfgware: the ZX0 window is 8 KB (ZX0_WINDOW, Makefile)");
+static void rompgm_out(uint8_t data) { FPGA_SEND_BYTE_SERIAL(data); }
 #endif
 
 uint8_t SPI_OFFLOAD;
@@ -186,12 +193,9 @@ void fpga_rompgm() {
 #else
   int MAXRETRIES = 10;
   int retries = MAXRETRIES;
-  uint8_t data;
-  int i;
   tick_t timeout;
   fpga_init();
   do {
-    i=0;
     timeout = getticks() + 100;
     fpga_set_prog_b(0);
     uart_putc('P');
@@ -211,19 +215,11 @@ void fpga_rompgm() {
     }
     uart_putc('p');
 
-    /* open configware file */
-    rle_mem_init(cfgware, sizeof(cfgware));
-    printf("sizeof(cfgware) = %d\n", sizeof(cfgware));
+    module_gate(0);                 /* ptrcache is the ZX0 window */
     FPGA_DIN_MASK();
-    for (;;) {
-      data = rle_mem_getc();
-      if(rle_state) break;
-      i++;
-      FPGA_SEND_BYTE_SERIAL(data);
-    }
+    zx0_stream(cfgware, (uint8_t *)ptrcache, 8191, rompgm_out);
     FPGA_DIN_UNMASK();
     uart_putc('c');
-    printf("fpga_rompgm: %d bytes programmed\n", i);
     delay_ms(1);
   } while (!fpga_get_done() && retries--);
   if(!fpga_get_done()) {

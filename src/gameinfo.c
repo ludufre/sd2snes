@@ -577,7 +577,7 @@ void gameinfo_fmv_next(void) {
   if(menu_music_active() && gi_fmv_fps) {
     /* frame = audio_seconds * fps = samples * fps / 44100 (MSU-1 rate), wrapped to the loop */
     uint32_t s = menu_music_samples();
-    target = (uint32_t)(((uint64_t)s * gi_fmv_fps) / 44100u) % gi_fmv_frames;
+    target = ((s / 44100u) * gi_fmv_fps + (s % 44100u) * gi_fmv_fps / 44100u) % gi_fmv_frames;  /* == s*fps/44100 without 64-bit division */
   } else {
     target = (uint32_t)((gi_fmv_cur + 1u) % gi_fmv_frames);   /* no audio: free-run */
   }

@@ -27,7 +27,9 @@ static uint32_t sd_tacc_max, sd_tacc_avg;
 static int write_sysinfo(int sd_measured);
 static void write_sysinfo_legacy(void);
 
-void sysinfo_loop() {
+/* noinline: under LTO this is inlined into its single caller and its path buffer
+   would sit in that caller's frame for the whole menu loop, under every call chain. */
+void __attribute__((noinline)) sysinfo_loop() {
   uint8_t caps[4];
   int v2;
   sd_tacc_max = 0;

@@ -221,20 +221,33 @@ void fpga_spi_init(void) {
   GPIO_MODE_IN(FPGA_MCU_RDY_REG, FPGA_MCU_RDY_BIT);
 }
 
-void set_msu_addr(uint16_t address) {
+/* Commands of one byte plus 0, 1 or 2 (big-endian) bytes of value: a call each instead of
+   the select/tx/deselect sequence inlined at every setter. */
+void fpga_cmd0(uint8_t cmd) {
   FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETADDR | FPGA_TGT_MSUBUF);
-  FPGA_TX_BYTE((address >> 8) & 0xff);
-  FPGA_TX_BYTE((address) & 0xff);
+  FPGA_TX_BYTE(cmd);
+  FPGA_DESELECT();
+}
+void fpga_cmd8(uint8_t cmd, uint8_t v) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(cmd);
+  FPGA_TX_BYTE(v);
+  FPGA_DESELECT();
+}
+void fpga_cmd16(uint8_t cmd, uint16_t v) {
+  FPGA_SELECT();
+  FPGA_TX_BYTE(cmd);
+  FPGA_TX_BYTE(v >> 8);
+  FPGA_TX_BYTE(v);
   FPGA_DESELECT();
 }
 
+void set_msu_addr(uint16_t address) {
+  fpga_cmd16(FPGA_CMD_SETADDR | FPGA_TGT_MSUBUF, address);
+}
+
 void set_dac_addr(uint16_t address) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETADDR | FPGA_TGT_DACBUF);
-  FPGA_TX_BYTE((address >> 8) & 0xff);
-  FPGA_TX_BYTE((address) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd16(FPGA_CMD_SETADDR | FPGA_TGT_DACBUF, address);
 }
 
 void set_mcu_addr(uint32_t address) {
@@ -252,10 +265,7 @@ void set_mcu_addr(uint32_t address) {
 }
 
 void set_saveram_base(uint8_t mask) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETRAMBASE);
-  FPGA_TX_BYTE((mask) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_SETRAMBASE, mask);
 }
 
 /* Every mask/base register below is one command byte followed by a 24-bit
@@ -309,9 +319,7 @@ void set_saveram_mask_b(uint32_t mask) {
 }
 
 void set_mapper(uint8_t val) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETMAPPER(val));
-  FPGA_DESELECT();
+  fpga_cmd0(FPGA_CMD_SETMAPPER(val));
 }
 
 uint8_t fpga_test() {
@@ -344,10 +352,7 @@ void fpga_set_sddma_range(uint16_t start, uint16_t end) {
 
 void fpga_sddma(uint8_t tgt, uint8_t partial) {
   GPIO_MODE_IN(SD_CLKREG, SD_CLKBIT);
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SDDMA | (tgt & 3) | (partial ? FPGA_SDDMA_PARTIAL : 0));
-  FPGA_TX_BYTE(0x00); /* dummy for falling DMA_EN edge */
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_SDDMA | (tgt & 3) | (partial ? FPGA_SDDMA_PARTIAL : 0), 0x00);  /* dummy for falling DMA_EN edge */
   FPGA_SELECT();
   FPGA_TX_BYTE(FPGA_CMD_GETSTATUS);
   DBG_SD_OFFLOAD printf("FPGA DMA tgt=%u partial=%u, wait for completion...", tgt, partial);
@@ -360,25 +365,15 @@ void fpga_sddma(uint8_t tgt, uint8_t partial) {
 }
 
 void dac_play() {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_DACPLAY);
-  FPGA_TX_BYTE(0x00); /* latch reset */
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_DACPLAY, 0x00);       /* latch reset */
 }
 
 void dac_pause() {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_DACPAUSE);
-  FPGA_TX_BYTE(0x00); /* latch reset */
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_DACPAUSE, 0x00);      /* latch reset */
 }
 
 void dac_reset(uint16_t address) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_DACSETPTR);
-  FPGA_TX_BYTE((address >> 8) & 0xff); /* address hi */
-  FPGA_TX_BYTE(address & 0xff);      /* address lo */
-  FPGA_DESELECT();
+  fpga_cmd16(FPGA_CMD_DACSETPTR, address);
 }
 
 /* Arm the autonomous SFX fetcher (sfxdma.v) with the PSRAM base + body length of a
@@ -408,18 +403,11 @@ uint8_t fpga_sfx_status(void) {
 /* Abort the SFX fetcher and hand the dac_buf write port back to the MCU SD-DMA path
    (in-game MSU-1 / FMV music).  Called at game load. */
 void fpga_sfx_disable(void) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SFX_DISABLE);    /* 0xfc */
-  FPGA_TX_BYTE(0x00);                    /* one param byte -> disable strobe */
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_SFX_DISABLE, 0x00);   /* 0xfc + one param byte -> disable strobe */
 }
 
 void msu_reset(uint16_t address) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_MSUSETPTR);
-  FPGA_TX_BYTE((address >> 8) & 0xff); /* address hi */
-  FPGA_TX_BYTE(address & 0xff);      /* address lo */
-  FPGA_DESELECT();
+  fpga_cmd16(FPGA_CMD_MSUSETPTR, address);
 }
 
 void set_msu_status(uint16_t status) {
@@ -572,10 +560,7 @@ void fpga_write_dspx_dat(uint16_t data) {
 }
 
 void fpga_dspx_reset(uint8_t reset) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_DSPRESET);
-  FPGA_TX_BYTE(reset);
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_DSPRESET, reset);
 }
 
 /* ST018 core: start the FPGA-side read-back checksum of the firmware image
@@ -608,17 +593,11 @@ uint8_t fpga_st018_vsum_read(uint32_t *sum) {
    internal state can be snapshotted/restored. MCU-driven path for bring-up;
    the savestate handler drives the same halt SNES-side via the $E8:07FF scan-window control byte. */
 void fpga_dspx_ss_halt(uint8_t halt) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_DSPSSHALT);
-  FPGA_TX_BYTE(halt);
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_DSPSSHALT, halt);
 }
 
 void fpga_set_dac_boost(uint8_t boost) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_DACBOOST);
-  FPGA_TX_BYTE(boost);
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_DACBOOST, boost);
 }
 
 void fpga_set_features(uint16_t feat) {
@@ -628,11 +607,7 @@ void fpga_set_features(uint16_t feat) {
   if (CFG.bus_compat) feat |= FEAT_BUSCOMPAT;
   else                feat &= ~FEAT_BUSCOMPAT;
   printf("set features: %04x\n", feat);
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SETFEATURE);
-  FPGA_TX_BYTE((feat >> 8) & 0xff);
-  FPGA_TX_BYTE((feat) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd16(FPGA_CMD_SETFEATURE, feat);
   current_features = feat;
 }
 
@@ -640,19 +615,12 @@ void fpga_set_features(uint16_t feat) {
    which is what lets the menu open with NMI off.  Other cores drop the bytes. */
 void fpga_set_ovl_combo(uint16_t combo) {
   printf("set in-game menu combo: %04x\n", combo);
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SET_OVL_COMBO);
-  FPGA_TX_BYTE((combo >> 8) & 0xff);
-  FPGA_TX_BYTE((combo) & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd16(FPGA_CMD_SET_OVL_COMBO, combo);
 }
 
 void fpga_set_213f(uint8_t data) {
   printf("set 213f: %d\n", data);
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SET213F);
-  FPGA_TX_BYTE(data);
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_SET213F, data);
 }
 
 /* Point the MCU's memory window at RAM0 (the PSRAM, unit 0) or RAM1 (the 4 Mbit SRAM,
@@ -660,10 +628,7 @@ void fpga_set_213f(uint8_t data) {
    so it is exclusively the RAM connection test's (src/memtest.c), which reconfigures to
    that core first.  Calling it under a runtime core would set an unrelated register. */
 void fpga_select_mem(uint8_t unit) {
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_SELECTMEM);
-  FPGA_TX_BYTE(unit);
-  FPGA_DESELECT();
+  fpga_cmd8(FPGA_CMD_SELECTMEM, unit);
 }
 
 void fpga_set_snescmd_addr(uint16_t addr) {
@@ -784,11 +749,7 @@ uint8_t fpga_copier_wait(void) {
 
 void fpga_set_chipfeat(uint16_t feat) {
   printf("chipfeat <= %d\n", feat);
-  FPGA_SELECT();
-  FPGA_TX_BYTE(FPGA_CMD_CHIPFEAT);
-  FPGA_TX_BYTE(feat >> 8);
-  FPGA_TX_BYTE(feat & 0xff);
-  FPGA_DESELECT();
+  fpga_cmd16(FPGA_CMD_CHIPFEAT, feat);
 }
 
 uint8_t fpga_read_config(uint8_t group, uint8_t index) {

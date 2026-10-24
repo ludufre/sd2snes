@@ -41,11 +41,12 @@ memory.c: RAM operations
 #include "led.h"
 #include "smc.h"
 #include "memory.h"
+#include "zx0.h"
 #include "snes.h"
 #include "timer.h"
 #include "rle.h"
 #include "diskio.h"
-#include "snesboot.h"
+#include "bootzx0.h"    /* generated: snesboot.h re-packed as ZX0 (Makefile) */
 #include "msu1.h"
 #include "sufami.h"
 #include "cli.h"
@@ -2107,23 +2108,22 @@ uint32_t load_sram_rle(uint8_t* filename, uint32_t base_addr) {
   return (uint32_t)filesize;
 }
 
+static uint32_t bootrle_n;
+static void bootrle_out(uint8_t data) {
+  FPGA_TX_BYTE(data);
+  FPGA_WAIT_RDY_INLINE();
+  bootrle_n++;
+}
 uint32_t load_bootrle(uint32_t base_addr) {
-  uint8_t data;
+  extern uint32_t ptrcache[];
   set_mcu_addr(base_addr);
-  DWORD filesize = 0;
-  rle_mem_init(bootrle, sizeof(bootrle));
-
+  bootrle_n = 0;
+  module_gate(0);                   /* ptrcache is the ZX0 window (8 KB, see fpga_rompgm) */
   FPGA_SELECT();
   FPGA_TX_BYTE(0x98);
-  for(;;) {
-    data = rle_mem_getc();
-    if(rle_state) break;
-    FPGA_TX_BYTE(data);
-    FPGA_WAIT_RDY_INLINE();
-    filesize++;
-  }
+  zx0_stream(bootzx0, (uint8_t *)ptrcache, 8191, bootrle_out);
   FPGA_DESELECT();
-  return (uint32_t)filesize;
+  return bootrle_n;
 }
 
 /* Build the bucketed SD save path "/sd2snes/saves/[<ns>/]<BB>/<stem><ext>" into buf, honoring an active

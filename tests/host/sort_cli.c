@@ -8,7 +8,13 @@
  *   1) a fixed MSU-1 folder lands in the exact expected order: ".." first, folders, every
  *      non-track file alphabetically, then the .pcm tracks in NUMERIC order;
  *   2) the same folder with hidden extensions (the '.' stored as byte 0x01);
- *   3) randomized tables are non-decreasing under an independent reference comparator.
+ *   3) randomized tables are non-decreasing under an independent reference comparator;
+ *   4) properties of the sort itself, over sizes from 0 to QSORT_MAXELEM and inputs that are
+ *      already sorted, reversed, all equal or full of duplicates: the table comes back a
+ *      permutation of itself, ordered whenever the comparator is a real order, and the
+ *      number of name reads stays O(n log n) (each one is a 256-byte SPI read on the device);
+ *      with names that start with '.', where the comparator answers "less" both ways, it has
+ *      to stay in bounds (ASan) and still return a permutation.
  * run_sort.sh builds this twice, with QSORT_MAXELEM large and tiny, so both the qsort path
  * and the in-place heapsort path are held to the same order.
  */
@@ -23,6 +29,7 @@
 
 static uint8_t *psram;
 static int fails;
+static unsigned long name_reads;   /* sram_readstrn calls: two per comparison that reads names */
 
 /* The FPGA takes a 24-bit address, so the type byte a directory pointer carries in its top
    8 bits never reaches the bus: sort_getstring_for_dirent adds the whole pointer to the
@@ -58,6 +65,7 @@ uint16_t sram_writeblock(void *buf, uint32_t a, uint16_t n) {
 uint16_t sram_readstrn(void *buf, uint32_t a, uint16_t n) {
   uint8_t *t = buf;
   uint16_t count = 0;
+  name_reads++;
   while(n--) {
     if(!(*t++ = psram[A24(a++)])) break;
     count++;
@@ -224,12 +232,91 @@ static void t_random(unsigned seed, unsigned n) {
   free(e);
 }
 
+/* ---- properties of the sort ----------------------------------------------------------- */
+
+static int u32cmp(const void *a, const void *b) {
+  uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
+  return x < y ? -1 : x > y;
+}
+
+enum { P_RANDOM, P_SORTED, P_REVERSED, P_EQUAL, P_DOTS, P_ALLDOTS };
+
+/* n entries of one shape; P_DOTS mixes in names that start with '.' */
+static void t_property(unsigned seed, unsigned n, int shape) {
+  static const uint8_t types[] = { TYPE_SUBDIR, TYPE_ROM, TYPE_PCM, TYPE_NES };
+  static const char *pool[] = { "a", "A", "b", "ab", "Ab", "b-2", "b-10", "c", "zz", "z9" };
+  ent_t *e = calloc(n ? n : 1, sizeof(*e));
+  char **names = calloc(n ? n : 1, sizeof(*names));
+  uint32_t *before = calloc(n ? n : 1, 4), *after = calloc(n ? n : 1, 4);
+  int dots = 0;
+  srand(seed);
+  for(unsigned i = 0; i < n; i++) {
+    unsigned k = shape == P_SORTED ? i : shape == P_REVERSED ? n - 1 - i : (unsigned)rand();
+    uint8_t type = shape == P_RANDOM || shape == P_DOTS ? types[rand() % 4] : TYPE_ROM;
+    names[i] = malloc(64);
+    if(shape == P_EQUAL)
+      snprintf(names[i], 64, "same.ext");
+    else if(shape == P_SORTED || shape == P_REVERSED)
+      snprintf(names[i], 64, "n%06u.ext", k);
+    else if(shape == P_ALLDOTS || (shape == P_DOTS && rand() % 4 == 0)) {
+      snprintf(names[i], 64, ".%s%s", pool[k % 10], type == TYPE_SUBDIR ? "/" : ".ext");
+      dots = 1;
+    } else
+      snprintf(names[i], 64, "%s%s", pool[k % 10], type == TYPE_SUBDIR ? "/" : ".ext");
+    e[i].name = names[i];
+    e[i].type = type;
+  }
+  build_table(e, n, 0);
+  for(unsigned i = 0; i < n; i++) before[i] = sram_readlong(SRAM_DIR_ADDR + 4 * i);
+  name_reads = 0;
+  sort_dir(SRAM_DIR_ADDR, n);
+  unsigned long reads = name_reads;
+  if(getenv("SORT_READS") && n >= 1000)
+    printf("  reads n=%u shape=%d: %lu\n", n, shape, reads);
+  for(unsigned i = 0; i < n; i++) after[i] = sram_readlong(SRAM_DIR_ADDR + 4 * i);
+  qsort(before, n, 4, u32cmp);
+  qsort(after, n, 4, u32cmp);
+  if(n && memcmp(before, after, 4 * n)) {
+    printf("  FAIL property seed=%u n=%u shape=%d: not a permutation of the input\n", seed, n, shape);
+    fails++;
+  }
+  if(!dots) {
+    for(unsigned i = 1; i < n; i++) {
+      if(ref_cmp(i - 1, i) > 0) {
+        printf("  FAIL property seed=%u n=%u shape=%d: \"%s\" sorted before \"%s\"\n",
+               seed, n, shape, entry_name(i - 1), entry_name(i));
+        fails++;
+        break;
+      }
+    }
+  }
+  /* 2 reads per comparison; a quadratic sort of 2048 entries would need millions */
+  unsigned lg = 1;
+  while((1u << lg) < n) lg++;
+  /* the non-strict shapes may end in the heapsort fallback: its comparisons on top */
+  unsigned long cap = shape >= P_DOTS ? 2ul * (6ul * n * lg + 10ul * n) : 2ul * (3ul * n * lg + 4ul * n);
+  if(n > 1 && reads > cap) {
+    printf("  FAIL property seed=%u n=%u shape=%d: %lu name reads, not O(n log n)\n", seed, n, shape, reads);
+    fails++;
+  }
+  for(unsigned i = 0; i < n; i++) free(names[i]);
+  free(names); free(e); free(before); free(after);
+}
+
 int main(void) {
   psram = calloc(1, 0x1000000);
   if(!psram) return 2;
   t_fixed(0);
   t_fixed(1);
   for(unsigned seed = 1; seed <= 40; seed++) t_random(seed, 2 + seed * 7);
+  {
+    static const unsigned sizes[] = { 0, 1, 2, 3, 7, 8, 9, 10, 17, 31, 64, 255, 1000, 2048 };
+    for(unsigned k = 0; k < sizeof(sizes) / sizeof(sizes[0]); k++) {
+      unsigned n = sizes[k] < QSORT_MAXELEM ? sizes[k] : QSORT_MAXELEM;
+      for(int shape = P_RANDOM; shape <= P_ALLDOTS; shape++)
+        for(unsigned seed = 1; seed <= (n < 100 ? 20u : 3u); seed++) t_property(seed * 31 + k, n, shape);
+    }
+  }
   printf("sort (QSORT_MAXELEM=%d): %s\n", QSORT_MAXELEM, fails ? "FAIL" : "ok");
   free(psram);
   return fails ? 1 : 0;

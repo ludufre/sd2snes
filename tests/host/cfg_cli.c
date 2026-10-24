@@ -36,7 +36,9 @@
 #include "snes.h"      /* the real src/snes.h: SNES_BUTTON_*, mcu_status_t */
 
 extern cfg_t CFG;
-extern const cfg_t CFG_DEFAULT;
+void cfg_defaults(cfg_t *c);
+cfg_t CFG_DEFAULT_img;
+#define CFG_DEFAULT CFG_DEFAULT_img
 
 /* cfg.c declares this; nothing it does touches it, but the definition keeps
    the link honest if that ever changes. */
@@ -632,6 +634,7 @@ static int mode_roundtrip(const char *in, const char *out) {
 }
 
 int main(int argc, char **argv) {
+  cfg_defaults(&CFG_DEFAULT_img);
   const char *mode;
 
   if (argc < 2) {

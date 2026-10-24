@@ -28,7 +28,9 @@
 #include "gameopt.h"
 
 extern cfg_t CFG;
-extern const cfg_t CFG_DEFAULT;
+void cfg_defaults(cfg_t *c);
+extern cfg_t CFG_DEFAULT_img;
+#define CFG_DEFAULT CFG_DEFAULT_img
 int cfg_cli_main(int argc, char **argv);   /* cfg_cli.c's own main, renamed: unused */
 void cfg_cli_sram_init(void);
 
@@ -113,6 +115,7 @@ static int idx_of(size_t off) {   /* gameopt_list's index of a field, from GAMEO
 }
 
 int main(void) {
+  cfg_defaults(&CFG_DEFAULT_img);
   uint8_t b[GAMEOPT_BLK_SIZE], srm, ss;
   int i1chip, ihook, ibright;
   const char *g = "/roms/Game.sfc";

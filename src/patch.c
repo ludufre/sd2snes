@@ -1510,7 +1510,9 @@ int patch_export_exists(const uint8_t *patch_path) {
     return 1;
 }
 
-int patch_export_write(const uint8_t *patch_path,
+/* noinline: under LTO this is inlined into its single caller and its path buffer
+   would sit in that caller's frame for the whole menu loop, under every call chain. */
+int __attribute__((noinline)) patch_export_write(const uint8_t *patch_path,
                        uint32_t rom_base_addr, uint32_t size) {
     char out[IPS_PATH_LEN];
     FILINFO fno;
@@ -1741,7 +1743,9 @@ int patch_unlink_rom_assets(const uint8_t *rom_path) {
     return n;
 }
 
-int patch_export_copy_assets(const uint8_t *rom_path, const uint8_t *save_key) {
+/* noinline: under LTO this is inlined into its single caller and its path buffer
+   would sit in that caller's frame for the whole menu loop, under every call chain. */
+int __attribute__((noinline)) patch_export_copy_assets(const uint8_t *rom_path, const uint8_t *save_key) {
     uint8_t dst[IPS_PATH_LEN];
     char ext[12];
     unsigned i;

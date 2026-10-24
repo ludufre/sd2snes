@@ -157,7 +157,9 @@ uint8_t patchmeta_flags_for(const uint8_t *rom_path, const char *patch_basename,
   return flags;
 }
 
-void patchmeta_save(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count) {
+/* noinline: under LTO this is inlined into its single caller and its path buffer
+   would sit in that caller's frame for the whole menu loop, under every call chain. */
+void __attribute__((noinline)) patchmeta_save(const uint8_t *rom_path, uint32_t sram_addr, uint8_t count) {
   char cur[IPS_NAME_BADGE];   /* display name as currently staged */
   char def[IPS_NAME_BADGE];   /* what the derivation alone would produce */
   unsigned stem_len = pm_stem_len(rom_path);

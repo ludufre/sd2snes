@@ -257,4 +257,7 @@ uint8_t fpga_copier_wait(void);
 void fpga_set_chipfeat(uint16_t feat);
 uint8_t fpga_read_config(uint8_t group, uint8_t index);
 void fpga_write_config(uint8_t group, uint8_t index, uint8_t value, uint8_t invmask);
+void fpga_cmd0(uint8_t cmd);
+void fpga_cmd8(uint8_t cmd, uint8_t v);
+void fpga_cmd16(uint8_t cmd, uint16_t v);
 #endif

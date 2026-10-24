@@ -55,7 +55,8 @@
 #define FLAG_NEGATIVE  128
 
 /* Digits used for conversion */
-static const char hexdigits[] = "0123456789abcdef";
+static const char hexdigits[] = "0123456789abcdef0123456789ABCDEF";
+static unsigned char hexup;  /* 16 while f_printf renders: %X upper case, as FatFs' own formatter did */
 
 /* Temporary buffer used for numbers - just large enough for 32 bit in octal */
 static char buffer[12];
@@ -91,6 +92,7 @@ static int internal_nprintf(void (*output_function)(char c), const char *fmt, va
   unsigned int width;
   unsigned int flags;
   unsigned int base = 0;
+  unsigned int up;
   char *ptr = NULL;
 
   outlength = 0;
@@ -111,6 +113,7 @@ static int internal_nprintf(void (*output_function)(char c), const char *fmt, va
 
     flags = 0;
     width = 0;
+    up = 0;
 
     /* read all flags */
     do {
@@ -188,8 +191,9 @@ static int internal_nprintf(void (*output_function)(char c), const char *fmt, va
       output_function('0');
       output_function('x');
       width -= 2;
-    case 'x':
     case 'X':
+      up = hexup;
+    case 'x':
       base = 16;
       flags |= FLAG_UNSIGNED;
       break;
@@ -200,7 +204,7 @@ static int internal_nprintf(void (*output_function)(char c), const char *fmt, va
     if (!(flags & FLAG_UNSIGNED)) {
       int tmp = va_arg(ap, int);
       if (tmp < 0) {
-        num = -tmp;
+        num = 0u - (unsigned int)tmp;   /* INT_MIN too, without signed overflow */
         flags |= FLAG_NEGATIVE;
       } else
         num = tmp;
@@ -212,7 +216,7 @@ static int internal_nprintf(void (*output_function)(char c), const char *fmt, va
     ptr = buffer + sizeof(buffer);
     *--ptr = 0;
     do {
-      *--ptr = hexdigits[num % base];
+      *--ptr = hexdigits[num % base + up];
       num /= base;
     } while (num != 0);
 
@@ -294,6 +298,14 @@ int snprintf(char *str, size_t size, const char *format, ...) {
   va_end(ap);
   if (res < size)
     str[res] = 0;
+  return res;
+}
+
+int vsnprintf_hexup(char *str, size_t size, const char *format, va_list ap) {
+  int res;
+  hexup = 16;
+  res = vsnprintf(str, size, format, ap);
+  hexup = 0;
   return res;
 }
 

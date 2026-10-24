@@ -303,6 +303,7 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
 
 int cfg_save(void);
 int cfg_load(void);
+void cfg_defaults(cfg_t *c);       /* every field to its default (cfg_load starts from these) */
 
 int cfg_validity_check_listed_games(const uint8_t *listfilename);
 int cfg_add_listed_game(const uint8_t *listfilename, uint8_t *fn, bool evict_oldest);
