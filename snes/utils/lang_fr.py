@@ -488,6 +488,8 @@ TRANSLATIONS = {
     'mdesc_browser_restoretheme': 'Rétablir le thème par défaut du menu',
     'mtext_browser_restoreclassic': 'Restaurer le thème classique',
     'mdesc_browser_restoreclassic': "Charger l'apparence classique du sd2snes (nécessite /sd2snes/classic.thm sur la carte)",
+    'mtext_sfn_restore': 'Restaurer la police',
+    'mdesc_sfn_restore': 'Revenir à la police du menu',
     'mtext_browser_restoremusic': 'Restaurer la musique',
     'mdesc_browser_restoremusic': 'Rétablir la musique de fond par défaut (menu.spc)',
     'mdesc_browser_menumusic_random': 'Tire un .spc au hasard du dossier à chaque chargement',

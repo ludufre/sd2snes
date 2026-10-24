@@ -56,4 +56,22 @@ int theme_font_edges_stale(void);
  * Updates CFG.skin_name and saves config. */
 void theme_select(const char *name);
 
+/* Overwrite the font of the just-loaded menu image in PSRAM with the .sfn whose
+ * full SD path is in CFG.font_name (format in theme.c). Call after theme_apply
+ * and before theme_font_edges, which then takes the new font as the pristine
+ * one. Not an absolute path, a missing or a bad file = the menu's own font. */
+void theme_font_file(void);
+
+/* Persist the chosen .sfn (full SD path, or NULL/empty for the menu's own font)
+ * in CFG.font_name and save config. */
+void font_select(const char *name);
+
+/* The browser's A on a TYPE_SKIN entry: a .sfn goes to font_select, anything
+ * else (.thm/.skin) to theme_select. */
+void theme_pick(const char *name);
+
+/* theme_select(NULL), or with `font` set font_select(NULL): the two "Restore"
+ * entries of the browser settings. */
+void theme_clear(int font);
+
 #endif

@@ -7,6 +7,9 @@
 ; menu's, and the table is copied to FM_TAB with our row right after "Random music",
 ; its strings already resolved for the menu language -- the way the context menus get
 ; their file rows.  Everything else on the row is an ordinary on/off value.
+; "Restore default font" (mtext_sfn_* / mdesc_sfn_*) rides along the same way, right
+; after "Restore classic theme": a plain FUNC row whose handler, restore_font, is in
+; filesel.a65.  With both rows the table holds 24 entries, as many as FM_TAB takes.
 ; ===========================================================================
 .link page $c3
 #include "memmap.i65"
@@ -71,13 +74,27 @@ gmb_entry:
   lda [print_ptr], y
   cmp #!mtext_browser_menumusic_random
   sep #$20 : .as
-  bne gmb_next
+  bne gmb_font
   iny
   iny
   lda [print_ptr], y
   cmp #^mtext_browser_menumusic_random
   bne gmb_next
   jsr gims_row
+  bra gmb_next
+gmb_font:
+  .as : .xl                 ; "Restore classic theme"? The font row comes right after it
+  rep #$20 : .al
+  lda [print_ptr], y
+  cmp #!mtext_browser_restoreclassic
+  sep #$20 : .as
+  bne gmb_next
+  iny
+  iny
+  lda [print_ptr], y
+  cmp #^mtext_browser_restoreclassic
+  bne gmb_next
+  jsr sfn_row
 gmb_next:
   .as : .xl
   ply
@@ -133,6 +150,52 @@ gims_row:
   sta !$0016, x
   phx
   ldx #!mdesc_gims_stop
+  jsr fm_str
+  plx
+  rep #$20 : .al
+  lda print_src
+  sta !$000b, x
+  lda !FMX_TLEN
+  clc
+  adc #MENU_ENTRY_SIZE
+  sta !FMX_TLEN
+  sep #$20 : .as
+  lda print_bank
+  sta !$000d, x
+  rts
+
+; sfn_row: the "Restore default font" row at FM_TAB + FMX_TLEN, an MTYPE_FUNC like the
+; theme rows above it.  .as/.xl, DP 0, DB $7E.
+sfn_row:
+  .as : .xl
+  ldx #!mtext_sfn_restore
+  jsr fm_str                ; -> print_src / print_bank
+  rep #$20 : .al
+  lda !FMX_TLEN
+  clc
+  adc #!FM_TAB
+  tax
+  lda print_src
+  sta !$0001, x
+  lda #!(restore_font-1)
+  sta !$0004, x
+  lda #$0000
+  sta !$0007, x             ; +7..+10: no value
+  sta !$0009, x
+  sta !$000e, x             ; +14..+22: no hooks
+  sta !$0010, x
+  sta !$0012, x
+  sta !$0014, x
+  sta !$0015, x
+  sep #$20 : .as
+  lda #MTYPE_FUNC
+  sta !$0000, x
+  lda print_bank
+  sta !$0003, x
+  lda #^restore_font
+  sta !$0006, x
+  phx
+  ldx #!mdesc_sfn_restore
   jsr fm_str
   plx
   rep #$20 : .al

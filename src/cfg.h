@@ -93,6 +93,7 @@
 #define CFG_GB_ROTATE_BUTTONS            ("GbRotateButtons")
 #define CFG_STOP_MUSIC_GAME_INFO         ("StopMusicOnGameInfo")
 #define CFG_LOCK_CODE                    ("LockCode")
+#define CFG_FONT_NAME                    ("FontName")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -294,6 +295,10 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      reads it and only the menu sets it (Settings > Parental lock).  YAML LockCode, the buttons
      as letters in order ("BYsSudlrAXLR", the in-game combos' alphabet): a parent who forgot
      the code reads or removes the line.  Default none. */
+  uint8_t  font_name[128];          /* CFG @ $1E1: full SD path of the chosen .sfn, a menu font
+     on its own that main.c writes over the menu image's font at every menu load (theme_font_file,
+     theme.c). Picked with A in the browser like a .thm; "" (default) or a missing/bad file = the
+     menu's own font. YAML FontName, cleared by Browser settings > Restore default font. */
 } cfg_t;
 
 int cfg_save(void);

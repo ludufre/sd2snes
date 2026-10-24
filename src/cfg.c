@@ -101,6 +101,7 @@ _Static_assert(SRAM_MENU_CFG_ADDR + offsetof(cfg_t, player_repeat) == SRAM_CFG_P
 _Static_assert(offsetof(cfg_t, gb_rotate_buttons) == 0x1da, "cfg_t.gb_rotate_buttons must stay at CFG_ADDR+$1DA");
 _Static_assert(offsetof(cfg_t, stop_music_game_info) == 0x1db, "cfg_t.stop_music_game_info must stay at CFG_ADDR+$1DB");
 _Static_assert(offsetof(cfg_t, lock_code) == 0x1dc, "cfg_t.lock_code must stay at CFG_ADDR+$1DC");
+_Static_assert(offsetof(cfg_t, font_name) == 0x1e1, "cfg_t.font_name must stay at CFG_ADDR+$1E1");
 
 const cfg_t CFG_DEFAULT = {
   .vidmode_menu = VIDMODE_60,
@@ -179,7 +180,8 @@ const cfg_t CFG_DEFAULT = {
   .player_repeat = 0,        /* the music players move on to the next track */
   .gb_rotate_buttons = 0,    /* Game Boy buttons as wired: SNES B = GB B */
   .stop_music_game_info = 0, /* the menu music keeps playing behind the game info screen */
-  .lock_code = {0}           /* no parental lock */
+  .lock_code = {0},          /* no parental lock */
+  .font_name = ""            /* the menu's own font */
 };
 
 cfg_t CFG;
@@ -267,7 +269,8 @@ typedef struct {
 
 #define CFG_STR_LEN (sizeof(CFG_DEFAULT.skin_name))
 _Static_assert(sizeof(CFG_DEFAULT.bgm_name) == CFG_STR_LEN
-               && sizeof(CFG_DEFAULT.menu_music_folder) == CFG_STR_LEN,
+               && sizeof(CFG_DEFAULT.menu_music_folder) == CFG_STR_LEN
+               && sizeof(CFG_DEFAULT.font_name) == CFG_STR_LEN,
                "every CK_STR field must share one length");
 
 /* The favorites mirror is 20 x 256 bytes and the game info block starts right after
@@ -356,7 +359,8 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_PLAYER_REPEAT,               player_repeat,              CK_BOOL,    0),
   CFGI(CFG_GB_ROTATE_BUTTONS,           gb_rotate_buttons,          CK_BOOL,    0),
   CFGI(CFG_STOP_MUSIC_GAME_INFO,        stop_music_game_info,       CK_BOOL,    0),
-  CFGI(CFG_LOCK_CODE,                   lock_code,                  CK_SEQ,     0)
+  CFGI(CFG_LOCK_CODE,                   lock_code,                  CK_SEQ,     0),
+  CFGI(CFG_FONT_NAME,                   font_name,                  CK_STR,     0)
 };
 #undef CFGI
 

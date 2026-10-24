@@ -447,7 +447,7 @@ def main():
     # $C3 like the context menus' file rows, same rules.
     FM_PREFIXES = ("text_fm_", "mtext_fm_", "mdesc_fm_",
                    "text_gopt_", "mtext_gopt_", "mdesc_gopt_",
-                   "mtext_gims_", "mdesc_gims_",
+                   "mtext_gims_", "mdesc_gims_", "mtext_sfn_", "mdesc_sfn_",
                    "text_lock_", "mtext_lock_", "mdesc_lock_")
     out, order, fm_neutral = [], [], []
     for line in lines:

@@ -422,8 +422,8 @@ SNES_FTYPE filetype_by_ext(const char *name) {
   if(!strcasecmp(ext+1, "CHT")) {
     return TYPE_CHT;
   }
-  if(!strcasecmp(ext+1, "SKIN") || !strcasecmp(ext+1, "THM")) {
-    return TYPE_SKIN;   /* menu theme file (see theme.c) */
+  if(!strcasecmp(ext+1, "SKIN") || !strcasecmp(ext+1, "THM") || !strcasecmp(ext+1, "SFN")) {
+    return TYPE_SKIN;   /* menu theme file, or a font on its own (.sfn; see theme.c) */
   }
   /* .nes (iNES) -- core NES, mk3-only. Listed on mk2 too: load_rom() aborts
      there with a clear MENU_ERR_NOHW popup instead of the file silently not

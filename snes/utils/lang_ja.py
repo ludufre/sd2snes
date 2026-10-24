@@ -472,6 +472,8 @@ TRANSLATIONS = {
     'mdesc_browser_restoretheme': 'メニューのテーマを内蔵の標準テーマに戻します',
     'mtext_browser_restoreclassic': 'クラシックテーマに戻す',
     'mdesc_browser_restoreclassic': '従来のsd2snesの見た目を読み込みます (カードに/sd2snes/classic.thmが必要です)',
+    'mtext_sfn_restore': 'フォントを元に戻す',
+    'mdesc_sfn_restore': 'メニュー内蔵のフォントに戻します',
     'mtext_browser_restoremusic': 'BGMを元に戻す',
     'mdesc_browser_restoremusic': 'メニューのBGMを標準 (menu.spc) に戻します',
     'mdesc_browser_menumusic_random': '読み込むたびに音楽フォルダーから.spcをランダムに選びます',

@@ -777,12 +777,18 @@ restore_theme:
   php
   phb
   sep #$20 : .as
+  lda #CMD_CLR_THEME
+restore_cfg_cmd:
+; the body restore_font and restore_music share: A = the command (8 bits), with the
+; caller's php/phb already on the stack.
+  .as
+  pha
   jsr cover_sync_before_cmd  ; drain any in-flight cover so its $55 isn't read as our ACK
   jsr hide_cursor
   jsr menu_reload_blank      ; fade out before the MCU starts rewriting the image
   lda #$00
   sta @SNES_CMD
-  lda #CMD_CLR_THEME
+  pla
   sta @MCU_CMD
 - lda @SNES_CMD
   cmp #$55
@@ -796,6 +802,16 @@ restore_theme:
   plb
   plp
   rtl
+
+restore_font:
+; Browser Options action (below Restore Classic Theme): back to the menu's own font.
+; The MCU clears CFG.font_name (the .sfn picked in the browser) and reloads the menu,
+; like restore_theme.
+  php
+  phb
+  sep #$20 : .as
+  lda #CMD_CLR_FONT
+  bra restore_cfg_cmd
 
 restore_classic_theme:
 ; Config-menu action (Browser Options -> Restore Classic Theme, right below Restore
@@ -3183,32 +3199,15 @@ set_selected_spc_as_bgm:
 
 restore_music:
 ; Browser Options action (below Restore Theme): revert the menu background music to
-; the /sd2snes/menu.spc fallback. Mirrors restore_theme exactly -- the MCU clears
+; the /sd2snes/menu.spc fallback. Same body as restore_theme -- the MCU clears
 ; CFG.bgm_name, persists, and RELOADS the menu (CMD_CLR_MENU_SPC -> menu_reload),
 ; which cold-boots into the fallback BGM. Music on/off is left untouched. The reload
 ; resets the SNES, so the rtl is moot; kept correct for the dispatcher convention.
   php
   phb
   sep #$20 : .as
-  jsr cover_sync_before_cmd
-  jsr hide_cursor
-  jsr menu_reload_blank      ; fade out before the MCU starts rewriting the image
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_CLR_MENU_SPC
-  sta @MCU_CMD
-- lda @SNES_CMD
-  cmp #$55
-  beq +
-  cmp #$aa
-  beq +
-  bra -
-+ jsr menu_reload_unblank    ; only reached on a NACK: menu stays live
-  lda #$00
-  sta @MCU_CMD
-  plb
-  plp
-  rtl
+  jmp restore_cfg_cmd
 
 scroll_direntry_clean:
   lda #$01

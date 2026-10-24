@@ -1114,13 +1114,15 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
          yields the full SD path; store it and reload the menu so theme_apply
          patches the gfxptr regions of the fresh menu image. */
       get_selected_name(file_lfn);
-      theme_select((char*)file_lfn);
+      theme_pick((char*)file_lfn);       /* a .sfn is a font, the rest a theme */
       browser_pos_save((char*)file_lfn); /* come back to this .thm, not to the root */
       *menu_reload = 1; /* leave loop -> outer loop reloads + themes the menu */
       return cmd;
     case SNES_CMD_CLR_THEME:
-      /* revert to the baked-in default look */
-      theme_select(NULL);
+    case SNES_CMD_CLR_FONT:
+      /* revert to the baked-in default look, or (Restore default font) to the
+         menu's own font */
+      theme_clear(cmd == SNES_CMD_CLR_FONT);
       browser_pos_save(NULL);
       *menu_reload = 1;
       return cmd;

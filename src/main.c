@@ -280,6 +280,8 @@ int main(void) {
        like the user's menu.  Fail-safe: a missing/bad theme leaves the baked
        image untouched. */
     theme_apply();
+    /* a .sfn picked in the browser replaces the image's font (menu and tour alike) */
+    theme_font_file();
     /* font edge remaps (outline ring / anti-alias step): the theme's own flags
        OR'd with the CFG.text_outline / CFG.text_antialias options, so the user
        toggles apply with or without a theme. Must run after theme_apply, which

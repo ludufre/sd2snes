@@ -473,6 +473,8 @@ TRANSLATIONS = {
     'mdesc_browser_restoretheme': 'Menu thema naar standaard terug zetten',
     'mtext_browser_restoreclassic': 'Naar klassiek thema herstellen',
     'mdesc_browser_restoreclassic': 'klassieke sd2snes uiterlijk starten (/sd2snes/classic.thm moet aanwezig zijn)',
+    'mtext_sfn_restore': 'Lettertype herstellen',
+    'mdesc_sfn_restore': 'Terug naar het standaard lettertype',
     'mtext_browser_restoremusic': 'Muziek herstellen',
     'mdesc_browser_restoremusic': 'Standaard menu muziek terugzetten (menu.spc)',
     'mdesc_browser_menumusic_random': 'Willekeurige muziek (.spc) spelen uit de /sd2snes/music map',

@@ -443,6 +443,7 @@ static void cfg_make_allchanged(void) {
   CFG.gb_rotate_buttons = 1;                     /* SNES B plays the Game Boy's A */
   CFG.stop_music_game_info = 1;                  /* the menu music stops on the game info screen */
   memcpy(CFG.lock_code, "\x12\x34\x56\x70", 4);   /* a change lock of 7 buttons: BYsSudl */
+  strcpy((char *)CFG.font_name, "/fonts/round.sfn"); /* a font picked in the browser */
 }
 
 /* ---- the alternating-booleans config ------------------------------------

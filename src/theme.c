@@ -203,6 +203,22 @@ void theme_font_pass(uint32_t dst, uint32_t src, uint32_t save,
   }
 }
 
+/* Open `path` into file_handle and read its `n`-byte header, which must start with
+   the 8-byte `magic` and carry `ver` right after it. 0 (and the file closed) when
+   the file is missing, short or not of that kind; the .thm and the .sfn share it. */
+static __attribute__((noinline)) int theme_open(const char *path, uint8_t *hdr, UINT n,
+                                                const char *magic, uint8_t ver) {
+  UINT got;
+  file_open((const uint8_t*)path, FA_READ);
+  if(!file_res) file_res = f_read(&file_handle, hdr, n, &got);
+  if(file_res || got != n || memcmp(hdr, magic, 8) || hdr[8] != ver) {
+    printf("theme: %s rejected\n", path);
+    file_close();
+    return 0;
+  }
+  return 1;
+}
+
 void theme_apply(void) {
   const char *skin = (const char*)CFG.skin_name;
   /* Every exit below leaves the font untouched, so start from "no theme flags":
@@ -217,18 +233,9 @@ void theme_apply(void) {
      "no theme / baked-in default look". */
   if(skin[0] != '/') return;
 
-  file_open((const uint8_t*)skin, FA_READ);
-  if(file_res) { printf("theme: open %s failed res=%d\n", skin, file_res); return; }
-
   uint8_t hdr[16];
   UINT got;
-  file_res = f_read(&file_handle, hdr, sizeof(hdr), &got);
-  if(file_res || got != sizeof(hdr)
-     || memcmp(hdr, THEME_MAGIC, 8) || hdr[8] != THEME_VERSION) {
-    printf("theme: bad header in %s\n", skin);
-    file_close();
-    return;
-  }
+  if(!theme_open(skin, hdr, sizeof(hdr), THEME_MAGIC, THEME_VERSION)) return;
   uint16_t flags = (uint16_t)hdr[10] | ((uint16_t)hdr[11] << 8);
   uint8_t n = hdr[9];
   if(n == 0 || n > THEME_NSLOTS) { file_close(); return; }
@@ -371,14 +378,65 @@ void theme_font_edges(void) {
   }
 }
 
-void theme_select(const char *name) {
-  if(!name || name[0] == 0) {
-    strcpy((char*)CFG.skin_name, THEME_DEFAULT);
-  } else {
-    /* strncpy for the zero padding: the whole cfg_t goes to the shared BSRAM,
-       tail included (see CK_STR in cfg.c). */
-    strncpy((char*)CFG.skin_name, name, sizeof(CFG.skin_name) - 1);
-    CFG.skin_name[sizeof(CFG.skin_name) - 1] = 0;
+/* .sfn: a menu font on its own, picked in the browser like a .thm.  Format:
+ *     off  size  field
+ *     0    8     magic "SD2SFNT1"
+ *     8    1     version (=SFN_VERSION)
+ *     9    7     reserved
+ *     16   32    mask: bit (t & 7) of byte (t >> 3) set = the file brings tile t
+ *     48   4096  the 256 tiles, 2bpp x 16 B, in snes/font.a65 order
+ * Written over the font of the just-loaded menu image in PSRAM (menu and tour), so it
+ * costs no memory of its own.  The mask is what keeps a font drawn against another
+ * build from repainting the icons, window borders and control codes: utils/pack_font.py
+ * sets only the text tiles unless told otherwise. */
+static const char SFN_MAGIC[8] = { 'S','D','2','S','F','N','T','1' };
+#define SFN_VERSION   1
+#define SFN_HDR_LEN   48
+#define SFN_TILE_LEN  16
+
+void theme_font_file(void) {
+  const char *path = (const char*)CFG.font_name;
+  uint32_t font_addr;
+  if(path[0] != '/') return;
+  if(!theme_font_locate(&font_addr)) return;
+  uint8_t hdr[SFN_HDR_LEN];
+  if(!theme_open(path, hdr, sizeof(hdr), SFN_MAGIC, SFN_VERSION)) return;
+  /* the whole body up front, like theme_apply: a short file never leaves half a font */
+  if(file_handle.fsize >= SFN_HDR_LEN + THEME_FONT_LEN) {
+    /* a tile the mask leaves out is skipped (theme_stream with cap 0 seeks past it) */
+    for(int t = 0; t < 256; t++) {
+      uint32_t cap = ((hdr[16 + (t >> 3)] >> (t & 7)) & 1) ? SFN_TILE_LEN : 0;
+      if(!theme_stream(font_addr + (uint32_t)t * SFN_TILE_LEN, SFN_TILE_LEN, cap)) break;
+    }
   }
+  file_close();
+  /* the font in PSRAM is a new one: theme_font_edges has to capture it as the pristine copy */
+  theme_font_orig_ok = 0;
+}
+
+static void theme_set_str(uint8_t *dst, const char *name, const char *none) {
+  /* strncpy for the zero padding: the whole cfg_t goes to the shared BSRAM,
+     tail included (see CK_STR in cfg.c). */
+  strncpy((char*)dst, (name && name[0]) ? name : none, sizeof(CFG.skin_name) - 1);
+  dst[sizeof(CFG.skin_name) - 1] = 0;   /* every CK_STR field has this length (cfg.c) */
   cfg_save();
+}
+
+void font_select(const char *name) {
+  theme_set_str(CFG.font_name, name, "");
+}
+
+void theme_clear(int font) {
+  if(font) font_select(NULL);
+  else theme_select(NULL);
+}
+
+void theme_pick(const char *name) {
+  const char *ext = strrchr(name, '.');
+  if(ext && !strcasecmp(ext + 1, "SFN")) font_select(name);
+  else theme_select(name);
+}
+
+void theme_select(const char *name) {
+  theme_set_str(CFG.skin_name, name, THEME_DEFAULT);
 }

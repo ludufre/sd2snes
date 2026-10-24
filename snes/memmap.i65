@@ -842,6 +842,7 @@
 #define CMD_SAVE_CHT_RECENT         $2b /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_save. */
 #define CMD_SET_THEME               $2c /* selected .thm in a visible folder (MCU_PARAM set like LOADROM): store full path, reload menu */
 #define CMD_CLR_THEME               $2d /* clear menu theme to baked default, reload menu */
+#define CMD_CLR_FONT                $52 /* clear CFG.font_name (the .sfn) back to the menu's own font, reload menu. Lockstep with SNES_CMD_CLR_FONT */
 #define CMD_SET_MENU_SPC            $2e /* selected .spc (MCU_PARAM set like LOADROM): store full path in CFG.bgm_name, enable music */
 #define CMD_CLR_MENU_SPC            $2f /* clear CFG.bgm_name -> menu BGM falls back to /sd2snes/menu.spc */
 #define CMD_PATCH_META_SAVE         $3b /* patch selector: persist the header modes the menu edited (IPS_FLAGS) into /sd2snes/patches/<BB>/<stem>.yml. MCU_PARAM set like LOADROM. ($39 went to CMD_RESTORE_CLASSIC, developed in parallel.) */
@@ -1094,6 +1095,7 @@
 #define CFG_GB_ROTATE_BUTTONS           CFG_ADDR+$01DA /* 0/1: SNES B plays the Game Boy's A and Y alone its B, on both Game Boy cores. YAML GbRotateButtons; menu row "Rotate Game Boy buttons" in the SGB menu (kv_onoff, NOT greyed: it applies to the SGB on the Mk.II too). The menu only edits it: at game load the MCU patches the SGB BIOS (sgb_stage_config) or the GBC player's "GBCF" block +6 (gbc_stage_config). Lockstep with src/cfg.h. */
 #define CFG_STOP_MUSIC_GI               CFG_ADDR+$01DB /* 0/1: stop the menu music while the game info screen is up, start it again on the way back (snes/gimusic.a65). $1D9/$1DA are reserved in cfg_t. YAML StopMusicOnGameInfo. Lockstep with src/cfg.h. */
 #define CFG_LOCK_CODE                   CFG_ADDR+$01DC /* 5 B: the parental lock's code (lock.a65), 4 to 10 buttons a nibble each (1..12), the first on top, a 0 nibble ends it; all zero = none. Lockstep with cfg_t.lock_code */
+#define CFG_FONT_NAME                   CFG_ADDR+$01E1 /* 128 B: full SD path of the chosen .sfn (the menu font on its own; theme.c). Only the MCU reads it. Lockstep with cfg_t.font_name */
 #define ONB_VERSION                     2              /* the first-boot tour's version: bump it when a release adds cards to the tour (tag them with it, +ONB_FD_SINCE), and the tour comes back once showing only them. Lockstep with snes/onboarding/onb_memmap.i65. */
 
 #define MENU_ENTRY_SIZE             23
