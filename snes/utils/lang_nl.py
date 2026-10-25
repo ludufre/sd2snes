@@ -474,7 +474,7 @@ TRANSLATIONS = {
     'mtext_browser_restoretheme': 'Thema herstellen',
     'mdesc_browser_restoretheme': 'Menu thema naar standaard terug zetten',
     'mtext_browser_restoreclassic': 'Naar klassiek thema herstellen',
-    'mdesc_browser_restoreclassic': 'klassieke sd2snes uiterlijk starten (/sd2snes/classic.thm moet aanwezig zijn)',
+    'mdesc_browser_restoreclassic': 'Het sd2snes+ uiterlijk zonder bewegende achtergrond (/sd2snes/classic.thm)',
     'mtext_sfn_restore': 'Lettertype herstellen',
     'mdesc_sfn_restore': 'Terug naar het standaard lettertype',
     'mtext_browser_restoremusic': 'Muziek herstellen',

@@ -892,10 +892,34 @@ static uint32_t menuqoa_fetch_max(void) {
   return menuqoa_pos + RUNB(MSU_DAC_BUFSIZE + (played > counted ? played : counted));
 }
 
+/* Bring menuqoa_halves up to date with the DAC: the half-buffers played since the last
+   count, from the cycle counter, with the parity fixed by the flip bit of the status word
+   (floor(time / half) or one more, whichever has the parity).  Held, the DAC stands still:
+   at most the flip it was in. */
+static void menuqoa_count(void) {
+  uint16_t now = fpga_status();
+  uint32_t cyc = getcycles();
+  uint32_t flip = ((now ^ menusfx_fpga_prev) & MSU_FPGA_STATUS_DAC_READ_MSB) ? 1 : 0;
+  if(menuqoa_hold) menuqoa_halves += flip;
+  else {
+    uint32_t n = (cyc - menuqoa_cyc) / MENUQOA_HALF_CYC;
+    menuqoa_halves += n + ((n ^ flip) & 1);
+  }
+  menuqoa_cyc = cyc;
+  menusfx_fpga_prev = now;
+}
+
 static void menuqoa_hold_set(uint8_t bit, int on) {
   uint8_t was = menuqoa_hold;
   if(on) menuqoa_hold |= bit; else menuqoa_hold &= ~bit;
-  if(!was && menuqoa_hold) { dac_pause(); menuqoa_held_at = getticks(); }
+  if(!was && menuqoa_hold) {
+    /* count up to the pause first: the menu loop pumps every ~20 ms (3 half-buffers),
+       and the halves between the last pump and here were lost before, so every
+       pause/resume left the DAC's position behind by that much */
+    menuqoa_count();
+    dac_pause();
+    menuqoa_held_at = getticks();
+  }
   else if(was && !menuqoa_hold) {
     menuqoa_t0 += getticks() - menuqoa_held_at;
     menuqoa_cyc = getcycles();
@@ -1003,18 +1027,8 @@ static int menuqoa_play(void) {
 /* Cheap enough for every pump site (no SD access): follow the DAC, hold it if the decoder
    fell behind, and re-kick at the end of the run. */
 static void menuqoa_pump(void) {
-  uint16_t now = fpga_status();
-  uint32_t cyc = getcycles();
-  uint32_t flip = ((now ^ menusfx_fpga_prev) & MSU_FPGA_STATUS_DAC_READ_MSB) ? 1 : 0;
   uint32_t at;
-  if(menuqoa_hold) menuqoa_halves += flip;   /* the DAC stands still: at most the flip it was in */
-  else {
-    /* the flips since the last pump: floor(time / half) or one more, whichever has the parity */
-    uint32_t n = (cyc - menuqoa_cyc) / MENUQOA_HALF_CYC;
-    menuqoa_halves += n + ((n ^ flip) & 1);
-  }
-  menuqoa_cyc = cyc;
-  menusfx_fpga_prev = now;
+  menuqoa_count();
   if(menuqoa_hold) return;
   at = menuqoa_pos + RUNB(menuqoa_halves * (MSU_DAC_BUFSIZE / 2));   /* the DAC's run byte */
   /* the FMV frame clock: samples fed (2 KB ahead of the DAC, like the .pcm path) into

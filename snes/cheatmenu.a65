@@ -1111,16 +1111,40 @@ cheatmenu_show_empty_popup:
   sta bar_xl
   sta bar_yl
   sta bar_wl
-; closed-border box: 40 wide, centered (x=12), y=13, 5 tall: the message, a blank
-; row, then the "Select: Add" hint (a cheat list that is empty can only be started
-; from here).  cm_tmp low byte = "a cheat was added" for the carry we return.
+; closed-border box, y=13, 5 tall: the message, a blank row, then the "Select: Add" hint
+; (a cheat list that is empty can only be started from here), as wide as the wider of the
+; two (popup_fitw, filesel.a65: translated, a fixed width let them run through the border).
+; cm_tmp low byte = "a cheat was added" for the carry we return.
   stz cm_tmp
-  lda #12
-  sta window_x
+  lda #^ce_sel_hint          ; "Select:" (neutral, lives with the editor in $C1)
+  sta print_bank
+  ldx #!ce_sel_hint
+  stx print_src
+  jsr pr_len
+  sta window_tmp
+  lda #^text_add             ; + the translated "Add"
+  sta print_bank
+  ldx #!text_add
+  stx print_src
+  jsr pr_len
+  clc
+  adc window_tmp
+  sta window_tmp             ; the hint's width
+  lda #^text_cheat_none_msg
+  sta print_bank
+  ldx #!text_cheat_none_msg
+  stx print_src
+  jsr pr_len
+  cmp window_tmp
+  bcs cmep_wide
+  lda window_tmp
+cmep_wide:
+  .as : .xl
+  jsr popup_fitw
+  lda window_tmp
+  pha
   lda #13
   sta window_y
-  lda #40
-  sta window_w
   lda #$05
   sta window_h
   lda #^zero                 ; empty title -> closed top border
@@ -1129,45 +1153,20 @@ cheatmenu_show_empty_popup:
   stx window_taddr
   jsr push_window
   jsr draw_window
-; resolve the message for the active language, then center it inside the box
-  lda #^text_cheat_none_msg
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #^text_cheat_none_msg  ; the message on window_y+1
   sta print_bank
   ldx #!text_cheat_none_msg
   stx print_src
-  lda print_bank
-  ldy print_src
-  jsr resolve_yx             ; A=resolved bank, Y=resolved addr; print_* resolved
-  phb
-  pha
-  plb                        ; DB = resolved string bank for strlen
-  jsr strlen                 ; Y = string length
-  plb
-  sep #$20 : .as
-  tya                        ; A = length (<256)
-  sta window_tmp
-  lda window_w
-  sec
-  sbc window_tmp             ; window_w - length
-  bcs +                      ; box wide enough
-  lda #$02                   ; message wider than box: small left margin
-+ lsr                        ; /2
-  clc
-  adc window_x               ; print_x = window_x + (window_w-length)/2
-  sta print_x
-  lda window_y
-  inc                        ; body row (window_y+1)
-  sta print_y
-  stz print_pal
-  lda #56
-  sta print_count
-  jsr hiprint
-; "Select:" (neutral, lives with the editor in $C1) + the translated "Add" on window_y+3
+  lda #$01
+  jsr popup_line
+  pla                        ; the hint on window_y+3, centred as one line
+  jsr popup_cx
   lda window_y
   clc
   adc #$03
   sta print_y
-  lda #24
-  sta print_x
   lda #^ce_sel_hint
   sta print_bank
   ldx #!ce_sel_hint

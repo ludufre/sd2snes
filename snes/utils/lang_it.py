@@ -494,7 +494,7 @@ TRANSLATIONS = {
     'mtext_browser_restoretheme': 'Ripristina tema',
     'mdesc_browser_restoretheme': 'Riporta il tema del menu a quello predefinito',
     'mtext_browser_restoreclassic': 'Ripristina tema classico',
-    'mdesc_browser_restoreclassic': "Carica l'aspetto classico di sd2snes (richiede /sd2snes/classic.thm sulla scheda)",
+    'mdesc_browser_restoreclassic': "L'aspetto sd2snes+ senza lo sfondo animato (richiede /sd2snes/classic.thm)",
     'mtext_sfn_restore': 'Ripristina carattere',
     'mdesc_sfn_restore': 'Torna al carattere del menu',
     'mtext_browser_restoremusic': 'Ripristina musica',
@@ -600,7 +600,7 @@ TRANSLATIONS = {
     'text_fm_deleting': 'Eliminazione',
     'text_fm_rm_note': 'Salvataggi e cheat in /sd2snes restano',
     'text_fm_sdel_ask': 'Eliminare le voci contrassegnate?',
-    'text_fm_ren_ask': "Rinominare con un'estensione sconosciuta?",
+    'text_fm_ren_ask': "Rinominare con estensione sconosciuta?",
     'text_fm_ren_note': "Il file non comparirà più nell'elenco",
     'mtext_fm_sdel': 'Elimina',
 

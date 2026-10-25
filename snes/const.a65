@@ -484,7 +484,7 @@ mdesc_cfg_gameinfo                .byt "Options for the pre-boot game info scree
 mdesc_browser_gameinfo_video      .byt "Play the animated clip on the game info screen (off shows a static snapshot)", 0
 mdesc_browser_gameinfo_music      .byt "Play the clip's soundtrack while it shows. Requires Show video.", 0
 mdesc_browser_restoretheme        .byt "Revert the menu theme to the built-in default", 0
-mdesc_browser_restoreclassic      .byt "Load the classic sd2snes look (needs /sd2snes/classic.thm on the card)", 0
+mdesc_browser_restoreclassic      .byt "The sd2snes+ look without the moving background (/sd2snes/classic.thm)", 0
 mdesc_sfn_restore                 .byt "Go back to the built-in menu font", 0
 mdesc_browser_restoremusic        .byt "Revert the menu background music to the default (menu.spc)", 0
 mdesc_browser_menumusic_random    .byt "Pick a random .spc from the music folder on each load", 0

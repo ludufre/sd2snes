@@ -473,7 +473,7 @@ TRANSLATIONS = {
     'mtext_browser_restoretheme': '恢复默认主题',
     'mdesc_browser_restoretheme': '将菜单主题恢复为内置默认主题',
     'mtext_browser_restoreclassic': '恢复经典主题',
-    'mdesc_browser_restoreclassic': '载入经典sd2snes外观（卡上需有/sd2snes/classic.thm）',
+    'mdesc_browser_restoreclassic': '不带动态背景的sd2snes+外观（卡上需有/sd2snes/classic.thm）',
     'mtext_sfn_restore': '恢复默认字体',
     'mdesc_sfn_restore': '将菜单字体恢复为内置字体',
     'mtext_browser_restoremusic': '恢复默认音乐',

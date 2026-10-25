@@ -1,30 +1,40 @@
-/* Conformance test for the published position maths in src/pcmplay.c, compiled against the
- * REAL source.  The audio engine itself is stubbed (menu_music_* below); what is under test
- * is the ONE piece of arithmetic that the screen cannot show you is wrong -- the 0..255
- * progress fraction, whose naive form (pos * 255 / body) silently wraps a 32-bit product
- * once the track body passes ~16.8 MB, i.e. at about 95 seconds of 44.1 kHz stereo.  Every
- * real MSU-1 track is longer than that.
+/* Conformance test for the published position maths of the menu PCM player, the card
+ * module src/modules/pcmplay/pcmmod.c, compiled the way host builds of the firmware link it
+ * (-DMODULE_HOST_LINKED).  The audio engine is a fake module_api_t (the music_* calls below);
+ * what is under test is the ONE piece of arithmetic that the screen cannot show you is
+ * wrong -- the 0..255 progress fraction, whose naive form (pos * 255 / body) silently wraps
+ * a 32-bit product once the track body passes ~16.8 MB, i.e. at about 95 seconds of
+ * 44.1 kHz stereo.  Every real MSU-1 track is longer than that.
  *
  * The block is checked as the MENU reads it: through the byte offsets, out of the fake
- * BSRAM the sram_writeblock shim fills, not through the struct the writer used. */
+ * BSRAM the api's sram_write fills, not through the struct the writer used. */
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "module.h"
+#include "memmap.h"
 #include "pcmplay.h"
 #include "msu1.h"
 
 /* ---- fake BSRAM ------------------------------------------------------------------- */
 static uint8_t blk[64];
+static uint8_t repeat;   /* CFG.player_repeat, read live by the module */
 
 static int writes;   /* every one of these is FPGA SPI traffic competing with the DAC pump */
 
-void sram_writeblock(const void *buf, uint32_t addr, uint16_t size) {
+static uint16_t fake_sram_write(void *buf, uint32_t addr, uint16_t size) {
   if(addr != SRAM_PCMPLAY_ADDR || size > sizeof(blk)) { printf("FAIL bad publish addr/size\n"); exit(1); }
   memcpy(blk, buf, size);
   writes++;
+  return size;
+}
+static uint16_t fake_sram_read(void *buf, uint32_t addr, uint16_t size) {
+  if(addr != SRAM_CFG_PLAYER_REPEAT_ADDR || size != 1) { printf("FAIL unexpected read\n"); exit(1); }
+  *(uint8_t *)buf = repeat;
+  return size;
 }
 
 static uint8_t  b8(int off)  { return blk[off]; }
@@ -35,6 +45,7 @@ static uint32_t clip_size, clip_pos, clip_loop;   /* clip_loop: header field, no
 static int      clip_res = 0xA0;
 static int      clip_playing;
 
+/* the engine's own names (msu1.h): what the firmware puts in the api table */
 int      menu_music_play(const char *f) { (void)f; if(clip_res == 0xA0) clip_playing = 1; return clip_res; }
 void     menu_music_stop(void)          { clip_playing = 0; }
 int      menu_music_active(void)        { return clip_playing; }
@@ -54,6 +65,21 @@ int      menu_music_seek(uint32_t pos)  {
   clip_ended = 0; clip_playing = 1; clip_pos = 8 + pos + MSU_DAC_BUFSIZE;
   return 1;
 }
+
+/* ---- the module, driven as module.c drives it ------------------------------------- */
+extern const module_fns_t pcmmod_fns;
+static module_api_t api;
+static uint64_t mod_state[64];          /* the scratch FRAME it gets */
+
+static void pcmplay_start(const char *path) { pcmmod_fns.start(mod_state, &api, path); }
+static void pcmplay_publish(void)           { pcmmod_fns.idle(mod_state); }   /* a menu-loop pass */
+static void pcmplay_stop(void)              { pcmmod_fns.ctl(mod_state, PCMPLAY_CTL_STOP); }
+static void pcmplay_pause(int on)
+{ pcmmod_fns.ctl(mod_state, on ? PCMPLAY_CTL_PAUSE : PCMPLAY_CTL_RESUME); }
+static void pcmplay_seek_sec(uint16_t s)
+{ pcmmod_fns.ctl(mod_state, PCMPLAY_CTL_SEEK | ((uint32_t)s << 8)); }
+static void pcmplay_seek_frac(uint8_t f)
+{ pcmmod_fns.ctl(mod_state, PCMPLAY_CTL_SEEKFRAC | ((uint32_t)f << 8)); }
 
 /* ---- harness ---------------------------------------------------------------------- */
 static int fails;
@@ -88,6 +114,19 @@ static void at(uint32_t body_off) {
 
 int main(void) {
   uint32_t body, off;
+
+  api.sram_read    = fake_sram_read;
+  api.sram_write   = fake_sram_write;
+  api.music_play   = menu_music_play;
+  api.music_stop   = menu_music_stop;
+  api.music_pause  = menu_music_pause;
+  api.music_lock   = menu_music_lock;
+  api.music_noloop = menu_music_noloop;
+  api.music_seek   = menu_music_seek;
+  api.music_active = menu_music_active;
+  api.music_ended  = menu_music_ended;
+  api.music_tell   = menu_music_tell;
+  api.music_size   = menu_music_size;
 
   /* --- a short clip: 10 s --------------------------------------------------------- */
   body = 10u * BPS;
@@ -267,11 +306,18 @@ int main(void) {
   check("seek on error: ignored", (long)clip_seek_to, (long)0xffffffffu);
   pcmplay_stop();
 
-  /* --- cold-boot clear ------------------------------------------------------------ */
-  memset(blk, 0xa5, sizeof(blk));
-  pcmplay_clear();
-  check("clear: magic0", b8(0), PCMPLAY_MAGIC0);
-  check("clear: state",  b8(3), PCMPLAY_STATE_NONE);
+  /* --- Repeat (CFG.player_repeat, read live): the engine loops the track, and an EOF
+         seen while Repeat was off restarts it from the top once Repeat goes on ------- */
+  repeat = 1;
+  play(body, 0);
+  check("repeat: loops", clip_noloop, 0);
+  clip_ended = 1;
+  clip_seek_to = 0xffffffffu;
+  pcmplay_publish();
+  check("repeat: from the top", (long)clip_seek_to, 0);
+  check("repeat: playing", b8(3), PCMPLAY_STATE_PLAYING);
+  repeat = 0;
+  pcmplay_stop();
 
   if(fails) { printf("%d failure(s)\n", fails); return 1; }
   printf("pcmpos: all checks passed\n");
