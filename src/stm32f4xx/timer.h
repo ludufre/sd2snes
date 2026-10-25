@@ -20,6 +20,15 @@ static inline tick_t getticks(void) {
 
 #define MS_TO_TICKS(x) (x/10)
 
+/**
+ * getcycles - return the CPU cycle counter (DWT CYCCNT, started by timer_init)
+ *
+ * Wraps every 2^32 cycles (~45 s at 96 MHz): use differences only.
+ */
+static inline uint32_t getcycles(void) {
+  return *(volatile uint32_t *)0xe0001004UL;
+}
+
 /* Adapted from Linux 2.6 include/linux/jiffies.h:
  *
  *      These inlines deal with timer wrapping correctly. You are

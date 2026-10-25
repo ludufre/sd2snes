@@ -79,6 +79,10 @@ void timer_init(void) {
 
   /* enable SysTick */
   SysTick_Config((SysTick->CALIB & SysTick_CALIB_TENMS_Msk));
+
+  /* start the cycle counter (getcycles) */
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
 void delay_us(unsigned int time) {

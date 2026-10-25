@@ -69,6 +69,10 @@ void timer_init(void) {
                         / SYSTICK_CALIB_MS;
   // printf("systick load value = %ld\n", (uint32_t)systick_load);
   SysTick_Config(systick_load & SysTick_CALIB_TENMS_Msk);
+
+  /* start the cycle counter (getcycles) */
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
 void delay_us(unsigned int time) {

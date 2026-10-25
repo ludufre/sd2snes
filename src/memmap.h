@@ -130,7 +130,7 @@
                                                     nav-SFX PCM bodies the FPGA sfxdma engine streams into the
                                                     DAC (msu1.c menusfx).  It used to be four fixed 64 KB slots,
                                                     which capped a single effect at 0.371 s and left anything
-                                                    longer silent; sharing lets one effect run to ~1.49 s as
+                                                    longer silent; sharing lets one effect run to ~1.49 s (~2.97 s kept mono, L == R) as
                                                     long as the other three are short.  Anything that overwrites
                                                     this window must call menu_sfx_forget(), which rewinds the
                                                     allocator as well as dropping the cache (memtest.c). */
