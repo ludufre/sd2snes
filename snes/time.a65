@@ -5,11 +5,15 @@
 #include "stack.i65"
 
 ; Date format per menu language, indexed by cur_lang (EN, BR, ES, DE, FR, IT,
-; RU, NL, JA, ZH). Low 7 bits = the separator; bit 7 set = day-month-year, clear =
-; month-day-year (the US order English uses). A new language needs its byte
-; here.
+; RU, NL, JA, ZH). Low 6 bits = the separator; bit 7 set = day-month-year, bit 6
+; set = year-month-day (Japanese), neither = month-day-year (the US order English
+; uses). A new language needs its byte here (and in saves_date_fmt, src/memory.c).
 time_date_sep
-  .byt $2f, $af, $af, $ae, $af, $af, $ae, $ad, $2f, $2f
+  .byt $2f, $af, $af, $ae, $af, $af, $ae, $ad, $6f, $2f
+
+; timebox_data offset per date order (time_date_order's X)
+timebox_ofs
+  .byt 0, 18, 36
 
 timebox_data
 ; string offset, selection width, bcdtime offset
@@ -24,6 +28,13 @@ timebox_data
   .byt  0, 2, 6
   .byt  3, 2, 8
   .byt  6, 4, 9
+  .byt 11, 2, 4
+  .byt 14, 2, 2
+  .byt 17, 2, 0
+; year-month-day: YYYY/MM/DD HH:MM:SS
+  .byt  0, 4, 9
+  .byt  5, 2, 8
+  .byt  8, 2, 6
   .byt 11, 2, 4
   .byt 14, 2, 2
   .byt 17, 2, 0
@@ -101,11 +112,9 @@ time_update
     sta print_y
     stz print_pal
     jsr hiprint
-    jsr time_date_order     ; C=1: day-month-year, whose boxes follow the month-day-year six
-    lda #$00
-    bcc +
-    lda #18
-+   clc
+    jsr time_date_order     ; X = the date order, which picks the six boxes
+    lda @timebox_ofs, x
+    clc
     adc time_sel
     adc time_sel
     adc time_sel
@@ -626,8 +635,8 @@ gettime:
   plp
   rts
 
-; time_date_order: A = the date separator of the menu language, C=1 when that
-; language writes day-month-year (C=0: month-day-year). Clobbers X (.xl).
+; time_date_order: A = the date separator of the menu language, X = its date
+; order (0 month-day-year, 1 day-month-year, 2 year-month-day). .as/.xl.
 time_date_order
   rep #$20 : .al
   lda @cur_lang
@@ -635,8 +644,15 @@ time_date_order
   tax
   sep #$20 : .as
   lda @time_date_sep, x
-  cmp #$80                  ; C = bit 7 = day first
-  and #$7f                  ; the separator (AND leaves C alone)
+  ldx #$0000
+  asl                       ; C = bit 7 = day first
+  bcc +
+  inx
++ asl                       ; C = bit 6 = year first
+  bcc +
+  ldx #$0002
++ lsr                       ; back to the separator, the two order bits gone
+  lsr
   rts
 
 rendertime
@@ -650,8 +666,11 @@ rendertime
   sep #$20 : .as
   jsr time_date_order
   sta w_rt_sep
+  txa                       ; the date order
   ldx #!stringbuf
-  bcs rt_dmy
+  cmp #$01
+  beq rt_dmy
+  bcs rt_ymd
   jsr rt_mon
   jsr rt_sep
   jsr rt_day
@@ -663,6 +682,13 @@ rt_dmy
 rt_year_last
   jsr rt_sep
   jsr rt_year
+  bra rt_clock
+rt_ymd
+  jsr rt_year
+  jsr rt_sep
+  jsr rt_mon
+  jsr rt_sep
+  jsr rt_day
 rt_clock
   lda #$20
   jsr rt_char

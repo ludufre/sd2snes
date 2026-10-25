@@ -2193,8 +2193,8 @@ void slot_sidecar_state_set(const char *src, uint8_t ss) {
 _Static_assert(SAVES_BLK_SIZE == 264, "SAVES_BLK: memmap.h reserves 264 B");
 _Static_assert(SAVES_E_SIZE + SAVES_SIZE_LEN <= SAVES_ENTRY_SIZE && SAVES_E_DATE + SAVES_DATE_LEN <= SAVES_E_SIZE,
                "SAVES_BLK entry fields overlap");
-static const uint8_t saves_date_fmt[] = {   /* bit 7 = day first; low 7 bits = separator */
-  0x2f, 0xaf, 0xaf, 0xae, 0xaf, 0xaf, 0xae, 0xad, 0x2f, 0x2f
+static const uint8_t saves_date_fmt[] = {   /* bit 7 = day first, bit 6 = year first; low 6 bits = separator */
+  0x2f, 0xaf, 0xaf, 0xae, 0xaf, 0xaf, 0xae, 0xad, 0x6f, 0x2f
 };
 
 /* The file of slot `slot` (0..3) of `kind` for the saves keyed off src; -1 = no name. */
@@ -2224,9 +2224,11 @@ static void saves_entry(const char *src, uint8_t kind, uint8_t slot, uint8_t on)
     uint32_t sz = fno.fsize;
     e[SAVES_E_FLAGS] = SAVES_EF_EXISTS;
     /* FAT fdate [15:9] year-1980, [8:5] month, [4:0] day; ftime [15:11] hour, [10:5] min */
-    snprintf((char *)e + SAVES_E_DATE, SAVES_DATE_LEN, "%02u%c%02u%c%04u %02u:%02u",
-             (f & 0x80) ? d : m, f & 0x7f, (f & 0x80) ? m : d, f & 0x7f,
-             1980 + (fno.fdate >> 9), fno.ftime >> 11, (fno.ftime >> 5) & 0x3f);
+    unsigned y = 1980 + (fno.fdate >> 9);
+    snprintf((char *)e + SAVES_E_DATE, SAVES_DATE_LEN,
+             (f & 0x40) ? "%04u%c%02u%c%02u %02u:%02u" : "%02u%c%02u%c%04u %02u:%02u",
+             (f & 0x40) ? y : (f & 0x80) ? d : m, f & 0x3f, (f & 0xc0) ? m : d, f & 0x3f,
+             (f & 0x40) ? d : y, fno.ftime >> 11, (fno.ftime >> 5) & 0x3f);
     if(sz >= 1024) snprintf((char *)e + SAVES_E_SIZE, SAVES_SIZE_LEN, "%lu KB",
                             (unsigned long)((sz >> 10) > 9999 ? 9999 : (sz >> 10)));
     else snprintf((char *)e + SAVES_E_SIZE, SAVES_SIZE_LEN, "%lu B", (unsigned long)sz);
