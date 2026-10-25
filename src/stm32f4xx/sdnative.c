@@ -269,11 +269,22 @@ int get_and_check_datacrc(uint8_t *buf) {
   return 0;
 }
 
-static inline void wait_busy(void) {
+/* Wait for DAT0 to go high again after a write or a STOP.  Bounded like the LPC driver's: a
+   card that holds DAT0 low for good used to hang the MCU here; the spec gives it 250 ms, so
+   after ~1 s the caller goes on and the next command's response decides.  Returns 0 when
+   the card released the line, 1 on the timeout. */
+static inline int wait_busy(void) {
+  uint32_t n = 0;
+  tick_t t0 = getticks();
   while(!(BITBAND(SD_DAT0REG->GPIO_I, SD_DAT0BIT))) {
     wiggle_fast_neg1();
+    if(!(++n & 0xff) && (tick_t)(getticks() - t0) > MS_TO_TICKS(1000)) {
+      printf("sd: busy timeout\n");
+      return 1;
+    }
   }
   wiggle_fast_neg(4);
+  return 0;
 }
 
 /*
@@ -672,7 +683,8 @@ int stream_datablock(uint8_t *buf) {
   return 0;
 }
 
-void send_datablock(uint8_t *buf) {
+/* returns 0, or 1 when the card refused the block (bad CRC status: see write_block) */
+int send_datablock(uint8_t *buf) {
   uint16_t crc0=0, crc1=0, crc2=0, crc3=0, cnt=512;
   uint8_t dat0=0, dat1=0, dat2=0, dat3=0, crcshift, datshift;
 
@@ -743,15 +755,16 @@ void send_datablock(uint8_t *buf) {
     wiggle_fast_neg1();
   } while (datshift);
   DBG_SD printf("crc %02x\n", dat0);
-  if((dat0 & 7) != 2) {
-    printf("crc error! %02x\n", dat0);
-    while(1);
-  }
   if(dat0 & 8) {
     printf("missing start bit in CRC status response...\n");
   }
   wiggle_fast_neg(2);
   wait_busy();
+  if((dat0 & 7) != 2) {
+    printf("crc error! %02x\n", dat0);
+    return 1;
+  }
+  return 0;
 }
 
 void read_block(uint32_t address, uint8_t *buf) {
@@ -809,27 +822,38 @@ void read_block(uint32_t address, uint8_t *buf) {
 //  printf("trans state = %d\n", during_blocktrans);
 }
 
-void write_block(uint32_t address, uint8_t* buf) {
-  if(during_blocktrans == TRANS_WRITE && (last_block == address-1)) {
-    wait_busy();
-    send_datablock(buf);
-    last_block=address;
-  } else {
-    if(during_blocktrans) {
-      /* send STOP_TRANSMISSION to end an open READ/WRITE_MULTIPLE_BLOCK */
-      cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+/* Write one sector, 0 on success.  A block the card refuses (CRC status != 010) is sent
+   again from a fresh WRITE_MULTIPLE_BLOCK, twice; a third refusal returns 1 with the
+   transfer closed, so sdn_write reports RES_ERROR and FatFs fails the operation
+   (FR_DISK_ERR) instead of going on as if the sector had been written -- the same contract
+   as the LPC driver (the old code hung in send_datablock on a bad CRC status). */
+int write_block(uint32_t address, uint8_t* buf) {
+  int tries = 3;
+  for(;;) {
+    if(during_blocktrans == TRANS_WRITE && (last_block == address-1)) {
+      wait_busy();
+    } else {
+      if(during_blocktrans) {
+        /* send STOP_TRANSMISSION to end an open READ/WRITE_MULTIPLE_BLOCK */
+        cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+      }
+      wait_busy();
+      /* only send cmd & get response */
+      cmd_fast(WRITE_MULTIPLE_BLOCK, ccs ? address : address << 9, 0, NULL, rsp);
+      DBG_SD printf("write_block: CMD25 response = %02x%02x%02x%02x%02x%02x\n", rsp[0], rsp[1], rsp[2], rsp[3], rsp[4], rsp[5]);
+      wiggle_fast_pos(8);
+      during_blocktrans = TRANS_WRITE;
     }
-    wait_busy();
     last_block=address;
-    if(!ccs) {
-      address <<= 9;
+    if(!send_datablock(buf)) return 0;
+    /* the card did not take the block: end the transfer, then send it again from here */
+    cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+    wait_busy();
+    during_blocktrans = TRANS_NONE;
+    if(!--tries) {
+      printf("sd: block %08lx refused 3 times, giving up\n", address);
+      return 1;
     }
-    /* only send cmd & get response */
-    cmd_fast(WRITE_MULTIPLE_BLOCK, address, 0, NULL, rsp);
-    DBG_SD printf("write_block: CMD25 response = %02x%02x%02x%02x%02x%02x\n", rsp[0], rsp[1], rsp[2], rsp[3], rsp[4], rsp[5]);
-    wiggle_fast_pos(8);
-    send_datablock(buf);
-    during_blocktrans = TRANS_WRITE;
   }
 }
 
@@ -1052,7 +1076,11 @@ DRESULT sdn_write(BYTE drv, const BYTE *buffer, DWORD sector, UINT count) {
   }
   writeled(1);
   for(sec=0; sec<count; sec++) {
-    write_block(sector+sec, buf);
+    if(write_block(sector+sec, buf)) {
+      /* the sector was NOT written: FatFs gets FR_DISK_ERR, never a silent hole */
+      writeled(0);
+      return RES_ERROR;
+    }
     buf+=512;
   }
   writeled(0);

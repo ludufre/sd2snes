@@ -54,8 +54,11 @@ SECTIONS
   } >flash
   __exidx_end = .;
 
-  /* I hope this does what I think it does */
-  .rodata : AT (ALIGN(__exidx_end,4))
+  /* Loaded where it runs: an AT() here placed the image at a 4-aligned address while the
+     section itself took the alignment of its widest constant, so one 8-aligned object (a
+     uint64_t table) moved every string and constant 4 bytes away from where the code reads
+     it, and the firmware did not boot.  The ASSERT below keeps it that way. */
+  .rodata :
   {
     *(.rodata)
     *(.rodata.*)
@@ -74,6 +77,7 @@ SECTIONS
   } > ram
 
   /* Addresses of in-rom data section */
+  ASSERT(LOADADDR(.rodata) == ADDR(.rodata), ".rodata must load where it runs")
   __data_load_start = LOADADDR(.data);
   __data_load_end   = __data_load_start + SIZEOF(.data);
 

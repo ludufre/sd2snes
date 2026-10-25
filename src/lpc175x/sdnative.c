@@ -233,6 +233,91 @@ static inline void wiggle_fast_pos1(void) {
     __NOP();
 }
 
+/*
+   Block bodies (the 512 data bytes of a read or a write), unrolled and without calls: the
+   wiggle_* helpers above are not inlined at -Os, and the call per clock edge made reads
+   ~2.6 MB/s and writes ~0.67 MB/s.  Reads have two timings: FAST waits one cycle in each
+   clock phase (~5.1 MB/s, measured on a Mk.III), SAFE two (~4.2 MB/s).  With no wait at all
+   the reads come back wrong: a nibble is sampled before the card drove it.  The first read
+   after a card init checks 31 blocks at FAST against the card's own CRC (sd_calibrate) and
+   stays SAFE on any mismatch; a write the card refuses (bad CRC status) also drops reads to
+   SAFE, and the block is sent again (write_block).
+*/
+#include "sdcrc64.h"
+
+static uint8_t sd_safe = 1;         /* data timing: 0 FAST, 1 SAFE */
+static uint8_t sd_calibrated;       /* sd_calibrate ran for this card */
+
+#define SD_DLY_FAST() __NOP()
+#define SD_DLY_SAFE() do { __NOP(); __NOP(); } while (0)
+/* falling edge (the card drives the next nibble), rising edge */
+#define SD_NEG(DLY) do { CLEAR_BIT(SD_CLKREG, SD_CLKBIT); DLY(); SET_BIT(SD_CLKREG, SD_CLKBIT); DLY(); } while (0)
+/* rising edge (the card latches our nibble), falling edge */
+#define SD_POS(DLY) do { SET_BIT(SD_CLKREG, SD_CLKBIT); DLY(); CLEAR_BIT(SD_CLKREG, SD_CLKBIT); DLY(); } while (0)
+#define SD_RD_BYTE(b, DLY) do { uint32_t hi_ = SD_DAT_IN; SD_NEG(DLY); \
+                                (b) = (uint8_t)(hi_ << 4 | SD_DAT_IN); SD_NEG(DLY); } while (0)
+
+#define SD_DEF_RD(NAME, DLY)                                                       \
+static void __attribute__((noinline, optimize("O2"))) NAME(uint8_t *buf) {        \
+  uint8_t *end = buf + 512;                                                        \
+  do {                                                                             \
+    SD_RD_BYTE(buf[0], DLY); SD_RD_BYTE(buf[1], DLY);                              \
+    SD_RD_BYTE(buf[2], DLY); SD_RD_BYTE(buf[3], DLY);                              \
+    buf += 4;                                                                      \
+  } while(buf != end);                                                             \
+}
+SD_DEF_RD(sd_rd_fast, SD_DLY_FAST)
+SD_DEF_RD(sd_rd_safe, SD_DLY_SAFE)
+
+/* data nibbles and the 16 CRC nibbles of one block; the start/end bits stay with the caller.
+   Writes have one timing, SAFE: the card checks every block and a refused one is sent again
+   (write_block), so a faster variant would buy little for its flash. */
+static void __attribute__((noinline, optimize("O2"))) sd_wr(const uint8_t *buf) {
+  uint64_t crc = 0;
+  const uint8_t *end = buf + 512;
+  do {
+    uint32_t v = *buf++;
+    SD_DAT_OUT(v >> 4); SD_POS(SD_DLY_SAFE);
+    SD_CRC64_NIB(crc, v >> 4);
+    SD_DAT_OUT(v & 15); SD_POS(SD_DLY_SAFE);
+    SD_CRC64_NIB(crc, v & 15);
+  } while(buf != end);
+  for(int sh = 60; sh >= 0; sh -= 4) {
+    SD_DAT_OUT((uint32_t)(crc >> sh) & 15); SD_POS(SD_DLY_SAFE);
+  }
+}
+
+static inline void sd_rd(uint8_t *buf) {
+  if(sd_safe) sd_rd_safe(buf); else sd_rd_fast(buf);
+}
+
+/* One block of an open READ_MULTIPLE_BLOCK, read into buf by sd_rd_fast itself and then
+   checked against the card's CRC: 1 = it matched.  The data has to come through the
+   production reader: a check that ran the CRC between the clock edges was a different
+   instruction stream, and the compiler was free to give the card more time per nibble
+   than sd_rd_fast does -- a marginal card could pass here and then misread at FAST, where
+   nothing checks the data (without CONFIG_SD_DATACRC the CRC is only clocked away).  The
+   16 CRC nibbles after the data are sampled here with more slack than the data gets, so a
+   misread CRC can only keep a good card at SAFE, never pass a bad one. */
+static int __attribute__((noinline)) sd_check_fast(uint8_t *buf) {
+  uint32_t timeout = 1000000;
+  uint64_t crc = 0, got = 0;
+  while((BITBAND(SD_DAT0REG->GPIO_I, SD_DAT0BIT)) && --timeout) SD_NEG(SD_DLY_FAST);
+  if(!timeout) return 0;
+  SD_NEG(SD_DLY_FAST);   /* start bit */
+  sd_rd_fast(buf);
+  for(int i = 0; i < 16; i++) {
+    got = got << 4 | SD_DAT_IN;
+    SD_NEG(SD_DLY_FAST);
+  }
+  SD_NEG(SD_DLY_FAST);   /* end bit */
+  for(int i = 0; i < 512; i++) {
+    SD_CRC64_NIB(crc, buf[i] >> 4);
+    SD_CRC64_NIB(crc, buf[i] & 15);
+  }
+  return crc == got;
+}
+
 
 int get_and_check_datacrc(uint8_t *buf) {
   uint16_t crc0=0, crc1=0, crc2=0, crc3=0;
@@ -270,11 +355,22 @@ int get_and_check_datacrc(uint8_t *buf) {
   return 0;
 }
 
-static inline void wait_busy(void) {
+/* Wait for DAT0 to go high again after a write or a STOP.  Bounded: a card that holds
+   DAT0 low for good (dead, or confused by a refused block) used to hang the MCU here; the
+   spec gives it 250 ms, so after ~1 s the caller goes on and the next command's response
+   decides.  Returns 0 when the card released the line, 1 on the timeout. */
+static inline int wait_busy(void) {
+  uint32_t n = 0;
+  tick_t t0 = getticks();
   while(!(BITBAND(SD_DAT0REG->GPIO_I, SD_DAT0BIT))) {
     wiggle_fast_neg1();
+    if(!(++n & 0xff) && (tick_t)(getticks() - t0) > MS_TO_TICKS(1000)) {
+      printf("sd: busy timeout\n");
+      return 1;
+    }
   }
   wiggle_fast_neg(4);
+  return 0;
 }
 
 /*
@@ -514,7 +610,10 @@ int send_command_fast(uint8_t* cmd, uint8_t* rsp, uint8_t* buf){
 
     if(state==CMD_DAT) { /* transfer rest of data */
       DBG_SD printf("remaining data: %d\n", j);
-      if(datshift==8) {
+      if(datshift==8 && j==512) {
+        sd_rd(buf);
+        buf += 512;
+      } else if(datshift==8) {
         while(1) {
           datdata |= SD_DAT_IN << 4;
           wiggle_fast_neg1();
@@ -623,9 +722,6 @@ int acmd_fast(uint8_t cmd, uint32_t param, uint8_t crc, uint8_t* dat, uint8_t* r
 }
 
 int stream_datablock(uint8_t *buf) {
-//  uint8_t datshift=8;
-  int j=512;
-  uint8_t datdata=0;
   uint32_t timeout=1000000;
 
   DBG_SD printf("stream_datablock: wait for ready...\n");
@@ -651,18 +747,8 @@ int stream_datablock(uint8_t *buf) {
       fpga_sddma(sd_offload_tgt, 0);
     }
   } else {
-    while(1) {
-      datdata = SD_DAT_IN << 4;
-      wiggle_fast_neg1();
-
-      datdata |= SD_DAT_IN;
-      wiggle_fast_neg1();
-
-      *buf=datdata;
-      buf++;
-      j--;
-      if(!j) break;
-    }
+    sd_rd(buf);
+    buf += 512;
 #ifdef CONFIG_SD_DATACRC
     return get_and_check_datacrc(buf-512);
 #else
@@ -673,9 +759,9 @@ int stream_datablock(uint8_t *buf) {
   return 0;
 }
 
-void send_datablock(uint8_t *buf) {
-  uint16_t crc0=0, crc1=0, crc2=0, crc3=0, cnt=512;
-  uint8_t dat0=0, dat1=0, dat2=0, dat3=0, crcshift, datshift;
+/* returns 0, or 1 when the card refused the block (bad CRC status: see write_block) */
+int send_datablock(uint8_t *buf) {
+  uint8_t dat0, datshift;
 
   wiggle_fast_pos1();
   GPIO_MODE_OUT(SD_DAT0REG, SD_DAT0BIT);
@@ -686,44 +772,8 @@ void send_datablock(uint8_t *buf) {
   SD_DAT_OUT(0);
 
   wiggle_fast_pos1(); /* send start bit to card */
-  crcshift=8;
-  while(cnt--) {
-    datshift=8;
-    do {
-      datshift-=4;
-      SD_DAT_OUT(((*buf)>>datshift) & 0xf);
-      wiggle_fast_pos1();
-    } while (datshift);
-
-    crcshift-=2;
-    dat0 |= (((*buf)&0x01) | (((*buf)&0x10) >> 3)) << crcshift;
-    dat1 |= ((((*buf)&0x02) >> 1) | (((*buf)&0x20) >> 4)) << crcshift;
-    dat2 |= ((((*buf)&0x04) >> 2) | (((*buf)&0x40) >> 5)) << crcshift;
-    dat3 |= ((((*buf)&0x08) >> 3) | (((*buf)&0x80) >> 6)) << crcshift;
-    if(!crcshift) {
-      crc0 = crc_xmodem_update(crc0, dat0);
-      crc1 = crc_xmodem_update(crc1, dat1);
-      crc2 = crc_xmodem_update(crc2, dat2);
-      crc3 = crc_xmodem_update(crc3, dat3);
-      crcshift=8;
-      dat0=0;
-      dat1=0;
-      dat2=0;
-      dat3=0;
-    }
-    buf++;
-  }
-//  printf("crc0=%04x crc1=%04x crc2=%04x crc3=%04x ", crc0, crc1, crc2, crc3);
-  /* send crcs */
-  datshift=16;
-  do {
-    datshift--;
-    OUT_BIT(SD_DAT0REG, SD_DAT0BIT, (crc0 >> datshift) & 1);
-    OUT_BIT(SD_DAT1REG, SD_DAT1BIT, (crc1 >> datshift) & 1);
-    OUT_BIT(SD_DAT2REG, SD_DAT2BIT, (crc2 >> datshift) & 1);
-    OUT_BIT(SD_DAT3REG, SD_DAT3BIT, (crc3 >> datshift) & 1);
-    wiggle_fast_pos1();
-  } while(datshift);
+  /* data and crcs */
+  sd_wr(buf);
 
   /* send end bit */
   SD_DAT_OUT(0xf);
@@ -745,15 +795,29 @@ void send_datablock(uint8_t *buf) {
     wiggle_fast_neg1();
   } while (datshift);
   DBG_SD printf("crc %02x\n", dat0);
-  if((dat0 & 7) != 2) {
-    printf("crc error! %02x\n", dat0);
-    while(1);
-  }
   if(dat0 & 8) {
     printf("missing start bit in CRC status response...\n");
   }
   wiggle_fast_neg(2);
   wait_busy();
+  if((dat0 & 7) != 2) {
+    printf("crc error! %02x\n", dat0);
+    return 1;
+  }
+  return 0;
+}
+
+/* Pick the data timing for this card: called with a READ_MULTIPLE_BLOCK open, its first
+   block already read (at SAFE) into buf.  The next blocks are read over buf (no buffer of
+   its own: nothing in RAM is free at every point a card can get mounted) and the stream is
+   ended; the caller reads its block again (read_block). */
+static void sd_calibrate(uint8_t *buf) {
+  int ok = 1;
+  sd_calibrated = 1;
+  for(int i = 0; i < 31 && ok; i++) ok = sd_check_fast(buf);
+  cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+  sd_safe = !ok;
+  printf("SD data timing: %s\n", ok ? "fast" : "safe");
 }
 
 void read_block(uint32_t address, uint8_t *buf) {
@@ -798,41 +862,61 @@ void read_block(uint32_t address, uint8_t *buf) {
     if(!ccs) {
       address <<= 9;
     }
+    /* the first read after a card init calibrates over buf, then opens the stream again
+       and reads its block at the timing just picked (at most two passes) */
+    for(;;) {
 #ifdef CONFIG_SD_DATACRC
-    while(1) {
-      if(cmd_fast(READ_MULTIPLE_BLOCK, address, 0, buf, rsp) != CRC_ERROR) break;
-      cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
-    };
+      while(cmd_fast(READ_MULTIPLE_BLOCK, address, 0, buf, rsp) == CRC_ERROR) {
+        cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+      }
 #else
-    cmd_fast(READ_MULTIPLE_BLOCK, address, 0, buf, rsp);
+      cmd_fast(READ_MULTIPLE_BLOCK, address, 0, buf, rsp);
 #endif
+      if(sd_calibrated || sd_offload || last_block + 32 > di.sectorcount) break;
+      sd_calibrate(buf);
+    }
     sd_offload_partial = 0;
   }
 //  uart_trace(buf, 0, 512);
 //  printf("trans state = %d\n", during_blocktrans);
 }
 
-void write_block(uint32_t address, uint8_t* buf) {
-  if(during_blocktrans == TRANS_WRITE && (last_block == address-1)) {
-    wait_busy();
-    send_datablock(buf);
-    last_block=address;
-  } else {
-    if(during_blocktrans) {
-      /* send STOP_TRANSMISSION to end an open READ/WRITE_MULTIPLE_BLOCK */
-      cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+/* Write one sector, 0 on success.  A block the card refuses (CRC status != 010) is sent
+   again from a fresh WRITE_MULTIPLE_BLOCK, twice; a third refusal returns 1 with the
+   transfer closed, so sdn_write reports RES_ERROR and FatFs fails the operation
+   (FR_DISK_ERR) instead of going on as if the sector had been written.  (The old code
+   hung in send_datablock on a bad CRC status; dropping the block silently would be worse:
+   a lost FAT or directory sector corrupts the volume.) */
+int write_block(uint32_t address, uint8_t* buf) {
+  int tries = 3;
+  for(;;) {
+    if(during_blocktrans == TRANS_WRITE && (last_block == address-1)) {
+      wait_busy();
+    } else {
+      if(during_blocktrans) {
+        /* send STOP_TRANSMISSION to end an open READ/WRITE_MULTIPLE_BLOCK */
+        cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+      }
+      wait_busy();
+      /* only send cmd & get response */
+      cmd_fast(WRITE_MULTIPLE_BLOCK, ccs ? address : address << 9, 0, NULL, rsp);
+      DBG_SD printf("write_block: CMD25 response = %02x%02x%02x%02x%02x%02x\n", rsp[0], rsp[1], rsp[2], rsp[3], rsp[4], rsp[5]);
+      wiggle_fast_pos(8);
+      during_blocktrans = TRANS_WRITE;
     }
-    wait_busy();
     last_block=address;
-    if(!ccs) {
-      address <<= 9;
+    if(!send_datablock(buf)) return 0;
+    /* the card did not take the block: end the transfer, then send it again from this
+       address (the data lines are driven at one timing for writes; sd_safe = 1 slows the
+       READS from here on, since a card that drops a write is likely marginal on reads too) */
+    sd_safe = 1;
+    cmd_fast(STOP_TRANSMISSION, 0, 0x61, NULL, rsp);
+    wait_busy();
+    during_blocktrans = TRANS_NONE;
+    if(!--tries) {
+      printf("sd: block %08lx refused 3 times, giving up\n", address);
+      return 1;
     }
-    /* only send cmd & get response */
-    cmd_fast(WRITE_MULTIPLE_BLOCK, address, 0, NULL, rsp);
-    DBG_SD printf("write_block: CMD25 response = %02x%02x%02x%02x%02x%02x\n", rsp[0], rsp[1], rsp[2], rsp[3], rsp[4], rsp[5]);
-    wiggle_fast_pos(8);
-    send_datablock(buf);
-    during_blocktrans = TRANS_WRITE;
   }
 }
 
@@ -962,6 +1046,8 @@ DSTATUS sdn_initialize(BYTE drv) {
   cmd_slow(SET_BLOCKLEN, 0x200, 0, NULL, rsp);
 
   printf("SD init complete. SDHC/XC=%d\n", ccs);
+  sd_safe = 1;
+  sd_calibrated = 0;
   disk_state = DISK_OK;
   during_blocktrans = TRANS_NONE;
   return sdn_status(drv);
@@ -1051,7 +1137,11 @@ DRESULT sdn_write(BYTE drv, const BYTE *buffer, DWORD sector, UINT count) {
   }
   writeled(1);
   for(sec=0; sec<count; sec++) {
-    write_block(sector+sec, buf);
+    if(write_block(sector+sec, buf)) {
+      /* the sector was NOT written: FatFs gets FR_DISK_ERR, never a silent hole */
+      writeled(0);
+      return RES_ERROR;
+    }
     buf+=512;
   }
   writeled(0);
