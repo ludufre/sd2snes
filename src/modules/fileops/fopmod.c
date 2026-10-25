@@ -449,7 +449,13 @@ static int xfer_piece(fopmod_t *m) {
     api->sram_read(m->buf, FOP_STAGE + m->st_drain, (uint16_t)n);
     FRESULT r = api->f_write(&m->fo, m->buf, n, &bw);
     if(r != FR_OK) return -FM_ERR_IO;
-    if(bw != n) return -FM_ERR_NOSPACE;
+    if(bw != n) {
+      /* the card is fuller than its FSINFO count said (stale the other way round from the
+         recount above: a count too HIGH passes the space check and fails here): drop the
+         count, so the next f_getfree (System Information, the next paste) walks the FAT */
+      m->fsp->free_clust = 0xFFFFFFFF;
+      return -FM_ERR_NOSPACE;
+    }
     m->st_drain += n;
     m->h.bytes_done += n;
   }

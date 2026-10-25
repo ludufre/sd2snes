@@ -579,6 +579,8 @@ TRANSLATIONS = {
     'text_fm_deleting': '正在删除',
     'text_fm_rm_note': '/sd2snes中的存档和金手指会保留',
     'text_fm_sdel_ask': '删除所选项目？',
+    'text_fm_ren_ask': '用未知扩展名重命名吗？',
+    'text_fm_ren_note': '该文件将不再显示在列表中',
     'mtext_fm_sdel': '删除',
 
     # game options (gameopt.a65 / igopt.i65)

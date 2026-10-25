@@ -1070,6 +1070,10 @@ ce_kbd_open:                  ; the file manager comes in here: its caller alrea
   stz ce_krow
   stz ce_kcol
   jsr ce_field_len
+  lda ce_klen
+  sta ce_kpos                 ; the text cursor starts at the end
+  stz ce_kview
+  stz ce_krep
   lda #CEK_X
   sta window_x
   lda #CEK_Y
@@ -1086,12 +1090,22 @@ ce_kbd_open:                  ; the file manager comes in here: its caller alrea
   jsr ce_kbd_draw_keys
   jsr ce_kbd_draw_fmt
   jsr ce_kbd_draw_hint
+  jsr ce_kbd_draw_lr
   jsr ce_kbd_draw_field
   jsr ce_kbd_bar
+  stz ce_hlon                 ; the cursor's bar lives in bank $C3 (kbdcur.a65)
+  jsl @fm_bank_ok
+  bcc ce_kbd_loop
+  jsl @ce_hl_on
+  inc ce_hlon
 ce_kbd_loop:
   lda isr_done
   beq ce_kbd_loop
   stz isr_done
+  lda ce_hlon
+  beq +
+  jsl @ce_hl_build            ; last frame's moves, before the bars are drawn
++
   jsl @mouse_kbdmode          ; the mouse points at the keys (mouse.a65)
   jsl @ui_call_pad
   lda pad_b
@@ -1120,6 +1134,9 @@ ce_kbd_loop:
   beq +
   jsr ce_kbd_space
   jmp ce_kbd_loop
++ jsr ce_kbd_lr               ; L/R: the text cursor (carry set = L/R handled)
+  bcc +
+  jmp ce_kbd_loop
 + lda pad_left
   beq +
   jsr ce_kbd_left
@@ -1143,7 +1160,10 @@ ce_kbd_moved:
   jsr ce_kbd_bar
   jmp ce_kbd_loop
 ce_kbd_out:
-  lda #CEK_H
+  lda ce_hlon
+  beq +
+  jsl @ce_hl_off
++ lda #CEK_H
   sta window_h
   jsl @ui_call_wclose
   pla
@@ -1313,7 +1333,8 @@ ce_kbd_clampcol:
   sta ce_kcol
 + rts
 
-; store A at field[ce_klen], advance, re-terminate, repaint the field
+; insert A at the cursor: field[kpos..klen) one byte right, A in the gap, re-terminate,
+; advance the cursor, repaint the field
 ce_kbd_put:
   pha
   lda ce_klen
@@ -1323,18 +1344,31 @@ ce_kbd_put:
   lda #$04                    ; full
   sta @SFX_MAILBOX
   rts
-+ rep #$20 : .al
++ jsr ce_kpos_byte            ; X = &field[kpos]
+  stx ce_tmp
+  rep #$20 : .al
+  lda ce_klen
   and #$00ff
   clc
   adc ce_kfield
-  tax
+  tax                         ; X = &field[klen]
   sep #$20 : .as
+  lda #$00
+  sta @$ff0001, x             ; the new end
+ckp_shift:
+  .as : .xl
+  cpx ce_tmp
+  beq ckp_put
+  dex
+  lda @$ff0000, x
+  sta @$ff0001, x
+  bra ckp_shift
+ckp_put:
+  .as : .xl
   pla
   sta @$ff0000, x
-  inx
-  lda #$00
-  sta @$ff0000, x
   inc ce_klen
+  inc ce_kpos
   lda #$01
   sta @SFX_MAILBOX
   jsr ce_kbd_draw_field
@@ -1351,43 +1385,181 @@ ce_kbd_space:
 + lda #$20
   jmp ce_kbd_put
 
-; Y: drop the last character.  A name may hold multi-byte UTF-8 from the .yml, so
-; keep dropping continuation bytes ($80-$BF) until a lead byte or an ASCII char went.
+; Y: drop the character in front of the cursor.  A name may hold multi-byte UTF-8 from the
+; .yml, so keep dropping continuation bytes ($80-$BF) until a lead byte or an ASCII char went.
 ce_kbd_backspace:
-  lda ce_klen
-  bne +
+  lda ce_kpos
+  bne ce_bs_loop
   rts
-+ dec ce_klen
+ce_bs_loop:
+  .as : .xl
+  dec ce_kpos
+  dec ce_klen
+  rep #$20 : .al
+  lda ce_klen
+  and #$00ff
+  clc
+  adc ce_kfield
+  sta ce_tmp2                 ; &field[klen], the new end
+  sep #$20 : .as
+  jsr ce_kpos_byte            ; X = &field[kpos], A = the byte that goes
+  sta ce_tmp3
+ce_bs_shift:
+  .as : .xl
+  cpx ce_tmp2
+  bcs ce_bs_shifted
+  lda @$ff0001, x
+  sta @$ff0000, x
+  inx
+  bra ce_bs_shift
+ce_bs_shifted:
+  .as : .xl
+  lda #$00
+  sta @$ff0000, x
   lda ce_kmode
   beq ce_bs_done
-- lda ce_klen
-  beq ce_bs_done
+  lda ce_tmp3
+  and #$c0
+  cmp #$80
+  bne ce_bs_done
+  lda ce_kpos
+  bne ce_bs_loop
+ce_bs_done:
+  .as : .xl
+  lda #$01
+  sta @SFX_MAILBOX
+  jsr ce_kbd_draw_field
+  rts
+
+; X = &field[kpos] (16 bits), A = the byte there.  .as/.xl in and out.
+ce_kpos_byte:
+  .as : .xl
   rep #$20 : .al
+  lda ce_kpos
   and #$00ff
   clc
   adc ce_kfield
   tax
   sep #$20 : .as
   lda @$ff0000, x
-  and #$c0
-  cmp #$80
-  bne ce_bs_done
-  dec ce_klen
-  bra -
-ce_bs_done:
-  lda ce_klen
-  rep #$20 : .al
-  and #$00ff
+  rts
+
+; L/R move the text cursor one character; held, they repeat (after 18 frames, every 4).
+; Carry set = L or R is down (this frame belongs to them).
+ce_kbd_lr:
+  .as : .xl
+  lda pad1mem
+  and #$30                    ; L ($20) / R ($10), held
+  bne +
+  stz ce_krep
   clc
-  adc ce_kfield
-  tax
-  sep #$20 : .as
-  lda #$00
-  sta @$ff0000, x
-  lda #$01
+  rts
++ sta ce_tmp3
+  lda pad_l
+  ora pad_r
+  beq ckl_held
+  stz ce_krep                 ; a fresh press moves at once
+  bra ckl_move
+ckl_held:
+  .as : .xl
+  inc ce_krep
+  lda ce_krep
+  cmp #18
+  bcc ckl_out
+  lda #14
+  sta ce_krep
+ckl_move:
+  .as : .xl
+  lda ce_tmp3
+  and #$20
+  beq ckl_right
+  jsr ce_cur_left
+  bra ckl_moved
+ckl_right:
+  .as : .xl
+  jsr ce_cur_right
+ckl_moved:
+  .as : .xl
+  bcc ckl_out                 ; at the edge: nothing moved
+  lda #$01                    ; snd_fx_cursor
   sta @SFX_MAILBOX
   jsr ce_kbd_draw_field
+ckl_out:
+  .as : .xl
+  sec
   rts
+
+; the cursor one character left / right (a name's UTF-8 continuation bytes are skipped with
+; their lead).  Carry set = it moved.
+ce_cur_left:
+  .as : .xl
+  lda ce_kpos
+  beq ccl_no
+ccl_back:
+  .as : .xl
+  dec ce_kpos
+  lda ce_kmode
+  beq ccl_yes
+  lda ce_kpos
+  beq ccl_yes
+  jsr ce_kpos_byte
+  and #$c0
+  cmp #$80
+  beq ccl_back
+ccl_yes:
+  .as : .xl
+  sec
+  rts
+ccl_no:
+  .as : .xl
+  clc
+  rts
+
+ce_cur_right:
+  .as : .xl
+  lda ce_kpos
+  cmp ce_klen
+  bcs ccl_no
+ccr_fwd:
+  .as : .xl
+  inc ce_kpos
+  lda ce_kmode
+  beq ccl_yes
+  lda ce_kpos
+  cmp ce_klen
+  bcs ccl_yes
+  jsr ce_kpos_byte
+  and #$c0
+  cmp #$80
+  beq ccr_fwd
+  bra ccl_yes
+
+; ce_kview so the cursor's cell shows: no empty room left of the end-of-text cell when the
+; text could fill it, and the cursor inside the CEK_FIELD_W+1 cells of the row
+ce_kbd_view:
+  .as : .xl
+  lda ce_klen
+  sec
+  sbc #CEK_FIELD_W            ; the view that ends on the end-of-text cell
+  bcs +
+  lda #$00
++ cmp ce_kview
+  bcs +
+  sta ce_kview
++ lda ce_kpos
+  cmp ce_kview
+  bcs +
+  sta ce_kview                ; the cursor left of the view
++ lda ce_kpos
+  sec
+  sbc ce_kview
+  cmp #CEK_FIELD_W+1
+  bcc +
+  lda ce_kpos
+  sec
+  sbc #CEK_FIELD_W            ; the cursor right of it
+  sta ce_kview
++ rts
 
 ; X: accept.  Names always; a code only when it is 8 hex digits, or 9 with '-' at [4].
 ce_kbd_ok:
@@ -1440,7 +1612,8 @@ ce_ok_bad:
   clc
   rts
 
-; the field row: blank, then the tail of the text that fits, then the '_' cursor
+; the field row: blank, then the part of the text the view shows (the cursor is the second
+; bar, kbdcur.a65, on column CEK_FIELD_COL + ce_kpos - ce_kview)
 ce_kbd_draw_field:
   lda #CEK_FIELD_ROW
   sta print_y
@@ -1455,16 +1628,17 @@ ce_kbd_draw_field:
   lda #CEK_BLANK_W
   sta print_count
   jsl @gi_call_hiprint
-  ; shown = min(klen, viewport); source = field + (klen - shown)
-  lda ce_klen
-  cmp #CEK_FIELD_W
-  bcc +
-  lda #CEK_FIELD_W
-+ sta ce_tmp                  ; shown
+  jsr ce_kbd_view
+  ; shown = min(klen - kview, CEK_FIELD_W + 1), from field + kview
   lda ce_klen
   sec
-  sbc ce_tmp                  ; offset
+  sbc ce_kview
+  cmp #CEK_FIELD_W+1
+  bcc +
+  lda #CEK_FIELD_W+1
++ sta ce_tmp                  ; shown
   rep #$20 : .al
+  lda ce_kview
   and #$00ff
   clc
   adc ce_kfield
@@ -1478,17 +1652,18 @@ ce_kbd_draw_field:
   beq +
   sta print_count
   jsl @gi_call_hiprint
-+ lda #CEK_FIELD_COL
-  clc
-  adc ce_tmp
-  sta print_x
-  lda #^ce_cursor_str
++ rts
+
+; "L:<  R:>" inside the box, above the bottom border's hint: L/R move the text cursor
+ce_kbd_draw_lr:
+  lda #CEK_Y+CEK_H-2
+  sta print_y
+  lda #^ce_lr_hint
   sta print_bank
-  ldx #!ce_cursor_str
+  ldx #!ce_lr_hint
   stx print_src
-  lda #$01
-  sta print_count
-  jsl @gi_call_hiprint
+  jsr ce_print_centered
+  jsl @hint_keys
   rts
 
 ; the key grid: one row (hex) or six (alnum), each glyph followed by a space
@@ -1658,8 +1833,8 @@ ce_kbd_hex_len:
   .byt 10, 7
 ce_kbd_aln_len:
   .byt 13, 13, 13, 13, 14, 13
-ce_cursor_str:
-  .byt "_", 0
+ce_lr_hint:
+  .byt "L:<  R:>", 0          ; language-neutral, like the code formats below
 ; code-format hint (code keyboard only). The dash after the 4th char = Game Genie.
 ce_fmt_gg:
   .byt "Game Genie:  XXXX-YYYY", 0

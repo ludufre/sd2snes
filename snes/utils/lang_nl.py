@@ -600,6 +600,8 @@ TRANSLATIONS = {
     'text_fm_deleting': 'Verwijderen',
     'text_fm_rm_note': 'Saves en cheats in /sd2snes blijven',
     'text_fm_sdel_ask': 'Gemarkeerde items verwijderen?',
+    'text_fm_ren_ask': 'Hernoemen met een onbekende extensie?',
+    'text_fm_ren_note': 'Het bestand verdwijnt uit de lijst',
     'mtext_fm_sdel': 'Verwijderen',
 
     # game options (gameopt.a65 / igopt.i65)

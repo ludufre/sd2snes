@@ -19,6 +19,7 @@
 static uint16_t fm_clip_count;
 static uint8_t  fm_clip_mode;
 static uint8_t  fm_clip_err;
+static uint8_t  fm_name_hidden;   /* FM_OP_NAMECHK's answer, published in FM_CLIPINFO+7 */
 
 void fileman_publish(void) {
   uint8_t b[FM_CLIPINFO_LEN];
@@ -29,7 +30,7 @@ void fileman_publish(void) {
   b[4] = fm_clip_count & 0xff;
   b[5] = fm_clip_count >> 8;
   b[6] = fm_clip_err;
-  b[7] = 0;
+  b[7] = fm_name_hidden;
   sram_writeblock(b, SRAM_FM_CLIPINFO_ADDR, sizeof(b));
 }
 
@@ -100,6 +101,17 @@ static __attribute__((noinline)) void fm_clip(void) {
   }
 }
 
+/* FM_OP_NAMECHK: would the browser list FM_NAME in the folder it shows?  noinline: the
+   name buffer belongs to this command only. */
+static __attribute__((noinline)) void fm_namechk(void) {
+  char name[FM_NAME_LEN];
+  sram_readstrn(file_lfn, snes_get_mcu_param() & 0xffffff, 256);
+  file_lfn[255] = 0;
+  sram_readstrn(name, SRAM_FM_NAME_ADDR, sizeof(name));
+  name[sizeof(name) - 1] = 0;
+  fm_name_hidden = !file_name_shown(file_lfn, name);
+}
+
 static void fm_stat_error(uint8_t op, uint8_t err) {
   uint8_t b[6] = { FM_MAGIC0, FM_MAGIC1, FM_VERSION, FM_ST_ERROR, op, err };
   sram_writeblock(b, SRAM_FM_STAT_ADDR, sizeof(b));
@@ -125,7 +137,11 @@ static void fm_open(uint8_t op) {
 
 void fileman_command(void) {
   uint8_t op = snescmd_readbyte(SNESCMD_MCU_PARAM + 8);
+  fm_name_hidden = 0;
   switch(op) {
+    case FM_OP_NAMECHK:
+      fm_namechk();
+      break;
     case FM_OP_BANK:
       fm_bank();
       break;

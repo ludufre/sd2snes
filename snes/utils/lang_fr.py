@@ -595,6 +595,8 @@ TRANSLATIONS = {
     'text_fm_deleting': 'Suppression',
     'text_fm_rm_note': 'Sauvegardes/cheats de /sd2snes restent',
     'text_fm_sdel_ask': 'Supprimer les entrées marquées ?',
+    'text_fm_ren_ask': 'Renommer avec une extension inconnue ?',
+    'text_fm_ren_note': 'Le fichier disparaîtra de la liste',
     'mtext_fm_sdel': 'Supprimer',
 
     # game options (gameopt.a65 / igopt.i65)

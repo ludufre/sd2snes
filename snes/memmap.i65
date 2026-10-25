@@ -1204,6 +1204,7 @@
 #define FM_OP_MKDIR                 7
 #define FM_OP_RMDIR                 8 /* MCU_PARAM+9: 0 = the selected folder, 1 = the folder the browser shows */
 #define FM_OP_RMSEL                 9 /* the marked entries of the folder shown (rmdir.bin) */
+#define FM_OP_NAMECHK              10 /* would the browser list FM_NAME here?  FM_CLIPINFO+7 = 1: no */
 #define FM_CLIP_COPY                1
 #define FM_CLIP_CUT                 2
 /* CMD_MOD_CTL to fileops.bin */

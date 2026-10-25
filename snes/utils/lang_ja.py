@@ -579,6 +579,8 @@ TRANSLATIONS = {
     'text_fm_deleting': '削除中',
     'text_fm_rm_note': '/sd2snesのセーブとチートは残ります',
     'text_fm_sdel_ask': '選択した項目を削除しますか？',
+    'text_fm_ren_ask': '不明な拡張子で名前を変更しますか？',
+    'text_fm_ren_note': 'ファイルが一覧に表示されなくなります',
     'mtext_fm_sdel': '削除',
 
     # game options (gameopt.a65 / igopt.i65)

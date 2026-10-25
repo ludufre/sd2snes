@@ -598,6 +598,26 @@ static void t_fsinfo_stale(void) {
   CHECK(nfree() == fr - 30, "free count after the recount: %u, want %u", nfree(), fr - 30);
 }
 
+/* ...and a stale HIGH one passes the space check, fails at the short write, and must not be
+   believed any longer: the next f_getfree walks the FAT */
+static void t_fsinfo_stale_up(void) {
+  fresh();
+  mkd("/dst");
+  mkf("/src/big.bin", 100000, 7);
+  DWORD f0 = nfree();
+  mkf("/filler", (f0 - 50) * 1024, 0);
+  DWORD fr = nfree();
+  CHECK(fr >= 48 && fr <= 50, "filler left %u clusters", fr);
+  fs.free_clust = f0;                     /* the count from before the filler */
+  fs.fsi_flag |= 1;
+  paste(FM_CLIP_COPY, "/src", NAMES("big.bin"), "/dst", NULL);
+  /* the space check passed (the count was high), so this is an item failure inside a paste
+     that ends DONE with the error kept, not the up-front refusal of t_nospace */
+  CHECK(st.state == FM_ST_DONE && st.err == FM_ERR_NOSPACE && !ex("/dst/big.bin"),
+        "100 KB into 50 KB with a high FSINFO: state %d err %d", st.state, st.err);
+  CHECK(nfree() == fr, "free count after the failed paste: %u, want the walked %u", nfree(), fr);
+}
+
 static void t_cancel(void) {
   script_t sc;
   fresh();
@@ -1363,6 +1383,7 @@ static const struct { const char *name; void (*fn)(void); } cases[] = {
   { "file vs folder", t_mixed },
   { "no space", t_nospace },
   { "stale FSINFO", t_fsinfo_stale },
+  { "stale FSINFO, high", t_fsinfo_stale_up },
   { "cancel", t_cancel },
   { "copy through the staging", t_copy_staging },
   { "rename", t_rename },

@@ -57,6 +57,10 @@
 #define FM_OP_RMSEL         9   /* open rmdir.bin: delete the entries of FM_MARKS in the folder the
                                    browser shows (MCU_PARAM+0..2), files and folders, the
                                    same way as FM_OP_RMDIR (count, FM_ASK_RMDIR, remove) */
+#define FM_OP_NAMECHK      10   /* would the browser list a file named FM_NAME in the folder at
+                                   MCU_PARAM+0..2?  The answer is FM_CLIPINFO+7: 1 = no (no
+                                   extension, an unknown one, a leading dot), and the rename
+                                   asks before using it.  An older firmware leaves 0 there */
 
 #define FM_CLIP_NONE        0
 #define FM_CLIP_COPY        1
@@ -157,7 +161,8 @@ _Static_assert(__builtin_offsetof(fm_stat_t, cur_name) == 40, "FM_CUR_NAME");
 _Static_assert(__builtin_offsetof(fm_stat_t, rm_files) == 34, "FMS_RM_FILES");
 _Static_assert(__builtin_offsetof(fm_stat_t, rm_dirs) == 36, "FMS_RM_DIRS");
 
-/* FM_CLIPINFO: +0 'F' +1 'C' +2 FM_VERSION +3 mode (FM_CLIP_*) +4..5 count (u16 LE) */
+/* FM_CLIPINFO: +0 'F' +1 'C' +2 FM_VERSION +3 mode (FM_CLIP_*) +4..5 count (u16 LE) +6 the
+   last FM_OP_CLIP's FM_ERR_* +7 the FM_OP_NAMECHK answer (0 after any other op) */
 #define FM_CLIPINFO_LEN     8
 
 /* The clipboard in PSRAM (FM_CLIP):

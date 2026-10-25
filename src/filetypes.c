@@ -138,6 +138,75 @@ static uint8_t path_is_sysdir(const uint8_t *path) {
   return p[n] == 0 || p[n] == '/';
 }
 
+/* The type a FILE named fn gets in the browser, from the type its extension gave (in_sysdir:
+   the folder is /sd2snes or under it).
+   Inside the card's own directory, list the files that have no known extension too:
+   the saves (.srm), the savestates (.state) and every sidecar (.yml/.cov/.slot/...).
+   Without this, saves/, states/, info/ and cheats/ look EMPTY to the only person who
+   can get in there -- someone who turned CFG.show_sd2snes_folder on to inspect the
+   card.  Outside /sd2snes nothing changes, so a legacy card carrying <rom>.srm next
+   to the ROM keeps a clean browser.  Deliberately NOT added to the type list the menu
+   asks for: that list already runs from MCU_PARAM+8 past the end of the 12-byte param
+   region into BRAM_ROUTINE ($2A10), and one more entry would push it further in.
+   Split in two: what the user owns (is_card_data_ext) becomes TYPE_DATA and the Y menu
+   offers Delete; everything else there stays TYPE_FILE, visible but undeletable, which
+   is what keeps firmware.im3/m3nu.bin/fpga_*.bi3 safe from a stray Y.
+   .msu is the ONE extension also classified outside /sd2snes: it sits next to the .pcm
+   tracks the browser already lists, and deleting those without it would leave a folder
+   still opening as a silent MSU-1 game.  scan_dir calls this AFTER its msu_seen probe,
+   which keys off TYPE_UNKNOWN. */
+static SNES_FTYPE browser_file_type(const char *fn, SNES_FTYPE type, uint8_t in_sysdir) {
+  if(type != TYPE_UNKNOWN) return type;
+  if(in_sysdir && is_card_data_ext(fn)) return TYPE_DATA;
+  if(is_text_ext(fn)) return TYPE_TEXT;
+  if(in_sysdir) return TYPE_FILE;
+  const char *e = strrchr(fn, '.');
+  if(e && !strcasecmp(e + 1, "msu")) return TYPE_DATA;
+  return TYPE_UNKNOWN;
+}
+
+/* Does the browser list an entry of this type, with the types the menu asked for?
+   .nsf and the text files ride on the .pcm request: the menu's type list already runs past
+   MCU_PARAM (filesel_request_filelist), and a menu that plays .pcm is a menu that knows the
+   player screens.  An older one shows the .nsf inert (unknown type, A blips). */
+static uint8_t type_shown(SNES_FTYPE type, const SNES_FTYPE *filetypes) {
+  if(!is_requested_filetype(type, filetypes) && type != TYPE_FILE && type != TYPE_DATA
+     && !((type == TYPE_NSF || type == TYPE_TEXT) && is_requested_filetype(TYPE_PCM, filetypes)))
+    return 0;
+  switch(type) {
+    case TYPE_ROM:
+    case TYPE_SPC:
+    case TYPE_PCM:    /* .pcm (MSU-1 track) -- listed like a .spc, played by the menu PCM player */
+    case TYPE_NSF:    /* .nsf (NES music) -- listed like a .spc, played by the menu NSF player */
+    case TYPE_TEXT:   /* a text file -- the file manager's viewer */
+    case TYPE_SKIN:   /* theme files (.thm/.skin) are listed like ROMs */
+    case TYPE_NES:    /* .nes (core NES, mk3-only) -- listado como ROM */
+    case TYPE_FILE:   /* system file inside /sd2snes -- shown with its size, inert */
+    case TYPE_DATA:   /* user's card data -- same, plus Delete in the Y context menu */
+    case TYPE_SUBDIR:
+    case TYPE_PARENT:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/* The type list of the last READDIR (the menu sends the same one every time), for
+   file_name_shown.  Bytes, as is_requested_filetype reads them. */
+static uint8_t browser_types[16];
+
+/* Would the browser list a file named leaf in folder dir?  The file manager's rename asks
+   before it gives a file a name the browser drops (no extension, an unknown one, a leading
+   dot), since nothing on the console could then reach it again.  scan_dir's own rules; the
+   file keeps its attributes, and a file the browser showed has neither hidden nor system.
+   1 before the first READDIR (nothing to compare with: no question). */
+uint8_t file_name_shown(const uint8_t *dir, const char *leaf) {
+  if(!browser_types[0]) return 1;
+  if(leaf[0] == '.') return 0;
+  return type_shown(browser_file_type(leaf, filetype_by_ext(leaf), path_is_sysdir(dir)),
+                    (const SNES_FTYPE*)browser_types);
+}
+
 static uint8_t msu_probe_walk(DIR *dir, uint32_t self);
 
 uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYPE *filetypes, uint16_t *msu_rom) {
@@ -160,6 +229,8 @@ uint16_t scan_dir(const uint8_t *path, const uint32_t base_addr, const SNES_FTYP
      subfolders it is about to show (SNES_CMD_MSU_PROBE_PAGE, msu_probe_page below). */
   const uint8_t probe = CFG.open_msu_folders;
 
+  memcpy(browser_types, filetypes, sizeof(browser_types));
+
   fno.lfsize = 255;
   fno.lfname = (TCHAR*)file_lfn;
   res = f_opendir(&dir, (TCHAR*)path);
@@ -180,107 +251,61 @@ printf("start\n");
         const char *ext = strrchr(fno.fname, '.');
         if(ext && !strcasecmp(ext+1, "MSU")) msu_seen = 1;
       }
-      /* Inside the card's own directory, list the files that have no known extension too:
-         the saves (.srm), the savestates (.state) and every sidecar (.yml/.cov/.slot/...).
-         Without this, saves/, states/, info/ and cheats/ look EMPTY to the only person who
-         can get in there -- someone who turned CFG.show_sd2snes_folder on to inspect the
-         card.  Outside /sd2snes nothing changes, so a legacy card carrying <rom>.srm next
-         to the ROM keeps a clean browser.  Deliberately NOT added to the type list the menu
-         asks for: that list already runs from MCU_PARAM+8 past the end of the 12-byte param
-         region into BRAM_ROUTINE ($2A10), and one more entry would push it further in.
-         Split in two: what the user owns (is_card_data_ext) becomes TYPE_DATA and the Y menu
-         offers Delete; everything else there stays TYPE_FILE, visible but undeletable, which
-         is what keeps firmware.im3/m3nu.bin/fpga_*.bi3 safe from a stray Y.
-         .msu is the ONE extension also classified outside /sd2snes: it sits next to the .pcm
-         tracks the browser already lists, and deleting those without it would leave a folder
-         still opening as a silent MSU-1 game.  Must stay AFTER the msu_seen probe above,
-         which keys off TYPE_UNKNOWN. */
-      if(type == TYPE_UNKNOWN && !(fno.fattrib & AM_DIR)) {
-        if(in_sysdir && is_card_data_ext(fn)) type = TYPE_DATA;
-        else if(is_text_ext(fn)) type = TYPE_TEXT;
-        else if(in_sysdir) type = TYPE_FILE;
-        else {
-          const char *e = strrchr(fn, '.');
-          if(e && !strcasecmp(e + 1, "msu")) type = TYPE_DATA;
+      if(!(fno.fattrib & AM_DIR)) type = browser_file_type(fn, type, in_sysdir);
+      if(!type_shown(type, filetypes)) continue;
+      /* omit entries with hidden or system attribute -- but NEVER the
+         parent "..": dirs created/copied on other OSes (e.g. macOS) can
+         mark their "." and ".." entries hidden, and we still need ".."
+         for navigation back up.  The sd2snes directory is exempt while
+         CFG.show_sd2snes_folder lists it: it is hidden by NAME below and
+         usually carries the system attribute on top of that, so lifting
+         only one of the two would leave it invisible on most cards. No
+         other hidden/system entry is affected. */
+      if(type != TYPE_PARENT && (fno.fattrib & (AM_HID | AM_SYS))
+         && !(CFG.show_sd2snes_folder && type == TYPE_SUBDIR && has_sd2snes(fn))) continue;
+      if(fno.fattrib & AM_DIR) {
+        /* omit dot directories except '..' */
+        if(fn[0]=='.' && fn[1]!='.') continue;
+        /* omit sd2snes directory specifically, unless the user asked for it */
+        if(!CFG.show_sd2snes_folder && has_sd2snes(fn)) continue;
+        snprintf(buf, sizeof(buf), " <dir>");
+        if(probe && type == TYPE_SUBDIR) {
+          buf[0] = DIR_MARK_UNPROBED;
+          memcpy(buf + 1, &fno.fclust, 4);   /* little endian, read back the same way */
+        }
+      } else {
+        if(fn[0]=='.') continue; /* omit dot files */
+        make_filesize_string(buf, fno.fsize);
+        /* never for a card file: inside /sd2snes the extension IS the distinction
+           (one bucket holds <stem>.srm next to <stem>.slot, states/ holds 01.state
+           next to 02.state), so hiding it would show the same name twice over. */
+        if(CFG.hide_extensions && type != TYPE_FILE && type != TYPE_DATA) {
+          char *dot = strrchr(fn, '.');
+          if(dot) *dot = 1;
         }
       }
-      /* .nsf and the text files ride on the .pcm request: the menu's type list already runs past MCU_PARAM
-         (filesel_request_filelist), and a menu that plays .pcm is a menu that knows the
-         player screens.  An older one shows the .nsf inert (unknown type, A blips). */
-      if(is_requested_filetype(type, filetypes) || type == TYPE_FILE || type == TYPE_DATA
-         || ((type == TYPE_NSF || type == TYPE_TEXT) && is_requested_filetype(TYPE_PCM, filetypes))) {
-        switch(type) {
-          case TYPE_ROM:
-          case TYPE_SPC:
-          case TYPE_PCM:    /* .pcm (MSU-1 track) -- listed like a .spc, played by the menu PCM player */
-          case TYPE_NSF:    /* .nsf (NES music) -- listed like a .spc, played by the menu NSF player */
-          case TYPE_TEXT:   /* a text file -- the file manager's viewer */
-          case TYPE_SKIN:   /* theme files (.thm/.skin) are listed like ROMs */
-          case TYPE_NES:    /* .nes (core NES, mk3-only) -- listado como ROM */
-          case TYPE_FILE:   /* system file inside /sd2snes -- shown with its size, inert */
-          case TYPE_DATA:   /* user's card data -- same, plus Delete in the Y context menu */
-          case TYPE_SUBDIR:
-          case TYPE_PARENT:
-            /* omit entries with hidden or system attribute -- but NEVER the
-               parent "..": dirs created/copied on other OSes (e.g. macOS) can
-               mark their "." and ".." entries hidden, and we still need ".."
-               for navigation back up.  The sd2snes directory is exempt while
-               CFG.show_sd2snes_folder lists it: it is hidden by NAME below and
-               usually carries the system attribute on top of that, so lifting
-               only one of the two would leave it invisible on most cards. No
-               other hidden/system entry is affected. */
-            if(type != TYPE_PARENT && (fno.fattrib & (AM_HID | AM_SYS))
-               && !(CFG.show_sd2snes_folder && type == TYPE_SUBDIR && has_sd2snes(fn))) continue;
-            if(fno.fattrib & AM_DIR) {
-              /* omit dot directories except '..' */
-              if(fn[0]=='.' && fn[1]!='.') continue;
-              /* omit sd2snes directory specifically, unless the user asked for it */
-              if(!CFG.show_sd2snes_folder && has_sd2snes(fn)) continue;
-              snprintf(buf, sizeof(buf), " <dir>");
-              if(probe && type == TYPE_SUBDIR) {
-                buf[0] = DIR_MARK_UNPROBED;
-                memcpy(buf + 1, &fno.fclust, 4);   /* little endian, read back the same way */
-              }
-            } else {
-              if(fn[0]=='.') continue; /* omit dot files */
-              make_filesize_string(buf, fno.fsize);
-              /* never for a card file: inside /sd2snes the extension IS the distinction
-                 (one bucket holds <stem>.srm next to <stem>.slot, states/ holds 01.state
-                 next to 02.state), so hiding it would show the same name twice over. */
-              if(CFG.hide_extensions && type != TYPE_FILE && type != TYPE_DATA) {
-                char *dot = strrchr(fn, '.');
-                if(dot) *dot = 1;
-              }
-            }
-            fnlen = strlen(fn);
-            if(fno.fattrib & AM_DIR) {
-              fn[fnlen] = '/';
-              fn[fnlen+1] = 0;
-              fnlen++;
-            }
-            /* The file-string table grows from base_addr+0x10000 ($DC0000) up
-               toward SRAM_DIR_STRINGS_END ($E00000, the battery SaveRAM). The
-               region moved twice as the menu image grew: $C2.. -> $C3..$C7 (128K
-               menu) -> $DC..$DF (192K menu; SRAM_DIR_ADDR now $DB0000). Stop
-               before the next entry would spill into the SaveRAM. goto, not
-               break: break would only exit the switch, not this scan loop. */
-            if(file_tbl_off + fnlen + 7 >= SRAM_DIR_STRINGS_END) goto dir_full;
-            /* write file size string */
-            sram_writeblock(buf, file_tbl_off, 6);
-            /* write file name string (leaf) */
-            sram_writeblock(fn, file_tbl_off+6, fnlen+1);
-            /* link file string entry in directory table */
-            sram_writelong((file_tbl_off-SRAM_MENU_ADDR) | ((uint32_t)type << 24), ptr_tbl_off);
-            file_tbl_off += fnlen+7;
-            ptr_tbl_off += 4;
-            numentries++;
-            if(type == TYPE_ROM) rom_seen++;
-            break;
-          case TYPE_UNKNOWN:
-          default:
-            break;
-        }
+      fnlen = strlen(fn);
+      if(fno.fattrib & AM_DIR) {
+        fn[fnlen] = '/';
+        fn[fnlen+1] = 0;
+        fnlen++;
       }
+      /* The file-string table grows from base_addr+0x10000 ($DC0000) up
+         toward SRAM_DIR_STRINGS_END ($E00000, the battery SaveRAM). The
+         region moved twice as the menu image grew: $C2.. -> $C3..$C7 (128K
+         menu) -> $DC..$DF (192K menu; SRAM_DIR_ADDR now $DB0000). Stop
+         before the next entry would spill into the SaveRAM. */
+      if(file_tbl_off + fnlen + 7 >= SRAM_DIR_STRINGS_END) goto dir_full;
+      /* write file size string */
+      sram_writeblock(buf, file_tbl_off, 6);
+      /* write file name string (leaf) */
+      sram_writeblock(fn, file_tbl_off+6, fnlen+1);
+      /* link file string entry in directory table */
+      sram_writelong((file_tbl_off-SRAM_MENU_ADDR) | ((uint32_t)type << 24), ptr_tbl_off);
+      file_tbl_off += fnlen+7;
+      ptr_tbl_off += 4;
+      numentries++;
+      if(type == TYPE_ROM) rom_seen++;
     }
   }
 dir_full:

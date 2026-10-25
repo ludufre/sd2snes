@@ -600,6 +600,8 @@ TRANSLATIONS = {
     'text_fm_deleting': 'Eliminazione',
     'text_fm_rm_note': 'Salvataggi e cheat in /sd2snes restano',
     'text_fm_sdel_ask': 'Eliminare le voci contrassegnate?',
+    'text_fm_ren_ask': "Rinominare con un'estensione sconosciuta?",
+    'text_fm_ren_note': "Il file non comparirà più nell'elenco",
     'mtext_fm_sdel': 'Elimina',
 
     # game options (gameopt.a65 / igopt.i65)

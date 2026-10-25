@@ -599,6 +599,8 @@ TRANSLATIONS = {
     'text_fm_deleting': 'Borrando',
     'text_fm_rm_note': 'Partidas y trucos en /sd2snes se quedan',
     'text_fm_sdel_ask': '¿Borrar las entradas marcadas?',
+    'text_fm_ren_ask': '¿Renombrar con una extensión desconocida?',
+    'text_fm_ren_note': 'El archivo ya no aparecerá en la lista',
     'mtext_fm_sdel': 'Eliminar',
 
     # game options (gameopt.a65 / igopt.i65)

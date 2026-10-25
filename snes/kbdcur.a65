@@ -1,0 +1,141 @@
+; ===========================================================================
+; The name keyboard's text cursor (cheatedit.a65): a second selection bar, in the theme's
+; editing colour (the red the menu's bar turns into while a value is edited), on the field's
+; cell at the cursor, while the menu's own bar stays on the key.
+;
+; The menu has one bar: HDMA ch5 turns colour math on for its lines (the NMI's hdma_math, with
+; the colour written one component per line ahead of it) and window 1 limits it to the bar's
+; columns.  While the keyboard is open ch5 reads ce_hdma5 instead, two bars in a row (the
+; field's, then the key's), and ch6 -- the iris's channel, idle in the menu -- moves window 1
+; from the key's span to the cursor's cell for the field's lines.  Rebuilt every frame from
+; bar_xl/yl/wl and the cursor, so the pad and the mouse move the key's bar as before.
+;
+; Bank $C3, borrowed by the game info guide viewer: cheatedit.a65 calls in only after
+; fm_bank_ok.  Entered by jsl with .as/.xl and DBR = $7E, left the same way.
+; ===========================================================================
+.link page $c3
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c3 AFTER it.
+.link page $c3
+
+#define CEK_FIELD_ROW   13      /* cheatedit.a65's, kept in step by hand */
+#define CEK_FIELD_COL   12
+#define CEH_F           ((CEK_FIELD_ROW-2)*8)   /* the field bar's first line, as the NMI places one */
+
+; static parts of the two tables; ce_hl_build fills in the colours, the positions and the
+; count that depends on the key's row
+ce_hl_t5:                       ; ch5: count, $2131 (math), $2132 (colour, one component)
+  .byt CEH_F, $00, $00          ; field: red component (the editing colour)
+  .byt 1, $00, $00              ;        green
+  .byt 1, $23, $00              ;        blue, math on: the bar's 8 lines
+  .byt 7, $23, $00
+  .byt 1, $63, $00              ;        half: its lower border
+  .byt 1, $00, $00              ; key: red component (the bar colour)
+  .byt 1, $00, $00              ;      green, up to the line above the key's bar
+  .byt 1, $23, $00              ;      blue, math on
+  .byt 7, $23, $00
+  .byt 1, $63, $00
+  .byt 1, $00, $e0
+  .byt 0
+ce_hl_t6:                       ; ch6: count, $2126, $2127 (window 1)
+  .byt CEH_F+1, 0, 0            ; the key's span
+  .byt 9, 0, 0                  ; the cursor's cell, the field bar's lines
+  .byt 1, 0, 0                  ; the key's span again
+  .byt 0
+
+; ce_hl_on: the tables, then ch5 on ce_hdma5 and ch6 armed.
+ce_hl_on:
+  .as : .xl
+  ldx #$0000
+chl_t5:
+  .as : .xl
+  lda @ce_hl_t5, x
+  sta ce_hdma5, x
+  inx
+  cpx #34
+  bne chl_t5
+  ldx #$0000
+chl_t6:
+  .as : .xl
+  lda @ce_hl_t6, x
+  sta ce_hdma6, x
+  inx
+  cpx #10
+  bne chl_t6
+  jsl @ce_hl_build
+  lda #$01                      ; A to B, direct, two registers once
+  sta @$004360
+  lda #$26                      ; $2126 + $2127 = window 1
+  sta @$004361
+  lda #$7e
+  sta @$004364
+  rep #$20 : .al
+  lda #!ce_hdma6
+  sta @$004362
+  lda #!ce_hdma5
+  sta @$004352                  ; ch5 (bank $7E as hdma_math's) from the next frame on
+  sep #$20 : .as
+  lda #$7f                      ; the menu's ch0-5 + ch6
+  sta @$00420c
+  rtl
+
+; ce_hl_off: ch5 back on the NMI's table, ch6 off.
+ce_hl_off:
+  .as : .xl
+  rep #$20 : .al
+  lda #!hdma_math
+  sta @$004352
+  sep #$20 : .as
+  lda #$3f
+  sta @$00420c
+  rtl
+
+; ce_hl_build: positions and colours for this frame.
+ce_hl_build:
+  .as : .xl
+  lda bar_xl                    ; the key's span, as the NMI computes window 1
+  asl
+  dec
+  asl
+  sta ce_hdma6+1
+  sta ce_hdma6+7
+  lda bar_wl
+  asl
+  asl
+  inc
+  clc
+  adc ce_hdma6+1
+  sta ce_hdma6+2
+  sta ce_hdma6+8
+  lda ce_kpos                   ; the cursor's cell, exactly: a column is 4 window pixels,
+  sec                           ; and the menu bar's margin on the left would cut into the
+  sbc ce_kview                  ; letter before
+  clc
+  adc #CEK_FIELD_COL
+  asl
+  asl
+  sta ce_hdma6+4
+  clc
+  adc #3
+  sta ce_hdma6+5
+  lda bar_yl                    ; the key's bar_y, less the field's 11 lines
+  dec
+  asl
+  asl
+  asl
+  sec
+  sbc #CEH_F+10
+  sta ce_hdma5+18
+  lda @hdma_bar_color_src+4     ; the editing colour (set_bar_color's 1)
+  sta ce_hdma5+2
+  lda @hdma_bar_color_src+5
+  sta ce_hdma5+5
+  lda @hdma_bar_color_src+6
+  sta ce_hdma5+8
+  lda hdma_math+2               ; the bar's current colour
+  sta ce_hdma5+17
+  lda hdma_math+5
+  sta ce_hdma5+20
+  lda hdma_math+8
+  sta ce_hdma5+23
+  rtl

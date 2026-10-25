@@ -969,8 +969,56 @@ fhn_kbd:
 fhn_go:
   .as : .xl
   lda FMX_OP
+  cmp #FM_OP_RENAME
+  bne fhn_run
+  jsr fm_ren_ok             ; a name the browser drops: asked first, No = edit it again
+  bcs fhn_run
+  lda #FM_OP_RENAME
+  bra fhn_kbd               ; FM_NAME still holds what was typed
+fhn_run:
+  .as : .xl
+  lda FMX_OP
   jsr fm_run
   jmp fm_h_out
+
+; fm_ren_ok: a file renamed to FM_NAME, which the browser would no longer list (no
+; extension, an unknown one, a leading dot: the firmware says, FM_OP_NAMECHK) -- nothing on
+; the console could reach it again, so the yes/no box asks.  A folder is never asked about,
+; nor is anything with an older firmware (FM_CLIPINFO+7 stays 0).  Carry SET = go ahead.
+; .as/.xl.
+fm_ren_ok:
+  .as : .xl
+  rep #$20 : .al
+  lda FM_IDX
+  asl
+  asl
+  tax
+  sep #$20 : .as
+  lda @ROOT_DIR+3, x
+  cmp #TYPE_SUBDIR
+  beq fro_yes
+  jsr fm_param_cwd
+  lda #FM_OP_NAMECHK
+  jsl @fm_cmd
+  lda @FM_CLIPINFO+7
+  beq fro_yes
+  stz !FMX_CN
+  ldx #!text_fm_ren_ask
+  jsr fm_str
+  jsr fm_cl_add
+  ldx #!FM_NAME
+  stx print_src
+  lda #^FM_NAME
+  sta print_bank
+  jsr fm_cl_add
+  ldx #!text_fm_ren_note
+  jsr fm_str
+  jsr fm_cl_add
+  jmp fm_confirm
+fro_yes:
+  .as : .xl
+  sec
+  rts
 
 fm_h_view:
   php

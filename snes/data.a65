@@ -739,4 +739,12 @@ gic_over        .byt 0     ; the title did not fit at gic_off (hiprint's print_o
 gic_end         .byt 0     ; 1 = shown to its end, waiting to restart
 gic_seen        .byt 0     ; GI_CRC state the row was drawn with
 
+;----------Name keyboard's text cursor (cheatedit.a65).  Set by ce_kbd_open on every entry ----
+ce_kpos         .byt 0     ; cursor: the byte the next key goes in front of (0..ce_klen)
+ce_kview        .byt 0     ; first byte of the field shown
+ce_krep         .byt 0     ; frames L/R has been held (auto-repeat)
+ce_hlon         .byt 0     ; 1 = the cursor's bar is up (kbdcur.a65)
+ce_hdma5        .byt 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0    ; HDMA ch5 while the keyboard is open: the field's bar, then the key's
+ce_hdma6        .byt 0,0,0,0,0,0,0,0,0,0    ; HDMA ch6: window 1 for each
+
 _END            .byt 0

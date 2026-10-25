@@ -588,6 +588,8 @@ TRANSLATIONS = {
     'text_fm_deleting': 'Удаление',
     'text_fm_rm_note': 'Сейвы и чит-коды в /sd2snes остаются',
     'text_fm_sdel_ask': 'Удалить отмеченные элементы?',
+    'text_fm_ren_ask': 'Переименовать с неизвестным расширением?',
+    'text_fm_ren_note': 'Файл пропадёт из списка',
     'mtext_fm_sdel': 'Удалить',
 
     # game options (gameopt.a65 / igopt.i65)

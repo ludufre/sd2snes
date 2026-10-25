@@ -1010,6 +1010,8 @@ text_fm_deleting        .byt "Deleting", 0
 text_fm_rm_note         .byt "Saves and cheats in /sd2snes are kept", 0
 text_fm_sdel_ask        .byt "Delete the marked entries?", 0
 text_fm_err_rdonly      .byt "Read-only entries were left", 0
+text_fm_ren_ask         .byt "Rename with an unknown extension?", 0
+text_fm_ren_note        .byt "The file will no longer show in the list", 0
 mdesc_fm_copy           .byt "Put this entry on the clipboard, to paste a copy of it in another folder", 0
 mdesc_fm_cut            .byt "Put this entry on the clipboard, to move it to another folder", 0
 mdesc_fm_paste          .byt "Copy or move what is on the clipboard into this folder", 0
