@@ -20,8 +20,9 @@
    hotspot ADDRESSES are facts of the cartridge hardware, and the byte patterns
    that reference them are generated here from the 6502 opcode tables below.
 
-   mk3-only: on the mk2 (LPC1754, tight flash and no Spartan-3 build of the core)
-   everything below compiles to no-op stubs (has_a26 stays 0) -- see CONFIG_MK2.
+   mk2: the same detect/swap/stage code serves the sd2snes_atari core (FPGA_ATARI);
+   only the hand-over of the scheme differs (memory.c: a byte in the player image,
+   not CHIPFEAT).
 */
 
 #include <string.h>
@@ -37,8 +38,6 @@
 #include "scratch.h"
 
 a26_romprops_t a26_romprops;
-
-#ifndef CONFIG_MK2
 
 extern cfg_t CFG;   /* a26_video_width -> feat16[5] (picture width) in a26_id */
 
@@ -117,11 +116,56 @@ typedef struct {
   uint8_t  sc_dist;       /* how many DISTINCT operands, i.e. popcount(sc_seen) */
   uint8_t  sc_lead_const; /* every 4K bank still has a constant 256-byte lead-in */
   uint8_t  sc_lead_fill;  /* the fill byte of the bank being checked */
+#ifdef CONFIG_MK2
+  uint8_t  sc_mir_ok;     /* Stella's rule: the first 128 bytes of every 4K bank repeat in the next 128 */
+  uint8_t  fe_hist[4];    /* the 4 bytes before the current one (FE/F8 windows) */
+  uint8_t  fe_seen;       /* how many of fe_hist are valid, saturates at 4 */
+  uint8_t  fe_sigs;       /* bit N = FE signature N of a26_fe_sig found */
+  uint8_t  f8_sta[2];     /* "STA $1FF9" / "STA $FFF9" windows, saturating */
+#endif
 } a26_scan_t;
+
+#ifdef CONFIG_MK2
+/* FE: the same five signatures and the same rule as Stella's CartDetector
+   (isProbablyFE, and "isProbablyFE(image) && !f8" in the 8K branch of
+   autodetectType): any one of these 5-byte sequences anywhere in an 8K image, and
+   neither "STA $1FF9" nor "STA $FFF9" found twice. */
+static const uint8_t a26_fe_sig[5][5] = {
+  { 0x20, 0x00, 0xD0, 0xC6, 0xC5 },  /* JSR $D000; DEC $C5  Decathlon */
+  { 0x20, 0xC3, 0xF8, 0xA5, 0x82 },  /* JSR $F8C3; LDA $82  Robot Tank */
+  { 0xD0, 0xFB, 0x20, 0x73, 0xFE },  /* BNE $FB; JSR $FE73  Space Shuttle (NTSC/PAL) */
+  { 0xD0, 0xFB, 0x20, 0x68, 0xFE },  /* BNE $FB; JSR $FE68  Space Shuttle (SECAM) */
+  { 0x20, 0x00, 0xF0, 0x84, 0xD6 }   /* JSR $F000; STY $D6  Thwocker */
+};
+
+/* Byte-wise, over every image byte exactly once (independent of the 3-byte window
+   and its carry in a26_scan_block). */
+static void a26_fe_byte(a26_scan_t *st, uint8_t b) {
+  uint8_t s;
+  if(st->fe_seen >= 2 && st->fe_hist[2] == 0x8D && st->fe_hist[3] == 0xF9) {
+    if(b == 0x1F && st->f8_sta[0] < 255) st->f8_sta[0]++;
+    if(b == 0xFF && st->f8_sta[1] < 255) st->f8_sta[1]++;
+  }
+  if(st->fe_seen >= 4) {
+    for(s = 0; s < 5; s++) {
+      if(b == a26_fe_sig[s][4] && !memcmp(st->fe_hist, a26_fe_sig[s], 4))
+        st->fe_sigs |= (uint8_t)(1 << s);
+    }
+  }
+  st->fe_hist[0] = st->fe_hist[1];
+  st->fe_hist[1] = st->fe_hist[2];
+  st->fe_hist[2] = st->fe_hist[3];
+  st->fe_hist[3] = b;
+  if(st->fe_seen < 4) st->fe_seen++;
+}
+#endif /* CONFIG_MK2 */
 
 static void a26_scan_reset(a26_scan_t *st) {
   memset(st, 0, sizeof(a26_scan_t));
   st->sc_lead_const = 1;
+#ifdef CONFIG_MK2
+  st->sc_mir_ok = 1;
+#endif
 }
 
 /* Which 1K slice groups of the E0 window ($1FE0-$1FE7, $1FE8-$1FEF, $1FF0-$1FF7)
@@ -166,6 +210,18 @@ static void a26_scan_block(a26_scan_t *st, const uint8_t *buf, uint32_t len,
     if(off == 0) st->sc_lead_fill = buf[i];
     else if(buf[i] != st->sc_lead_fill) st->sc_lead_const = 0;
   }
+#ifdef CONFIG_MK2
+  /* Stella's rule needs no buffer of its own: the blocks are 512 bytes and start on
+     multiples of 512 (the carry bytes only precede the first new byte), so the 256-byte
+     lead-in of a bank is always inside ONE block, at buf[carry]. A block too short to hold
+     it (a truncated file) can only lose evidence. */
+  if(((base + carry) & 0xFFF) == 0) {
+    if(len - carry < 256 || memcmp(buf + carry, buf + carry + 128, 128)) st->sc_mir_ok = 0;
+  }
+#endif
+#ifdef CONFIG_MK2
+  for(i = carry; i < len; i++) a26_fe_byte(st, buf[i]);
+#endif
 
   if(len < 2) return;
   if(last) {
@@ -270,6 +326,22 @@ static uint8_t a26_superchip(const a26_scan_t *st) {
   return (uint8_t)(st->sc_lead_const && st->sc_dist >= 2);
 }
 
+#ifdef CONFIG_MK2
+/* Superchip, Stella's rule (CartDetector::isProbablySC): the first 128 bytes of every
+   4K bank repeat in the next 128 (the RAM is mirrored there on the cartridge). It also
+   catches images whose lead-in is not one constant filler (Crystal Castles, Dig Dug, ...)
+   or that never read the RAM through two distinct addresses. Used for 8K (F8SC) and 16K
+   (F6SC) only, in addition to a26_superchip(). */
+static uint8_t a26_superchip_stella(const a26_scan_t *st) {
+  return st->sc_mir_ok;
+}
+
+/* FE: a signature, and no "potential F8" (Stella asks for 2 hits of one store). */
+static uint8_t a26_probably_fe(const a26_scan_t *st) {
+  return (uint8_t)(st->fe_sigs && st->f8_sta[0] < 2 && st->f8_sta[1] < 2);
+}
+#endif
+
 static void a26_noimpl(a26_romprops_t *props, const char *param) {
   props->error = MENU_ERR_NOIMPL;
   props->error_param = (const uint8_t*)param;
@@ -308,18 +380,34 @@ static void a26_decide(a26_romprops_t *props, const a26_scan_t *st,
       if(a26_strong_ua(st))      { a26_noimpl(props, "UA"); return; }
       props->scheme = A26_BS_F8;
       props->size_class = 2;
+#ifdef CONFIG_MK2
+      sc |= a26_superchip_stella(st);
+#endif
       props->superchip = sc;
+#ifdef CONFIG_MK2
+      /* after the refusals above and only without Superchip evidence: Stella tests
+         SC, 3F and UA before FE as well, and every other 8K image stays F8 */
+      if(!sc && a26_probably_fe(st)) props->scheme = A26_BS_FE;
+#endif
       break;
 
     case 16384:
       if(a26_strong_3f(st)) { a26_noimpl(props, "3F"); return; }
       props->scheme = A26_BS_F6;
       props->size_class = 3;
+#ifdef CONFIG_MK2
+      sc |= a26_superchip_stella(st);
+#endif
       props->superchip = sc;
       break;
 
     case 32768:
       if(a26_strong_3f(st)) { a26_noimpl(props, "3F"); return; }
+#ifdef CONFIG_MK2
+      /* the sd2snes_atari core holds 16 KB of cartridge ROM (the Spartan-3 block RAM is
+         full): F4 does not fit, so refuse it here instead of booting half a game */
+      a26_noimpl(props, "F4"); return;
+#endif
       props->scheme = A26_BS_F4;
       props->size_class = 4;
       props->superchip = sc;
@@ -418,6 +506,15 @@ void a26_id(a26_romprops_t *props, uint8_t *filename) {
   /* 3F=<score>/<positions>/<absolute stores>, SC=<flag>/<distinct read refs>,
      E0=<slice mask>: the last two of each are what the decision looks at, the
      rest is there to explain a verdict from a log alone. */
+#ifdef CONFIG_MK2
+  printf("A26: %ld B scheme=%d SC=%d/%d 3F=%d/%d/%d UA=%d/%d E0=%x FE=%x/%d/%d feat16=%04x %s%s\n",
+         (long)romsize, props->scheme, props->superchip, props->sc_read_refs,
+         props->score_3f, props->addr_distinct_3f, props->abs_stores_3f,
+         props->score_ua, props->addr_distinct_ua,
+         props->e0_slices_hit, st.fe_sigs, st.f8_sta[0], st.f8_sta[1], props->feat16,
+         props->error ? "NOIMPL:" : "ok",
+         props->error ? (const char*)props->error_param : "");
+#else
   printf("A26: %ld B scheme=%d SC=%d/%d 3F=%d/%d/%d UA=%d/%d E0=%x feat16=%04x %s%s\n",
          (long)romsize, props->scheme, props->superchip, props->sc_read_refs,
          props->score_3f, props->addr_distinct_3f, props->abs_stores_3f,
@@ -425,6 +522,7 @@ void a26_id(a26_romprops_t *props, uint8_t *filename) {
          props->e0_slices_hit, props->feat16,
          props->error ? "NOIMPL:" : "ok",
          props->error ? (const char*)props->error_param : "");
+#endif
 }
 
 /* boot the SNES-side player instead of the .a26; the .a26 is staged separately */
@@ -448,23 +546,3 @@ void a26_load_rom(void) {
   printf("A26: staging %s -> PSRAM %06lx\n", a26_rompath, (long)A26_ROM_PSRAM);
   load_sram_offload((uint8_t*)a26_rompath, A26_ROM_PSRAM, 0);
 }
-
-#else /* CONFIG_MK2: no-op stubs -- the Atari core is mk3-only (no Spartan-3
-         build of fpga_a26 and the LPC1754 flash does not pay for the loader) */
-
-void a26_id(a26_romprops_t *props, uint8_t *filename) {
-  (void)filename;
-  props->has_a26 = 0;
-  props->error = MENU_ERR_OK;
-  props->error_param = NULL;
-}
-
-uint8_t a26_update_file(uint8_t **filename_ref) {
-  (void)filename_ref;
-  return 1;
-}
-
-void a26_load_rom(void) {
-}
-
-#endif /* CONFIG_MK2 */

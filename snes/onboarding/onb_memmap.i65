@@ -106,7 +106,7 @@
 #define ONB_FONT_BUF_BG1            $7F1000 /* BG1's 8 KB: byte 32c + r */
 #define ONB_FONT_K1                 $7F3000 /* the remap mask of the fill: hi &= (lo & K1) ^ K2 */
 #define ONB_FONT_K2                 $7F3001
-#define ONB_VERSION                 2       /* this tour's version; lockstep with snes/memmap.i65.
+#define ONB_VERSION                 3       /* this tour's version; lockstep with snes/memmap.i65.
                                                A release that adds cards bumps it and tags the new
                                                cards with it (+ONB_FD_SINCE): the gate shows the tour
                                                again and only those cards are walked */
@@ -215,7 +215,7 @@
      +13 byte  option kind             (ONB_OPT_*)
      +14 word  cfg field offset        (low16 of the CFG addr; bank $FF implied)
    =========================================================================== */
-#define ONB_NUM_FEATURES  63    /* 55 cards + the 8 items of the "and more" card */
+#define ONB_NUM_FEATURES  66    /* 58 cards + the 8 items of the "and more" card */
 #define ONB_FEAT_STRIDE   16
 #define ONB_FD_DEP        0
 #define ONB_FD_DEP2       8       /* a second parent CFG byte (0 = none) */

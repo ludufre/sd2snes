@@ -199,6 +199,11 @@ onboarding_replay_218:
   php
   rep #$30 : .al : .xl
   lda #$b502
+  bra onboarding_replay
+onboarding_replay_219:
+  php
+  rep #$30 : .al : .xl
+  lda #$b503
 onboarding_replay:
   .al : .xl
   phb

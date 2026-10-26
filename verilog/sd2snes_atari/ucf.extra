@@ -1,0 +1,37 @@
+# Atari core: timing exceptions.  sd2snes_atari (STorm2600 core).
+#
+# Flip-flops under snes_a26/core and snes_a26/vid change only on a
+# colour-clock, CPU-cycle or pixel enable, EXCEPT the ones in "a26_fast"
+# (they change or are sampled on every clk).  The enables are at least 26 clk
+# (270 ns at 96 MHz) apart; 125 ns = 12 clock periods.
+# core -> vid is NOT relaxed: vid samples the TIA outputs one clk after they
+# change.  Paths that start in a26_fast or enter/leave a group keep 96 MHz.
+# rom_q stays in the slow group: rom_ack must arrive >= 12 clk before cpu_ce
+# (it comes 16 clk after rom_rd, in a CPU cycle of ~80).
+INST "snes_a26/core/*" TNM = FFS "a26_core_all";
+INST "snes_a26/vid/*" TNM = FFS "a26_vid_all";
+INST "snes_a26/core/acc*"          TNM = FFS "a26_fast";
+INST "snes_a26/core/cc_ce_r"       TNM = FFS "a26_fast";
+INST "snes_a26/core/ce_d"          TNM = FFS "a26_fast";
+INST "snes_a26/core/u_tia/pix_stb" TNM = FFS "a26_fast";
+INST "snes_a26/vid/fb_wr"          TNM = FFS "a26_fast";
+INST "snes_a26/vid/vsync_d"        TNM = FFS "a26_fast";
+INST "snes_a26/vid/pub_pend"       TNM = FFS "a26_fast";
+INST "snes_a26/vid/dsh*"           TNM = FFS "a26_fast";
+INST "snes_a26/vid/vsh*"           TNM = FFS "a26_fast";
+TIMEGRP "a26_slow_core" = "a26_core_all" EXCEPT "a26_fast";
+TIMEGRP "a26_slow_vid"  = "a26_vid_all" EXCEPT "a26_fast";
+TIMESPEC TS_a26_slow = FROM "a26_slow_core" TO "a26_slow_core" 125 ns;
+TIMESPEC TS_a26_vid  = FROM "a26_slow_vid"  TO "a26_slow_vid"  125 ns;
+# RIOT RAM: its output changes one clk after cpu_ce and only feeds cpu_din.
+INST "snes_a26/core/u_riot/Mram_ram" TNM = RAMS "a26_riot_ram";
+TIMESPEC TS_a26_riot = FROM "a26_riot_ram" TO "a26_slow_core" 125 ns;
+# Superchip RAM (128 x 8 of distributed RAM in a26_core, Passo 36): same reasoning as the RIOT RAM, its
+# registered output (sc_q) changes one clk after the address and only feeds cpu_din.
+INST "snes_a26/core/Mram_sc_ram*" TNM = RAMS "a26_sc_ram";
+TIMESPEC TS_a26_sc = FROM "a26_sc_ram" TO "a26_slow_core" 125 ns;
+# Cartridge ROM (16 KB of block RAM in a26_mem): its read address changes only on
+# rom_rd and a26_mem holds rom_ack back for ACK_DLY clk, so the output has been
+# stable for 15 clk when the core registers it.  Do not shorten ACK_DLY below 12.
+INST "snes_a26/memc/Mram_cart*" TNM = RAMS "a26_rom_ram";
+TIMESPEC TS_a26_rom = FROM "a26_rom_ram" TO "a26_slow_core" 125 ns;

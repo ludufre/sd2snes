@@ -256,6 +256,12 @@ NAMES = [
   ('NTT Data Keypad',)*8,
   # 55 the parental lock: a code of 4 buttons before what changes the card or the settings (2.18)
   ('Parental lock', 'Bloqueio parental', 'Bloqueo parental', 'Kindersicherung', 'Contrôle parental', 'Blocco parentale', 'Родительский контроль', 'Kinderslot'),
+  # 56 the 2.19 section: what is new in this release
+  ("What's new in 2.19", 'Novidades da 2.19', 'Novedades de la 2.19', 'Neu in 2.19', 'Nouveautés de la 2.19', 'Novità della 2.19', 'Новое в 2.19', 'Nieuw in 2.19'),
+  # 57 font files (.sfn), picked in the browser like a theme (2.19)
+  ('Font files', 'Arquivos de fonte', 'Archivos de fuente', 'Schriftdateien', 'Fichiers de police', 'File di font', 'Файлы шрифтов', 'Lettertypebestanden'),
+  # 58 the Atari 2600 on the Mk.II too, and the same pad keys on both boards (2.19)
+  ('Atari 2600 on the Mk.II', 'Atari 2600 no Mk.II', 'Atari 2600 en el Mk.II', 'Atari 2600 auf dem Mk.II', 'Atari 2600 sur le Mk.II', 'Atari 2600 sul Mk.II', 'Atari 2600 на Mk.II', 'Atari 2600 op de Mk.II'),
   # 50 the PPU is cleared before every game boots
   ('Clear PPU on boot', 'Limpar PPU no boot', 'Limpiar PPU al arrancar', 'PPU beim Start löschen', 'Effacer le PPU au boot', "Pulisci PPU all'avvio", 'Очистка PPU при загрузке', 'Leeg PPU bij starten'),
   # 51 bus timing compat
@@ -517,24 +523,24 @@ TEXTS = [
    'Le cartucce Campus Challenge 92 e PowerFest 94 giocano un round a tempo, come ai tornei originali. Scegli quanto dura, da 3 a 18 minuti: i tornei usavano 6. Anche in {chipopts}.',
    'В картриджах |Campus Challenge 92| и |PowerFest 94| раунд идёт по внутреннему таймеру, как на настоящих турнирах. Выбери его продолжительность от 3 до 18 минут (на турнирах было 6). Настраивается в {chipopts}.',
    'De cartridges Campus Challenge 92 en PowerFest 94 spelen een ronde op tijd, zoals op de echte toernooien. Kies hoe lang die duurt, 3 tot 18 minuten: de toernooien gebruikten 6. Ook in {chipopts}.'),
-  # 27 other consoles: NES, Master System, Game Boy Color, Atari 2600 (Mk.III only, experimental)
-  ('NES, Master System, Game Boy Color and Atari 2600 games run on their own FPGA cores, |FXPAK PRO (Mk.III)| only, and open like any ROM. These cores are experimental: some games may glitch or not run. On the NES, [L]+[R]+[Start]+[Up] repaints the palette if the colours look wrong.',
-   'Jogos de NES, Master System, Game Boy Color e Atari 2600 rodam em cores de FPGA próprios, só no |FXPAK PRO (Mk.III)|, e abrem como qualquer ROM. Esses cores são experimentais: alguns jogos podem ter falhas ou não rodar. No NES, [L]+[R]+[Start]+[Cima] repinta a paleta se as cores saírem erradas.',
-   'Los juegos de NES, Master System, Game Boy Color y Atari 2600 corren en sus propios cores FPGA, solo en |FXPAK PRO (Mk.III)|, y abren como cualquier ROM. Estos cores son experimentales: algunos juegos pueden fallar o no arrancar. En la NES, [L]+[R]+[Start]+[Arriba] repinta la paleta si los colores salen mal.',
-   'NES-, Master-System-, Game-Boy-Color- und Atari-2600-Spiele laufen auf eigenen FPGA-Cores, nur auf |FXPAK PRO (Mk.III)|. Die Cores sind experimentell: manche Spiele haben Fehler oder laufen nicht. Beim NES malt [L]+[R]+[Start]+[Oben] die Palette neu, wenn Farben falsch sind.',
-   "Les jeux NES, Master System, Game Boy Color et Atari 2600 tournent sur leurs propres cores FPGA, sur |FXPAK PRO (Mk.III)| seulement. Ces cores sont expérimentaux : certains jeux peuvent bugger ou ne pas démarrer. Sur NES, [L]+[R]+[Start]+[Haut] redessine la palette si les couleurs sont fausses.",
-   'I giochi NES, Master System, Game Boy Color e Atari 2600 girano su core FPGA dedicati, solo su |FXPAK PRO (Mk.III)|, e si aprono come una ROM. Questi core sono sperimentali: alcuni giochi possono avere difetti o non partire. Sul NES, [L]+[R]+[Start]+[Su] ridisegna la tavolozza se i colori sono sbagliati.',
-   'Игры NES, Master System, Game Boy Color и Atari 2600 идут на своих ядрах FPGA, только на |FXPAK PRO (Mk.III)|, и открываются как любой ROM-файл. Эти ядра экспериментальные: некоторые игры могут сбоить или не запускаться. У NES комбинация кнопок [L]+[R]+[Start]+[Вверх] перерисовывает палитру, если цвета неверны.',
-   'NES-, Master System-, Game Boy Color- en Atari 2600-spellen draaien op eigen FPGA-cores, alleen op |FXPAK PRO (Mk.III)|, en openen als elke ROM. Deze cores zijn experimenteel: sommige spellen haperen of starten niet. Op de NES tekent [L]+[R]+[Start]+[Omhoog] het palet opnieuw als de kleuren fout zijn.'),
-  # 28 the Atari 2600's console switches on the pad, and its picture width
-  ("The console's switches are on controller 1: [Start] is RESET and [Select] is SELECT while held, [X] flips Color and B/W, [L] and [R] flip the two difficulty switches. {a26w} in {chipopts} picks 160 px (1:1) or 256 px (wide), |FXPAK PRO (Mk.III)| only.",
-   'As chaves do console ficam no controle 1: [Start] é o RESET e [Select] o SELECT enquanto segurados, [X] alterna Cor e P/B, [L] e [R] alternam as duas chaves de dificuldade. {a26w} em {chipopts} escolhe 160 px (1:1) ou 256 px (esticado), só no |FXPAK PRO (Mk.III)|.',
-   'Los interruptores de la consola están en el mando 1: [Start] es RESET y [Select] es SELECT mientras se mantienen, [X] cambia Color y B/N, [L] y [R] los dos de dificultad. {a26w} en {chipopts} elige 160 px (1:1) o 256 px (ancho), solo en |FXPAK PRO (Mk.III)|.',
-   'Die Schalter der Konsole liegen auf Controller 1: [Start] ist RESET und [Select] SELECT, solange gehalten, [X] wechselt Farbe und S/W, [L] und [R] die zwei Schwierigkeitsschalter. {a26w} in {chipopts}: 160 px (1:1) oder 256 px (breit), nur |FXPAK PRO (Mk.III)|.',
-   "Sur la manette 1, [Start] est RESET et [Select] SELECT tant qu'ils sont tenus, [X] bascule Couleur et N/B, [L] et [R] les deux interrupteurs de difficulté. {a26w} ({chipopts}) choisit 160 px (1:1) ou 256 px (large), |FXPAK PRO (Mk.III)| seulement.",
-   'Gli interruttori della console sono sul controller 1: [Start] è RESET e [Select] è SELECT finché tenuti, [X] alterna Colore e B/N, [L] e [R] i due interruttori di difficoltà. {a26w} in {chipopts}: 160 px (1:1) o 256 px (largo), solo |FXPAK PRO (Mk.III)|.',
-   'Переключатели консоли на контроллере 1: кнопка [Start] выполняет функцию [RESET], а кнопка [Select] - функцию [SELECT] (пока кнопка удерживается). Кнопка [X] переключает режим отображения (цветной или чёрно-белый), а кнопки [L] и [R] управляют двумя переключателями сложности. {a26w} в {chipopts}: 160 пикселей (1:1) или 256 пикселей (широко), только для |FXPAK PRO (Mk.III)|.',
-   'De schakelaars van de console zitten op controller 1: [Start] is RESET en [Select] SELECT zolang ingedrukt, [X] wisselt Kleur en Z/W, [L] en [R] de twee moeilijkheidsschakelaars. {a26w} in {chipopts}: 160 px (1:1) of 256 px (breed), alleen |FXPAK PRO (Mk.III)|.'),
+  # 27 other consoles: NES, Master System, Game Boy Color (Mk.III only), Atari 2600 (both boards), experimental
+  ('NES, Master System and Game Boy Color games run on their own FPGA cores, |FXPAK PRO (Mk.III)| only, Atari 2600 games also on the |sd2snes Mk.II|, and they open like any ROM. These cores are experimental: some games may glitch or not run. On the NES, [L]+[R]+[Start]+[Up] repaints the palette if the colours look wrong.',
+   'Jogos de NES, Master System e Game Boy Color rodam em cores de FPGA próprios, só no |FXPAK PRO (Mk.III)|, os de Atari 2600 também no |sd2snes Mk.II|, e abrem como qualquer ROM. Esses cores são experimentais: alguns jogos podem ter falhas ou não rodar. No NES, [L]+[R]+[Start]+[Cima] repinta a paleta se as cores saírem erradas.',
+   'Los juegos de NES, Master System y Game Boy Color corren en sus propios cores FPGA, solo en |FXPAK PRO (Mk.III)|, los de Atari 2600 también en |sd2snes Mk.II|, y abren como cualquier ROM. Estos cores son experimentales: algunos juegos pueden fallar o no arrancar. En la NES, [L]+[R]+[Start]+[Arriba] repinta la paleta si los colores salen mal.',
+   'NES-, Master-System- und Game-Boy-Color-Spiele laufen auf eigenen FPGA-Cores, nur auf |FXPAK PRO (Mk.III)|, Atari-2600-Spiele auch auf |sd2snes Mk.II|. Die Cores sind experimentell: manche Spiele haben Fehler oder laufen nicht. Beim NES malt [L]+[R]+[Start]+[Oben] die Palette neu, wenn Farben falsch sind.',
+   "Les jeux NES, Master System et Game Boy Color tournent sur leurs propres cores FPGA, sur |FXPAK PRO (Mk.III)| seulement, les jeux Atari 2600 aussi sur |sd2snes Mk.II|. Ces cores sont expérimentaux : certains jeux peuvent bugger ou ne pas démarrer. Sur NES, [L]+[R]+[Start]+[Haut] redessine la palette si les couleurs sont fausses.",
+   'I giochi NES, Master System e Game Boy Color girano su core FPGA dedicati, solo su |FXPAK PRO (Mk.III)|, quelli Atari 2600 anche su |sd2snes Mk.II|, e si aprono come una ROM. Questi core sono sperimentali: alcuni giochi possono avere difetti o non partire. Sul NES, [L]+[R]+[Start]+[Su] ridisegna la tavolozza se i colori sono sbagliati.',
+   'Игры NES, Master System и Game Boy Color идут на своих ядрах FPGA, только на |FXPAK PRO (Mk.III)|, игры Atari 2600 также на |sd2snes Mk.II|, и открываются как любой ROM-файл. Эти ядра экспериментальные: некоторые игры могут сбоить или не запускаться. У NES комбинация кнопок [L]+[R]+[Start]+[Вверх] перерисовывает палитру, если цвета неверны.',
+   'NES-, Master System- en Game Boy Color-spellen draaien op eigen FPGA-cores, alleen op |FXPAK PRO (Mk.III)|, Atari 2600-spellen ook op |sd2snes Mk.II|, en openen als elke ROM. Deze cores zijn experimenteel: sommige spellen haperen of starten niet. Op de NES tekent [L]+[R]+[Start]+[Omhoog] het palet opnieuw als de kleuren fout zijn.'),
+  # 28 the Atari 2600's console switches and player keys on the pad (both boards), and its picture width (Mk.III)
+  ("The console's switches are on controller 1: [Start] is RESET and [Select] is SELECT while held, [L] steps the difficulty (Easy, Normal, Hard), [R] pauses, [X] flips Color and B/W, [Y] changes the palette. {a26w} in {chipopts} picks 160 px (1:1) or 256 px (wide), |FXPAK PRO (Mk.III)| only.",
+   'As chaves do console ficam no controle 1: [Start] é o RESET e [Select] o SELECT enquanto segurados, [L] passa a dificuldade (Easy, Normal, Hard), [R] pausa, [X] alterna Cor e P/B, [Y] troca a paleta. {a26w} em {chipopts} escolhe 160 px (1:1) ou 256 px (esticado), só no |FXPAK PRO (Mk.III)|.',
+   'Los interruptores de la consola están en el mando 1: [Start] es RESET y [Select] es SELECT mientras se mantienen, [L] cambia la dificultad (Easy, Normal, Hard), [R] pausa, [X] cambia Color y B/N, [Y] la paleta. {a26w} en {chipopts} elige 160 px (1:1) o 256 px (ancho), solo en |FXPAK PRO (Mk.III)|.',
+   'Die Schalter der Konsole liegen auf Controller 1: [Start] ist RESET und [Select] SELECT, solange gehalten, [L] wechselt die Schwierigkeit (Easy, Normal, Hard), [R] pausiert, [X] wechselt Farbe und S/W, [Y] die Palette. {a26w} in {chipopts}: 160 px (1:1) oder 256 px (breit), nur |FXPAK PRO (Mk.III)|.',
+   "Sur la manette 1, [Start] est RESET et [Select] SELECT tant qu'ils sont tenus, [L] change la difficulté (Easy, Normal, Hard), [R] met en pause, [X] bascule Couleur et N/B, [Y] change la palette. {a26w} ({chipopts}) choisit 160 px (1:1) ou 256 px (large), |FXPAK PRO (Mk.III)| seulement.",
+   'Gli interruttori della console sono sul controller 1: [Start] è RESET e [Select] è SELECT finché tenuti, [L] cambia la difficoltà (Easy, Normal, Hard), [R] mette in pausa, [X] alterna Colore e B/N, [Y] cambia la tavolozza. {a26w} in {chipopts}: 160 px (1:1) o 256 px (largo), solo |FXPAK PRO (Mk.III)|.',
+   'Переключатели консоли на контроллере 1: кнопка [Start] выполняет функцию RESET, а кнопка [Select] - функцию SELECT (пока кнопка удерживается). [L] меняет сложность (Easy, Normal, Hard), [R] ставит паузу, [X] переключает цветной и чёрно-белый режим, [Y] меняет палитру. {a26w} в {chipopts}: 160 пикселей (1:1) или 256 (широко), только для |FXPAK PRO (Mk.III)|.',
+   'De schakelaars van de console zitten op controller 1: [Start] is RESET en [Select] SELECT zolang ingedrukt, [L] wisselt de moeilijkheid (Easy, Normal, Hard), [R] pauzeert, [X] wisselt Kleur en Z/W, [Y] het palet. {a26w} in {chipopts}: 160 px (1:1) of 256 px (breed), alleen |FXPAK PRO (Mk.III)|.'),
   # 29 the card's folders: 2-letter buckets, console folders, |Organize|
   ('Saves, states, cheats, info cards and patch settings of each game live in |/sd2snes/<area>/<2 letters>/|, plus a console folder (|sgb, sft, nes, sms, a26|). Updating only the firmware? Run |Organize| in the |Web Manager|, or old saves seem to vanish.',
    'Saves, states, cheats, fichas e ajustes de patch de cada jogo ficam em |/sd2snes/<área>/<2 letras>/|, mais uma pasta por console (|sgb, sft, nes, sms, a26|). Vai atualizar só a firmware? Rode o |Organize| do |Web Manager|, senão os saves antigos parecem sumir.',
@@ -772,6 +778,33 @@ TEXTS = [
    '{lockrow}, in {cfg}, chiede un codice da 4 a 10 tasti (aspetta 3 s per finire prima di 10) prima di ciò che cambia la scheda o le impostazioni: {cfg}, cancellare, rinominare e spostare file, salvataggi, {goptrow}, modificare i cheat, autoboot e temi, anche nel menu in gioco. Tenere [B] 3 s annulla. Codice dimenticato? Cancella LockCode in |/sd2snes/config.yml|.',
    '{lockrow} в {cfg} запрашивает код, состоящий из комбинации 4-10 кнопок, перед любым действием, меняющим данные на карте памяти или настройки: {cfg}, удалением, переименованием и перемещением файлов, сохранениями, {goptrow}, правкой чит-кодов, автозапуском и темами, в том числе в |Меню в игре|. Если в коде менее 10 кнопок, подождите 3 секунды, чтобы закончить ввод раньше. Удержание кнопки [B] в течение 3 секунд - отмена. Забыли код? Удалите строку LockCode в файле |/sd2snes/config.yml|.',
    "{lockrow} in {cfg} vraagt een code van 4 tot 10 knoppen (wacht 3 s om eerder te stoppen) voor alles wat de kaart of de instellingen wijzigt: {cfg}, bestanden wissen, hernoemen en verplaatsen, saves, {goptrow}, cheats bewerken, autoboot en thema's, ook in het in-game menu. [B] 3 s vasthouden annuleert. Code vergeten? Wis LockCode in |/sd2snes/config.yml|."),
+  # 56 the 2.19 section: what is new in this release
+  ('Version 2.19 is out. The next cards show what is new.',
+   'A versão 2.19 chegou. Os próximos cards mostram o que há de novo.',
+   'Ya está aquí la versión 2.19. Las siguientes pantallas muestran las novedades.',
+   'Version 2.19 ist da. Die nächsten Karten zeigen, was neu ist.',
+   'La version 2.19 est là. Les prochains écrans montrent les nouveautés.',
+   'La versione 2.19 è arrivata. Le prossime schede mostrano le novità.',
+   'Вышла версия 2.19. На следующих страницах показано, что нового.',
+   'Versie 2.19 is er. De volgende kaarten tonen wat er nieuw is.'),
+  # 57 font files (.sfn), picked in the browser like a theme (2.19)
+  ("Change the menu's letters with a |.sfn| font file: pick it in the list, as with a theme, and only the letters change. Draw your own in the |Font Editor| on the site or take one from its font gallery. {restorefont} in {browser} brings back the built-in font.",
+   'Troque as letras do menu com um arquivo de fonte |.sfn|: escolha na lista, como um tema, e só as letras mudam. Desenhe a sua no |Font Editor| do site ou pegue uma na galeria de fontes. {restorefont} em {browser} volta à fonte do próprio menu.',
+   'Cambia las letras del menú con un archivo de fuente |.sfn|: elígelo en la lista, como un tema, y solo cambian las letras. Dibuja la tuya en el |Font Editor| del sitio o toma una de su galería de fuentes. {restorefont} en {browser} vuelve a la fuente del menú.',
+   'Ändere die Buchstaben des Menüs mit einer Schriftdatei |.sfn|: in der Liste wählen wie ein Theme, nur die Buchstaben ändern sich. Zeichne deine eigene im |Font Editor| der Website oder nimm eine aus der Schriftgalerie. {restorefont} in {browser} holt die eingebaute Schrift zurück.',
+   "Change les lettres du menu avec un fichier de police |.sfn| : choisis-le dans la liste, comme un thème, et seules les lettres changent. Dessine la tienne dans le |Font Editor| du site ou prends-en une dans sa galerie de polices. {restorefont} ({browser}) remet la police d'origine.",
+   'Cambia le lettere del menu con un file di font |.sfn|: sceglilo nella lista, come un tema, e cambiano solo le lettere. Disegna il tuo nel |Font Editor| del sito o prendine uno dalla galleria dei font. {restorefont} in {browser} torna al font del menu.',
+   'Меняйте буквы меню файлом шрифта |.sfn|: выберите его в списке, как тему, и изменятся только буквы. Нарисуйте свой в |Font Editor| на сайте или возьмите готовый из галереи шрифтов. {restorefont} в разделе {browser} вернёт встроенный шрифт.',
+   'Verander de letters van het menu met een lettertypebestand |.sfn|: kies het in de lijst, zoals een thema, en alleen de letters veranderen. Teken je eigen in de |Font Editor| op de site of neem er een uit de lettertypegalerij. {restorefont} in {browser} zet het ingebouwde lettertype terug.'),
+  # 58 the Atari 2600 on the Mk.II too, and the same pad keys on both boards (2.19)
+  ('Atari 2600 games now run on the |sd2snes Mk.II| too, on a core of its own. And on both boards the pad works the same: [L] steps the difficulty (Easy, Normal, Hard), [R] pauses, [X] flips Color and B/W and [Y] changes the palette, each with its name on screen. They act when released and only alone, so the combos never change a setting.',
+   'Os jogos de Atari 2600 agora rodam também no |sd2snes Mk.II|, num core próprio. E nas duas placas o controle funciona igual: [L] passa a dificuldade (Easy, Normal, Hard), [R] pausa, [X] alterna Cor e P/B e [Y] troca a paleta, cada um com o nome na tela. Eles agem ao soltar e só sozinhos, então os combos nunca mudam um ajuste.',
+   'Los juegos de Atari 2600 ahora corren también en el |sd2snes Mk.II|, con un core propio. Y en las dos placas el mando funciona igual: [L] cambia la dificultad (Easy, Normal, Hard), [R] pausa, [X] cambia Color y B/N e [Y] la paleta, cada uno con su nombre en pantalla. Actúan al soltarlos y solo solos, así los combos nunca cambian un ajuste.',
+   'Atari-2600-Spiele laufen jetzt auch auf dem |sd2snes Mk.II|, mit einem eigenen Core. Und auf beiden Boards funktioniert der Controller gleich: [L] wechselt die Schwierigkeit (Easy, Normal, Hard), [R] pausiert, [X] wechselt Farbe und S/W, [Y] die Palette, jeweils mit Namen auf dem Bild. Sie wirken beim Loslassen und nur allein, Kombos ändern also nie eine Einstellung.',
+   "Les jeux Atari 2600 tournent maintenant aussi sur le |sd2snes Mk.II|, avec un core à lui. Et sur les deux cartes la manette marche pareil : [L] change la difficulté (Easy, Normal, Hard), [R] met en pause, [X] bascule Couleur et N/B, [Y] change la palette, chacun avec son nom à l'écran. Ils agissent au relâchement et seuls, donc les combos ne changent jamais un réglage.",
+   "I giochi Atari 2600 ora girano anche sul |sd2snes Mk.II|, con un core tutto suo. E su entrambe le schede il controller funziona allo stesso modo: [L] cambia la difficoltà (Easy, Normal, Hard), [R] mette in pausa, [X] alterna Colore e B/N, [Y] cambia la tavolozza, ognuno con il nome sullo schermo. Agiscono al rilascio e solo da soli, quindi le combo non cambiano mai un'impostazione.",
+   'Игры Atari 2600 теперь идут и на |sd2snes Mk.II|, на собственном ядре. А на обеих платах кнопки работают одинаково: [L] меняет сложность (Easy, Normal, Hard), [R] ставит паузу, [X] переключает цветной и чёрно-белый режим, [Y] меняет палитру, название каждой настройки видно на экране. Кнопки срабатывают при отпускании и только поодиночке, поэтому комбинации никогда не меняют настройки.',
+   "Atari 2600-spellen draaien nu ook op de |sd2snes Mk.II|, met een eigen core. En op beide borden werkt de controller hetzelfde: [L] wisselt de moeilijkheid (Easy, Normal, Hard), [R] pauzeert, [X] wisselt Kleur en Z/W, [Y] het palet, elk met de naam op het scherm. Ze werken bij loslaten en alleen los, dus combo's veranderen nooit een instelling."),
   # 50 the PPU is cleared before every game boots
   ("Some romhacks draw their intro without clearing the video memory, and on a real console the menu's leftovers show as garbage. The |sd2snes+| wipes it before every game starts.",
    'Alguns romhacks desenham a abertura sem limpar a memória de vídeo, e num console de verdade as sobras do menu aparecem como lixo. O |sd2snes+| limpa tudo antes de qualquer jogo começar.',
@@ -928,7 +961,7 @@ def _cells(text):
 
 
 TEXT_W = 30          # == ONB_TEXT_W: cols 1..30
-MORE_FIRST = 55      # == ONB_MORE_FIRST: the "and more" items are the descriptors from here
+MORE_FIRST = 58      # == ONB_MORE_FIRST: the "and more" items are the descriptors from here
 MORE_NAME_W = 24     # an answer row's width (onb_draw_option_value prints labels with 24)
 # How tall a card's paragraph may be depends on what the card shows under it, so the cap
 # is worked out per card from the engine's own layout (onboarding_main.a65) and the card's
@@ -986,7 +1019,7 @@ _MENU_LABELS = {"cfg": "mtext_mm_cfg", "sgbmenu": "mtext_cfg_sgb", "auto": "text
                 "hook": "mtext_ingame_enable",
                 "goptrow": "mtext_gopt_row", "lockrow": "mtext_lock_row", "onechip": "mtext_ingame_1chiptransientfixes",
                 "gdefault": "text_gopt_default", "rmdir": "mtext_fm_rmdir",
-                "fmsel": "mtext_fm_select"}
+                "fmsel": "mtext_fm_select", "restorefont": "mtext_sfn_restore"}
 _MENU_WORDS = {key: menu_text(lab) for key, lab in _MENU_LABELS.items()}
 # a sub-option's label without the menu's indent and arrow glyph (" {129}")
 _MENU_WORDS["igbuttons"] = tuple(w.replace("{129}", "").strip() for w in menu_text("mtext_ingame_buttons"))
@@ -1191,8 +1224,8 @@ CJK_SHEET_BANK = {"ja": "$ca", "zh": "$c7"}
 _PICS = 8 * (7168 + 256)                      # a bank of 8 demo pictures (gen_onb_demo.py PER_BANK)
 STR_OTHER = {
     "$c1": 64,                                # onb_strtab_nlang and the CJK sheet pointers
-    "$c0": 11500,                             # the engine's code, palette, spc700 (~11.2 KB) + room to grow
-    "$cb": 7 * (7168 + 256),                  # the last 7 pictures
+    "$c0": 11700,                             # the engine's code, palette, spc700 (~11.2 KB) + room to grow
+    "$cb": 6 * (7168 + 256),                  # the last 6 pictures
     "$c5": _PICS, "$c6": _PICS,
     "$c3": _PICS + 16 * 64,                   # + onb_demo_map (16 bytes a card)
     "$c8": _PICS + 1800,                      # + onb_welcome.a65's code

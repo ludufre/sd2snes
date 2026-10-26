@@ -505,13 +505,14 @@ def mouse_pointer():
     return scr.done()
 
 
-def section(version):
-    """A release section's opening card: the sd2snes+ logo and the version."""
+def section():
+    """A release section's opening card: the sd2snes+ logo. One picture for every release
+    (the version is in the card's name and text): the tour ROM has no room for a picture
+    per release, and one release's strings took the room of the second."""
     im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     grad, logo = default_look()
     lg = logo.resize((128, 28), Image.LANCZOS)
-    im.paste(lg, (0, 14), lg)
-    draw_menu_text(im, 64, 56, version, 3, 5, (248, 208, 56))
+    im.paste(lg, (0, 42), lg)
     return im
 
 
@@ -1573,7 +1574,7 @@ PICTURES = {
     "consoles": consoles_icons, "memtest": more("memtest"),
     "saves": saves_tab, "pcm": pcm_player, "bsx": icon_bsx, "delete": delete_ctx,
     "bios": bios_popup, "desc": option_desc,
-    "section_217": lambda: section("2.17"), "section_218": lambda: section("2.18"),
+    "section": lambda: section(),
     "rp2040_cart": icon_rp2040_cart, "gbc": icon_gbc, "shortcuts": shortcut_list,
     "carts_seta": icon_carts_seta, "carts_more": carts_more, "icons": browser_icons,
     "gameinfo_cheats": gameinfo_cheats,

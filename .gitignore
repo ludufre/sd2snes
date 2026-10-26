@@ -26,6 +26,7 @@ utils/derle
 *.s
 # assembly sources (a case-insensitive filesystem would match them by *.s)
 !src/xc_soc/*.S
+!snes/atari/*.s
 *.txt
 # the CJK fonts' licenses ship with them
 !snes/fonts/*.txt

@@ -38,7 +38,7 @@ onb_demo_map
   .byt 61, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 25 Sufami Turbo Slot B
   .byt 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63   ; 26 Competition Cart round
   .byt 33, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 27 other consoles (Mk.III only)
-  .byt 62, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 28 Atari 2600 controls (Mk.III only)
+  .byt 62, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 28 Atari 2600 controls (both boards)
   .byt 64, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 29 the card's folders
   .byt 34, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 30 memory test
   .byt 67, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 31 the Mk.II LED (Mk.II only)
@@ -51,9 +51,9 @@ onb_demo_map
   .byt 45, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 38 2.17: Super 20 in 1, Gamars, .sfrom
   .byt 46, 8, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 39 2.17: the browser icons (No: the plain list of covers_off, names only -- $CB has no room for a picture of its own)
   .byt 47, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 40 2.17: cheats from the game info card
-  .byt 77, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 41 2.18: what's new
+  .byt 41, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 41 2.18: what's new
   .byt 76, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 42 2.18: the RP2040 cartridge
-  .byt 78, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 43 2.18: the SNES Mouse in the menu
+  .byt 77, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 43 2.18: the SNES Mouse in the menu
   .byt 36, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 44 2.18: the music players (the .pcm player picture)
   .byt 13, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 45 2.18: the NES music player (the music icon: the card before it already shows the .pcm player, and $CB has no room for a picture of its own)
   .byt 35, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 46 2.18: the saves screen (the in-game SAVES tab picture: $CB has no room for a picture of its own)
@@ -66,3 +66,6 @@ onb_demo_map
   .byt 42, 42, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 53 2.18: rotated Game Boy buttons (the Game Boy picture for both answers: no bank has room for a greyed one)
   .byt 23, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 54 2.18: the NTT Data Keypad (the controllers picture)
   .byt 23, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 55 2.18: the parental lock (the controllers picture: the code is typed on the pad)
+  .byt 41, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 56 2.19: what's new
+  .byt 49, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 57 2.19: font files (the text sample picture)
+  .byt 62, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 58 2.19: the Atari 2600 on the Mk.II (the Atari picture)

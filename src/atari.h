@@ -27,7 +27,21 @@
 /* SNES-side player loaded as the booted LoROM image. Built from snes/a26/
    a26_snes.asm by build.sh and shipped in the release zip, same as the NES stub
    and the SMS player (<system>_snes.bin = the SNES-side half of that system). */
+#ifdef CONFIG_MK2
+/* mk2: the player of the sd2snes_atari core; a new name so it never collides with an
+   a26_snes.bin (mk3 core, different register contract) left on the card. */
+#define A26_PLAYER_FILE ((const uint8_t*)"/sd2snes/atari_snes.bin")
+/* mk2: the core's register block is cleared on every SNES reset, so the PLAYER writes
+   mapper + run (register 3) at each boot.  The firmware tells it the mapper by patching
+   two bytes of the player image in PSRAM: $7FF0 = a26_bs_t, $7FF1 = magic.  LoROM
+   $00:FFF0/FFF1 are unused 65816 vector slots (emulation vectors start at $FFF4), and
+   nothing in the load path reads or rewrites them.  The player must leave them free. */
+#define A26_PLAYER_MAPPER_OFS   0x7FF0L
+#define A26_PLAYER_MAGIC_OFS    0x7FF1L
+#define A26_PLAYER_MAGIC        0xA2
+#else
 #define A26_PLAYER_FILE ((const uint8_t*)"/sd2snes/a26_snes.bin")
+#endif
 /* where the core reads the cartridge image from -- lockstep with the ROM fetch
    base of verilog/sd2snes_a26 (ATARI-CORE-CONTRACT.md sec. 1). <=32768 B; the
    core copies it into BRAM at reset and never reads PSRAM again. */
@@ -41,7 +55,14 @@ typedef enum {
   A26_BS_F8 = 2,
   A26_BS_F6 = 3,
   A26_BS_F4 = 4
+#ifdef CONFIG_MK2
+  /* mk2 only: the sd2snes_atari core maps FE as mapper 5; the mk3 core has
+     no FE, so neither the value nor its detection exist there. */
+  , A26_BS_FE = 5
+  /* 6..15 reserved */
+#else
   /* 5..15 reserved */
+#endif
 } a26_bs_t;
 
 typedef struct __attribute__((__packed__)) _a26_romprops {

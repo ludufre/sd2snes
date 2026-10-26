@@ -79,6 +79,9 @@ static const char *scheme_name(const a26_romprops_t *p) {
     case A26_BS_F8: return "F8";
     case A26_BS_F6: return "F6";
     case A26_BS_F4: return "F4";
+#ifdef CONFIG_MK2
+    case A26_BS_FE: return "FE";
+#endif
     default:        return "?";
   }
 }

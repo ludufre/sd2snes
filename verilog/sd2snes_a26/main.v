@@ -713,7 +713,8 @@ mcu_cmd snes_mcu_cmd(
 // ---------------------------------------------------------------------
 // Player write window, bank $EF.  DATA and SWAP are decoded SEPARATELY
 // (a data byte must never be able to strobe a frame swap):
-//   $EF0000/1 JOY1 L/H, $EF0002/3 JOY2 L/H, $EF0004 SWCHB shadow  -> data
+//   $EF0000/1 JOY1 L/H, $EF0002/3 JOY2 L/H, $EF0004 SWCHB shadow,
+//   $EF0006 control (bit0 pause, bits 2:1 palette)                -> data
 //   $EF0005                                                       -> swap
 // SNES_ADDR[15:8] is ignored, so the window mirrors across the bank
 // (inherited from sd2snes_sms/main.v).  snescmd_unlock stays as cheat.v
@@ -721,7 +722,7 @@ mcu_cmd snes_mcu_cmd(
 // sd2snes_nes/main.v does would raise IS_PATCH for $C0-$FF and turn every
 // one of these writes into a real PSRAM write.
 wire a26_ef_hit  = SNES_WR_end & (SNES_ADDR[23:16] == 8'hEF);
-wire a26_ef_data = a26_ef_hit & (SNES_ADDR[7:0] <= 8'h04);
+wire a26_ef_data = a26_ef_hit & ((SNES_ADDR[7:0] <= 8'h04) | (SNES_ADDR[7:0] == 8'h06));
 wire a26_ef_swap = a26_ef_hit & (SNES_ADDR[7:0] == 8'h05);
 
 reg [15:0] a26_joy1  = 16'h0000;   // $4218/$4219 as written by the player
@@ -729,6 +730,11 @@ reg [15:0] a26_joy2  = 16'h0000;   // $421A/$421B
 // SWCHB shadow, idle value: RESET/SELECT released (D0/D1=1), D2/D4/D5=1,
 // COLOR (D3)=1, both difficulty switches B (D6/D7=0).
 reg [7:0]  a26_swchb = 8'h3F;
+// Player control byte: bit0 = pause (stops the colour clock, so CPU, TIA, RIOT
+// and audio freeze, and the core publishes no new frame), bits 2:1 = palette
+// (0 Color-1, 1 Color-2, 2 Color-3, 3 Black/White, taken at the next frame).
+reg [2:0]  a26_ctl   = 3'd0;
+wire       a26_pause = a26_ctl[0];
 always @(posedge CLK2) begin
   if (a26_ef_data) begin
     case (SNES_ADDR[2:0])
@@ -737,6 +743,7 @@ always @(posedge CLK2) begin
       3'd2: a26_joy2[7:0]  <= SNES_DATA;
       3'd3: a26_joy2[15:8] <= SNES_DATA;
       3'd4: a26_swchb      <= SNES_DATA;
+      3'd6: a26_ctl        <= SNES_DATA[2:0];
     endcase
   end
 end
@@ -771,7 +778,8 @@ end
 // core, so the floor for cycle-level timing analysis is 3*26 = 78 CLK2.
 reg [24:0] a26_ce_acc = 25'd0; reg a26_ce = 1'b0;
 always @(posedge CLK2) begin
-  {a26_ce, a26_ce_acc} <= {1'b0, a26_ce_acc} + 26'd1251142;
+  if (a26_pause) a26_ce <= 1'b0;   // paused: the accumulator holds its phase
+  else           {a26_ce, a26_ce_acc} <= {1'b0, a26_ce_acc} + 26'd1251142;
 end
 
 // CPU enable: every third color clock, from a free-running counter.  A line is
@@ -792,13 +800,14 @@ end
 // window; the mapping to the 2600's ports is contract 6:
 //   SWCHA  D7-D4 = Right Left Down Up of joystick 0 (SNES pad 1)
 //          D3-D0 = the same for joystick 1 (SNES pad 2), all active low
-//   INPT4/5 = fire of pad 1 / pad 2, active low, any of B/A/Y
+//   INPT4/5 = fire of pad 1 / pad 2, active low, B or A (Y is the palette
+//             key of the player, so it is not a fire button)
 //   SWCHB   passes straight through from the player's shadow byte
 // ---------------------------------------------------------------------
 wire [7:0] a26_swcha = ~{a26_joy1[8], a26_joy1[9], a26_joy1[10], a26_joy1[11],
                          a26_joy2[8], a26_joy2[9], a26_joy2[10], a26_joy2[11]};
-wire [1:0] a26_inpt45 = ~{(a26_joy2[15] | a26_joy2[14] | a26_joy2[7]),
-                          (a26_joy1[15] | a26_joy1[14] | a26_joy1[7])};
+wire [1:0] a26_inpt45 = ~{(a26_joy2[15] | a26_joy2[7]),
+                          (a26_joy1[15] | a26_joy1[7])};
 
 // a26 read client: latch the core's request, let the arbiter service it on a
 // free slot, hand the byte back with a one-cycle ready pulse (SMS molde)
@@ -844,7 +853,7 @@ end
 
 a26_core a26_inst (
   .CLK(CLK2), .RST(SNES_DEADr), .TIA_CE(a26_ce), .CPU_CE(a26_cpu_ce),
-  .FEAT(a26_feat_out),
+  .FEAT(a26_feat_out), .PAL(a26_ctl[2:1]),
   .ROM_RRQ(a26_rom_rrq), .ROM_ADDR(a26_rom_addr),
   .ROM_DATA(A26_DINr), .ROM_RDY(a26_rom_rdy),
   // framebuffer write client: wired at integration, with the arbiter arm that

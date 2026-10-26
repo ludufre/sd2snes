@@ -79,6 +79,7 @@ module a26_video (
   input             RST,
   input             TIA_CE,
   input             WIDTH_256,        // feat16[5]: 0 = 160 px, 1 = 256 px
+  input      [1:0]  PAL,              // palette from the player ($EF0006 bits 2:1)
 
   // TIA raster
   input             VID_VISIBLE,
@@ -294,7 +295,10 @@ module a26_video (
     2'd2:    pal_sel = sel_p0;
     default: pal_sel = sel_p1;
   endcase
-  wire [6:0] pal_ra = cur_pad ? 7'd0 : pal_sel;
+  // The palette is taken at the frame boundary (pal_f, set next to wd_trip),
+  // so one frame never mixes two.
+  reg  [1:0] pal_f;
+  wire [8:0] pal_ra = {pal_f, cur_pad ? 7'd0 : pal_sel};
 
   // tile byte about to be emitted and the digest it produces
   wire [7:0]  tbyte    = cur_pad ? 8'h00 : ((st == ST_TW0) ? lb_q[7:0] : lb_q[15:8]);
@@ -380,6 +384,10 @@ module a26_video (
   wire next_locked  = (~cap_bank) ? bank1_locked : bank0_locked;
   wire this_locked  = ( cap_bank) ? bank1_locked : bank0_locked;
   wire wd_trip  = LINE_START & (frame_lines == (WATCHDOG_LINES - 9'd1));
+  always @(posedge CLK) begin
+    if (RST)                      pal_f <= 2'd0;
+    else if (VSYNC_EDGE | wd_trip) pal_f <= PAL;
+  end
   wire tile_we  = (st == ST_TDIG);
   wire frame_reset = (st == ST_DONE) & ~v_r & ~BUF_WRQ;
   // rows that were never captured because the write port starved us: their

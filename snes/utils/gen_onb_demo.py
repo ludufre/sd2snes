@@ -43,14 +43,14 @@ DEMOS = ["lang_en", "lang_ptbr", "lang_es", "lang_de", "lang_fr", "lang_it", "la
          "pad2_on", "pad2_off", "msu_on", "msu_off",
          "reset_0", "reset_1", "reset_2", "reset_3", "reset_4",
          "patches", "consoles", "memtest",
-         "saves", "pcm", "bsx", "delete", "bios", "desc", "section_217", "gbc", "shortcuts",
+         "saves", "pcm", "bsx", "delete", "bios", "desc", "section", "gbc", "shortcuts",
          "carts_seta", "carts_more", "icons", "gameinfo_cheats",
          "theme_restore", "text_theme", "text_full", "text_nooutline", "text_noaa",
          "lists_on", "lists_off", "video_on", "video_off", "clipmusic_on", "clipmusic_off",
          "cheatlist", "patchmenu", "sufami", "atari", "cctime", "folders",
          "sd2snesdir_on", "sd2snesdir_off", "led", "clearppu", "buscompat", "sysinfo", "clock",
          "trainer", "chips_more", "lang_ja", "lang_zh",
-         "rp2040_cart", "section_218", "mouse"]
+         "rp2040_cart", "mouse"]
 PER_BANK = 8                   # 8 x (7168 + 256) bytes = 59392, a bank holds 65536
 BANKS = ("$c2", "$c3", "$c4", "$c5", "$c6", "$c7", "$c8", "$c9", "$ca", "$cb")
 SUFFIX = "abcdefghij"          # onb_demo_<suffix>.a65, one per bank (the Makefile lists them all)

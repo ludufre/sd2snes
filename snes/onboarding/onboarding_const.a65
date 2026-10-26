@@ -209,7 +209,7 @@ onb_feat_table:
   .byt ONB_PAL_GREEN, ONB_OPT_CCTIME : .word !CFG_CC_TIME_LIMIT
   .word 0, 1, onb_f27_name, onb_f27_text, 0, ONB_FF_MK3ONLY   ; 27 other consoles (Mk.III only)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f28_name, onb_f28_text, 0, ONB_FF_MK3ONLY   ; 28 Atari 2600 controls (Mk.III only)
+  .word 0, 1, onb_f28_name, onb_f28_text, 0, 0                ; 28 Atari 2600 controls (both boards)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
   .word 0, 1, onb_f29_name, onb_f29_text, 0, 0   ; 29 the card's folders
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
@@ -265,21 +265,27 @@ onb_feat_table:
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
   .word 0, 2, onb_f55_name, onb_f55_text, 0, 0   ; 55 2.18: the parental lock (the code before what changes the card)
   .byt ONB_PAL_PURPLE, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f56_name, onb_f56_text, 0, 0   ; 56 and more: the PPU is cleared before every game
+  .word 0, 3, onb_f56_name, onb_f56_text, 0, ONB_FF_SECTION   ; 56 2.19: what's new (Settings > tour: section 3)
+  .byt ONB_PAL_AMBER, ONB_OPT_INFO : .word 0
+  .word 0, 3, onb_f57_name, onb_f57_text, 0, 0   ; 57 2.19: font files (.sfn), picked like a theme
+  .byt ONB_PAL_CYAN, ONB_OPT_INFO : .word 0
+  .word 0, 3, onb_f58_name, onb_f58_text, 0, 0   ; 58 2.19: the Atari 2600 on the Mk.II too, the same keys on both boards
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f57_name, onb_f57_text, 0, 0   ; 57 and more: bus timing compat
+  .word 0, 1, onb_f59_name, onb_f59_text, 0, 0   ; 59 and more: the PPU is cleared before every game
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f58_name, onb_f58_text, 0, 0   ; 58 and more: hardware model
+  .word 0, 1, onb_f60_name, onb_f60_text, 0, 0   ; 60 and more: bus timing compat
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f59_name, onb_f59_text, 0, 0   ; 59 and more: BS-X
+  .word 0, 1, onb_f61_name, onb_f61_text, 0, 0   ; 61 and more: hardware model
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f60_name, onb_f60_text, 0, 0   ; 60 and more: delete
+  .word 0, 1, onb_f62_name, onb_f62_text, 0, 0   ; 62 and more: BS-X
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f61_name, onb_f61_text, 0, 0   ; 61 and more: missing BIOS
+  .word 0, 1, onb_f63_name, onb_f63_text, 0, 0   ; 63 and more: delete
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f62_name, onb_f62_text, 0, 0   ; 62 and more: clock and date
+  .word 0, 1, onb_f64_name, onb_f64_text, 0, 0   ; 64 and more: missing BIOS
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f63_name, onb_f63_text, 0, 0   ; 63 and more: option descriptions
+  .word 0, 1, onb_f65_name, onb_f65_text, 0, 0   ; 65 and more: clock and date
+  .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
+  .word 0, 1, onb_f66_name, onb_f66_text, 0, 0   ; 66 and more: option descriptions
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
 
 ; the bar colour: the menu's hdma_bar_color_src ("normal", then "highlight"), the

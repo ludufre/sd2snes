@@ -44,7 +44,7 @@ onb_demo_tbl:
   .word !onb_demo_delete : .byt ^onb_demo_delete : .word !onb_demo_delete_pal : .byt ^onb_demo_delete_pal
   .word !onb_demo_bios : .byt ^onb_demo_bios : .word !onb_demo_bios_pal : .byt ^onb_demo_bios_pal
   .word !onb_demo_desc : .byt ^onb_demo_desc : .word !onb_demo_desc_pal : .byt ^onb_demo_desc_pal
-  .word !onb_demo_section_217 : .byt ^onb_demo_section_217 : .word !onb_demo_section_217_pal : .byt ^onb_demo_section_217_pal
+  .word !onb_demo_section : .byt ^onb_demo_section : .word !onb_demo_section_pal : .byt ^onb_demo_section_pal
   .word !onb_demo_gbc : .byt ^onb_demo_gbc : .word !onb_demo_gbc_pal : .byt ^onb_demo_gbc_pal
   .word !onb_demo_shortcuts : .byt ^onb_demo_shortcuts : .word !onb_demo_shortcuts_pal : .byt ^onb_demo_shortcuts_pal
   .word !onb_demo_carts_seta : .byt ^onb_demo_carts_seta : .word !onb_demo_carts_seta_pal : .byt ^onb_demo_carts_seta_pal
@@ -80,7 +80,6 @@ onb_demo_tbl:
   .word !onb_demo_lang_ja : .byt ^onb_demo_lang_ja : .word !onb_demo_lang_ja_pal : .byt ^onb_demo_lang_ja_pal
   .word !onb_demo_lang_zh : .byt ^onb_demo_lang_zh : .word !onb_demo_lang_zh_pal : .byt ^onb_demo_lang_zh_pal
   .word !onb_demo_rp2040_cart : .byt ^onb_demo_rp2040_cart : .word !onb_demo_rp2040_cart_pal : .byt ^onb_demo_rp2040_cart_pal
-  .word !onb_demo_section_218 : .byt ^onb_demo_section_218 : .word !onb_demo_section_218_pal : .byt ^onb_demo_section_218_pal
   .word !onb_demo_mouse : .byt ^onb_demo_mouse : .word !onb_demo_mouse_pal : .byt ^onb_demo_mouse_pal
 
 onb_demo_lang_en_pal:

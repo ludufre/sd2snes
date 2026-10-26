@@ -473,6 +473,21 @@ sd_dma snes_sd_dma(
 
 assign SD_DMA_TO_ROM = (SD_DMA_STATUS && (SD_DMA_TGT == 2'b00));
 
+`ifdef ATARI
+// sd2snes_atari (Mk.II Atari 2600, the STorm2600 core): the audio comes from the
+// TIA mix, through a26_i2s on the same MCLK/LRCK/SDOUT pins.
+wire [4:0]         a26_aud_mix;
+wire signed [15:0] a26_aud_sample;
+assign DAC_STATUS = 1'b0;
+a26_i2s snes_dac(
+  .clkin(CLK2),
+  .sample(a26_aud_sample),
+  .sdout(DAC_SDOUT),
+  .mclk_out(DAC_MCLK),
+  .lrck_out(DAC_LRCK),
+  .sclk_out()
+);
+`else
 dac snes_dac(
   .clkin(CLK2),
   .sysclk(SNES_SYSCLK),
@@ -494,6 +509,7 @@ dac snes_dac(
   .reset(dac_reset),
   .dac_address_ext(dac_ptr_addr)
 );
+`endif
 
 // Autonomous SFX fetcher: streams a one-shot PCM SFX from PSRAM into dac_buf so a
 // menu blip survives long MCU-blocking SD transactions (no more "frozen loop").
@@ -622,6 +638,42 @@ wire       MCU_DMA_WE;
 wire       MCU_DMA_ACTIVE;
 wire [1:0] DMA_BUSY;
 
+`ifdef ATARI
+// sd2snes_atari: the Atari subsystem sits where the FPGA copier was (same ports
+// plus the audio outputs).  The $2020-$202F window (dma_enable) and the MCU_DMA_*
+// path are its register window, the DMA_* slot carries ROM reads and
+// frame-buffer writes.
+a26_top snes_a26 (
+  .clkin(CLK2),
+  .reset(SNES_reset_strobe),
+  // MCU-driven copier: when MCU_DMA_ACTIVE, the copier reg interface is fed by the
+  // MCU (mcu_cmd CMD 0xd4) instead of the SNES bus, so the patcher can drive the
+  // copier with the SNES held in reset (full bus bandwidth, any core).
+  .enable(MCU_DMA_ACTIVE | dma_enable),
+
+  .reg_addr(MCU_DMA_ACTIVE ? MCU_DMA_ADDR : SNES_ADDR[3:0]),
+  .reg_data_in(MCU_DMA_ACTIVE ? MCU_DMA_DATA : DMA_SNES_DATA_IN),
+  .reg_data_out(DMA_SNES_DATA_OUT),
+
+  .reg_oe_falling(SNES_RD_start),
+  .reg_we_rising(MCU_DMA_ACTIVE ? MCU_DMA_WE : SNES_WR_end),
+
+  .loop_enable(DMA_LOOP_ENABLE),
+  .busy(DMA_BUSY),
+
+  .BUS_RDY(DMA_RDY),
+  .BUS_RRQ(DMA_RRQ),
+  .BUS_WRQ(DMA_WRQ),
+  
+  .ROM_ADDR(DMA_ADDR),
+  .ROM_DATA_OUT(DMA_DOUT),
+  .ROM_DATA_IN(DMA_DINr),
+  .ROM_WORD_ENABLE(DMA_WORD),
+
+  .aud_mix(a26_aud_mix),
+  .aud_sample(a26_aud_sample)
+);
+`else
 dma snes_dma (
   .clkin(CLK2),
   .reset(SNES_reset_strobe),
@@ -649,6 +701,7 @@ dma snes_dma (
   .ROM_DATA_IN(DMA_DINr),
   .ROM_WORD_ENABLE(DMA_WORD)
 );
+`endif
 
 // BS Memory Pack flash-erase request -> exposed in the MCU status word (mcu_cmd)
 wire [1:0] bs_erase_seq;

@@ -1,0 +1,21 @@
+Atari 2600 on the sd2snes Mk.II: the STorm2600 core and player
+
+Copyright (C) 2026 AndinhoNFS
+https://github.com/AndinhoNFS/STorm2600-sd2snes-Chip-mk2
+
+Licensed under the GNU General Public License, version 2 or (at your option)
+any later version (SPDX-License-Identifier: GPL-2.0-or-later), the same
+license as the rest of this repository's FPGA cores.
+
+What comes from STorm2600 (each file keeps its SPDX header; this directory
+builds it as a variant of sd2snes_base with the MK2 and ATARI macros):
+  - verilog/sd2snes_atari/   a26_core.v a26_i2s.v a26_mem.v a26_regs.v
+                             a26_tdict.v a26_top.v a26_vidwr.v m6507.v
+                             riot6532.v tia.v tia_audio.v (and the tia_*
+                             helpers), the stub_*.v shims and config.vh
+  - snes/atari/              the SNES-side player (atari_snes.s and its
+                             generated tables)
+  - src/atari.c              the Mk.II parts of the cartridge detection
+
+Changes made in this repository (sd2snes+, by ludufre and contributors) are
+recorded in its git history and are distributed under the same license.

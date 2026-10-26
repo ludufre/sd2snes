@@ -646,7 +646,8 @@ menu_enttab_sgb:
 
 ; Settings > "Tour of the new features": where the tour starts. One line per release
 ; section (the Nth line after "from the start" = the tour's Nth ONB_FF_SECTION card,
-; onboarding_gate.a65); a release with tour cards adds its line and moves "(current)".
+; onboarding_gate.a65); a release with tour cards adds its line (no "(current)" suffix
+; since 2.19: bank $C2 has no room for a second spelling of the previous line).
 menu_enttab_tour:
 ; HEADER
  .byt 1
@@ -684,6 +685,19 @@ menu_enttab_tour:
  .byt  ^mtext_cfg_tour_218
  .word !onboarding_replay_218-1
  .byt  ^onboarding_replay_218-1
+ .byt  0
+ .byt  0,0,0
+ .word !mdesc_cfg_tour
+ .byt  ^mdesc_cfg_tour
+ .byt  0,0,0
+ .byt  0,0,0
+ .byt  0,0,0
+
+ .byt  MTYPE_FUNC
+ .word !mtext_cfg_tour_219
+ .byt  ^mtext_cfg_tour_219
+ .word !onboarding_replay_219-1
+ .byt  ^onboarding_replay_219-1
  .byt  0
  .byt  0,0,0
  .word !mdesc_cfg_tour

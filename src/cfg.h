@@ -174,7 +174,8 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      width. 0 = 160 px, the native TIA raster 1:1, pillarboxed on the 256 px screen; 1 = 256 px, every 5
      source pixels stretched to 8 so the picture fills the screen. Global toggle, read at .a26 load time
      and shipped to the core as feat16[5] of CHIPFEAT $EF (src/atari.c); the core resamples, so the SNES
-     side never sees the difference. mk3-only -- the mk2 a26 stubs never look at it. Default 0. */
+     side never sees the difference. mk3-only -- the mk2 core (sd2snes_atari) has no CHIPFEAT
+     and always shows 160 px. Default 0. */
   uint8_t  cc_time_limit;           /* CFG @ $14A: Competition Cart (Campus Challenge '92 / PowerFest '94)
      round timer, 0..15 = 3..18 minutes -- the value of the 4-bit DIP bank on the physical event
      boards. Read at load time by smc_id and shipped to the dsp core in dsp_feat[12:8]. Menu entry

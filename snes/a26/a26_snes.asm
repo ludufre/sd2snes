@@ -81,7 +81,8 @@
 ;   +$0F contract_ver, and the core's sign of life
 ;
 ; Write window (main.v): $EF0000/1 JOY1 L/H, $EF0002/3 JOY2 L/H, $EF0004 SWCHB
-; shadow, $EF0005 buffer swap strobe.  Data and strobe are decoded separately,
+; shadow, $EF0005 buffer swap strobe, $EF0006 control (bit0 pause, bits 2:1
+; palette).  Data and strobe are decoded separately,
 ; so every store here MUST be 8 bits: a 16-bit store to $EF0004 would also hit
 ; $EF0005 and fire a phantom swap.
 
@@ -280,6 +281,13 @@ endif
 ;   $7C      bitmap bytes actually in use = ceil(height_rows / 8)
 ;   $7D-$7E  popcount byte index (high byte kept 0 for ldx)
 ;   $7F      1 = fast path engaged this NMI (hysteresis, see A26FastSelect)
+;   $80      level: 0 Easy, 1 Normal, 2 Hard (the two difficulty switches)
+;   $81      1 = paused
+;   $82      palette 0..3
+;   $84-$85  keys and switches pressed while one of L/R/X/Y is down
+;   $86      frames left for the text on screen (0 = stays, or none)
+;   $87      message on the text row ($FF = blank)
+;   $88      1 = the text row has to be sent at the next NMI
 
 lorom
 
@@ -315,6 +323,16 @@ Reset:
     sta.b $03           ; NMI re-entrancy latch: not inside the body.  The menu
                         ; leaves WRAM as it found it, so a gate byte that is
                         ; read before it is written has to be zeroed by hand.
+    sta.b $80           ; level Easy
+    sta.b $81           ; not paused
+    sta.b $82           ; palette Color-1
+    sta.b $84
+    sta.b $85           ; no key held
+    sta.b $86           ; no text timer
+    sta.b $88           ; no text row to send
+    sta.l !A26_EF+$06   ; control: running, palette 0
+    lda.b #$FF
+    sta.b $87           ; text row: blank
 
     lda.b #$8F
     sta.w $2100         ; forced blank, held until the core signs $E2:020F
@@ -364,6 +382,10 @@ endif
 
     jsr A26ClearVram    ; ~24 ms; the empty tile and every not-yet-painted tile
                         ; must read back as pixel 0
+
+if !A26_FORMAT == 0
+    jsr A26TextInit     ; BG2: the on-screen text layer
+endif
 
 if !A26_FORMAT == 1
     jsr A26LoadPalette  ; 8bpp reserve: CGRAM is static, uploaded once
@@ -561,6 +583,8 @@ NMI:
     lda.b $03
     bne A26NmiBusy
     inc.b $03
+
+    jsr A26Text         ; the bottom text row (at most 64 bytes, ch7)
 
     ; --- 2) fold the core's dirty bitmap + spans into the backlog -----------
     lda.b $0B
@@ -1664,53 +1688,136 @@ A26VCount:
     rts
 
 ; ===========================================================================
-; Console switches -> SWCHB shadow at $EF0004 (contract sec. 6).
+; Console switches and player keys (pad 1) -> SWCHB shadow at $EF0004 and the
+; control byte at $EF0006 (contract sec. 5/6).  The layout is the same on both
+; boards (the Mk.II player of the STorm2600 core uses it too):
 ;
-; The polarity is deliberately not uniform: RESET/SELECT are active LOW levels,
-; COLOR and the two difficulty switches are latching toggles driven by button
-; EDGES.  Directions and fire are not our business -- the RTL derives SWCHA and
-; INPT4/5 straight from the raw pads we forwarded above.  Console switches come
-; from pad 1 only.
+;   Start = RESET and Select = SELECT, while held (active LOW levels)
+;   L = difficulty: Easy (both switches B) -> Normal (left B, right A)
+;       -> Hard (both A) -> Easy ...
+;   R = pause (the core stops its colour clock: $EF0006 bit 0)
+;   X = TV type switch, Color <-> B/W (SWCHB D3)
+;   Y = palette: Color-1 -> Color-2 -> Color-3 -> Black/White ($EF0006 bits 2:1)
 ;
-; Combo guard: while L+R are both held on pad 1, no edge is taken and RESET /
-; SELECT read as released, so the IGR combos ($3030 = L+R+Start+Select,
-; $2070 = L+R+Select+X) cannot also poke the game.
+; L, R, X and Y act on RELEASE, and only when that key was the only one of
+; L/R/X/Y/Select/Start pressed while it was down ($84 collects them), so
+; starting the L+R+Select+X / L+R+Start+Select combos with L or R changes
+; nothing.  While paused only R does something.  Each change shows its name
+; on the bottom text row (A26Text); PAUSE stays up for the whole pause.
+;
+; Combo guard: while L+R are both held RESET/SELECT read as released, so the
+; IGR combos ($3030 = L+R+Start+Select, $2070 = L+R+Select+X) cannot also poke
+; the game.  Directions and fire are not our business -- the RTL derives SWCHA
+; and INPT4/5 straight from the raw pads we forwarded above.
 ; ===========================================================================
+!A26_KEYS  = $4070      ; Y, X, L, R in the {JOY1H,JOY1L} word
+!A26_CHORD = $7070      ; + Select, Start
+!A26_TXT_SHOW = 150     ; frames a changed setting stays on screen (~2.5 s)
+
 A26Switches:
+    rep #$20
     lda.b $0E
-    and.b #$30          ; L | R
-    cmp.b #$30
-    beq A26SwIdle
-
+    and.w #!A26_KEYS
+    beq A26SwNoKey
     lda.b $0E
-    eor.b $07
-    and.b $0E           ; bits that went released -> pressed this frame
-    sta.b $17
+    and.w #!A26_CHORD
+    ora.b $84
+    sta.b $84           ; every key and switch pressed while one key is down
+    bra A26SwKeyDone
+A26SwNoKey:
+    lda.b $84
+    beq A26SwKeyDone
+    tay                 ; Y = what was pressed during the hold
+    stz.b $84
+    sep #$20
+    cpy.w #$0010
+    beq A26SwPause
+    lda.b $81
+    bne A26SwOut        ; paused: nothing but R
+    cpy.w #$0020
+    beq A26SwLevel
+    cpy.w #$0040
+    beq A26SwTv
+    cpy.w #$4000
+    beq A26SwPal
+    bra A26SwOut
+A26SwKeyDone:
+    sep #$20
+    bra A26SwOut
 
-    lda.b $17
-    and.b #$40          ; X -> COLOR / B&W (D3)
-    beq A26SwNoX
+A26SwPause:
+    sep #$20
+    lda.b $81
+    eor.b #$01
+    sta.b $81
+    beq A26SwResume
+    lda.b #$03          ; PAUSE, held until the pause ends
+    jsr A26TextShow
+    stz.b $86
+    bra A26SwOut
+A26SwResume:
+    jsr A26TextClear
+    bra A26SwOut
+
+A26SwLevel:
+    sep #$20
+    lda.b $80
+    inc a
+    cmp.b #$03
+    bcc A26SwLevelOk
+    lda.b #$00
+A26SwLevelOk:
+    sta.b $80
+    jsr A26TextShow     ; ids 0..2 = EASY / NORMAL / HARD
+    bra A26SwOut
+
+A26SwTv:
+    sep #$20
     lda.b $06
     eor.b #$08
     sta.b $06
-A26SwNoX:
-    lda.b $17
-    and.b #$20          ; L -> player 0 difficulty (D6)
-    beq A26SwNoL
-    lda.b $06
-    eor.b #$40
-    sta.b $06
-A26SwNoL:
-    lda.b $17
-    and.b #$10          ; R -> player 1 difficulty (D7)
-    beq A26SwNoR
-    lda.b $06
-    eor.b #$80
-    sta.b $06
-A26SwNoR:
+    and.b #$08
+    beq A26SwTvBw
+    lda.b #$04          ; TV COLOR
+    bra A26SwTvShow
+A26SwTvBw:
+    lda.b #$05          ; TV B/W
+A26SwTvShow:
+    jsr A26TextShow
+    bra A26SwOut
 
+A26SwPal:
+    sep #$20
+    lda.b $82
+    inc a
+    and.b #$03
+    sta.b $82
+    clc
+    adc.b #$06          ; ids 6..9 = COLOR-1 .. BLACK/WHITE
+    jsr A26TextShow
+
+A26SwOut:
+    ; SWCHB = the TV switch kept in $06, the difficulty switches from the level,
+    ; and RESET/SELECT from the live buttons (combo guard first)
     lda.b $06
+    and.b #$3F
     sta.b $18
+    lda.b $80
+    beq A26SwEasy
+    lda.b $18
+    ora.b #$80          ; Normal: right switch A (D7), left B
+    sta.b $18
+    lda.b $80
+    cmp.b #$02
+    bne A26SwEasy
+    lda.b $18
+    ora.b #$40          ; Hard: both A
+    sta.b $18
+A26SwEasy:
+    lda.b $0E
+    and.b #$30          ; L | R
+    cmp.b #$30
+    beq A26SwGuard
     lda.b $0F
     and.b #$10          ; Start held -> RESET pressed (D0 = 0)
     beq A26SwNoReset
@@ -1720,25 +1827,143 @@ A26SwNoR:
 A26SwNoReset:
     lda.b $0F
     and.b #$20          ; Select held -> SELECT pressed (D1 = 0)
-    beq A26SwNoSelect
+    beq A26SwGuard
     lda.b $18
     and.b #$FD
     sta.b $18
-A26SwNoSelect:
-    bra A26SwOut
-
-A26SwIdle:
-    lda.b $06
-    sta.b $18           ; switches frozen, RESET/SELECT released
-
-A26SwOut:
+A26SwGuard:
     lda.b $18
     sta.l !A26_EF+$04       ; 8-bit store ONLY: $EF0005 next door is the swap strobe
+    lda.b $82
+    asl a
+    ora.b $81
+    sta.l !A26_EF+$06       ; control: pause | palette << 1
     lda.b $0E
-    sta.b $07           ; edge reference for the next frame -- updated on the
-                        ; guarded path too, so releasing L+R is not an edge
+    sta.b $07
     rts
 
+; A = message id: show it at the next NMI, for !A26_TXT_SHOW frames
+A26TextShow:
+    sta.b $87
+    lda.b #!A26_TXT_SHOW
+    sta.b $86
+    lda.b #$01
+    sta.b $88
+    rts
+
+A26TextClear:
+    lda.b #$FF
+    sta.b $87
+    stz.b $86
+    lda.b #$01
+    sta.b $88
+    rts
+
+; ===========================================================================
+; On-screen text: BG2 tile row !A26_TXT_ROW (screen lines 193-200, inside the
+; picture), one 32-entry row sent by ch7 when the message changes ($88), and
+; cleared when its time runs out ($86).  Called at the start of the NMI, right
+; after the swap strobe: 64 bytes cost well under a line, and the transfer
+; engine that runs next re-derives what is left of the vblank from the V
+; counter anyway.  ch0-5 are the HDMA's and ch6 the tile engine's.
+; ===========================================================================
+!A26_TXT_MAP = $2800            ; BG2 map base, VRAM word
+!A26_TXT_CHR = $3000            ; BG2 char base, VRAM word
+!A26_TXT_ROW = 24
+!A26_TXT_VADDR = $2B00          ; !A26_TXT_MAP + !A26_TXT_ROW * 32 (asar math is left to right)
+
+A26Text:
+if !A26_FORMAT == 0
+    lda.b $88
+    beq A26TextTimer
+    stz.b $88
+    lda.b #$80
+    sta.w $2115
+    rep #$20
+    lda.w #!A26_TXT_VADDR
+    sta.w $2116
+    lda.b $87
+    and.w #$00FF
+    cmp.w #$00FF
+    beq A26TextBlank
+    xba                 ; id * 256 ...
+    lsr a
+    lsr a               ; ... / 4 = id * 64 (one row)
+    clc
+    adc.w #A26TxtRows
+    tax
+    lda.w #$1801        ; A->B, increment, mode 1, B = $2118
+    bra A26TextFire
+A26TextBlank:
+    ldx.w #A26TxtZero
+    lda.w #$1809        ; fixed source: the zero word, 32 times
+A26TextFire:
+    sta.w $4370
+    stx.w $4372
+    lda.w #$0040
+    sta.w $4375
+    sep #$20
+    lda.b #$00
+    sta.w $4374         ; this ROM lives in bank $00
+    lda.b #$80
+    sta.w $420B         ; fire ch7
+    rts
+A26TextTimer:
+    lda.b $86
+    beq A26TextDone
+    dec.b $86
+    bne A26TextDone
+    jsr A26TextClear    ; time is up (PAUSE never gets here: its timer is 0)
+A26TextDone:
+endif
+    rts
+
+; Boot, in forced blank: BG2 map at word !A26_TXT_MAP (cleared with the rest
+; of VRAM, so every entry is the blank tile 0), its font at !A26_TXT_CHR, the
+; text colours in CGRAM 33/34 (BG2 palette 0 in mode 0; the colour HDMA only
+; ever touches CGRAM 0-3), and BG2 on the main screen over BG1 (the text
+; tiles carry the priority bit, the picture's do not).
+A26TextInit:
+    lda.b #(!A26_TXT_MAP>>8)
+    sta.w $2108         ; BG2SC: 32x32
+    lda.b #((!A26_TXT_CHR>>12)<<4)
+    sta.w $210B         ; BG12NBA: BG2 chars at !A26_TXT_CHR, BG1 at $0000
+    stz.w $210F
+    stz.w $210F         ; BG2HOFS = 0
+    lda.b #$FF
+    sta.w $2110
+    sta.w $2110         ; BG2VOFS = $FFFF, the same as BG1
+    lda.b #$03
+    sta.w $212C         ; TM: BG1 + BG2
+    lda.b #$80
+    sta.w $2115
+    rep #$20
+    lda.w #!A26_TXT_CHR
+    sta.w $2116
+    lda.w #$1801
+    sta.w $4370
+    lda.w #A26TxtFont
+    sta.w $4372
+    lda.w #(A26TxtFontEnd-A26TxtFont)
+    sta.w $4375
+    sep #$20
+    stz.w $4374
+    lda.b #$80
+    sta.w $420B
+    lda.b #33
+    sta.w $2121
+    lda.b #$E0
+    sta.w $2122
+    lda.b #$03
+    sta.w $2122         ; colour 1: green, $03E0
+    stz.w $2122
+    stz.w $2122         ; colour 2: black outline
+    rts
+
+A26TxtZero:
+    dw $0000
+
+incsrc "a26_text.inc"
 ; ===========================================================================
 ; IGR pad combos (chassis parity).  This core keeps cheat.v, but the NMI hook
 ; that feeds its combo detector never runs under the player, so the match lives

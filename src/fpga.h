@@ -72,9 +72,13 @@ extern uint8_t fpga_boot_led;
 #define FPGA_NES_MMC5 ((const uint8_t*)"/sd2snes/fpga_nes_mmc5." FPGA_CONF_EXT)
 #define FPGA_SPC7110 ((const uint8_t*)"/sd2snes/fpga_spc7110." FPGA_CONF_EXT)
 #define FPGA_SMS ((const uint8_t*)"/sd2snes/fpga_sms." FPGA_CONF_EXT)
-/* Atari 2600 core (verilog/sd2snes_a26) -- mk3-only, like NES/SMS: only fpga_a26.bi3
-   exists, no mk2 .bit is planned (see atari.c). */
+/* Atari 2600 core of the mk3 (verilog/sd2snes_a26): only fpga_a26.bi3 exists.  The mk2
+   runs a different core, FPGA_ATARI below. */
 #define FPGA_A26 ((const uint8_t*)"/sd2snes/fpga_a26." FPGA_CONF_EXT)
+/* Atari 2600 on the mk2 (verilog/sd2snes_atari, the STorm2600 core by AndinhoNFS): a
+   different core with its own contract -- ROM read from PSRAM, mapper/run in register 3
+   of the $2020-$202F window (a26_regs.v), written by the player.  See atari.h. */
+#define FPGA_ATARI ((const uint8_t*)"/sd2snes/fpga_atari." FPGA_CONF_EXT)
 /* Game Boy Color core (verilog/sd2snes_gbc, the SGB core promoted to CGB) -- mk3-only:
    only fpga_gbc.bi3 exists, no mk2 .bit is planned (see gbc.c; on the mk2 a .gb/.gbc
    keeps booting the SGB core).  Selected by gbc_id() through sgb_update_romprops. */

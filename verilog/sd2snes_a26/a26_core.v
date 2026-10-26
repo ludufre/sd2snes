@@ -24,6 +24,7 @@ module a26_core (
   input             CPU_CE,           // CPU cycle enable (TIA_CE / 3)
 
   input      [15:0] FEAT,             // CHIPFEAT 0xef (contract 7)
+  input      [1:0]  PAL,              // palette, from the player ($EF0006 bits 2:1)
 
   // .a26 image read (PSRAM, via arbiter) -- boot copy only
   output            ROM_RRQ,
@@ -90,7 +91,7 @@ module a26_core (
   // BUF_* outputs of this wrapper come straight from it (BUF_ADDR already
   // carries BUF_BASE + set offset; main.v adds 0x180000/0x190000).
   a26_video vid (
-    .CLK(CLK), .RST(RST), .TIA_CE(TIA_CE), .WIDTH_256(FEAT[5]),
+    .CLK(CLK), .RST(RST), .TIA_CE(TIA_CE), .WIDTH_256(FEAT[5]), .PAL(PAL),
     .VID_VISIBLE(vid_visible), .VID_CODE(vid_code),
     .LINE_START(line_start), .LINE_VIS_START(line_vis_start),
     .COLUBK(colubk), .COLUPF(colupf), .COLUP0(colup0), .COLUP1(colup1),

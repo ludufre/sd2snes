@@ -16,7 +16,7 @@
 
    mk3-only: there is no Spartan-3 build of the core, so on the mk2 gbc.c compiles
    to no-op stubs and a .gb/.gbc keeps booting the SGB exactly as before (a .gbc is
-   NEVER refused there -- unlike .nes/.sms/.a26, the Game Boy has a working mk2
+   NEVER refused there -- unlike .nes/.sms, the Game Boy has a working mk2
    path).  Same shape as sms.c / atari.c.
 
    sgb.h has to be included before this header (it defines sgb_romprops_t), the way
