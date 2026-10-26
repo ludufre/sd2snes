@@ -16,7 +16,12 @@
 */
 
 uint32_t stat_getstring = 0;
-static char sort_str1[SORT_STRLEN+1], sort_str2[SORT_STRLEN+1];
+/* The two names sort_cmp_elem read last and the entries they belong to: a quicksort scan
+   compares against one pivot and a sorted pass against the entry before, so one of the two
+   is nearly always there already, and each name is a read over SPI.  sort_dir empties it. */
+static char sort_str[2][SORT_STRLEN+1];
+static uint32_t sort_str_el[2];
+static uint8_t sort_str_a;
 #ifndef IN_AHBMOD
 #define IN_AHBMOD IN_AHBRAM   /* host builds */
 #endif
@@ -88,8 +93,16 @@ int sort_cmp_elem(const void* elem1, const void* elem2) {
   int pcm2 = (el2 >> 24) == TYPE_PCM;
   if (pcm1 != pcm2) return pcm1 ? 1 : -1;
 
-  sort_getstring_for_dirent(sort_str1, el1);
-  sort_getstring_for_dirent(sort_str2, el2);
+  if(el1 == sort_str_el[!sort_str_a] || el2 == sort_str_el[sort_str_a]) sort_str_a = !sort_str_a;
+  char *sort_str1 = sort_str[sort_str_a], *sort_str2 = sort_str[!sort_str_a];
+  if(sort_str_el[sort_str_a] != el1) {
+    sort_getstring_for_dirent(sort_str1, el1);
+    sort_str_el[sort_str_a] = el1;
+  }
+  if(sort_str_el[!sort_str_a] != el2) {
+    sort_getstring_for_dirent(sort_str2, el2);
+    sort_str_el[!sort_str_a] = el2;
+  }
 
   if (*sort_str1 == '.') return -1;
   if (*sort_str2 == '.') return 1;
@@ -154,7 +167,9 @@ void sort_heapify(uint32_t addr, unsigned int i, unsigned int heapsize)
    names still partition consistently.  A table of nothing but such names would still make
    every partition degenerate (quadratic): past a budget of comparisons this gives up and
    sort_dir falls back to the heapsort, O(n log n) whatever the comparator answers.
-   Returns 0 when it gave up (the table is then a permutation of the input, unsorted). */
+   Returns 0 when it gave up (the table is then a permutation of the input, unsorted).
+   A table already in order (a folder copied in name order, the usual case and the one where
+   the scans would still pay n log n name reads) is settled by one pass first. */
 static void sort_swap(uint32_t *a, uint32_t *b) { uint32_t t = *a; *a = *b; *b = t; }
 static int sort_cmp(uint32_t a, uint32_t b) { return sort_cmp_elem(&a, &b); }
 static int sort_ptrs(uint32_t *v, unsigned int n) {
@@ -164,6 +179,9 @@ static int sort_ptrs(uint32_t *v, unsigned int n) {
   long budget = (3L * lg + 4) * n;  /* a few times what a sorted or random table takes */
 #define SORT_LT(a, b) (budget--, sort_cmp(a, b) < 0)
 #define SORT_GT(a, b) (budget--, sort_cmp(a, b) > 0)
+  unsigned int in_order = 1;
+  while(in_order < n && !SORT_GT(v[in_order-1], v[in_order])) in_order++;
+  if(in_order >= n) return 1;
   for(;;) {
     while(hi - lo > 8) {
       if(budget < 0) return 0;
@@ -194,6 +212,7 @@ static int sort_ptrs(uint32_t *v, unsigned int n) {
 void sort_dir(uint32_t addr, unsigned int size)
 {
 stat_getstring=0;
+  sort_str_el[0] = sort_str_el[1] = 0xffffffff;
   if(size > QSORT_MAXELEM) {
     printf("more than %d dir entries, doing slower in-place sort\n", QSORT_MAXELEM);
     ext_heapsort(addr, size);

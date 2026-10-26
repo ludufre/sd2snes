@@ -42,12 +42,14 @@ filesel_init:
   jsr filesel_request_filelist
   rts
 
+fsl_idle:
+  jsl @bgx_idle_gate        ; fork: the scrolling background composes while the loop waits
 fileselloop:
   sep #$20 : .as
   rep #$10 : .xl
   lda isr_done
   lsr
-  bcc fileselloop
+  bcc fsl_idle
   stz isr_done
   jsr printtime
   jsr filesel_updates ; update stuff, check keys etc
@@ -1060,13 +1062,17 @@ bgm_update:
   beq bgm_upd_unstub       ; 3 -> stub running; back to IPL so music can load
   bra bgm_upd_done         ; 1=playing, 4=tried+stub -> nothing to do
 bgm_upd_load:
+  jsl @bgx_flush_gate      ; the composed list on the TV first: the upload stops the NMI
   jsr menu_bgm_load        ; list is visible now; sets BGM_STATE to 1 or 2
   lda @BGM_STATE
   cmp #$02
   bne bgm_upd_done
 bgm_upd_stub24:
+  .as
   ; no/invalid menu.spc: the S-SMP sits silent at IPL, which gates the cart's
   ; MSU-1 DAC audio (= menu sound effects). Run the DSP-unmute stub.
+  jsl @bgx_flush_gate      ; the composed list on the TV first (state 2 comes here direct;
+                           ;   after bgm_upd_load's flush this one is a frame)
   jsr sfx_dsp_unmute       ; bounded; mark 4 even on timeout (no retry storm)
   lda #$04
   sta @BGM_STATE
@@ -1093,6 +1099,7 @@ bgm_upd_disabled:
   beq bgm_upd_mark3        ; stub already up via the no-spc path -> relabel only
   ; state 0/2: S-SMP silent at IPL -> upload the DSP-unmute stub so the menu
   ; sound effects stay audible with the music off
+  jsl @bgx_flush_gate      ; the composed list on the TV first, as for the music upload
   jsr sfx_dsp_unmute       ; bounded; mark 3 even on timeout (no retry storm)
 bgm_upd_mark3:
   lda #$03
@@ -1403,27 +1410,8 @@ delete_selected_file:
   plp
   rtl
 delete_file_go:
-  lda #$01
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_DELETE_FILE
-  sta @MCU_CMD
-; wait for ACK/NACK
-- lda @SNES_CMD
-  cmp #$55
-  beq delete_file_ack
-  cmp #$aa
-  beq delete_file_ack
-  bra -
-delete_file_ack:
-  pha               ; save ACK/NACK value
-  lda #$00
-  sta @MCU_CMD
-  jsr pop_window
-  pla               ; restore ACK/NACK value
+  jsr loading_cmd   ; A = the ACK/NACK value
   cmp #$55
   bne delete_file_done  ; NACK: skip refresh
 ; ACK: refresh the directory listing (file is gone), keep cursor position
@@ -1472,25 +1460,10 @@ delete_favorite_file:
   plb
   plp
   rtl
-+ lda #$01
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
-  lda #CMD_DELETE_FILE_FAV
-  sta @MCU_CMD
-- lda @SNES_CMD
-  cmp #$55
-  beq +
-  cmp #$aa
-  beq +
-  bra -
-+ lda #$00
-  sta @MCU_CMD
++ lda #CMD_DELETE_FILE_FAV
+  jsr loading_cmd
   lda #$01
   sta listsel_dirty            ; entry removed -> redraw the favorites list
-  jsr pop_window
 ; The deleted ROM may still be listed in the browser's current folder
 ; (the directory buffer is stale).  Re-read it now so the file vanishes
 ; there too; otherwise opening the now-missing ROM hangs on "Loading...".
@@ -1534,25 +1507,10 @@ delete_recent_file:
   plb
   plp
   rtl
-+ lda #$01
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
-  lda #CMD_DELETE_FILE_RECENT
-  sta @MCU_CMD
-- lda @SNES_CMD
-  cmp #$55
-  beq +
-  cmp #$aa
-  beq +
-  bra -
-+ lda #$00
-  sta @MCU_CMD
++ lda #CMD_DELETE_FILE_RECENT
+  jsr loading_cmd
   lda #$01
   sta listsel_dirty            ; entry removed -> redraw the recents list
-  jsr pop_window
 ; Same as the favorites case: drop the now-stale browser entry so the
 ; deleted ROM can't be opened (and hang) from the current folder.
   jsr filesel_request_filelist
@@ -1642,6 +1600,7 @@ confirm_no_name:
   jsr confirm_redraw_opts
   jsr enable_screen_update
 confirm_loop:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq confirm_loop
   stz isr_done
@@ -2013,6 +1972,7 @@ show_empty_msg:
   jsr hiprint             ; draw the message INSIDE the box
   jsr enable_screen_update
 show_empty_msg_wait:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq show_empty_msg_wait
   stz isr_done
@@ -2104,6 +2064,7 @@ sem_wide:
 +                         ; case where tgt_bright is already the brightness limit.
   jsr enable_screen_update
 show_error_msg_wait:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq show_error_msg_wait
   stz isr_done
@@ -2670,6 +2631,7 @@ favsel_navigate:
   sta bar_wl
   jsr favsel_bar_y
 favsel_loop:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq favsel_loop
   stz isr_done
@@ -2961,9 +2923,39 @@ lscb_ret:
   plp
   rts
 
-; TODO the following seven functions differ only in the command byte
-;      sent to the MCU and whether the listsel_dirty flag is set.
-;      consider merging!
+; ----------------------------------------------------------------------
+; loading_cmd: A = the command.  The bar hidden, the "Loading" window drawn and ON THE
+; TV before the command goes (the menu spins until the firmware answers, and with the
+; composed layer nothing composes meanwhile: bgx_flush_gate composes and publishes it
+; first; the classic layout waits one VBlank, as the waitblank here used to), the wait
+; for the firmware's $55 (ACK) or $aa (NACK), MCU_CMD cleared, the window popped.
+; Returns A = the reply.  .as in (DB the caller's: the bar and window variables are
+; DBR-relative), kept.  The eleven callers below and in cheatmenu.a65 differ only in
+; the command and in what they do with the reply.
+; ----------------------------------------------------------------------
+loading_cmd:
+  pha
+  jsr hide_cursor
+  jsr draw_loading_window
+  jsl @bgx_flush_gate
+  lda #$00
+  sta @SNES_CMD
+  pla
+  sta @MCU_CMD
+lcmd_wait:
+  lda @SNES_CMD
+  cmp #$55
+  beq lcmd_reply
+  cmp #$aa
+  bne lcmd_wait
+lcmd_reply:
+  pha
+  lda #$00
+  sta @MCU_CMD
+  jsr pop_window
+  pla
+  rts
+
 add_selected_file_to_favorites:
 ; have MCU save the file to the favorites list
 ; the file path should already have been saved to MCU_PARAM before calling
@@ -2971,25 +2963,8 @@ add_selected_file_to_favorites:
   php
   phb
   sep #$20 : .as
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_ADD_FAVORITE_ROM
-  sta @MCU_CMD
-; wait for ACK/NACK
-- lda @SNES_CMD
-  cmp #$55
-; success
-  beq +
-  cmp #$aa
-; failure
-  beq +
-  bra -
-+ lda #$00
-  sta @MCU_CMD
-  jsr pop_window
+  jsr loading_cmd
   jsr favorites_full_msg     ; show "list full" popup if the MCU refused the add
   plb
   plp
@@ -3002,26 +2977,8 @@ add_recent_file_to_favorites:
   php
   phb
   sep #$20 : .as
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_ADD_FAVORITE_RECENT
-  sta @MCU_CMD
-  ; wait for ACK/NACK
-  - lda @SNES_CMD
-  cmp #$55
-  ; success
-  beq +
-  cmp #$aa
-  ; failure
-  beq +
-  bra -
-  + lda #$00
-  sta @MCU_CMD
-;  sta listsel_dirty
-  jsr pop_window
+  jsr loading_cmd
   jsr favorites_full_msg     ; show "list full" popup if the MCU refused the add
   plb
   plp
@@ -3057,27 +3014,10 @@ remove_selected_recent_file:
   php
   phb
   sep #$20 : .as
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_REMOVE_RECENT_ROM
-  sta @MCU_CMD
-  ; wait for ACK/NACK
-  - lda @SNES_CMD
-  cmp #$55
-  ; success
-  beq +
-  cmp #$aa
-  ; failure
-  beq +
-  bra -
-  + lda #$00
-  sta @MCU_CMD
+  jsr loading_cmd
   lda #$01
   sta listsel_dirty
-  jsr pop_window
   plb
   plp
   rtl
@@ -3089,27 +3029,10 @@ remove_selected_favorite_file:
   php
   phb
   sep #$20 : .as
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_REMOVE_FAVORITE_ROM
-  sta @MCU_CMD
-  ; wait for ACK/NACK
-  - lda @SNES_CMD
-  cmp #$55
-  ; success
-  beq +
-  cmp #$aa
-  ; failure
-  beq +
-  bra -
-  + lda #$00
-  sta @MCU_CMD
+  jsr loading_cmd
   lda #$01
   sta listsel_dirty
-  jsr pop_window
   plb
   plp
   rtl
@@ -3121,25 +3044,8 @@ set_selected_as_autoboot_rom:
   php
   phb
   sep #$20 : .as
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_SET_AUTOBOOT_ROM
-  sta @MCU_CMD
-; wait for ACK/NACK
-- lda @SNES_CMD
-  cmp #$55
-; success
-  beq +
-  cmp #$aa
-; failure
-  beq +
-  bra -
-+ lda #$00
-  sta @MCU_CMD
-  jsr pop_window
+  jsr loading_cmd
   plb
   plp
   rtl
@@ -3149,25 +3055,8 @@ set_recent_as_autoboot_rom:
   php
   phb
   sep #$20 : .as
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_SET_AUTOBOOT_RECENT
-  sta @MCU_CMD
-; wait for ACK/NACK
-- lda @SNES_CMD
-  cmp #$55
-; success
-  beq +
-  cmp #$aa
-; failure
-  beq +
-  bra -
-+ lda #$00
-  sta @MCU_CMD
-  jsr pop_window
+  jsr loading_cmd
   plb
   plp
   rtl
@@ -3179,25 +3068,8 @@ set_favorite_as_autoboot_rom:
   php
   phb
   sep #$20 : .as
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
-  lda #$00
-  sta @SNES_CMD
   lda #CMD_SET_AUTOBOOT_FAV
-  sta @MCU_CMD
-; wait for ACK/NACK
-- lda @SNES_CMD
-  cmp #$55
-; success
-  beq +
-  cmp #$aa
-; failure
-  beq +
-  bra -
-+ lda #$00
-  sta @MCU_CMD
-  jsr pop_window
+  jsr loading_cmd
   plb
   plp
   rtl
@@ -3380,13 +3252,16 @@ filesel_request_filelist:
   sta @MCU_PARAM+7        ; "opens as an MSU-1 game" answer: stays 0 unless the firmware
                           ; writes one back (see msu_folder_arm)
   sta @SNES_CMD
-  lda #CMD_READDIR
-  sta @MCU_CMD
   lda #$00
   pha
   plb
   jsr hide_cursor
   jsr draw_loading_window
+  jsl @bgx_flush_gate       ; composed layer: the window reaches the TV first -- BEFORE the
+                            ; command, like loading_cmd (gameinfo_query had it after, and the
+                            ; firmware's work overlapping the flush garbled the title row)
+  lda #CMD_READDIR
+  sta @MCU_CMD
 filesel_request_filelist_wait_mcu:
   jsl @WRAM_WAIT_MCU
   jsr pop_window

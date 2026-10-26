@@ -3,7 +3,7 @@
  * .thm format (little-endian), produced by utils/pack_theme.py:
  *     off  size  field
  *     0    8     magic  "FXTHEME1"
- *     8    1     version (=THEME_VERSION)
+ *     8    1     version (1, or 2 when the theme has an animated background)
  *     9    1     N = number of regions
  *     10   2     flags  (bit0 = has logo; bit1 = outline off; bit2 = AA off,
  *                        see the font remap notes below)
@@ -16,6 +16,11 @@
  *   5 oam_data_l  6 oam_data_h  7 palette  8 logo_tiles
  * The table is read from the loaded menu PSRAM so this survives menu rebuilds;
  * only theme_slot_max (the per-region byte cap) is build-coupled.
+ *
+ * Version 2 adds the animated background of the menu body. Its four parts do not live in
+ * the menu image: they go to SRAM_THEME_BG_ADDR, which the menu reads when it sets the
+ * background up, and count only when all four are there.
+ *   9 bg_pal (32)  10 bg_tiles (<=2048)  11 bg_map (2048)  12 bg_params (8)
  */
 
 #include "config.h"
@@ -32,8 +37,14 @@ extern cfg_t CFG;
 
 static const char THEME_MAGIC[8]  = { 'F','X','T','H','E','M','E','1' };
 static const char GFXPTR_MAGIC[8] = { '_','G','F','X','P','T','R','_' };
-#define THEME_VERSION   1
-#define THEME_NSLOTS    9
+#define THEME_VERSION   2       /* highest version read; 1 = no background */
+#define THEME_NSLOTS    9       /* _GFXPTR_ entries */
+#define THEME_NREGIONS  13      /* slots a .thm may carry: the 9 above + the background's 4 */
+#define THEME_SLOT_BG   9
+
+/* The background's parts: slot - THEME_SLOT_BG -> offset and cap in SRAM_THEME_BG_ADDR. */
+static const uint16_t theme_bg_off[4] = { 0x10, 0x40, 0x840, 0x04 };
+static const uint16_t theme_bg_max[4] = { 32, 2048, 2048, 8 };
 
 /* Font edge remaps: .thm header flags bit1/bit2 ask the MCU to edit the menu
    font's edge pixels, matching what the official editor does to the tiles it
@@ -211,7 +222,7 @@ static __attribute__((noinline)) int theme_open(const char *path, uint8_t *hdr, 
   UINT got;
   file_open((const uint8_t*)path, FA_READ);
   if(!file_res) file_res = f_read(&file_handle, hdr, n, &got);
-  if(file_res || got != n || memcmp(hdr, magic, 8) || hdr[8] != ver) {
+  if(file_res || got != n || memcmp(hdr, magic, 8) || !hdr[8] || hdr[8] > ver) {
     printf("theme: %s rejected\n", path);
     file_close();
     return 0;
@@ -229,6 +240,8 @@ void __attribute__((noinline)) theme_apply(void) {
   /* ...and from "no pristine copy": this is a fresh menu image, so whatever
      SRAM_FONT_ORIG_ADDR holds belongs to the previous one. */
   theme_font_orig_ok = 0;
+  /* ...and from "no background": the magic goes back only once a theme's four parts are in */
+  sram_memset(SRAM_THEME_BG_ADDR, 4, 0);
   /* skin_name holds the FULL SD path of the chosen .thm (captured from the
      browser selection, so themes can live in any visible folder). Anything not
      an absolute path -- empty, or the "sd2snes.skin" sentinel -- means
@@ -240,9 +253,9 @@ void __attribute__((noinline)) theme_apply(void) {
   if(!theme_open(skin, hdr, sizeof(hdr), THEME_MAGIC, THEME_VERSION)) return;
   uint16_t flags = (uint16_t)hdr[10] | ((uint16_t)hdr[11] << 8);
   uint8_t n = hdr[9];
-  if(n == 0 || n > THEME_NSLOTS) { file_close(); return; }
+  if(n == 0 || n > THEME_NREGIONS) { file_close(); return; }
 
-  uint8_t toc[THEME_NSLOTS * 4];
+  uint8_t toc[THEME_NREGIONS * 4];
   file_res = f_read(&file_handle, toc, (UINT)n * 4, &got);
   if(file_res || got != (UINT)n * 4) { file_close(); return; }
 
@@ -263,9 +276,19 @@ void __attribute__((noinline)) theme_apply(void) {
     return;
   }
 
+  uint8_t bg_parts = 0;
   for(int r = 0; r < n; r++) {
     uint8_t  slot = toc[r * 4];
     uint16_t len  = (uint16_t)toc[r * 4 + 2] | ((uint16_t)toc[r * 4 + 3] << 8);
+    if(slot >= THEME_SLOT_BG && slot < THEME_SLOT_BG + 4) {
+      uint8_t  k   = slot - THEME_SLOT_BG;
+      uint32_t dst = SRAM_THEME_BG_ADDR + theme_bg_off[k];
+      /* tiles shorter than the region: the rest blank, so a cell past the theme's shows nothing */
+      if(len < theme_bg_max[k]) sram_memset(dst + len, theme_bg_max[k] - len, 0);
+      if(!theme_stream(dst, len, theme_bg_max[k])) { file_close(); return; }
+      bg_parts |= 1 << k;
+      continue;
+    }
     uint16_t cap  = (slot < THEME_NSLOTS) ? theme_slot_max[slot] : 0;
     if(cap == 0 || gfxptr[slot] == 0) {
       /* unknown/unthemable slot: consume payload, keep file aligned */
@@ -295,6 +318,16 @@ void __attribute__((noinline)) theme_apply(void) {
      (main.c, right after us) do the single remap pass. Published only on the
      success path, so a theme that bailed halfway leaves the flags at 0. */
   theme_font_flags = flags & (THEME_FLAG_OUTLINE_OFF | THEME_FLAG_AA_OFF);
+
+  /* "TBG1": the theme's background; "TBG0": a theme without one, made for the plain
+     gradient (the menu shows no background, not its built-in one) */
+  {
+    static const uint8_t magic[4] = { 'T', 'B', 'G', '1' };
+    uint8_t m[4];
+    memcpy(m, magic, 4);
+    if(bg_parts != 0x0f) m[3] = '0';
+    sram_writeblock(m, SRAM_THEME_BG_ADDR, 4);
+  }
 
   file_close();
   printf("theme: applied %s\n", skin);

@@ -40,6 +40,13 @@ nmi_no_upload:
   jsl @mouse_nmi_off
   bra nmi_skip_upload
 do_screen_dma:
+; fork: the scrolling background composes the text into BG2 (menubg.a65): its own upload
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne nmi_classic
+  jsl @bgx_nmi_gate
+  jmp skip_screen_dma
+nmi_classic:
 ; CJK glyphs waiting for VRAM go up first, in place of this frame's tilemaps: the
 ; buffers may already point at them, so the tilemaps wait for a VBlank with none left.
   lda @CJK_NDIRTY
@@ -112,6 +119,10 @@ math_cont
   beq nobuttonspressed
 buttonspressed
   stz idle_count
+  lda @gi_relight     ; fork: a repaint will fade in by itself (gi_relight_check): lighting
+  and #$00ff          ;   it now would show the list before it is finished (1 = pending, as
+  cmp #$0001          ;   gi_relight_check reads it: clear_wram leaves $55 there)
+  beq nobuttonspressed
   lda menu_brightness ; restore normal brightness when button pressed
   tax
   stx tgt_bright
@@ -156,5 +167,5 @@ bright_down
 ; IRQ_ROUTINE - called when IRQ triggered
 IRQ_ROUTINE:
   sep #$20 : .as
-  lda $4211     ; Acknowledge IRQ
-  rtl
+  lda @$004211  ; Acknowledge IRQ (long: DB is whatever the interrupted code had)
+  jmp @bgx_irq_gate

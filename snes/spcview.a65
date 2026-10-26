@@ -108,6 +108,7 @@ spc_scr_fps:
 
 spc_loop:
   .as : .xl
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq spc_loop
   stz isr_done
@@ -421,7 +422,7 @@ spc_lt_magic:
 spc_lt_opened:
   .as : .xl
   jsr spc_draw_all            ; "Loading", on screen before the upload stops the NMI (~1 s)
-  jsr pcm_wait_frame
+  jsl @bgx_flush_gate         ; (composed layer: all of it published, not one frame's share)
   jsr media_light_wait        ; fade in over the finished screen, before the NMI stops
   jsl @ui_call_spcload
   sep #$20 : .as

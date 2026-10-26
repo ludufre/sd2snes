@@ -640,6 +640,7 @@ patchsel_navigate:
     sta bar_wl
     jsr patchsel_bar_y
 psn_loop:
+    jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
     lda isr_done
     beq psn_loop
     stz isr_done
@@ -1167,6 +1168,8 @@ patch_export_screen:
     ; uploads, and the wiped BG1 rows 0-8 stay wiped because it never touches them.
     jsr setup_hdma              ; HDMA + NMI back on at the next VBlank; the NMI raised
                                 ;   right there uploads the modal while still blanked
+    jsl @bgx_flush_gate         ; composed layer: the modal composed and sent, still blanked
+                                ;   (nothing composes it later: the firmware halts this CPU)
     lda cur_bright              ; un-blank: the modal is the only thing left
     sta $2100
     jsr waitblank
@@ -1369,6 +1372,7 @@ show_modal_msg
     sta print_count
     jsr hiprint
 smm_wait:
+    jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
     lda isr_done
     beq smm_wait
     stz isr_done

@@ -1469,6 +1469,7 @@ fm_ctl1:
 ; one frame
 fm_frame:
   .as : .xl
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq fm_frame
   stz isr_done

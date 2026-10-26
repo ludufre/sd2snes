@@ -136,6 +136,7 @@ time_update
     lda @timebox_data, x
     sta time_ptr
 timeloop1
+    jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
     lda isr_done
     lsr
     bcc timeloop1

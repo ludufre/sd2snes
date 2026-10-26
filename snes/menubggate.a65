@@ -1,0 +1,241 @@
+; The scrolling background's resident gates (menubg.a65 lives in bank $C3, which the game
+; info screen's guide viewer borrows). The NMI and the IRQ only jump in while bank $C3 is
+; the menu's; setup_hdma turns the mode on through fm_bank_ok, which puts the bank back.
+.link page $c1
+#include "memmap.i65"
+.link page $c1
+
+; carry set = bank $C3 starts with "FMB1"
+bgx_magic:
+  .as
+  lda @FM_BANK_MAGIC
+  cmp #$46
+  bne bgxbgm_no
+  lda @FM_BANK_MAGIC+1
+  cmp #$4d
+  bne bgxbgm_no
+  lda @FM_BANK_MAGIC+2
+  cmp #$42
+  bne bgxbgm_no
+  lda @FM_BANK_MAGIC+3
+  cmp #$31
+  bne bgxbgm_no
+  sec
+  rts
+bgxbgm_no:
+  clc
+  rts
+
+; NMI_ROUTINE, composed mode on: A8 X16, DB = 0
+bgx_nmi_gate:
+  .as : .xl
+  jsr bgx_magic
+  bcc bgxbng_out
+  jmp @bgx_nmi
+bgxbng_out:
+  rtl
+
+; IRQ_ROUTINE: A8 X16, DB unknown
+bgx_irq_gate:
+  .as : .xl
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne bgxbig_out
+  jsr bgx_magic
+  bcc bgxbig_out
+  jmp @bgx_irq
+bgxbig_out:
+  rtl
+
+; setup_hdma, before it enables HDMA: A8 X16. Returns A = the HDMA enable mask.
+bgx_hdma_gate:
+  .as : .xl
+  lda @BGX_LSEL
+  cmp #BGX_LSEL_MAGIC
+  bne bgxbhg_cfg
+  lda @cur_lang             ; a language picked just now (bgx_lang_gate)
+  bra bgxbhg_lang
+bgxbhg_cfg:
+  .as
+  lda @CFG_LANGUAGE          ; (cur_lang is not set yet at boot)
+bgxbhg_lang:
+  .as
+  cmp #$08                  ; Japanese / Chinese: the CJK cache owns the VRAM the
+  bcs bgxbhg_off               ;   composed layer uses
+  jsl @fm_bank_ok
+  bcc bgxbhg_off
+  jmp @bgx_setup
+bgxbhg_off:
+  .as
+  lda #$00
+  sta @BGX_ON
+  lda #$3f
+  rtl
+
+; A language was picked (the Language entry, the first-boot gate): in place of their jsl to
+; cjk_lang_sync. The work is bgx_lang (menubg.a65, bank $C3): fm_bank_ok puts the bank back
+; if a guide took it, and a firmware without the file manager (no bank to put back) never
+; turns the layer on either, so there the plain cjk_lang_sync is all there is to do.
+; Any widths/DB in; preserves P and DB.
+bgx_lang_gate:
+  jsl @fm_bank_ok
+  bcc bgxlg_nobank
+  jmp @bgx_lang
+bgxlg_nobank:
+  jmp @cjk_lang_sync
+
+; hiprint_end (A8): the row it printed on is worth a look. Keeps A X Y P.
+bgx_hint_print:
+  php
+  rep #$30 : .al : .xl
+  pha
+  phx
+  lda @print_y
+  and #$001f
+  tax
+  sep #$20 : .as
+  lda #$01
+  sta @BGX_HINT, x
+  txa
+  sec
+  sbc @listdisp             ; the clock's row (printtime, every frame) is not activity:
+  cmp #$0a                  ;   the idle collector waits for a still screen (BGX_GC_QUIET)
+  beq bgxhp_quiet
+  lda #$00
+  sta @BGX_QUIET
+bgxhp_quiet:
+  .as
+  rep #$30 : .al : .xl
+  plx
+  pla
+  plp
+  rtl
+
+; pop_window / window_greyout: many rows change at once. Keeps A X Y P.
+bgx_hint_all:
+  php
+  sep #$20 : .as
+  pha
+  lda #$01
+  sta @BGX_HINTALL
+  lda #$00
+  sta @BGX_QUIET
+  pla
+  plp
+  rtl
+
+; the browser's / menus' wait for the next frame: compose meanwhile. Keeps everything.
+bgx_idle_gate:
+  php
+  sep #$20 : .as
+  pha
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne bgxgi_out
+  jsr bgx_magic
+  bcc bgxgi_out
+  pla
+  plp
+  jmp @bgx_idle
+bgxgi_out:
+  pla
+  plp
+  rtl
+
+; A screen that takes the PPU over (the game info screen, in forced blank with HDMA off): the
+; composed layer gives back the classic layout that screen draws on (the font at $0000/$4000,
+; the maps and char bases video_init sets). setup_hdma turns the mode on again on the way out.
+; A8 X16, DB = 0.
+bgx_screen_off:
+  .as : .xl
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne bgxso_out
+  lda #$00
+  sta @BGX_ON
+  jsl @ovl_call_genfonts
+  lda #$5a                  ; (video_init's values)
+  sta $2107
+  lda #$52
+  sta $2108
+  lda #$40
+  sta $210b
+bgxso_out:
+  rtl
+
+; The value dialogs' wait for the next frame (menu.a65, in place of waitblank). With the
+; composed layer on, nothing else composes while a dialog runs (only the browser's and
+; show_menu's waits do), so the value being edited would not reach the screen: wait for the
+; NMI like those loops, composing meanwhile. Off, the plain VBlank edge. Keeps all but A.
+bgx_frame:
+  php
+  sep #$20 : .as
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne bgxf_plain
+  lda #$00
+  sta @isr_done
+bgxf_wait:
+  .as
+  jsl @bgx_loop_gate
+  lda @isr_done
+  beq bgxf_wait
+  lda #$00
+  sta @isr_done
+  plp
+  rtl
+bgxf_plain:
+  .as
+  lda @$004212
+  bmi bgxf_plain
+bgxf_edge:
+  .as
+  lda @$004212
+  bpl bgxf_edge
+  plp
+  rtl
+
+; A popup drawn right before a blocking wait on the firmware (loading_cmd, the easter egg,
+; the export modal), or a screen rebuilt in forced blank (setup_hdma from the font toggles,
+; from a language change): with the composed layer on nothing composes while the menu spins
+; or is blanked, so compose and publish what the buffers hold now and wait until the NMI has
+; sent it (bgx_flush). Off, one VBlank edge: what the waitblank it replaces did. Keeps
+; everything.
+bgx_flush_gate:
+  php
+  sep #$20 : .as
+  pha
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne bgxfg_off
+  jsr bgx_magic
+  bcc bgxfg_off
+  pla
+  plp
+  jmp @bgx_flush
+bgxfg_off:
+  .as
+  pla
+  plp
+  jmp bgx_frame             ; (off: its plain VBlank edge; on without the bank: one NMI)
+
+; The wait for the next frame of a screen with a loop of its own (Saves, System Information,
+; the players, the popups...): compose like bgx_idle_gate, but stop at BGX_VLAST, so the
+; screen's loop keeps its frame and no key press is missed. Keeps everything.
+bgx_loop_gate:
+  php
+  sep #$20 : .as
+  pha
+  lda #$01
+  sta @BGX_BOUND
+  pla
+  plp
+  jsl @bgx_idle_gate
+  php
+  sep #$20 : .as
+  pha
+  lda #$00
+  sta @BGX_BOUND
+  pla
+  plp
+  rtl

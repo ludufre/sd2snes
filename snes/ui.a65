@@ -308,6 +308,7 @@ hiprint_cjk1
   bra hiprint_bg1
 hiprint_end
   sep #$20 : .as
+  jsl @bgx_hint_print        ; fork: the scrolling background composes this row again
   lda [print_ptr]
   and #$fe ; mask "soft" end of string
   sta print_over
@@ -579,12 +580,13 @@ pushw_skip_current_head
   phx                 ; save "previous" head
   jsl @win_rowbytes         ; bytes a row of the previous element
   sep #$20 : .as
-  sta $211b
-  stz $211b
-  lda @WINDOW_STACK_BASE+8, x
-  sta $211c
+  sta $4202           ; the CPU multiplier, not $211b (menu.a65 show_menu_loop: the BG1
+  lda @WINDOW_STACK_BASE+8, x ; scroll HDMA shares $211b's write-twice latch)
+  sta $4203
   rep #$20 : .al
-  lda $2134
+  nop                 ; 8 cycles before $4216 is read
+  nop
+  lda $4216
   asl
   clc
   adc #$0010
@@ -677,6 +679,7 @@ pushw_write_element
 
 
 pop_window:
+  jsl @bgx_hint_all          ; fork: the scrolling background looks at every row
   phb
   php
   sep #$20 : .as
@@ -799,6 +802,7 @@ hide_cursor:
   rts
 
 window_greyout:
+  jsl @bgx_hint_all          ; fork: the scrolling background looks at every row
 #define _locals      $04
 #define w_vcount        $00
 #define w_start_offset  $02

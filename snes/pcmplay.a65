@@ -202,6 +202,7 @@ pcm_screen:
   jsr pcm_draw
   jsr media_light             ; after a warm reset: fade in over the finished screen
 pcm_loop:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq pcm_loop
   stz isr_done
@@ -320,7 +321,8 @@ pcm_prepare_audio:
   lda #$01
   sta filesel_dirty           ; the browser owes itself a repaint when we hand it back
   jsl @ui_call_listrepaint    ; ...but the window opens NOW, so paint the list first
-  jsr pcm_wait_frame          ; and let one NMI DMA it, or the window overlays a blank screen
+  jsl @bgx_flush_gate         ; and let the NMI send it, or the window overlays a blank screen
+                              ;   (composed layer: all of it published, not one frame's share)
 pcm_pa_stub:
   ; NOT bounded: spc_begin_upload waits for the IPL hello forever, deliberately (sfx.a65
   ; explains why a bounded wait there silently skipped the stub instead).  Same exposure
@@ -566,6 +568,7 @@ pcm_wait_frame:
   sep #$20 : .as
   stz isr_done
 pcm_wf_loop:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq pcm_wf_loop
   stz isr_done

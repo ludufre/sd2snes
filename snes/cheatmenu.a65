@@ -177,10 +177,6 @@ cheatmenu_done:
 cheatmenu_load_from_mcu:
   php
   sep #$20 : .as
-  lda #$01
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
 ; Dispatch on cm_source so the right addressing scheme reaches the MCU.
 ; The toggle command clobbers MCU_PARAM byte 0 during normal menu use,
 ; so we rebuild it here just before sending LOAD.
@@ -215,17 +211,7 @@ cheatmenu_load_filesel:
   sta @MCU_PARAM+3
   lda #CMD_LOAD_CHT
 cheatmenu_load_send:
-  pha
-  lda #$00
-  sta @SNES_CMD
-  pla
-  sta @MCU_CMD
-- lda @SNES_CMD
-  cmp #$55
-  bne -
-  lda #$00
-  sta @MCU_CMD
-  jsr pop_window
+  jsr loading_cmd                   ; the "Loading" window around the command (filesel.a65)
 ; Wait one vblank so cheat_yaml_load's PSRAM writes have time to
 ; propagate to the SNES read path before we redraw.
   jsr waitblank
@@ -236,10 +222,6 @@ cheatmenu_load_send:
 cheatmenu_save_to_mcu:
   php
   sep #$20 : .as
-  lda #$01
-  jsr hide_cursor
-  jsr draw_loading_window
-  jsr waitblank
   lda cm_source
   beq cheatmenu_save_filesel        ; $00 = filesel
   cmp #$02
@@ -267,17 +249,7 @@ cheatmenu_save_filesel:
   sta @MCU_PARAM+3
   lda #CMD_SAVE_CHT
 cheatmenu_save_send:
-  pha
-  lda #$00
-  sta @SNES_CMD
-  pla
-  sta @MCU_CMD
-- lda @SNES_CMD
-  cmp #$55
-  bne -
-  lda #$00
-  sta @MCU_CMD
-  jsr pop_window
+  jsr loading_cmd                   ; the "Loading" window around the command (filesel.a65)
   plp
   rts
 
@@ -748,7 +720,8 @@ cheatmenu_scroll_tick_done:
 ;                 the cursor to that last row.  Left is the mirror.
 ; ----------------------------------------------------------------------
 cheatmenu_input_loop:
-- lda isr_done
+- jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
+  lda isr_done
   beq -
   stz isr_done
   jsr printtime
@@ -1187,7 +1160,8 @@ cmep_wide:
   jsr hiprint
   jsr enable_screen_update
 ; wait for a button, then close and restore the selection bar
-- lda isr_done
+- jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
+  lda isr_done
   beq -
   stz isr_done
   jsr printtime

@@ -101,6 +101,8 @@ sysinfo_printloop:
 - lda isr_done
   lsr
   bcc -
+  stz isr_done          ; fork: one pass per frame; the redraw takes most of one, so the
+  jsl @bgx_loop_gate    ;   scrolling background composes in what is left of it
   jsr printtime
   jsr read_pad
   jsl @ext_sysinfo_pad   ; an extension may look at the keys (bootgate.a65)

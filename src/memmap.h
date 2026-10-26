@@ -280,6 +280,14 @@
 #define SRAM_FONT_ORIG_ADDR          (0xFA8000L)
 #define FONT_ORIG_BYTES              (0x1000)
 
+/* A theme's animated background (.thm v2, slots 9-12), written by theme_apply on every menu
+   load and read by the menu's background (snes/menubg.a65). Menu-time only, like the font
+   copy just below it. Layout: +0 magic, written last: "TBG1" = the theme's background, "TBG0" =
+   a theme without one (no background at all), 0 = no theme (the built-in one), +4 params (8 B), +$10 palette (32 B), +$40 tiles (2048 B), +$840 map (2048 B).
+   Lockstep with THEME_BG in snes/memmap.i65. */
+#define SRAM_THEME_BG_ADDR           (0xFA9000L)
+#define THEME_BG_BYTES               (0x1040)
+
 #define SRAM_SKIN_ADDR               (0xF00000L)
 
 #define SRAM_SPC_DATA_ADDR           (0xFD0000L)
@@ -503,6 +511,9 @@ _Static_assert(SRAM_TRAINER_SNAP_LO_ADDR + 0x10000L == SRAM_TRAINER_SNAP_HI_ADDR
 _Static_assert(SRAM_FONT_ORIG_ADDR >= SRAM_TRAINER_META_ADDR + TRAINER_META_BYTES
                && SRAM_FONT_ORIG_ADDR + FONT_ORIG_BYTES <= SRAM_TRAINER_SNAP_LO_ADDR,
                "the pristine font copy must fit in the spare tail of the trainer bank");
+_Static_assert(SRAM_THEME_BG_ADDR >= SRAM_FONT_ORIG_ADDR + FONT_ORIG_BYTES
+               && SRAM_THEME_BG_ADDR + THEME_BG_BYTES <= SRAM_TRAINER_SNAP_LO_ADDR,
+               "the theme background must fit in the spare tail of the trainer bank");
 _Static_assert(SRAM_TRAINER_SNAP_HI_ADDR + 0x10000L <= SRAM_SPC_DATA_ADDR,
                "the trainer snapshot must stay below the menu SPC data bank");
 _Static_assert(SRAM_TRAINER_BITMAP_ADDR >= 0xF70000L + 0x30000L,

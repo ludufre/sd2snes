@@ -254,9 +254,11 @@ menu_select_noinit:
   sta bar_wl
   jsr menu_select_barpos     ; fork: bar_yl = window_y + (listsel_sel - menu_top)*step (menu_top=0 when not scrolling)
 
+msl_idle:
+  jsl @bgx_idle_gate        ; fork: the scrolling background composes while the loop waits
 menu_select_loop1
   lda isr_done
-  beq menu_select_loop1
+  beq msl_idle
   stz isr_done
   jsr printtime
   jsl @mouse_listmode        ; fork: the mouse points at this list's rows (mouse.a65)
@@ -384,13 +386,12 @@ menu_select_barpos:
 msbp_plain:
   lda listsel_sel            ; not scrolling -> selection maps straight to a row
 msbp_mul:
-  sta $211b
-  stz $211b
+  sta $4202                  ; (the CPU multiplier, not $211b: see show_menu_loop)
   lda listsel_step
-  sta $211c
-  lda window_y
+  sta $4203
+  lda window_y               ; (8 cycles before $4216 is read: 4 + 2 + the adc's 3)
   clc
-  adc $2134
+  adc $4216
   sta bar_yl
   plp
   rts
@@ -565,12 +566,13 @@ menu_desc_draw:
 ; --- locate the mdesc long pointer for the selected entry ---
   sep #$20 : .as
   lda @listsel_sel
-  sta $211b
-  stz $211b
+  sta $4202                  ; (the CPU multiplier, not $211b: see show_menu_loop)
   lda #MENU_ENTRY_SIZE
-  sta $211c
+  sta $4203
   rep #$20 : .al
-  lda $2134                  ; listsel_sel * MENU_ENTRY_SIZE
+  nop                        ; 8 cycles before $4216 is read
+  nop
+  lda $4216                  ; listsel_sel * MENU_ENTRY_SIZE
   clc
   adc #$000f                 ; + 15 -> desc field of that entry
   tay
@@ -990,11 +992,13 @@ show_menu:
     sta menu_top
     jsr show_menu_scroll_calc  ; fork: menu_vis = min(numentries, MENU_VISMAX); set menu_scroll_active
     lda menu_vis               ; window height is sized to the clamped visible count
-    sta $211b
-    stz $211b
+    sta $4202                  ; (the CPU multiplier, not $211b: see show_menu_loop)
     lda [w_menu_addr] ; listsel_step from menu structure
-    sta $211c
-    lda $2134
+    sta $4203
+    nop                        ; 8 cycles before $4216 is read
+    nop
+    nop
+    lda $4216
     sec
     sbc [w_menu_addr] ; listsel_step from menu structure
     inc
@@ -1050,12 +1054,13 @@ show_menu_loop:
     stz menu_desc_on              ; off during nested screens; re-armed by cont_reprint
     cmp #$ff
     beq show_menu_out
-    sta $211b
-    stz $211b
-    lda #MENU_ENTRY_SIZE
-    sta $211c
-    rep #$20 : .al
-    lda $2134
+    sta $4202                  ; the CPU's multiplier, never the PPU's: $211b shares the
+    lda #MENU_ENTRY_SIZE       ;   mode-7 write-twice latch with the BG1 scroll ($210d/
+    sta $4203                  ;   $210e) that HDMA ch4 writes a few lines a frame, and an
+    rep #$20 : .al             ;   HDMA between the two $211b writes made the scroll byte
+    nop                        ;   the multiplicand: the row picked was another one's
+    nop                        ; (8 cycles between $4203 and the read of $4216)
+    lda $4216
     clc
     adc #$04
     tay
@@ -1319,7 +1324,7 @@ show_menu_editvalue:
     bcc +
     lda #$00
 +   sta cur_lang
-    jsl @cjk_lang_sync         ; a CJK language: load its file (or fall back to English)
+    jsl @bgx_lang_gate         ; a CJK language: load its file (or fall back to English)
     jmp show_menu_cont
 #undef _locals
 
@@ -2031,6 +2036,8 @@ mfr_ready:
   jsr genfonts
   jsr setup_hdma             ; HDMA and NMI back on at the next VBlank: one clean black
                              ;   frame, and the NMI raised right there uploads on time
+  jsl @bgx_flush_gate        ; composed layer: the whole screen from the new font, still
+                             ;   blanked (menubggate.a65)
   lda @cur_bright
   sta $2100                  ; screen back on at whatever the fade had reached
 mfr_done:
@@ -2060,7 +2067,7 @@ menu_value_dialog_u8:
     rep #$10 : .xl
     sep #$20 : .as
     phb
--     jsr waitblank
+-     jsl @bgx_frame         ; fork: waitblank, composing the scrolling background meanwhile
       jsl @mouse_valuemode_num ; fork: a click sets the next value (mouse.a65)
       jsr read_pad
       jsr printtime
@@ -2190,7 +2197,7 @@ menu_value_dialog_u16:
     phb
 ; adjust selection bar to highlight parameter area
       rep #$20 : .al
--     jsr waitblank
+-     jsl @bgx_frame         ; fork: waitblank, composing the scrolling background meanwhile
       jsl @mouse_valuemode_num ; fork: a click sets the next value (mouse.a65)
       jsr read_pad
       jsr printtime
@@ -2337,7 +2344,7 @@ menu_value_dialog_kv8:
       ldy w_preset_addr
 menu_value_dialog_kv8_loop:
       phy
-        jsr waitblank
+        jsl @bgx_frame       ; fork: waitblank, composing the scrolling background meanwhile
         jsl @mouse_valuemode_kv ; fork: a click sets the next value (mouse.a65)
         jsr read_pad
         jsr printtime
@@ -2592,9 +2599,7 @@ show_easter_egg:
   ldx #$00f0
 egg_wait_loop:
   phx
-- lda isr_done
-  beq -
-  stz isr_done
+  jsl @bgx_frame             ; a frame (composed: the egg's rows reach the TV meanwhile)
   plx
   dex
   bne egg_wait_loop

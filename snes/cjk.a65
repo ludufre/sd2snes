@@ -793,6 +793,13 @@ cjk2_unbind:
 ; planes 0/1 of each tile) to the cell's two tiles. A free slot is skipped. X kept.
 cjk2_upload_slot:
   .al : .xl
+  lda @BGX_ON                ; (as cjk_upload_slot)
+  and #$00ff
+  cmp #BGX_ON_MAGIC
+  bne c2u_vram
+  rts
+c2u_vram:
+  .al : .xl
   phx
   txa
   asl
@@ -879,6 +886,13 @@ c2d_next:
 ; (A -> B, two registers to $2118). Copies the slot's glyph (64 bytes: its two 4bpp tiles)
 ; into VRAM. A free slot is skipped.
 cjk_upload_slot:
+  .al : .xl
+  lda @BGX_ON                ; the composed menu (menubg.a65) owns this VRAM and draws the
+  and #$00ff                 ;   glyphs from the sheet itself
+  cmp #BGX_ON_MAGIC
+  bne cus_vram
+  rts
+cus_vram:
   .al : .xl
   phx
   txa
@@ -1054,6 +1068,9 @@ cqs_bg2:
 ; Any widths in; .as out; X kept.
 cjk_dirty1:
   sep #$20 : .as
+  lda @BGX_ON                ; composed: nothing goes to VRAM (cjk_bgx_on dropped the queue)
+  cmp #BGX_ON_MAGIC
+  beq cqd_out
   lda @CJK_DIRTY, x
   bne cqd_out
   lda #$01
@@ -1063,6 +1080,9 @@ cjk_dirty1:
   bra cjk_qpush
 cjk_dirty2:
   sep #$20 : .as
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  beq cqd_out
   lda @CJK2_DIRTY, x
   bne cqd_out
   lda #$01
@@ -1090,6 +1110,18 @@ cjk_qpush:
 cqd_out:
   .as : .xl
   rts
+
+; cjk_bgx_on: the composed menu turns on (menubg.a65 bgx_setup). Its tables take WRAM $7F
+; from $2000 on, so a CJK language's file there is gone, and it draws the glyphs itself: no
+; upload waits. Any widths in; preserves P.
+cjk_bgx_on:
+  php
+  jsr cjk_qreset
+  sep #$20 : .as
+  lda #$00
+  sta @CJK_LANG_CUR
+  plp
+  rtl
 
 ; cjk_qreset: an empty queue and no dirty flag (a flag left set would keep its cell out of
 ; the queue for good). .al/.xl out.
@@ -2151,6 +2183,8 @@ cll_done:
   ldx #$0000                 ; LANG_STAGE
   ldy #$2000                 ; CJK_LANG_BASE
   mvn $7f, $d0
+  lda #$0000
+  sta @BGX_TBLOK             ; the composed menu's fixed tables in $7F are gone too
   jsr cjk_flush_lang
   sep #$20 : .as
   lda @cur_lang

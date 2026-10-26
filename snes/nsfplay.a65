@@ -85,6 +85,7 @@ nsf_screen:
 
 nsf_loop:
   .as : .xl
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq nsf_loop
   stz isr_done

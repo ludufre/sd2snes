@@ -1,0 +1,2499 @@
+; Scrolling menu background (bank $C3, behind the gates in menubggate.a65).
+;
+; Mode 5 shows a 16-px BG tile as two 8-px halves (tile N and N+1), so the classic menu prints
+; even columns on BG2 and odd columns on BG1 and both layers are text. Here the text of rows
+; 8..29 is COMPOSED into BG2 alone, and BG1 is free for a background: a small repeating block
+; that slides by changing the BG1 scroll each frame.
+;
+; A cell (two columns) shows a PAIR of glyphs. A cache keeps pairs in VRAM, one tile pair per
+; SLOT: a cell whose pair is already there only gets a map word, a new pair is copied into a
+; free slot first. Each of the two regions (rows 8..19, rows 20..29: one BG2 char base reaches
+; 1024 tiles, 511 pairs, and a region holds at most 384 cells) has its own slots. A pair is
+; found in two steps, no search: the first glyph's PAGE (BGX_L1), then the page's entry for
+; the second glyph, checked against the slot's own second glyph (two glyphs share an entry).
+; When a region runs out of slots or the pages run out, the COLLECTOR keeps only what the
+; screen shows and rebuilds the pages from it.
+;
+; A row is composed whole into BGX_TMAP and only then PUBLISHED to BGX_MAP: the NMI sends a
+; published row once every pair it uses is in VRAM, so a row on screen never shows a slot
+; that is still waiting. New pairs go into a queue the NMI empties (no lock: the compositor
+; only moves BGX_STTOT, the NMI only BGX_UPTOT). A row whose words are the ones another row
+; of its region was composed from (the list scrolled) takes that row's map words.
+;
+; Nothing else in the menu changes: hiprint, the window stack and the rest keep writing the
+; same tile buffers (BG2_TILE_BUF/BG1_TILE_BUF, glyph numbers). The pieces:
+;  - bgx_work, from the browser's and the menus' wait for the next frame (bgx_idle) and from
+;    a V-IRQ on line BGX_VIRQ (bgx_irq), after the menu's own work of the frame: looks at the
+;    rows that were printed to (hints from hiprint and the window code, plus a slow sweep for
+;    anything else) and composes the ones that changed.
+;  - bgx_nmi, in place of the classic tilemap upload: queued pairs, published map rows, and
+;    the background's scroll.
+;  - bgx_setup, from setup_hdma: VRAM layout, background, HDMA tables, IRQ.
+;
+; VRAM (words) while composed:
+;   $0000-$000F  blank pair (rows 8..19)      $3000-$300F  mouse pointer (OBJ)
+;   $0010-$1FFF  slots of rows 8..19          $3010-$3FFF  slots of rows 20..29
+;   $2000-$2FFF  cover (OBJ)                  $4000-$400F  blank pair (rows 20..29, header BG2)
+;   $5400 text map, $5C00 background map      $4010-$4FFF  slots of rows 20..29
+;   $6000-$7BFF  header logo                  $7C00-$7FFF  background tiles (4bpp: the
+;                                             built-in block's 1 KB ends at $7DFF, a theme's
+;                                             2 KB at $7FFF)
+; BG2's char base is $0000 for rows 8..19 and $3000 for rows 20..29 (HDMA on $210B at the
+; line row 20 starts). BG1's is $4000 in the body. The header (lines 0-55, mode 3) keeps its
+; own maps and bases.
+;
+; The compositor copies with MVN, never DMA: S-CPU version 1 can crash when a DMA ends right
+; before HDMA, and the NMI's own transfers stop before the end of VBlank.
+.link page $c3
+#include "memmap.i65"
+#include "dma.i65"
+.link page $c3
+
+#define BGX_DX_STEP   $0040     ; 8.8 per frame: the block slides right...
+#define BGX_DY_STEP   $0020     ; ...and up
+#define BGX_VIRQ      120       ; the IRQ's line: the menu's own work of the frame comes first
+#define BGX_VSTART    0         ; the IRQ does no composing if it starts this late
+#define BGX_VLAST     205       ; no row is started past this line
+#define BGX_NMI_VEND  254       ; the NMI starts no transfer on this line or later
+#define BGX_NMI_VROWS 234       ; ...and the committed rows (up to 22 transfers of 64 B) not on this one
+#define BGX_NMI_VROWE 252       ; ...and no further committed row on this one: a row is ~1.1-1.4
+                                ;   lines, the NMI's tail after the rows ~1.5 more (mouse, scroll,
+                                ;   channel 7, NMI_ROUTINE's own end), so it ends by ~256 of 261
+#define BGX_RUNMAX    16        ; pairs one transfer of the NMI takes at most
+#define BGX_PENDMAX   8         ; frames published rows wait for the rest of the screen
+#define BGX_PENDFULL  4         ; ...and, from a screen's own loop, before the rest is composed at once
+#define BGX_PENDMAXB  30        ; ...and before they show anyway (only if something holds the rest up)
+#define BGX_GC_QUIET  30        ; frames without a hint before the idle loop collects
+#define BGX_TBLMAGIC  $5642     ; BGX_SM / BGX_VA are filled in
+#define BGX_SA_FREE   $7fff     ; a free slot's first glyph (matches none; bit 15 = in use, GC)
+#define BGX_NSLOT_A   511
+#define BGX_NSLOT_B   510       ; (tiles 512/513 of base $3000 are the blank pair)
+
+; ---------------------------------------------------------------------------------------
+; bgx_setup: from bgx_hdma_gate (setup_hdma, before it enables HDMA). Entry A8 X16.
+; Exit A = the HDMA enable mask setup_hdma writes ($7f: ch. 6 is the char-base switch).
+; ---------------------------------------------------------------------------------------
+bgx_setup:
+  .as : .xl
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  pha
+  plb
+  stz $4200                 ; no NMI/IRQ while VRAM is rebuilt
+  stz $420c
+  lda #$80
+  sta $2100                 ; forced blank for the uploads
+  sta $2115                 ; VRAM: increment after $2119
+  lda $4210                 ; (NMI is off: reading it loses nothing)
+  and #$0f
+  sta @BGX_CPUV
+; the background: the built-in block (no theme, Y = 0), the theme's (Y = 1) or none, for a
+; theme that brings no background (Y = 2: a .thm made for the plain gradient)
+  rep #$20 : .al
+  lda #BGX_DX_STEP
+  sta @BGX_DXS
+  lda #BGX_DY_STEP
+  sta @BGX_DYS
+  ldy #$0000
+  lda @THEME_BG
+  cmp #THEME_BG_MAGIC_LO
+  bne bgxs_thm0
+  lda @THEME_BG+2
+  cmp #THEME_BG_NONE_HI
+  bne bgxs_thm1
+  lda #$0000
+  sta @BGX_DXS
+  sta @BGX_DYS
+  ldy #$0002
+  bra bgxs_thm0
+bgxs_thm1:
+  .al
+  cmp #THEME_BG_MAGIC_HI
+  bne bgxs_thm0
+  lda @THEME_BG_PRM
+  sta @BGX_DXS
+  lda @THEME_BG_PRM+2
+  sta @BGX_DYS
+  iny
+bgxs_thm0:
+  .al
+  sep #$20 : .as
+  tya
+  sta @BGX_THM
+; background tiles (none: transparent ones, from a fixed zero)
+  ldx #BGX_BGVRAM
+  stx $2116
+  lda #$01
+  sta $4370
+  lda #$18
+  sta $4371
+  ldx #!menubg_tiles
+  lda #^menubg_tiles
+  cpy #$0001
+  bcc bgxs_tsrc
+  bne bgxs_tnone
+  ldx #!THEME_BG_TILES
+  lda #^THEME_BG_TILES
+  bra bgxs_tsrc
+bgxs_tnone:
+  .as
+  pha
+  lda #$09                  ; fixed source, two registers
+  sta $4370
+  pla
+  ldx #!bgx_zero
+  lda #^bgx_zero
+bgxs_tsrc:
+  .as
+  stx $4372
+  sta $4374
+  ldx #1024
+  cpy #$0001
+  bne bgxs_tlen
+  ldx #2048
+bgxs_tlen:
+  .as
+  stx $4375
+  lda #$80
+  sta $420b
+; the two blank pairs (the second is also what the header's BG2 shows)
+  ldx #$0000
+  jsr bgx_zero16
+  ldx #$4000
+  jsr bgx_zero16
+; background palette: BG1 palette 7
+  lda #BGX_BGPAL*16
+  sta $2121
+  stz $4370
+  lda #$22
+  sta $4371
+  ldx #!menubg_pal
+  lda #^menubg_pal
+  cpy #$0001
+  bne bgxs_psrc
+  ldx #!THEME_BG_PAL
+  lda #^THEME_BG_PAL
+bgxs_psrc:
+  .as
+  stx $4372
+  sta $4374
+  ldx #32
+  stx $4375
+  lda #$80
+  sta $420b
+; the tables that never change, built once (WRAM $7F is the mode's alone): the background
+; map, the blank text map, the blank physical rows, each slot's map word and VRAM address
+  rep #$30 : .al : .xl
+  lda @BGX_TBLOK
+  cmp #BGX_TBLMAGIC
+  beq bgxs_have
+  jsr bgx_tables
+bgxs_have:
+  .al
+  jsr bgx_bgmap             ; every time: the theme may have changed
+  sep #$20 : .as
+  ldx #!BGX_BGMAPC
+  ldy #BGX_BGMAP
+  jsr bgx_send2k
+  ldx #!BGX_TMAPC
+  ldy #BGX_TEXTMAP
+  jsr bgx_send2k
+  rep #$30 : .al : .xl
+  ldx #!BGX_PMAPC           ; physical rows 0..21: rows 8..29 as the screen shows them, blank
+  ldy #!BGX_PMAP
+  lda #BGX_ROWS*64-1
+  phb
+  mvn ^BGX_PMAP, ^BGX_PMAPC
+  plb
+  sep #$20 : .as            ; ...composed from nothing a buffer holds
+  ldx #!BGX_PSRC2
+  jsr bgx_ffrow
+  ldx #!BGX_PSRC1
+  jsr bgx_ffrow
+; the cache: every slot free, the maps blank, no row composed yet
+  rep #$30 : .al : .xl
+bgxs_tbld:
+  .al
+  lda #$0000                ; no slot handed out yet (BGX_NEXT), none recycled (BGX_FREEN)
+  sta @BGX_FREEN
+  sta @BGX_FREEN+2
+  sta @BGX_NEXT
+  sta @BGX_NEXT+2
+  sep #$20 : .as            ; every hash entry empty
+  ldx #!BGX_HT
+  stx $2181
+  lda #$01                  ; (bank $7F)
+  sta $2183
+  lda #$08
+  sta $4370
+  lda #$80
+  sta $4371
+  ldx #!bgx_zero
+  stx $4372
+  lda #^bgx_zero
+  sta $4374
+  ldx #$2000                ; two tables of 2048 words
+  stx $4375
+  lda #$80
+  sta $420b
+  rep #$20 : .al
+  lda #$0000
+  sta @BGX_STTOT
+  sta @BGX_UPTOT
+  sta @BGX_NGC
+  sta @BGX_NROWS
+  sta @BGX_NSTAGED
+  sta @BGX_NCYC
+  sta @BGX_NSHIFT
+  sta @BGX_NCOMMIT
+  sta @BGX_VMAX
+  sta @BGX_NMIV
+  sep #$20 : .as
+  ldx #$0000
+bgxs_rc:
+  .as
+  lda #$00
+  sta @BGX_RC, x
+  inx
+  cpx #BGX_NP
+  bcc bgxs_rc
+  ldx #$0000
+bgxs_rows:
+  .as
+  lda #$01
+  sta @BGX_HINT+8, x
+  txa
+  sta @BGX_CUR, x
+  sta @BGX_DISP, x
+  lda #$02
+  sta @BGX_RC, x
+  inx
+  cpx #BGX_ROWS
+  bcc bgxs_rows
+  lda #BGX_ROWS
+  sta @BGX_PSCAN
+  lda #$00
+  sta @BGX_PSCAN+1
+  lda #$00
+  sta @BGX_COMMIT
+  sta @BGX_PEND
+  sta @BGX_PENDF
+  sta @BGX_SCAN
+  sta @BGX_HINTALL
+  sta @BGX_BUSY
+  sta @BGX_IDLE
+  sta @BGX_HDMA7
+; HDMA tables
+  ldx #$0000
+bgxs_hdma:
+  .as
+  lda @bgx_hdma_src, x
+  sta @BGX_HDMA_MODE, x
+  inx
+  cpx #$0030
+  bne bgxs_hdma
+; ch. 3: $2105-$2108 (mode + both maps), ch. 4: BG1 scroll, ch. 6: $210B
+  lda #$04
+  sta $4330
+  lda #$05
+  sta $4331
+  ldx #!BGX_HDMA_MODE
+  stx $4332
+  lda #^BGX_HDMA_MODE
+  sta $4334
+  ldx #!BGX_HDMA_SCR
+  stx $4342
+  lda #^BGX_HDMA_SCR
+  sta $4344
+  stz $4360
+  lda #$0b
+  sta $4361
+  ldx #!BGX_HDMA_CB
+  stx $4362
+  lda #^BGX_HDMA_CB
+  sta $4364
+; V-IRQ on line BGX_VIRQ (the NMI arms it, $4200 = $a1)
+  lda #BGX_VIRQ
+  sta $4209
+  stz $420a
+  lda #BGX_ON_MAGIC
+  sta @BGX_ON
+  jsl @cjk_bgx_on           ; the CJK cache: no uploads, the language file in $7F is gone
+  plb                       ; the screen stays as the caller left it (forced blank): it
+  plp                       ;   shows once the HDMA is armed and, where the caller flushes
+                            ;   first (bgx_flush), once the rows are composed
+; (no cli: the V-IRQ is off, BGX_VSTART 0; it comes back with the IRQ path)
+  lda #$7f
+  rtl
+
+; zero 16 words of VRAM at X (A8 X16, DB = 0)
+bgx_zero16:
+  .as : .xl
+  stx $2116
+  lda #$09
+  sta $4370
+  lda #$18
+  sta $4371
+  ldx #!bgx_zero
+  stx $4372
+  lda #^bgx_zero
+  sta $4374
+  ldx #32
+  stx $4375
+  lda #$80
+  sta $420b
+  rts
+
+; send the 2 KB at X (bank $7F) to VRAM at Y (A8 X16, DB = 0)
+bgx_send2k:
+  .as : .xl
+  sty $2116
+  lda #$01
+  sta $4370
+  lda #$18
+  sta $4371
+  stx $4372
+  lda #^BGX_STAGE
+  sta $4374
+  ldx #2048
+  stx $4375
+  lda #$80
+  sta $420b
+  rts
+
+bgx_zero .word 0
+bgx_ff   .byt $ff
+
+; fill the 22 * 64 bytes of WRAM $7F at X with $ff (A8 X16, DB = 0)
+bgx_ffrow:
+  .as : .xl
+  stx $2181
+  lda #$01
+  sta $2183
+  lda #$08
+  sta $4370
+  lda #$80
+  sta $4371
+  ldx #!bgx_ff
+  stx $4372
+  lda #^bgx_ff
+  sta $4374
+  ldx #BGX_ROWS*64
+  stx $4375
+  lda #$80
+  sta $420b
+  rts
+
+; the tables that never change (A16 X16, any DB): background map, blank text map, blank
+; physical rows, each slot's map word and VRAM address
+bgx_tables:
+  .al : .xl
+  ldx #$0000
+  jmp bgxt_tmap
+
+; the background map into BGX_BGMAPC: the theme's (its words + first tile and palette) or the
+; built-in 16x16 cells repeated (A16 X16, any DB)
+bgx_bgmap:
+  .al : .xl
+  ldx #$0000                ; byte offset
+  lda @BGX_THM
+  and #$00ff
+  cmp #$0001                ; (2, no background: the built-in map over transparent tiles)
+  bne bgxm_dflt
+bgxm_thm:
+  .al
+  lda @THEME_BG_MAP, x
+  clc
+  adc #BGX_BGTILE | (BGX_BGPAL << 10)
+  sta @BGX_BGMAPC, x
+  inx
+  inx
+  cpx #2048
+  bcc bgxm_thm
+  rts
+bgxm_dflt:
+  .al
+  ldy #$0000                ; entry index
+bgxt_bgmap:
+  .al
+  tya
+  and #$000f                ; x & 15
+  sta @BGX_T2
+  tya
+  lsr
+  and #$00f0                ; (y & 15) * 16, y = index / 32
+  ora @BGX_T2
+  asl                       ; a word of the 16x16 block
+  phx
+  tax
+  lda @menubg_map, x
+  plx
+  clc
+  adc #BGX_BGTILE | (BGX_BGPAL << 10)
+  sta @BGX_BGMAPC, x
+  inx
+  inx
+  iny
+  cpx #2048
+  bcc bgxt_bgmap
+  rts
+bgxt_tmap:
+  .al
+  lda #$2000                ; rows 0..19: the first blank pair
+  cpx #20*64
+  bcc bgxt_tmap_a
+  lda #$2200                ; rows 20..31: the second ($4000 = tile 512 of base $3000)
+bgxt_tmap_a:
+  .al
+  sta @BGX_TMAPC, x
+  inx
+  inx
+  cpx #2048
+  bcc bgxt_tmap
+  ldx #$0000
+bgxt_pm:
+  .al
+  lda #$2000                ; physical rows 0..11 are region A's, 12..21 region B's
+  cpx #12*64
+  bcc bgxt_pma
+  lda #$2200
+bgxt_pma:
+  .al
+  sta @BGX_PMAPC, x
+  inx
+  inx
+  cpx #BGX_ROWS*64
+  bcc bgxt_pm
+  ldx #$0000
+bgxs_sma:
+  .al
+  txa
+  inc
+  inc                       ; tile 2 * slot + 2
+  ora #$2000
+  sta @BGX_SM, x
+  and #$03ff
+  asl
+  asl
+  asl
+  sta @BGX_VA, x
+  inx
+  inx
+  cpx #BGX_NSLOT_A*2
+  bcc bgxs_sma
+  ldx #$0000
+bgxs_smb:
+  .al
+  txa
+  inc
+  inc
+  cmp #512
+  bcc bgxs_smb2
+  inc                       ; (tiles 512/513 are the blank pair)
+  inc
+bgxs_smb2:
+  .al
+  ora #$2000
+  sta @BGX_SM+$400, x
+  and #$03ff
+  asl
+  asl
+  asl
+  clc
+  adc #$3000
+  sta @BGX_VA+$400, x
+  inx
+  inx
+  cpx #BGX_NSLOT_B*2
+  bcc bgxs_smb
+  lda #BGX_TBLMAGIC
+  sta @BGX_TBLOK
+  rts
+
+; copied to BGX_HDMA_MODE ($30 bytes: the three tables at +$00, +$10, +$20)
+bgx_hdma_src:
+  ; $2105 $2106 $2107 $2108
+  .byt 56, $03, $00, $5a, $52       ; header: mode 3, maps $5800 / $5000 (32x64)
+  .byt 1,  $05, $00, $5c, $54       ; body: mode 5, background map $5C00, text map $5400
+  .byt 0, 0, 0, 0, 0, 0
+  ; $210B: BG2 base in the high nibble, BG1 in the low one
+  .byt 56, $40, 90, $04, 1, $34, 0  ; header BG2 $4000 BG1 $0000; rows 8..19 $0000/$4000;
+  .byt 0, 0, 0, 0, 0, 0, 0, 0, 0    ;   rows 20..29 $3000/$4000
+  ; BG1 scroll ($210D x2, $210E x2): the body's values change every frame
+  .byt 56, $00, $00, $ff, $03
+  .byt 127, $00, $00, $00, $00
+  .byt 41, $00, $00, $00, $00
+  .byt 0
+
+
+; ---------------------------------------------------------------------------------------
+; bgx_nmi: the NMI's upload while composed (NMI_ROUTINE, on time, DB = 0). Entry A8 X16.
+; The queued pairs first, then the published rows whose pairs are all in VRAM; whatever does
+; not fit before BGX_NMI_VEND (BGX_NMI_VROWE for the rows) waits for the next NMI, so the NMI
+; ends with VBlank to spare (BGX_NMIV keeps the latest line). The compositor may be anywhere: it only
+; ever moves BGX_STTOT (after the pair's tiles are in place) and a row's BGX_ROWRDY.
+; ---------------------------------------------------------------------------------------
+bgx_nmi:
+  .as : .xl
+  rep #$20 : .al            ; channel 7 as the idle loop's staging left it
+  lda $4370
+  sta @BGX_SV7
+  lda $4372
+  sta @BGX_SV7+2
+  lda $4374
+  sta @BGX_SV7+4
+  lda $4376
+  sta @BGX_SV7+6
+  sep #$20 : .as
+  lda #$80
+  sta $2115
+  lda #$01
+  sta $4370
+  lda #$18
+  sta $4371
+  lda #^BGX_STAGE
+  sta $4374
+  rep #$30 : .al : .xl
+bgxn_pair:
+  .al
+  lda @BGX_STTOT
+  sec
+  sbc @BGX_UPTOT
+  beq bgxn_rows
+  cmp #BGX_RUNMAX+1
+  bcc bgxn_n
+  lda #BGX_RUNMAX
+bgxn_n:
+  .al
+  tay                       ; pairs this run may take
+  jsr bgx_vline
+  rep #$20 : .al
+  cmp #BGX_NMI_VEND-3
+  bcc bgxn_pgo
+  jmp bgxn_done
+bgxn_pgo:
+  .al
+  lda @BGX_UPTOT
+  and #BGX_QN-1
+  asl
+  tax
+  sta @BGX_NMIF             ; the run's first entry * 2
+  lda @BGX_STQ, x
+  sta $2116
+bgxn_ext:
+  .al                       ; the next entry goes right after this one in VRAM: same run
+  dey
+  beq bgxn_go
+  cpx #(BGX_QN-1)*2
+  bcs bgxn_go               ; (the ring wraps)
+  lda @BGX_STQ+2, x
+  sec
+  sbc @BGX_STQ, x
+  cmp #$0010
+  bne bgxn_go
+  inx
+  inx
+  bra bgxn_ext
+bgxn_go:
+  .al
+  txa
+  sec
+  sbc @BGX_NMIF
+  lsr
+  inc
+  sta @BGX_NMIN             ; pairs in the run
+; the scan above takes up to ~2.7 lines itself (16 entries): look at the line again and trim
+; the run to what ends before BGX_NMI_VEND-1, at a quarter line per pair (32 B of DMA is a
+; fifth, the run's own setup the rest). The pairs left out go with the next run or NMI.
+  jsr bgx_vline
+  rep #$20 : .al
+  cmp #225
+  bcc bgxn_pnone            ; below the NMI's own line: wrapped past 261, VBlank is over
+  sec
+  sbc #BGX_NMI_VEND-1
+  bmi bgxn_pfit
+bgxn_pnone:
+  .al
+  jmp bgxn_done             ; no time left for any
+bgxn_pfit:
+  .al
+  eor #$ffff
+  inc                       ; lines left (1 or more)
+  asl
+  asl                       ; pairs that fit in them
+  cmp @BGX_NMIN
+  bcs bgxn_pall
+  sta @BGX_NMIN
+bgxn_pall:
+  .al
+  lda @BGX_NMIF
+  asl
+  asl
+  asl
+  asl                       ; entry * 32
+  clc
+  adc #!BGX_STAGE
+  sta $4372
+  lda @BGX_NMIN
+  asl
+  asl
+  asl
+  asl
+  asl
+  sta $4375
+  sep #$20 : .as
+  lda #$80
+  sta $420b
+  rep #$20 : .al
+  lda @BGX_UPTOT
+  clc
+  adc @BGX_NMIN
+  sta @BGX_UPTOT
+  jmp bgxn_pair
+; the committed rows, once their pairs are all in VRAM: every row whose physical row is not
+; the one the screen shows (one transfer each; the compositor waits while a commit is up)
+bgxn_rows:
+  .al
+  sep #$20 : .as
+  lda @BGX_COMMIT
+  bne bgxn_c
+  lda @BGX_PEND             ; rows waiting for their commit: one frame more
+  beq bgxn_cdone
+  lda @BGX_PENDF
+  inc
+  beq bgxn_cdone
+  sta @BGX_PENDF
+bgxn_cdone:
+  .as
+  jmp bgxn_done
+bgxn_c:
+  .as
+  rep #$20 : .al
+  lda @BGX_UPTOT
+  sec
+  sbc @BGX_COMMITQ
+  bmi bgxn_cdone
+  jsr bgx_vline
+  rep #$20 : .al
+  cmp #BGX_NMI_VROWS
+  bcs bgxn_cdone
+  ldy #$0000
+bgxn_cr:
+  .al
+  tyx
+  sep #$20 : .as
+  lda @BGX_CUR, x
+  cmp @BGX_DISP, x
+  beq bgxn_crn
+; time for one more row? Only the low 8 bits of the line (cheap: this runs per row): the
+; NMI started on 225, so a value below 225 is a line past 255. No: the rows sent so far
+; read CUR = DISP, BGX_COMMIT stays up and the next NMI sends the rest (one frame shows the
+; new rows over the old ones below them: better than running out of VBlank).
+  lda $2137                 ; latch the counters (DB = 0)
+  lda $213f                 ; reset the OPVCT flip-flop
+  lda $213d
+  cmp #BGX_NMI_VROWE
+  bcs bgxn_cdone
+  cmp #225
+  bcc bgxn_cdone
+  lda @BGX_CUR, x
+  pha                       ; the screen's physical row lets go, the new one is held
+  lda @BGX_DISP, x
+  tax
+  lda @BGX_RC, x
+  dec
+  sta @BGX_RC, x
+  pla
+  tyx
+  sta @BGX_DISP, x
+  tax
+  lda @BGX_RC, x
+  inc
+  sta @BGX_RC, x
+  rep #$20 : .al
+  txa                       ; physical row * 64
+  xba
+  lsr
+  lsr
+  clc
+  adc #!BGX_PMAP
+  sta $4372
+  tya
+  clc
+  adc #8
+  asl
+  asl
+  asl
+  asl
+  asl                       ; map row * 32 words
+  clc
+  adc #BGX_TEXTMAP
+  sta $2116
+  lda #64
+  sta $4375
+  sep #$20 : .as
+  lda #$80
+  sta $420b
+bgxn_crn:
+  .as
+  rep #$20 : .al
+  iny
+  cpy #BGX_ROWS
+  bne bgxn_cr
+  sep #$20 : .as
+  lda #$00
+  sta @BGX_COMMIT
+  sta @BGX_PEND
+  sta @BGX_PENDF
+bgxn_done:
+  .al
+  sep #$20 : .as
+  lda @mouse_ptr_on
+  beq bgxn_nomouse
+  jsl @mouse_nmi
+bgxn_nomouse:
+  sep #$20 : .as
+  rep #$10 : .xl
+; slide the background here, in VBlank: both of the body's HDMA entries take the new values
+; in the same frame
+  lda @BGX_NOIDLE           ; frames since the idle loop last ran
+  inc
+  beq bgxn_sat
+  sta @BGX_NOIDLE
+bgxn_sat:
+  .as
+  lda @BGX_QUIET            ; frames since the last hint
+  inc
+  beq bgxn_qsat
+  sta @BGX_QUIET
+bgxn_qsat:
+  .as
+  rep #$20 : .al
+  lda @BGX_HX
+  sec
+  sbc @BGX_DXS
+  sta @BGX_HX
+  lda @BGX_VY
+  clc
+  adc @BGX_DYS
+  sta @BGX_VY
+  sep #$20 : .as
+  lda @BGX_HX+1
+  sta @BGX_HDMA_SCR+6
+  sta @BGX_HDMA_SCR+11
+  lda @BGX_VY+1
+  sta @BGX_HDMA_SCR+8
+  sta @BGX_HDMA_SCR+13
+  rep #$20 : .al
+  lda @BGX_SV7
+  sta $4370
+  lda @BGX_SV7+2
+  sta $4372
+  lda @BGX_SV7+4
+  sta $4374
+  lda @BGX_SV7+6
+  sta $4376
+  jsr bgx_vline             ; debug: the latest line bgx_nmi ended on, all of it (only
+  rep #$20 : .al            ;   NMI_ROUTINE's own end, ~1 line, comes after this)
+  cmp #225
+  bcs bgxn_vin
+  lda #$ffff                ; the line wrapped: VBlank ran out
+bgxn_vin:
+  .al
+  cmp @BGX_NMIV
+  bcc bgxn_vok
+  sta @BGX_NMIV
+bgxn_vok:
+  .al
+  sep #$20 : .as
+  lda #$81                  ; NMI + auto-joypad (the compositor runs from the idle loop only)
+  sta $4200
+  rtl
+
+; A16 = current line (any DB). Returns A16 (the caller re-asserts .al after the jsr).
+bgx_vline:
+  sep #$20 : .as
+  lda @$002137
+  lda @$00213f
+  lda @$00213d
+  xba
+  lda @$00213d
+  and #$01
+  xba
+  rep #$20 : .al
+  rts
+
+; A16 = the current line for the time checks: VBlank (after the NMI) counts as line 0, a
+; whole frame away from the next NMI. DB = 0. Returns A16.
+bgx_vwork:
+  jsr bgx_vline
+  rep #$20 : .al
+  cmp #225
+  bcc bgxvw_ok
+  lda #$0000
+bgxvw_ok:
+  .al
+  rts
+
+; ---------------------------------------------------------------------------------------
+; bgx_irq: V-IRQ, line BGX_VIRQ (IRQ_ROUTINE -> bgx_irq_gate). Entry A8 X16, all registers
+; saved by IRQ_16bit. Unless the main loop's idle time is already at it, does a share.
+; ---------------------------------------------------------------------------------------
+bgx_irq:
+  .as : .xl
+  phb
+  lda #$00
+  pha
+  plb
+  jsr bgx_live
+  bcs bgxi_exit
+  lda @BGX_BUSY
+  bne bgxi_exit
+  rep #$20 : .al
+  jsr bgx_vline
+  rep #$20 : .al
+  cmp #BGX_VSTART
+  sep #$20 : .as
+  bcs bgxi_exit
+  jsr bgx_work
+bgxi_exit:
+  .as
+  sep #$20 : .as
+  plb
+  rtl
+
+; bgx_idle: from the browser's and the menus' wait for the next frame (bgx_idle_gate). Any
+; widths, everything kept.
+bgx_idle:
+  php
+  rep #$30 : .al : .xl
+  pha
+  phx
+  phy
+  phb
+  sep #$20 : .as
+  lda #$00
+  pha
+  plb
+  jsr bgx_live
+  bcs bgxd_out
+  lda @BGX_BUSY
+  bne bgxd_out
+  lda @isr_done
+  bne bgxd_out              ; a frame is waiting to be handled: the menu first
+  lda #$00
+  sta @BGX_NOIDLE
+  lda #$01
+  sta @BGX_IDLE
+  jsr bgx_work
+  lda #$00
+  sta @BGX_IDLE
+bgxd_out:
+  rep #$30 : .al : .xl
+  plb
+  ply
+  plx
+  pla
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------------------
+; bgx_flush: from bgx_flush_gate. What the buffers hold now, composed and on the TV: a popup
+; drawn right before the menu spins on the firmware (the "Loading" window, the easter egg,
+; the "creating patched ROM" modal), or a screen rebuilt in forced blank (setup_hdma from
+; the font toggles, a language change) that should show whole. Every hinted row (the idle
+; loop's rules: at any line), the commit, and the NMIs that send the pairs and the rows,
+; until nothing is left or BGX_FLUSH_MAX frames have gone (each NMI wait bounded too: a
+; caller with the NMI off is not held). Any widths, DB; keeps everything.
+; ---------------------------------------------------------------------------------------
+#define BGX_FLUSH_MAX 12
+bgx_flush:
+  php
+  rep #$30 : .al : .xl
+  pha
+  phx
+  phy
+  phb
+  sep #$20 : .as
+  lda #$00
+  pha
+  plb
+  jsr bgx_live
+  bcs bgxfl_out
+  ldy #BGX_FLUSH_MAX
+bgxfl_frame:
+  .as : .xl
+  lda #$00
+  sta @isr_done
+  jsl @bgx_idle_gate        ; (the idle loop's call: the hinted rows, then the commit)
+  ldx #$0000
+bgxfl_nmi:
+  .as : .xl
+  lda @isr_done             ; the NMI: queued pairs and the committed rows go up
+  bne bgxfl_sent
+  dex
+  bne bgxfl_nmi
+  bra bgxfl_next            ; (no NMI came: the caller runs with it off)
+bgxfl_sent:
+  .as : .xl
+  lda @BGX_COMMIT           ; rows still waiting for the NMI
+  bne bgxfl_next
+  lda @BGX_PEND
+  bne bgxfl_next
+  rep #$20 : .al
+  lda @BGX_STTOT            ; pairs still waiting
+  cmp @BGX_UPTOT
+  sep #$20 : .as
+  bne bgxfl_next
+  ldx #$0000                ; rows still hinted (one stopped on a full queue)
+bgxfl_hint:
+  .as : .xl
+  lda @BGX_HINT+8, x
+  bne bgxfl_next
+  inx
+  cpx #BGX_ROWS
+  bne bgxfl_hint
+  bra bgxfl_out
+bgxfl_next:
+  .as : .xl
+  dey
+  bne bgxfl_frame
+bgxfl_out:
+  .as
+  rep #$30 : .al : .xl
+  plb
+  ply
+  plx
+  pla
+  plp
+  rtl
+
+; ---------------------------------------------------------------------------------------
+; bgx_lang: from bgx_lang_gate, a language picked (the Language entry, the first-boot gate),
+; in place of their jsl to cjk_lang_sync. Japanese and Chinese run without the composed
+; layer, whose VRAM their glyph cache uses and whose tables their file in WRAM $7F would
+; overwrite: going to one turns it off BEFORE the file loads (the NMI would compose from the
+; file), coming back turns it on. Any widths/DB in; preserves P and DB.
+; ---------------------------------------------------------------------------------------
+bgx_lang:
+  php
+  phb
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00
+  pha
+  plb
+  pha                       ; 1 = the layer was turned off here
+  lda @cur_lang
+  cmp #$08
+  bcc bgxlg_sync
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne bgxlg_sync
+  jsr bgx_classic
+  pla
+  lda #$01
+  pha
+bgxlg_sync:
+  .as
+  jsl @cjk_lang_sync
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda $01, s
+  bne bgxlg_hdma            ; off: the classic HDMA, and the screen back
+  lda @cur_lang
+  cmp #$08
+  bcs bgxlg_out
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  beq bgxlg_out
+bgxlg_hdma:
+  .as
+  lda #$00
+  sta $4200                 ; (setup_hdma's waitblank misses the edge under the NMI)
+  lda #BGX_LSEL_MAGIC
+  sta @BGX_LSEL
+  jsl @bgx_call_shdma       ; turns the layer on for a Latin language (bgx_setup), not for CJK
+  lda #$00
+  sta @BGX_LSEL
+  jsl @bgx_flush_gate       ; on: the whole screen composed before it shows
+  lda @cur_bright
+  sta $2100
+bgxlg_out:
+  .as
+  pla
+  plb
+  plp
+  rtl
+
+; The composed layer off, in place (forced blank, NMI and HDMA off until setup_hdma): the
+; classic layout and font, and the CJK glyphs the buffers show into the VRAM it gave back.
+; A8 X16, DB = 0.
+bgx_classic:
+  .as : .xl
+  lda #$00                  ; at the top of a frame (the next NMI, bounded)
+  sta @isr_done
+  ldx #$0000
+bgxcl_wait:
+  .as
+  lda @isr_done
+  bne bgxcl_go
+  dex
+  bne bgxcl_wait
+bgxcl_go:
+  .as
+  lda #$00
+  sta $4200
+  lda #$80
+  sta $2100
+  stz $420c
+  lda $4211                 ; (a pending IRQ goes)
+  jsl @bgx_screen_off
+  jsl @cjk_vram_restore
+  sep #$20 : .as
+  rep #$10 : .xl
+  rts
+
+; carry set = nothing to do now (a screen owns the PPU, or a CJK language took $7F). A8 X16.
+bgx_live:
+  .as : .xl
+  lda @screen_dma_disable
+  ora @screen_dma_disable+1
+  bne bgxlv_no
+  lda @cur_lang
+  cmp #$08
+  bcs bgxlv_no
+  clc
+  rts
+bgxlv_no:
+  .as
+  sec
+  rts
+
+
+; ---------------------------------------------------------------------------------------
+; bgx_work: the rows that need it, as far as the time and the queue allow. A8 X16, DB = 0.
+; BGX_BUSY keeps the other caller off (the NMI does not care).
+; First, top to bottom, the rows that now show what the row below them was composed from
+; (the list moved up: the row below is still the old one). Then, bottom to top, the rest:
+; a row that shows what the row above it had (the list moved down), or a new composition.
+; ---------------------------------------------------------------------------------------
+bgx_work:
+  .as : .xl
+  lda @BGX_COMMIT           ; a whole screen waits for the NMI: BGX_MAP must stay
+  beq bgxw_go
+  rts
+bgxw_go:
+  .as
+  lda #$01
+  sta @BGX_BUSY
+  lda #$00
+  sta @BGX_STOP
+; a window came or went: every row
+  lda @BGX_HINTALL
+  beq bgxw_p1
+  lda #$00
+  sta @BGX_HINTALL
+  ldx #$0000
+bgxw_all:
+  .as
+  lda #$01
+  sta @BGX_HINT+8, x
+  inx
+  cpx #BGX_ROWS
+  bne bgxw_all
+bgxw_p1:
+  .as
+  lda @BGX_BOUND            ; a screen's own loop: no list to follow, and this pass has no
+  bne bgxw_p2               ;   time check (it costs frames when a window opens)
+  ldy #$0000
+bgxw_p1l:
+  .as
+  tyx
+  lda @BGX_HINT+8, x
+  beq bgxw_p1n
+  jsr bgx_up
+bgxw_p1n:
+  .as
+  iny
+  cpy #BGX_ROWS
+  bne bgxw_p1l
+bgxw_p2:
+  .as
+  lda @BGX_BOUND            ; a screen's own loop reprints its rows every frame and gives
+  bne bgxw_p3               ;   this little time: go on from the row it stopped at
+  ldy #BGX_ROWS-1
+bgxw_p2l:
+  .as
+  jsr bgxw_one
+  bcs bgxw_stopped
+  dey
+  bpl bgxw_p2l
+  bra bgxw_p2done
+bgxw_p3:
+  .as
+  lda #BGX_ROWS
+  sta @BGX_RCNT
+  rep #$20 : .al
+  lda @BGX_RESUME
+  and #$00ff
+  cmp #BGX_ROWS
+  bcc bgxw_p3y
+  lda #BGX_ROWS-1
+bgxw_p3y:
+  .al
+  tay
+  sep #$20 : .as
+bgxw_p3l:
+  .as
+  jsr bgxw_one
+  bcs bgxw_p3stop
+  dey
+  bpl bgxw_p3n
+  ldy #BGX_ROWS-1
+bgxw_p3n:
+  .as
+  lda @BGX_RCNT
+  dec
+  sta @BGX_RCNT
+  bne bgxw_p3l
+  bra bgxw_p2done
+bgxw_p3stop:
+  .as
+  tya
+  sta @BGX_RESUME
+  jmp bgxw_stopped
+bgxw_p2done:
+  .as
+; and a slow sweep, for what is written without a hint
+  lda @BGX_SCAN
+  rep #$20 : .al
+  and #$00ff
+  tay
+  sep #$20 : .as
+  lda #$01
+  sta @BGX_SWEEP
+  jsr bgx_row
+  lda #$00
+  sta @BGX_SWEEP
+  bcs bgxw_done
+  lda @BGX_SCAN
+  inc
+  cmp #BGX_ROWS
+  bcc bgxw_scan
+  lda #$00
+bgxw_scan:
+  .as
+  sta @BGX_SCAN
+bgxw_done:
+  .as
+  lda @BGX_IDLE             ; every row done, and the menu waits for the next frame: what
+  beq bgxw_late             ;   it drew is a whole screen
+  jsr bgx_commit
+  lda @BGX_BOUND            ; (not from a screen's own loop: the collection takes a frame)
+  bne bgxw_end
+  jsr bgx_idlegc            ; and time to spare: collect ahead of the next screen
+  bra bgxw_end
+; stopped before the hinted rows were done: show what there is only if nothing more can be
+; composed until the screen changes (3), or if it has waited long enough
+bgxw_stopped:
+  .as
+  lda @BGX_STOP
+  cmp #$03
+  beq bgxw_commit
+bgxw_late:
+  .as
+  lda @BGX_BOUND            ; a screen's own loop: the rest comes in a frame or two (the
+  beq bgxw_lt8              ;   queue to VRAM is what it waits for), show it whole
+  lda @BGX_PENDF
+  cmp #BGX_PENDMAXB
+  bcc bgxw_end
+  bra bgxw_commit
+bgxw_lt8:
+  .as
+  lda @BGX_PENDF
+  cmp #BGX_PENDMAX
+  bcc bgxw_end
+bgxw_commit:
+  .as
+  jsr bgx_commit
+bgxw_end:
+  .as
+  rep #$20 : .al
+  jsr bgx_vline
+  rep #$20 : .al
+  cmp @BGX_VMAX             ; debug: the latest line it ended on
+  bcc bgxw_vok
+  sta @BGX_VMAX
+bgxw_vok:
+  .al
+  sep #$20 : .as
+  lda #$00
+  sta @BGX_BUSY
+  rts
+
+; The rows published since the last commit are a whole screen: the NMI shows them together,
+; once their pairs are in VRAM. A8 X16, DB = 0.
+bgx_commit:
+  .as
+  lda @BGX_PEND
+  beq bgxcm_out
+  rep #$20 : .al
+  lda @BGX_STTOT
+  sta @BGX_COMMITQ
+  lda @BGX_NCOMMIT          ; debug
+  inc
+  sta @BGX_NCOMMIT
+  sep #$20 : .as
+  lda #$01
+  sta @BGX_COMMIT
+bgxcm_out:
+  .as
+  rts
+
+; A region with few free slots left, early in the frame: collect it now, so the next screen
+; finds room (the collector takes most of a frame). One region per call. A8 X16, DB = 0.
+bgx_idlegc:
+  .as
+  lda @BGX_QUIET            ; only once the screen has been still for a while (the list
+  cmp #BGX_GC_QUIET         ;   is not scrolling: a collection is long and nothing can
+  bcc bgxig_out8            ;   interrupt it)
+  rep #$20 : .al
+  jsr bgx_vwork
+  rep #$20 : .al
+  cmp #60
+  bcs bgxig_out
+  lda @BGX_STTOT            ; nothing new since the last time
+  cmp @BGX_GCST
+  beq bgxig_out
+  lda #BGX_NSLOT_A*2         ; room (recycled + never handed out) for less than half a
+  sec                       ;   screen of the region
+  sbc @BGX_NEXT
+  clc
+  adc @BGX_FREEN
+  ldx #$0000
+  cmp #12*32
+  bcc bgxig_go
+  lda #BGX_NSLOT_B*2
+  sec
+  sbc @BGX_NEXT+2
+  clc
+  adc @BGX_FREEN+2
+  ldx #12
+  cmp #10*32
+  bcc bgxig_go
+  lda @BGX_STTOT
+  sta @BGX_GCST
+  bra bgxig_out
+bgxig_go:
+  .al
+  phb
+  pea $7f7f
+  plb
+  plb
+  lda !BGX_T1
+  pha
+  stx !BGX_T1
+  jsr bgx_region
+  jsr bgx_gc
+  pla
+  sta !BGX_T1
+  plb
+bgxig_out:
+  .al
+  sep #$20 : .as
+bgxig_out8:
+  .as
+  rts
+
+; row Y if it is hinted. Carry set = stopped (the hint stays). A8 X16, DB = 0; Y kept.
+bgxw_one:
+  .as : .xl
+  tyx
+  lda @BGX_HINT+8, x
+  beq bgxw_o_no
+  lda #$00
+  sta @BGX_HINT+8, x        ; (cleared first: a print after the look marks it again)
+  jsr bgx_row
+  bcc bgxw_o_ok
+  tyx
+  lda #$01                  ; stopped: look again later
+  sta @BGX_HINT+8, x
+  sec
+  rts
+bgxw_o_no:
+bgxw_o_ok:
+  .as
+  clc
+  rts
+
+; Hinted row Y: unchanged, or what the row below it was composed from? Then done (the hint
+; goes); anything else is left for the second pass. A8 X16, DB = 0; Y kept.
+bgx_up:
+  .as : .xl
+  phy
+  phb
+  rep #$30 : .al : .xl
+  tya
+  pea $7f7f
+  plb
+  plb
+  sta !BGX_T1
+  jsr bgx_region
+  lda !BGX_T1
+  jsr bgx_eqrow             ; the words it was composed from
+  bcc bgxu_done
+  lda !BGX_T1
+  inc
+  jsr bgx_take
+  bcs bgxu_keep
+bgxu_done:
+  .al
+  plb
+  sep #$20 : .as
+  ply
+  tyx
+  lda #$00
+  sta @BGX_HINT+8, x
+  rts
+bgxu_keep:
+  .al
+  plb
+  sep #$20 : .as
+  ply
+  rts
+
+; ---------------------------------------------------------------------------------------
+; bgx_row: bring row Y (0..21 = map row Y+8) up to date. A8 X16, DB = 0; Y kept.
+; Carry set = stopped (BGX_STOP: 1 out of time, 2 queue full, 3 cache full until the NMI).
+; ---------------------------------------------------------------------------------------
+bgx_row:
+  .as : .xl
+  phy
+  lda @BGX_BOUND            ; a screen's own loop: rows only until BGX_VLAST of this frame
+  beq bgxr_nb               ;   (the frame has not passed yet: no NMI since the loop's wait)
+  lda @BGX_PENDF            ; ...unless rows of a new screen have waited a while: then the
+  cmp #BGX_PENDFULL         ;   rest goes at any line, so the screen shows whole and not
+  bcs bgxr_go8              ;   in pieces (a window that opened over a screen that redraws)
+  lda @isr_done
+  bne bgxr_blate
+  rep #$20 : .al
+  jsr bgx_vline
+  rep #$20 : .al
+  cmp #BGX_VLAST
+  bcc bgxr_go
+bgxr_blate:
+  sep #$20 : .as
+  jmp bgxr_late
+bgxr_nb:
+  .as
+  lda @BGX_IDLE             ; from the idle loop: a screen the menu drew is finished first,
+  beq bgxr_t                ;   at any line; the slow sweep gives way to the menu's frame
+  lda @BGX_SWEEP
+  beq bgxr_go8
+  lda @isr_done
+  beq bgxr_go8
+  jmp bgxr_late
+bgxr_t:
+  .as
+  rep #$20 : .al
+  jsr bgx_vwork
+  rep #$20 : .al
+  cmp #BGX_VLAST
+  bcc bgxr_go
+  jmp bgxr_late
+bgxr_go8:
+  .as
+  rep #$20 : .al
+bgxr_go:
+  .al
+  phb
+  pea $7f7f
+  plb
+  plb
+  tya
+  sta !BGX_T1
+  jsr bgx_region
+  lda !BGX_T1
+  jsr bgx_eqrow             ; the words it was composed from: nothing to do
+  bcc bgxr_ok
+  lda @BGX_BOUND            ; a screen's own loop: no list moved, compose
+  and #$00ff
+  bne bgxr_comp
+  lda !BGX_T1
+  dec
+  jsr bgx_take              ; the row above's (the list moved down)
+  bcc bgxr_ok
+  lda !BGX_T1
+  inc
+  jsr bgx_take              ; the row below's
+  bcc bgxr_ok
+bgxr_comp:
+  .al
+  jsr bgx_compose
+  bcs bgxr_stop
+  lda !BGX_PROW             ; the row is the physical row just composed
+  jsr bgx_setcur
+  lda @BGX_NROWS            ; debug
+  inc
+  sta @BGX_NROWS
+bgxr_ok:
+  .al
+  plb
+  sep #$20 : .as
+  ply
+  clc
+  rts
+bgxr_stop:
+  .al
+  plb
+  sep #$20 : .as
+  ply
+  sec
+  rts
+bgxr_late:
+  sep #$20 : .as
+  lda #$01
+  sta @BGX_STOP
+  ply
+  sec
+  rts
+
+; the region of row BGX_T1 (rows 8..19 or 20..29), and BGX_XROW. A16 X16, DB = $7F; X Y kept.
+bgx_region:
+  .al
+  lda !BGX_T1
+  clc
+  adc #8
+  xba
+  lsr
+  lsr
+  sta !BGX_XROW             ; (row + 8) * 64
+  lda !BGX_T1
+  cmp #12
+  bcs bgxrg_b
+  lda #$0000
+  sta !BGX_REG
+  sta !BGX_ROH
+  sta !BGX_RO4
+  lda #BGX_NSLOT_A
+  sta !BGX_NSL
+  lda #$2000
+  sta !BGX_BLANKW
+  rts
+bgxrg_b:
+  .al
+  lda #$0001
+  sta !BGX_REG
+  lda #$1000
+  sta !BGX_ROH
+  lda #$0400
+  sta !BGX_RO4
+  lda #BGX_NSLOT_B
+  sta !BGX_NSL
+  lda #$2200
+  sta !BGX_BLANKW
+  rts
+
+; Are the buffer row BGX_T1 and the words row A's physical row was composed from the same?
+; Carry clear = yes. A16 X16, DB = $7F.
+bgx_eqrow:
+  .al
+  tax
+  lda !BGX_CUR, x
+  and #$00ff
+  xba
+  lsr
+  lsr
+  tay                       ; physical row * 64
+  ldx !BGX_XROW
+; buffer row at X, physical row at Y (BGX_PSRC*): the same once composed? Carry clear = yes.
+; Words that differ can still compose the same: a blank glyph is 0 or the space, in any
+; palette, and only the visible glyph's palette counts (rows keep the blanks earlier windows
+; left, $0000 in one row and $2040 in the next). A16 X16, DB = $7F.
+bgx_eq:
+  .al : .xl
+  lda @BG2_TILE_BUF+24, x   ; cell 12 first: a sorted list's rows share their start
+  cmp !BGX_PSRC2+24, y
+  bne bgxq_p
+  lda @BG1_TILE_BUF+24, x
+  cmp !BGX_PSRC1+24, y
+  beq bgxq_go
+bgxq_p:
+  .al
+  lda #24
+  jsr bgxq_canon
+  bcs bgxq_diff
+bgxq_go:
+  .al
+  lda #$0008
+  sta !BGX_TMP
+bgxq_loop:
+  .al
+  lda @BG2_TILE_BUF, x
+  cmp !BGX_PSRC2, y
+  bne bgxq_s0
+  lda @BG1_TILE_BUF, x
+  cmp !BGX_PSRC1, y
+  bne bgxq_s0
+bgxq_c0:
+  .al
+  lda @BG2_TILE_BUF+2, x
+  cmp !BGX_PSRC2+2, y
+  bne bgxq_s1
+  lda @BG1_TILE_BUF+2, x
+  cmp !BGX_PSRC1+2, y
+  bne bgxq_s1
+bgxq_c1:
+  .al
+  lda @BG2_TILE_BUF+4, x
+  cmp !BGX_PSRC2+4, y
+  bne bgxq_s2
+  lda @BG1_TILE_BUF+4, x
+  cmp !BGX_PSRC1+4, y
+  bne bgxq_s2
+bgxq_c2:
+  .al
+  lda @BG2_TILE_BUF+6, x
+  cmp !BGX_PSRC2+6, y
+  bne bgxq_s3
+  lda @BG1_TILE_BUF+6, x
+  cmp !BGX_PSRC1+6, y
+  bne bgxq_s3
+bgxq_c3:
+  .al
+  txa
+  clc
+  adc #$0008
+  tax
+  tya
+  clc
+  adc #$0008
+  tay
+  dec !BGX_TMP
+  bne bgxq_loop
+  clc
+  rts
+bgxq_s0:
+  .al
+  lda #0
+  jsr bgxq_canon
+  bcc bgxq_c0
+  rts
+bgxq_s1:
+  .al
+  lda #2
+  jsr bgxq_canon
+  bcc bgxq_c1
+  rts
+bgxq_s2:
+  .al
+  lda #4
+  jsr bgxq_canon
+  bcc bgxq_c2
+  rts
+bgxq_s3:
+  .al
+  lda #6
+  jsr bgxq_canon
+  bcc bgxq_c3
+  rts
+bgxq_diff:
+  .al
+  sec
+  rts
+
+; cell A (byte offset) of buffer row X and physical row Y: the same once composed? Carry
+; clear = yes. A16 X16, DB = $7F; X Y kept.
+bgxq_canon:
+  .al
+  phx
+  phy
+  sta !BGX_CQO
+  txa
+  clc
+  adc !BGX_CQO
+  tax
+  tya
+  clc
+  adc !BGX_CQO
+  tay
+  lda @BG2_TILE_BUF, x
+  sta !BGX_CQ2
+  lda @BG1_TILE_BUF, x
+  sta !BGX_CQ1
+  jsr bgxq_key
+  lda !BGX_CKA
+  sta !BGX_CKA2
+  lda !BGX_CKB
+  sta !BGX_CKB2
+  lda !BGX_CKP
+  sta !BGX_CKP2
+  lda !BGX_PSRC2, y
+  sta !BGX_CQ2
+  lda !BGX_PSRC1, y
+  sta !BGX_CQ1
+  jsr bgxq_key
+  ply
+  plx
+  lda !BGX_CKA
+  cmp !BGX_CKA2
+  bne bgxqc_no
+  lda !BGX_CKB
+  cmp !BGX_CKB2
+  bne bgxqc_no
+  lda !BGX_CKP
+  cmp !BGX_CKP2
+  bne bgxqc_no
+  clc
+  rts
+bgxqc_no:
+  .al
+  sec
+  rts
+
+; the cell BGX_CQ2 / BGX_CQ1 as composed: its glyphs (blank = 0) and the palette that shows.
+bgxq_key:
+  .al
+  lda !BGX_CQ2
+  bit #$03be                ; (a CJK cell, tile 512+, is never blank)
+  beq bgxk_lb
+  and #$03fe
+  sta !BGX_CKA
+  lda !BGX_CQ2
+  and #$1c00
+  sta !BGX_CKP
+  bra bgxk_r
+bgxk_lb:
+  .al
+  stz !BGX_CKA
+  lda !BGX_CQ1
+  and #$1c00
+  sta !BGX_CKP
+bgxk_r:
+  .al
+  lda !BGX_CQ1
+  bit #$03be
+  beq bgxk_rb
+  and #$03fe
+  sta !BGX_CKB
+  rts
+bgxk_rb:
+  .al
+  stz !BGX_CKB
+  lda !BGX_CKA
+  bne bgxk_out
+  stz !BGX_CKP              ; both blank: no palette shows
+bgxk_out:
+  .al
+  rts
+
+; Row A (0..21) of BGX_T1's region was composed from the words row BGX_T1 now has? Then row
+; BGX_T1 shows its physical row too. Carry clear = taken. A16 X16, DB = $7F.
+bgx_take:
+  .al : .xl
+  cmp #BGX_ROWS
+  bcs bgxt2_no              ; (row -1 too: $ffff)
+  sta !BGX_PG
+  cmp #12                   ; carry = region B
+  rol
+  eor !BGX_REG              ; REG = 1 for region B
+  and #$0001
+  bne bgxt2_no              ; another region: other slots
+  lda !BGX_PG
+  jsr bgx_eqrow
+  bcs bgxt2_no
+  ldx !BGX_PG
+  lda !BGX_CUR, x
+  and #$00ff
+  jsr bgx_setcur
+  lda @BGX_NSHIFT           ; debug
+  inc
+  sta @BGX_NSHIFT
+  clc
+  rts
+bgxt2_no:
+  .al
+  sec
+  rts
+
+; Row BGX_T1 shows physical row A from now on (the next commit puts it on screen). A16 X16,
+; DB = $7F.
+bgx_setcur:
+  .al
+  ldx !BGX_T1
+  sep #$20 : .as
+  pha
+  lda !BGX_CUR, x
+  tax
+  lda !BGX_RC, x
+  dec
+  sta !BGX_RC, x
+  pla
+  ldx !BGX_T1
+  sta !BGX_CUR, x
+  tax
+  lda !BGX_RC, x
+  inc
+  sta !BGX_RC, x
+  lda #$01
+  sta @BGX_PEND
+  rep #$20 : .al
+  rts
+
+; ---------------------------------------------------------------------------------------
+; bgx_compose: the buffer row at BGX_XROW into a free physical row (BGX_PROW: its map words
+; in BGX_PMAP, the buffer words in BGX_PSRC*), cell by cell. A16 X16, DB = $7F. Carry set =
+; stopped (BGX_STOP; the physical row stays free). A cell's palette is its left
+; glyph's, or the right one's under a blank left glyph. A pair is found by a hash of its two
+; glyphs (BGX_HT, one table per region): the entry names a slot, and the slot's own two
+; glyphs say whether it is this pair (another pair may have taken the entry since, or the
+; slot may be free). The cell loop keeps its scratch in a direct page of its own (BGX_DP,
+; page-aligned: one cycle less per access than absolute).
+; ---------------------------------------------------------------------------------------
+#define C_W2    $00
+#define C_W1    $02
+#define C_PAL   $04
+#define C_HE    $06             /* the pair's BGX_HT entry */
+#define C_ROH   $08
+#define C_XEND  $0a
+#define C_BLANK $0c
+#define C_G2    $0e
+#define C_RO4   $10
+#define C_FREEN $12             /* address of the region's BGX_FREEN */
+#define C_G1    $14
+#define C_DMA   $16             /* nonzero: new pairs' tiles go through DMA */
+#define C_PY    $18             /* the cell's offset in the physical row */
+#define C_NK    $1a             /* the next cell's left half: the right half of a CJK glyph on BG1 (0 = none) */
+#define C_NP    $1c             /*   its palette */
+bgx_compose:
+  .al : .xl
+  jsr bgx_alloc             ; a physical row nothing holds
+  bcc bgxc_have
+  sep #$20 : .as
+  lda #$03                  ; (none: the next commit frees the screen's old ones)
+  sta @BGX_STOP
+  rep #$20 : .al
+  sec
+  rts
+bgxc_have:
+  .al
+  sta !BGX_PROW
+  xba
+  lsr
+  lsr
+  sta !BGX_PROWO
+  phd
+  pea BGX_DP
+  pld
+  lda #$0000
+  sta !BGX_GCROW            ; no collection for this row yet
+  lda @BGX_IDLE             ; from the idle loop the menu's own code is parked: channel 7
+  and #$00ff                ;   is free (the NMI keeps it as it finds it)...
+  sta C_DMA
+  beq bgxc_start
+  lda @BGX_HDMA7            ; ...unless the keyboard's cursor runs it as HDMA (kbdcur.a65):
+  and #$00ff                ;   a GP-DMA on it would retarget the channel mid-frame, so
+  beq bgxc_dma              ;   the tiles are copied with MVN
+  stz C_DMA
+  bra bgxc_start
+bgxc_dma:
+  .al
+  sep #$20 : .as            ; channel 7: the font's bank into $2180; WRAM bank $7F
+  lda #$00
+  sta @$004370
+  lda #$80
+  sta @$004371
+  lda #^font
+  sta @$004374
+  lda #$01
+  sta @$002183
+  rep #$20 : .al
+bgxc_start:
+  .al
+  lda !BGX_ROH
+  sta C_ROH
+  lda !BGX_RO4
+  sta C_RO4
+  lda !BGX_REG
+  asl
+  adc #!BGX_FREEN
+  sta C_FREEN
+  lda !BGX_BLANKW
+  sta C_BLANK
+  ldx !BGX_XROW             ; X: the buffer row, Y: the physical row
+  txa
+  clc
+  adc #64
+  sta C_XEND
+  ldy !BGX_PROWO
+  stz C_NK
+bgxc_cell:
+  .al
+  lda @BG2_TILE_BUF, x
+  sta !BGX_PSRC2, y
+  sta C_W2
+  lda @BG1_TILE_BUF, x
+  sta !BGX_PSRC1, y
+  sta C_W1
+  ora C_W2
+  ora C_NK
+  bit #$0200                ; a CJK glyph (tile 512 and up: a cache cell, never the font)?
+  beq bgxc_fnt
+  jmp bgxc_cjk
+bgxc_fnt:
+  .al
+  and #$01be                ; both glyphs blank (0 or the space, 32)?
+  bne bgxc_nb
+  lda C_BLANK
+  sta !BGX_PMAP, y
+bgxc_next:
+  .al
+  inx
+  inx
+  iny
+  iny
+  cpx C_XEND
+  bcc bgxc_cell
+  jmp bgxc_end
+bgxc_nb:
+  .al
+  sty C_PY
+  lda C_W2                  ; the palette
+  bit #$01be
+  bne bgxc_lp
+  lda C_W1
+bgxc_lp:
+  .al
+  and #$1c00
+  sta C_PAL
+  lda C_W1                  ; the two glyphs * 2
+  and #$01fe
+  sta C_G1
+  lda C_W2
+  and #$01fe
+  sta C_G2
+bgxc_hash:
+  .al
+  asl                       ; the hash
+  asl
+  asl
+  eor C_G1
+  and #$0ffe
+  ora C_ROH
+  tay
+  sty C_HE
+  lda !BGX_HT, y
+  beq bgxc_miss
+  tay                       ; = RO4 + slot * 2 + 2
+  lda C_G1
+  cmp !BGX_SB-2, y
+  bne bgxc_miss
+  lda C_G2
+  cmp !BGX_SA-2, y
+  bne bgxc_miss
+  lda !BGX_SM-2, y
+bgxc_put:
+  .al
+  ora C_PAL
+  ldy C_PY
+  sta !BGX_PMAP, y
+  bra bgxc_next
+bgxc_miss:
+  .al
+  jsr bgx_insert            ; carry clear: A = map word
+  bcc bgxc_put
+  lda @BGX_STOP
+  and #$00ff
+  cmp #$0004
+  bne bgxc_stop
+  lda #$0000                ; collected: what this row took is free again, start over
+  sep #$20 : .as
+  sta @BGX_STOP
+  rep #$20 : .al
+  jmp bgxc_start
+bgxc_stop:
+  .al                       ; (the physical row stays free)
+  pld
+  sec
+  rts
+bgxc_end:
+  .al
+  pld
+  clc
+  rts
+
+; A cell with a CJK glyph (cjk.a65). The glyph cache's cells are 16 px: a BG1 glyph starts on
+; this cell's odd column and ends on the next cell's even one (whose BG2 word is a blank), a
+; BG2 glyph (its own pool) fills this cell. Its halves are keys of their own: $0200 + glyph * 4
+; (+2 = the right half), drawn from the resident sheet (bgx_half); a glyph the sheet does not
+; have (a CJK language's own, gone with the composed mode) or an unbound cell is blank.
+bgxc_cjk:
+  .al
+  sty C_PY
+  lda #$ffff                ; no palette yet
+  sta C_PAL
+  lda C_W2                  ; the left half
+  bit #$0200
+  beq bgxcj_l1
+  jsr bgx_cjk2key           ; a BG2 glyph: both halves
+  beq bgxcj_lb
+  sta C_G2
+  inc
+  inc
+  sta C_G1
+  lda C_W2
+  and #$1c00
+  sta C_PAL
+  stz C_NK
+  bra bgxcj_go
+bgxcj_l1:
+  .al
+  lda C_NK                  ; the end of the BG1 glyph before
+  beq bgxcj_l2
+  sta C_G2
+  lda C_NP
+  sta C_PAL
+  bra bgxcj_r
+bgxcj_l2:
+  .al
+  lda C_W2
+  bit #$01be
+  beq bgxcj_lb
+  and #$01fe
+  sta C_G2
+  lda C_W2
+  and #$1c00
+  sta C_PAL
+  bra bgxcj_r
+bgxcj_lb:
+  .al
+  stz C_G2
+bgxcj_r:
+  .al
+  stz C_NK                  ; the right half
+  lda C_W1
+  bit #$0200
+  beq bgxcj_r1
+  jsr bgx_cjk1key
+  beq bgxcj_rb
+  sta C_G1
+  inc
+  inc
+  sta C_NK                  ; its end shows on the next cell
+  lda C_W1
+  and #$1c00
+  sta C_NP
+  bra bgxcj_rp
+bgxcj_r1:
+  .al
+  lda C_W1
+  bit #$01be
+  beq bgxcj_rb
+  and #$01fe
+  sta C_G1
+bgxcj_rp:
+  .al
+  lda C_PAL
+  bpl bgxcj_go
+  lda C_W1
+  and #$1c00
+  sta C_PAL
+  bra bgxcj_go
+bgxcj_rb:
+  .al
+  stz C_G1
+  lda C_PAL
+  bpl bgxcj_go
+  lda C_BLANK               ; nothing shows
+  ldy C_PY
+  sta !BGX_PMAP, y
+  jmp bgxc_next
+bgxcj_go:
+  .al
+  lda C_G2
+  jmp bgxc_hash
+
+; BG1 word A (a CJK cell) -> its glyph's left half key, or 0 (Z). A16 X16, DB = $7F; X Y kept.
+bgx_cjk1key:
+  .al
+  phx
+  and #$03ff
+  sec
+  sbc #CJK_TILE_B
+  lsr
+  tax                       ; (tile - $200) / 2
+  lda !CJK_TILE_SLOT, x
+  and #$00ff
+  beq bgxck_out
+  dec
+  asl
+  tax
+  lda !CJK_S2G, x           ; glyph + 1
+  bra bgxck_g
+
+; BG2 word A (a CJK cell of its own pool) -> the same.
+bgx_cjk2key:
+  .al
+  phx
+  and #$03ff
+  cmp #CJK2_TILE_B
+  bcc bgxck2_a
+  sec
+  sbc #CJK2_TILE_B+128      ; tiles 896..1023 = slots 64..127
+  cmp #$0080
+  bcs bgxck_none
+  lsr
+  clc
+  adc #64
+  bra bgxck2_s
+bgxck2_a:
+  .al
+  sec
+  sbc #CJK2_TILE_A          ; tiles 640..767 = slots 0..63
+  bcc bgxck_none
+  lsr
+bgxck2_s:
+  .al
+  asl
+  tax
+  lda !CJK2_S2G, x
+bgxck_g:
+  .al
+  beq bgxck_out
+  dec
+  cmp @cjk_nglyphs          ; only the resident sheet's glyphs
+  bcs bgxck_none
+  asl
+  asl
+  clc
+  adc #$0200
+  plx
+  cmp #$0000
+  rts
+bgxck_none:
+  .al
+  lda #$0000
+bgxck_out:
+  .al
+  plx
+  cmp #$0000
+  rts
+
+; ---------------------------------------------------------------------------------------
+; bgx_insert: the cell's pair (C_G2, C_G1) is not in the region's cache: a free slot takes
+; it, its hash entry (C_HE) names it, the queue carries its tiles. A16 X16, DB = $7F, D =
+; BGX_DP; X kept. Carry clear: A = the slot's map word (no palette). Carry set: BGX_STOP =
+; 2 queue full, 3 no slot until the screen changes, 4 collected (the row starts over).
+; ---------------------------------------------------------------------------------------
+bgx_insert:
+  .al : .xl
+  phx
+  lda @BGX_STTOT
+  sec
+  sbc @BGX_UPTOT
+  cmp #BGX_QN
+  bcc bgxi_q
+  lda #$0002
+  jmp bgxi_fail
+bgxi_q:
+  .al
+  lda (C_FREEN)
+  bne bgxi_take
+  lda !BGX_REG              ; none recycled: the next one never handed out
+  asl
+  tax
+  lda !BGX_NEXT, x
+  lsr
+  cmp !BGX_NSL
+  bcs bgxi_none
+  asl
+  pha
+  inc
+  inc
+  sta !BGX_NEXT, x
+  pla
+  clc
+  adc C_RO4
+  tay
+  bra bgxi_slot
+bgxi_none:
+  .al
+  jsr bgxi_collect          ; no slot
+  jmp bgxi_fail
+bgxi_take:
+  .al
+  dec                       ; a slot off the stack
+  dec
+  sta (C_FREEN)
+  clc
+  adc C_RO4
+  tax
+  ldy !BGX_FREE, x          ; Y = the slot (RO4 + slot * 2)
+bgxi_slot:
+  .al
+  lda C_G2
+  sta !BGX_SA, y
+  lda C_G1
+  sta !BGX_SB, y
+  ldx C_HE
+  tya
+  inc
+  inc
+  sta !BGX_HT, x
+  lda @BGX_STTOT            ; its queue entry: where it goes in VRAM, then its tiles
+  and #BGX_QN-1
+  asl
+  tax
+  lda !BGX_VA, y
+  sta !BGX_STQ, x
+  txa
+  asl
+  asl
+  asl
+  asl                       ; entry * 32
+  clc
+  adc #!BGX_STAGE
+  phy
+  tay
+  lda C_G2
+  ora C_G1
+  bit #$0200
+  bne bgxi_cjk              ; a CJK half: not from the font
+  tya
+  ldy C_DMA
+  beq bgxi_mvn
+  sta @$002181
+  lda C_G2
+  jsr bgx_stdma
+  lda C_G1
+  jsr bgx_stdma
+  bra bgxi_qd
+bgxi_mvn:
+  .al
+  tay
+  lda C_G2
+  asl
+  asl
+  asl                       ; glyph * 16
+  clc
+  adc #!font
+  tax
+  lda #$000f
+  mvn ^BGX_STAGE, ^font
+  lda C_G1                  ; (Y moved on 16 bytes: the right half's tile)
+  asl
+  asl
+  asl
+  clc
+  adc #!font
+  tax
+  lda #$000f
+  mvn ^BGX_STAGE, ^font
+  bra bgxi_qd
+bgxi_cjk:
+  .al
+  lda C_G2
+  jsr bgx_half
+  lda C_G1
+  jsr bgx_half
+bgxi_qd:
+  .al
+  ply
+  lda @BGX_STTOT            ; the NMI may send it now
+  inc
+  sta @BGX_STTOT
+  lda !BGX_SM, y
+  plx
+  clc
+  rts
+bgxi_fail:
+  .al
+  sep #$20 : .as
+  sta @BGX_STOP
+  rep #$20 : .al
+  plx
+  sec
+  rts
+
+; One half (A = its key) into the stage at Y: a font glyph's tile, or a CJK glyph's half
+; from the resident sheet (planes 0/1 of its 4bpp tile). Y moves on 16 bytes. A16 X16; DB =
+; $7F after.
+bgx_half:
+  .al : .xl
+  cmp #$0200
+  bcs bgxh_cjk
+  asl
+  asl
+  asl
+  clc
+  adc #!font
+  tax
+  lda #$000f
+  mvn ^BGX_STAGE, ^font
+  rts
+bgxh_cjk:
+  .al
+  sec
+  sbc #$0200
+  asl
+  asl
+  asl
+  asl                       ; glyph * 64 + half * 32
+  clc
+  adc #!cjk_sheet
+  tax
+  lda #$000f
+  mvn ^BGX_STAGE, ^cjk_sheet
+  rts
+
+; no slot: collect, once per row, else wait for the screen to change. A16, DB = $7F.
+; Returns A = BGX_STOP's value (3 or 4).
+bgxi_collect:
+  .al
+  lda !BGX_GCROW
+  bne bgxic_wait            ; (collected already for this row: nothing more would free)
+  jsr bgx_gc
+  lda #$0001
+  sta !BGX_GCROW
+  lda #$0004
+  rts
+bgxic_wait:
+  .al
+  lda #$0003
+  rts
+
+; A physical row no row holds and the screen does not show. A16 X16, DB = $7F. Carry
+; clear: A = it.
+bgx_alloc:
+  .al
+  ldx !BGX_PSCAN
+  ldy #BGX_NP
+bgxal_loop:
+  .al
+  sep #$20 : .as
+  lda !BGX_RC, x
+  rep #$20 : .al
+  beq bgxal_found
+  inx
+  cpx #BGX_NP
+  bcc bgxal_n
+  ldx #$0000
+bgxal_n:
+  .al
+  dey
+  bne bgxal_loop
+  sec
+  rts
+bgxal_found:
+  .al
+  txa
+  inc
+  cmp #BGX_NP
+  bcc bgxal_s
+  lda #$0000
+bgxal_s:
+  .al
+  sta !BGX_PSCAN
+  txa
+  clc
+  rts
+
+; One glyph (A = glyph * 2) into WRAM at the $2180 address, channel 7 set up by the caller.
+; S-CPU version 1 can crash when a DMA ends right before HDMA: there it starts only early
+; enough on the line to end well before the HDMA point. A16 X16, any DB.
+bgx_stdma:
+  .al
+  asl
+  asl
+  asl
+  clc
+  adc #!font
+  sta @$004372
+  lda #$0010
+  sta @$004375
+  sep #$20 : .as
+  lda @BGX_CPUV
+  cmp #$02
+  bcs bgxsd_go
+bgxsd_wait:
+  .as
+  lda @$002137              ; latch H and V
+  lda @$00213f
+  lda @$00213c              ; H, low 8 bits
+  xba
+  lda @$00213c              ; bit 8
+  and #$01
+  xba
+  rep #$20 : .al
+  cmp #150                  ; dot 150 + the 16 bytes ends ~dot 240, HDMA is at ~274
+  sep #$20 : .as
+  bcs bgxsd_wait
+bgxsd_go:
+  .as
+  lda #$80
+  sta @$00420b
+  rep #$20 : .al
+  rts
+
+; ---------------------------------------------------------------------------------------
+; bgx_gc: the collector, region BGX_REG only. Every slot of the region that neither BGX_MAP
+; nor (rows changed since the commit) BGX_DMAP shows goes back on the free stack, and no
+; lookup finds it any more (its first glyph becomes BGX_SA_FREE). The pages stay: an entry
+; that names a free slot just misses. Marks are bit 15 of BGX_SA. A16 X16, DB = $7F; X Y kept.
+; ---------------------------------------------------------------------------------------
+bgx_gc:
+  .al : .xl
+  phx
+  phy
+  lda #$0000                ; the region's rows
+  ldx !BGX_REG
+  beq bgxgc_r
+  lda #12
+bgxgc_r:
+  .al
+  sta !BGX_GCR
+bgxgc_row:
+  .al
+  ldx !BGX_GCR
+  lda !BGX_CUR, x
+  and #$00ff
+  pha
+  jsr bgxgc_prow            ; what it holds
+  pla
+  ldx !BGX_GCR
+  sep #$20 : .as
+  cmp !BGX_DISP, x
+  rep #$20 : .al
+  beq bgxgc_rn
+  lda !BGX_DISP, x          ; and what the screen shows, if not the same
+  and #$00ff
+  jsr bgxgc_prow
+bgxgc_rn:
+  .al
+  lda !BGX_GCR
+  inc
+  sta !BGX_GCR
+  cmp #12
+  beq bgxgc_end             ; (region A ends at row 12)
+  cmp #BGX_ROWS
+  bne bgxgc_row
+bgxgc_end:
+  .al
+  jsr bgx_rebuild
+  lda @BGX_NGC              ; debug
+  inc
+  sta @BGX_NGC
+  ply
+  plx
+  rts
+
+; the slots physical row A uses are in use. A16 X16, DB = $7F.
+bgxgc_prow:
+  .al
+  xba
+  lsr
+  lsr
+  tax
+  lda #32
+  sta !BGX_T2
+bgxgc_pl:
+  .al
+  lda !BGX_PMAP, x
+  jsr bgxgc_one
+  inx
+  inx
+  dec !BGX_T2
+  bne bgxgc_pl
+  rts
+
+; map word A of region BGX_REG: its slot is in use. A16 X16, DB = $7F; X kept. Slot offset
+; (RO4 + slot * 2) = tile - 2, region B $400 on, past tiles 512/513.
+bgxgc_one:
+  .al
+  and #$03ff                ; the tile
+  ldy !BGX_REG
+  bne bgxgc_mb
+  cmp #$0002                ; region A: tile 0 is the blank pair
+  bcc bgxgc_mn
+  dec
+  dec
+  tay
+  bra bgxgc_set
+bgxgc_mb:
+  .al
+  cmp #$0200                ; region B: tile 512 is the blank pair, the slots skip it
+  beq bgxgc_mn
+  bcc bgxgc_mb2
+  dec
+  dec
+bgxgc_mb2:
+  .al
+  cmp #$0002
+  bcc bgxgc_mn
+  clc
+  adc #$0400-2
+  tay
+bgxgc_set:
+  .al
+  lda !BGX_SA, y
+  ora #$8000
+  sta !BGX_SA, y
+bgxgc_mn:
+  .al
+  rts
+
+; the region's free stack from the marks: unmarked slots free (pushed from the last down, so
+; the stack's top is the first slot), marked ones unmarked. A16 X16, DB = $7F.
+bgx_rebuild:
+  .al : .xl
+  ldy !BGX_RO4              ; the stack's next entry
+  lda !BGX_REG
+  asl
+  tax
+  lda !BGX_NEXT, x          ; the slots handed out so far (the rest were never used)
+  lsr
+  beq bgxb_end
+  sta !BGX_T2
+  dec
+  asl
+  clc
+  adc !BGX_RO4
+  tax                       ; the last of them
+bgxb_loop:
+  .al
+  lda !BGX_SA, x
+  bmi bgxb_used
+  lda #BGX_SA_FREE
+  sta !BGX_SA, x
+  txa
+  sta !BGX_FREE, y
+  iny
+  iny
+  bra bgxb_next
+bgxb_used:
+  .al
+  and #$7fff
+  sta !BGX_SA, x
+bgxb_next:
+  .al
+  dex
+  dex
+  dec !BGX_T2
+  bne bgxb_loop
+bgxb_end:
+  .al
+  lda !BGX_REG
+  asl
+  tax
+  tya
+  sec
+  sbc !BGX_RO4
+  sta !BGX_FREEN, x
+  rts
+
+; the background block (utils/gen_menubg.py)
+#include "menubg_data.i65"

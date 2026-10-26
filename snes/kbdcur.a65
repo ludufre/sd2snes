@@ -63,6 +63,9 @@ chl_t6:
   cpx #10
   bne chl_t6
   jsl @ce_hl_build
+  lda @BGX_ON                   ; the composed layer (menubg.a65) runs ch6 itself: the char
+  cmp #BGX_ON_MAGIC             ;   base of the header and of each region; the window table
+  beq chl_bgx                   ;   goes on ch7 there
   lda #$01                      ; A to B, direct, two registers once
   sta @$004360
   lda #$26                      ; $2126 + $2127 = window 1
@@ -78,14 +81,46 @@ chl_t6:
   lda #$7f                      ; the menu's ch0-5 + ch6
   sta @$00420c
   rtl
+; Composed: ch7, the channel of the GP-DMAs. The NMI's own transfers on it run in VBlank,
+; where no HDMA runs, and bgx_nmi puts the registers back as it found them; the compositor
+; sees BGX_HDMA7 and copies its tiles with MVN instead of a mid-frame DMA on the channel
+; (which would retarget the HDMA, and an HDMA run ends a GP-DMA on its channel).
+chl_bgx:
+  .as : .xl
+  lda #$01
+  sta @BGX_HDMA7
+  sta @$004370                  ; A to B, direct, two registers once
+  lda #$26                      ; $2126 + $2127 = window 1
+  sta @$004371
+  lda #$7e
+  sta @$004374
+  rep #$20 : .al
+  lda #!ce_hdma6
+  sta @$004372
+  lda #!ce_hdma5
+  sta @$004352
+  sep #$20 : .as
+  lda #$ff                      ; the layer's ch0-6 + ch7
+  sta @$00420c
+  rtl
 
-; ce_hl_off: ch5 back on the NMI's table, ch6 off.
+; ce_hl_off: ch5 back on the NMI's table, the window's channel off (ch6, or ch7 under the
+; composed layer, whose ch6 stays).
 ce_hl_off:
   .as : .xl
   rep #$20 : .al
   lda #!hdma_math
   sta @$004352
   sep #$20 : .as
+  lda @BGX_HDMA7
+  beq chlo_classic
+  lda #$00
+  sta @BGX_HDMA7
+  lda #$7f                      ; the layer's ch0-6
+  sta @$00420c
+  rtl
+chlo_classic:
+  .as : .xl
   lda #$3f
   sta @$00420c
   rtl

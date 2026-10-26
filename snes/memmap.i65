@@ -205,6 +205,129 @@
 #define BG2_TILE_BUF                $7EA000
 #define BG1_TILE_BUF                $7EB000
 
+/* Scrolling background (menubg.a65). The text of rows 8..29 is composed into ONE layer, BG2:
+   each cell (two columns) shows a PAIR of glyphs, a tile pair that a cache of pairs keeps in
+   VRAM, so BG1 is free for the background. $7ED200-$7EEFFF is zeroed by setup_gfx (BGX_ON = 0
+   until setup_hdma turns the mode on again); the $7F part is the mode's alone while it is on
+   (only a CJK language would load its file there, and that turns the mode off). */
+#define BGX_ON                      $7EE800    /* BGX_ON_MAGIC = composed mode on */
+#define BGX_ON_MAGIC                $A5
+#define BGX_SCAN                    $7EE801    /* the slow sweep's next row (0..21) */
+#define BGX_STOP                    $7EE803    /* why the last row stopped: 1 time, 2 queue full, 3 cache full */
+#define BGX_STTOT                   $7EE804    /* word: pairs queued so far (the compositor's) */
+#define BGX_UPTOT                   $7EE806    /* word: pairs sent so far (the NMI's) */
+#define BGX_HX                      $7EE808    /* word, 8.8: BG1 hscroll */
+#define BGX_VY                      $7EE80A    /* word, 8.8: BG1 vscroll */
+#define BGX_DXS                     $7EE80C    /* word, 8.8: the background's step per frame, + = right */
+#define BGX_DYS                     $7EE80E    /* word, 8.8: + = up */
+#define BGX_THM                     $7EE810    /* 1 = the background is the theme's (THEME_BG) */
+#define BGX_CPUV                    $7EE817    /* S-CPU version ($4210 & 15) */
+#define BGX_HINTALL                 $7EE818    /* a window came or went: look at every row */
+#define BGX_BUSY                    $7EE819    /* bgx_work is running (IRQ or idle) */
+#define BGX_IDLE                    $7EE81A    /* bgx_work called from the idle loop */
+#define BGX_NOIDLE                  $7EE81B    /* frames since the idle loop last ran */
+#define BGX_VMAX                    $7EE81C    /* debug: latest line bgx_work ended on */
+#define BGX_NMIV                    $7EE81E    /* debug: the latest line bgx_nmi ended on ($ffff = past VBlank) */
+#define BGX_NGC                     $7EE820    /* debug: collections so far */
+#define BGX_NROWS                   $7EE822    /* debug: rows composed so far */
+#define BGX_NSTAGED                 $7EE824    /* debug: pairs queued so far (same as STTOT, never reset) */
+#define BGX_NCYC                    $7EE826    /* debug: lines spent composing rows */
+#define BGX_NSHIFT                  $7EE828    /* debug: rows taken from a neighbour's composition */
+#define BGX_COMMIT                  $7EE830    /* the published rows are a whole screen: the NMI shows them */
+#define BGX_COMMITQ                 $7EE832    /* word: BGX_STTOT at the commit (their pairs) */
+#define BGX_PEND                    $7EE834    /* rows published since the last commit */
+#define BGX_PENDF                   $7EE835    /* frames they have waited (the NMI counts) */
+#define BGX_NCOMMIT                 $7EE836    /* debug: commits so far (word) */
+#define BGX_NMIF                    $7EE838    /* word: NMI scratch */
+#define BGX_NMIN                    $7EE83A    /* word: NMI scratch */
+#define BGX_SWEEP                   $7EE855    /* bgx_row is the slow sweep's (it gives way to the menu) */
+#define BGX_QUIET                   $7EE854    /* frames since the last hint (the NMI counts, 255 = a long time) */
+#define BGX_GCST                    $7EE852    /* word: BGX_STTOT when the idle loop found nothing to collect */
+#define BGX_SV7                     $7EE84A    /* 8 B: channel 7's registers while the NMI uses it */
+#define BGX_HINT                    $7EE8A0    /* 32 B, by map row: something printed there */
+#define BGX_HDMA_MODE               $7EE8C0    /* 11 B: $2105-$2108 per region */
+#define BGX_HDMA_CB                 $7EE8D0    /* 7 B: $210B per region */
+#define BGX_HDMA_SCR                $7EE8E0    /* 16 B: BG1 scroll per region */
+#define BGX_BOUND                   $7EE942    /* bgx_loop_gate: compose only until BGX_VLAST (a screen's own loop) */
+#define BGX_RESUME                  $7EE943    /*   the hinted row it stopped at, to go on from there */
+#define BGX_RCNT                    $7EE944    /*   rows left to look at in this pass */
+#define BGX_LSEL                    $7EE946    /* BGX_LSEL_MAGIC: setup_hdma decides by cur_lang, not CFG_LANGUAGE */
+#define BGX_LSEL_MAGIC              $C7        /*   (bgx_lang_gate; a magic, as clear_wram leaves $55) */
+#define BGX_HDMA7                   $7EE948    /* 1 = channel 7 is the keyboard cursor's HDMA (kbdcur.a65): the
+                                                  compositor copies tiles with MVN, no GP-DMA on it outside the NMI */
+/* bank $7F (the CJK cache keeps $7F0000-$7F1FFF): the pair cache. A region is rows 8..19 (A)
+   or rows 20..29 (B); per-region tables are BGX_RO2 or BGX_RO4 apart. Glyphs are kept as
+   2 * glyph (the tile buffers' tile number, space folded into 0). */
+#define BGX_STAGE                   $7F2000    /* the queue: BGX_QN pairs of tiles, 32 B each */
+#define BGX_SB                      $7F3400    /* 512 words per region: the slot's second glyph */
+#define BGX_SA                      $7F3C00    /*   its first glyph */
+#define BGX_SM                      $7F4400    /*   its map word (tile | priority) */
+#define BGX_FREE                    $7F4C00    /* 512 words per region: free slots (a stack of RO4 + slot * 2) */
+#define BGX_VA                      $7F7800    /* 512 words per region: the slot's VRAM address */
+#define BGX_TBLOK                   $7F7FFC    /* BGX_TBLMAGIC once BGX_SM / BGX_VA are filled in */
+#define BGX_BGMAPC                  $7FC800    /* 2 KB: the background map, built once */
+#define BGX_TMAPC                   $7FD000    /* 2 KB: the blank text map, built once */
+#define BGX_PMAPC                   $7FD800    /* 22 * 64 B: the blank physical rows, built once */
+#define BGX_STQ                     $7F8000    /* BGX_QN words: the VRAM address of each queued pair */
+#define BGX_V                       $7F8100    /* scratch (DB = $7F) */
+#define BGX_PAL                     $7F8100
+#define BGX_W1                      $7F8102
+#define BGX_PG                      $7F8108    /* bgx_take: the other row's offset */
+#define BGX_XEND                    $7F810A
+#define BGX_ROH                     $7F810C    /* 0 or $1000: the region's hash table */
+#define BGX_RO4                     $7F810E    /* 0 or $400 */
+#define BGX_REG                     $7F8110
+#define BGX_BLANKW                  $7F8112    /* the region's blank map word */
+#define BGX_T1                      $7F8114    /* the row (0..21) */
+#define BGX_T2                      $7F8116
+#define BGX_SLOT                    $7F8118
+#define BGX_XROW                    $7F811A    /* the row's offset in the tile buffers */
+#define BGX_FREEN                   $7F811E    /* 2 words: free slots per region, * 2 */
+#define BGX_TMP                     $7F8122
+#define BGX_NSL                     $7F8124    /* slots in this region */
+#define BGX_GCROW                   $7F8126    /* the row being composed has had its collection */
+#define BGX_GCR                     $7F812E    /* the collector's row */
+#define BGX_PROW                    $7F8130    /* the physical row being composed */
+#define BGX_PROWO                   $7F8132    /*   * 64 */
+#define BGX_PSCAN                   $7F8134    /* where the next free physical row is looked for */
+#define BGX_CQO                     $7F8136    /* bgx_eq's cell compare scratch */
+#define BGX_CQ2                     $7F8138
+#define BGX_CQ1                     $7F813A
+#define BGX_CKA                     $7F813C
+#define BGX_CKB                     $7F813E
+#define BGX_CKP                     $7F8140
+#define BGX_CKA2                    $7F8142
+#define BGX_CKB2                    $7F8144
+#define BGX_CKP2                    $7F8146
+#define BGX_NEXT                    $7F8148    /* 2 words: slots handed out so far per region, * 2 */
+#define BGX_DP                      $0F00      /* bank 0 page the compositor uses as its direct page */
+#define BGX_CUR                     $7F8200    /* 22 B: the physical row each map row holds now */
+#define BGX_DISP                    $7F8220    /* 22 B: the physical row the screen shows */
+#define BGX_RC                      $7F8240    /* BGX_NP B: how many of CUR and DISP name each physical row */
+#define BGX_PMAP                    $7FA400    /* BGX_NP physical rows of 64 B: map words */
+#define BGX_PSRC2                   $7FB000    /*   the BG2 words they were composed from */
+#define BGX_PSRC1                   $7FBC00    /*   the BG1 words */
+#define BGX_NP                      48         /* physical rows (22 held + 22 shown + 1 being composed) */
+#define BGX_HT                      $7F8400    /* 2048 words per region ($1000 apart): pair hash -> RO4 + slot * 2 + 2 */
+#define BGX_QN                      128        /* pairs the queue holds */
+#define BGX_ROWS                    22         /* map rows 8..29 */
+#define BGX_TEXTMAP                 $5400      /* VRAM: BG2 map of the body (32x32) */
+#define BGX_BGMAP                   $5C00      /* VRAM: BG1 map of the body (32x32) */
+#define BGX_BGVRAM                  $7C00      /* VRAM: background tiles, after the header logo (to $7DFF, a theme's to $7FFF) */
+#define BGX_BGTILE                  960        /* their first BG1 tile number (body BG1 char base $4000) */
+#define BGX_BGPAL                   7          /* BG1 palette 7 = CGRAM 112-127 */
+/* A theme's background (.thm v2, slots 9-12), written by the MCU's theme_apply on every menu
+   load: the magic only when the theme carries all four parts, 0 otherwise. Lockstep with
+   SRAM_THEME_BG_ADDR in src/memmap.h. */
+#define THEME_BG                    $FA9000    /* "TBG1" */
+#define THEME_BG_PRM                $FA9004    /* dx, dy (8.8), flags (bit0 hires), log2 w, log2 h, 0 */
+#define THEME_BG_PAL                $FA9010    /* 32 B: BG1 palette 7 */
+#define THEME_BG_TILES              $FA9040    /* 2048 B: 32 cells of two 4bpp tiles */
+#define THEME_BG_MAP                $FA9840    /* 2048 B: 32x32 words, cell*2 | flips */
+#define THEME_BG_MAGIC_LO           $4254      /* "TB" */
+#define THEME_BG_MAGIC_HI           $3147      /* "G1" */
+#define THEME_BG_NONE_HI            $3047      /* "G0": a theme without a background (the menu shows none) */
+
 /* CJK glyph cache (cjk.a65). An ideograph is a 16-px BG1 cell: two consecutive 4bpp tiles in a
    VRAM SLOT, loaded when a string first prints it and recycled when nothing shows it any more.
    Slots map to tiles through CJK_SLOT_TILE, so the pool can live wherever the screen has room:

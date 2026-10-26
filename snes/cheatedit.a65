@@ -402,6 +402,7 @@ ce_editor:
   jsr ce_draw_ed_hint
   jsr ce_draw_all
 ce_ed_loop:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq ce_ed_loop
   stz isr_done
@@ -1006,15 +1007,17 @@ ce_popup_nosup:
   ldx #!text_pcm_nosup
   stx print_src
   jsr ce_print_centered
-- lda isr_done
-  beq -
+ce_nosup_wait:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
+  lda isr_done
+  beq ce_nosup_wait
   stz isr_done
   jsl @ui_call_pad
   lda pad_a
   ora pad_b
   ora pad_y
   ora pad_start
-  beq -
+  beq ce_nosup_wait
   lda #$03
   sta @SFX_MAILBOX
   lda #CEP_H
@@ -1099,6 +1102,7 @@ ce_kbd_open:                  ; the file manager comes in here: its caller alrea
   jsl @ce_hl_on
   inc ce_hlon
 ce_kbd_loop:
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq ce_kbd_loop
   stz isr_done

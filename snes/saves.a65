@@ -246,6 +246,7 @@ ss_out:
 ; ----------------------------------------------------------------------
 sv_loop:
   .as
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq sv_loop
   stz isr_done

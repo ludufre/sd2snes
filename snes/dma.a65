@@ -71,9 +71,16 @@ setup_hdma:
   sty $4352
   sta $4354
 
+  jsl @bgx_hdma_gate ; fork: the scrolling background (menubg.a65) may take ch. 3, 4, 6
+  pha
   jsr waitblank
-  lda #$3f
-  sta $420c     ;enable HDMA ch. 0-5
+  pla
+  sta $420c     ;enable HDMA ch. 0-5 (+6)
   lda #$81      ;VBlank NMI + Auto Joypad Read
   sta $4200     ;enable V-BLANK NMI
   rts
+
+; fork: setup_hdma for bank $C1 (menubggate.a65 bgx_lang_gate). DB = 0, NMI off.
+bgx_call_shdma:
+  jsr setup_hdma
+  rtl

@@ -1,0 +1,55 @@
+; ===========================================================================
+; onboarding: the resident half of the first-boot gate (bank $C1). The gate itself
+; (onboarding_gate.a65) lives in bank $C3, which the game info screen's guide viewer
+; borrows, so every way in checks the bank with fm_bank_ok first (it restages it when a
+; guide took it). Without the bank the gate does nothing: no question at boot, and the
+; Settings entries return to the menu.
+; ===========================================================================
+
+.link page $c1
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c1 AFTER it.
+.link page $c1
+
+; jsl from snes/main.a65's coldboot. The tour seen already (the usual case) costs no bank.
+onboarding_gate:
+  php
+  sep #$20 : .as
+  lda @CFG_ONBOARDING_VERSION
+  cmp #ONB_VERSION
+  bcs onbr_out
+  jsl @fm_bank_ok
+  bcc onbr_out
+  plp
+  jmp @onbg_gate_c3
+onbr_out:
+  plp
+  rtl
+
+; Settings > "Tour of the new features" (menu_enttab_tour, contextdata.a65)
+onboarding_replay_all:
+  jsl @fm_bank_ok
+  bcc onbr_rtl
+  jmp @onbg_replay_all_c3
+onboarding_replay_217:
+  jsl @fm_bank_ok
+  bcc onbr_rtl
+  jmp @onbg_replay_217_c3
+onboarding_replay_218:
+  jsl @fm_bank_ok
+  bcc onbr_rtl
+  jmp @onbg_replay_218_c3
+onboarding_replay_219:
+  jsl @fm_bank_ok
+  bcc onbr_rtl
+  jmp @onbg_replay_219_c3
+onbr_rtl:
+  rtl
+
+; memtest's fade (same bank) for the gate in $C3
+onb_call_fade_out:
+  jsr mt_fade_out
+  rtl
+onb_call_fade_in:
+  jsr mt_fade_in
+  rtl

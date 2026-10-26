@@ -93,6 +93,7 @@ gea_wait:                     ; LOAD_NACK and republishes Recents, which the cal
   .as : .xl
   lda @LOAD_NACK
   bne gea_done
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq gea_wait
   stz isr_done
@@ -214,6 +215,7 @@ eb_opts:
   stz screen_dma_disable      ; the NMI uploads the box from here on
 eb_loop:
   .as : .xl
+  jsl @bgx_loop_gate  ; fork: the scrolling background composes while the loop waits
   lda isr_done
   beq eb_loop
   stz isr_done

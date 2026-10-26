@@ -648,6 +648,7 @@ gi_dc_show:
   jsr waitblank
   lda #$8f : sta $2100       ; forced blank
   stz $420c                  ; ALL HDMA off during our GP-DMA uploads (as setup_gfx does)
+  jsl @bgx_screen_off        ; fork: the scrolling background's layout back to the classic one
   ; --- base mode 3; ch3 HDMA will flip BGMODE to mode 5 at the band/body seam (line
   ;     128). SET UP ch3 here but DO NOT enable $420c yet: HDMA fires every scanline even
   ;     in forced blank, and the menu's proven ordering (setup_gfx `stz $420c` during the

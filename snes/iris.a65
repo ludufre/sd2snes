@@ -78,14 +78,16 @@ iris_out:
   rep #$10 : .xl
   lda #$7e : pha : plb                  ; DB = $7E (abs access to the iris WRAM)
 
-  ; --- ch6: A->B transfer mode 1 (2 regs x 1 byte) -> $2128 (WH2 L) + $2129 (WH3 R).
-  ;     DMA config only -- inert until $420c arms it below. ---
-  lda #$01 : sta @$004360               ; DMAP: A->B direct, mode 1
-  lda #$28 : sta @$004361               ; B base = $2128
+  ; --- ch5 (the selection bar's, which the iris drops anyway): A->B transfer mode 1 (2 regs
+  ;     x 1 byte) -> $2128 (WH2 L) + $2129 (WH3 R). ch6 stays the scrolling background's
+  ;     char-base switch (menubg.a65): without it the logo and rows 8..19 read the wrong
+  ;     tiles. DMA config only -- inert until $420c arms it below. ---
+  lda #$01 : sta @$004350               ; DMAP: A->B direct, mode 1
+  lda #$28 : sta @$004351               ; B base = $2128
   rep #$20 : .al
-  lda #IRIS_HDMA : sta @$004362         ; A1T low/high ($4362=$00, $4363=$80)
+  lda #IRIS_HDMA : sta @$004352         ; A1T low/high ($4352=$00, $4353=$80)
   sep #$20 : .as
-  lda #$7e : sta @$004364               ; A1B bank = $7E
+  lda #$7e : sta @$004354               ; A1B bank = $7E
 
   ; --- static HDMA headers (written once; only the 224 L/R pairs change) ---
   lda #$f0 : sta IRIS_HDMA+0            ; count = repeat|112, scanlines 0..111
@@ -133,7 +135,20 @@ iris_out:
                                         ;   black circle" the user asked for).
   ; --- swap the HDMA set: $5F (menu: keep ch0/ch1/ch2/ch3/ch4 + ch6, drop only ch5) or $4E
   ;     (ficha: keep ch1/ch2/ch3 + ch6). ch1/ch2 KEEP the gradient backdrop animating. ---
-  lda IRIS_HDMA_EN : sta @$00420c       ; arm ch6 (full-open table already staged)
+  lda IRIS_HDMA_EN                      ; arm the iris on ch5 (the set names it ch6), and
+  and #$bf                              ;   ch6 only for the scrolling background
+  ora #$20
+  pha
+  lda @BGX_ON
+  cmp #BGX_ON_MAGIC
+  bne ir_noch6
+  pla
+  ora #$40
+  pha
+ir_noch6:
+  .as
+  pla
+  sta @$00420c                          ; (full-open table already staged)
 
   ; --- colour math OFF (kills the ch5 blue-purple), AFTER dropping ch5 so it sticks. ch5
   ;     rewrote $2131/$2132 per scanline, so setting this BEFORE the swap would be clobbered.
