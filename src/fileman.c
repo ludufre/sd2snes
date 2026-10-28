@@ -75,7 +75,7 @@ static __attribute__((noinline)) void fm_clip(void) {
     sram_readblock(ent, SRAM_DIR_ADDR + i * 4, 4);
     if(ent[3] == TYPE_PARENT) continue;
     uint32_t p = ent[0] | ((uint32_t)ent[1] << 8) | ((uint32_t)ent[2] << 16);
-    sram_readstrn(name + 1, SRAM_MENU_ADDR + p + 6, sizeof(name) - 1);
+    sram_read_fsname(name + 1, SRAM_MENU_ADDR + p + 6, sizeof(name) - 1);
     char *dot = strchr(name + 1, 1);          /* the hidden extension (get_selected_name) */
     if(dot) *dot = '.';
     uint16_t len = strlen(name + 1);

@@ -12,6 +12,7 @@
 #include "snes.h"
 #include "util.h"
 #include "gameopt.h"
+#include "gameinfo.h"
 
 /* The SNES menu pokes config bytes by hard-coded offset (snes/memmap.i65,
    CFG_*=CFG_ADDR+$nn).  Pinning the C layout to that map is what stops an
@@ -824,6 +825,7 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
     sram_writebyte(0, SRAM_LASTGAME_FILE_ADDR); /* default: empty pre-select name */
   }
   int cap = listed_game_cap(listfilename);
+  fn_cjk_begin(0);
   /* Favorites alphabetical sort is DISPLAY-ONLY: the file keeps its insertion order
      (so turning the toggle off restores it).  Sort an index permutation, dump the
      names in that order, and record favorite_sort_map so the by-index ops
@@ -863,10 +865,12 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
         order[j + 1] = curi;
       }
       for(i = 0; i < count; i++) {
-        sram_writestrn((uint8_t*)keys[order[i]], address + 256 * i, 256);
+        fn_utf8_to_menu(keys[order[i]], fntmp, sizeof(fntmp));
+        sram_writestrn((uint8_t*)fntmp, address + 256 * i, 256);
         favorite_sort_map[i] = order[i];
       }
       favorite_sort_count = (uint8_t) count;
+      fn_cjk_commit();
       return (uint8_t) count;
     }
     favorite_sort_count = 0; /* toggle off -> identity (display == file order) */
@@ -883,7 +887,8 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
        LAST_GAME_DIR block below (which scans the base part for the last '/'). */
     TCHAR disp[256];
     listed_game_display_key(fntmp, disp);
-    sram_writestrn((uint8_t*)disp, address+256*index, 256);
+    fn_utf8_to_menu(disp, dirtmp, sizeof(dirtmp));
+    sram_writestrn((uint8_t*)dirtmp, address+256*index, 256);
     if(write_lastdir && index == 0) {
       /* write directory + base ROM basename of the most recent game for
          reset_to_menu >= 2 (Folder/Rom) navigation. For a patch-aware
@@ -916,6 +921,7 @@ uint8_t cfg_dump_listed_games_for_snes(const uint8_t *listfilename, uint32_t add
     index++;
   }
   file_close();
+  fn_cjk_commit();
   return (uint8_t) index;
 }
 

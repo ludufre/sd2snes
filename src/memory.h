@@ -127,6 +127,9 @@ void sram_writeshort(uint16_t val, uint32_t addr);
 void sram_writelong(uint32_t val, uint32_t addr);
 uint16_t sram_readblock(void* buf, uint32_t addr, uint16_t size);
 uint16_t sram_readstrn(void* buf, uint32_t addr, uint16_t size);
+/* Directory string: display\0 [filesystem\0]. The second string, when present, is the UTF-8
+   name FatFs can open; the first is what the menu prints (CJK-encoded). */
+uint16_t sram_read_fsname(void* buf, uint32_t addr, uint16_t size);
 uint16_t sram_writestrn(void* buf, uint32_t addr, uint16_t size);
 void sram_readlongblock(uint32_t* buf, uint32_t addr, uint16_t count);
 uint16_t sram_writeblock(void* buf, uint32_t addr, uint16_t size);

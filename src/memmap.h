@@ -124,7 +124,9 @@
 #define SRAM_COVER_ADDR              (0xC90000L) /* bank C9: per-ROM cover preview staging */
 #define SRAM_GAMEINFO_TILES_ADDR     (0xCA0000L) /* bank CA: game-info DirectColor 8bpp tiles (up to ~48KB) */
 #define SRAM_GAMEINFO_TMAP_ADDR      (0xCB0000L) /* bank CB: game-info 16-bit BG tilemap */
-#define SRAM_GAMEINFO_CJK_ADDR       (0xCBC000L) /* the game-info screen's CJK glyphs (a Japanese/Chinese title or description): 64 bytes each, up to GI_CJK_MAX, drawn by the firmware (gameinfo.c) and uploaded by the menu's glyph cache as glyphs 640+ (lead $FF). Lockstep with GI_CJK_SHEET in snes/memmap.i65 */
+#define SRAM_GAMEINFO_CJK_LOW_ADDR   (0xCBA000L) /* the file list's glyphs past its first 128: the menu's glyph i (16..127) at +64*i, $CBA400..$CBBFFF (the retired .gd tilemap's space; GI_TMAP keeps $CB0000..$CB00EF). Lockstep with GI_CJK_LOW in snes/memmap.i65 */
+#define SRAM_GAMEINFO_CJK_ADDR       (0xCBC000L) /* browser CJK filenames: 64 bytes each, up to GI_CJK_MAX (8 KB). The menu's glyph cache uploads them as glyphs 640+ (lead $FF) while CJK_MODE=0. Lockstep with GI_CJK_SHEET in snes/memmap.i65 */
+#define SRAM_GAMEINFO_CJK_GI_ADDR    (0xCBE000L) /* game-info CJK title/description: the other 8 KB of bank CB below SFX @CC. Same glyph indices 640+, selected by CJK_MODE=1 in cjk.a65 cus_src so a Ficha cannot wipe the file list's sheet */
 #define SRAM_MENU_SFX_ADDR           (0xCC0000L) /* banks CC..CF (256 KB, free during menu, below cheats @D0):
                                                     one SHARED budget, bump-allocated, holding the preloaded
                                                     nav-SFX PCM bodies the FPGA sfxdma engine streams into the
@@ -298,6 +300,14 @@
    sysinfo screens can coexist. Layout = WIFI_OFF_* in src/snes.h; lockstep with WIFI_BLK
    in snes/memmap.i65. LAST_GAME_FILE (0xFF4A00) stays clear above it. */
 #define SRAM_WIFI_ADDR               (0xFF4000L)
+/* The ideographs of the browser and the Recents/Favorites names (gameinfo.c fn_cjk_*), in the
+   free 0xFF41B6..0xFF48FF gap: count byte, "the folder has CJK rows" byte (the menu reads it:
+   FN_CJK_HAS in snes/memmap.i65), 240 u16 code points, the 30-byte pin bitmap
+   (0xFF4200..0xFF43FF). The lists' popups show over the browser, so both share one numbering. */
+#define SRAM_FN_CJK_ADDR             (0xFF4200L)
+/* the glyphs the last pass (re)drew, in the menu's numbering: count byte, pad, u16 each
+   (0xFF4400..0xFF45E1). Lockstep with FN_CJK_NEW in snes/memmap.i65 */
+#define SRAM_FN_CJK_NEW_ADDR         (0xFF4400L)
 /* Favorites mirror, 20*256 = 0x1400 bytes -> 0xFF6000..0xFF73FF.  Relocated out of
    the old 0xFF4000 slot (which only fit 10 entries before LAST_GAME_FILE) into the
    free gap past IPS_LIST so growing to 20 needed only this one address (kept in

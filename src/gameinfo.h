@@ -127,6 +127,18 @@ typedef struct __attribute__((__packed__)) _gameinfo_meta {
 void gameinfo_info_base(const uint8_t *rom_path, char *out, int outsize);
 int  gameinfo_font_cp(uint32_t cp, uint8_t *out);   /* one code point -> menu font bytes */
 
+/* File-list CJK: a pass numbers ideographs, then draws /sd2snes/lang/<ja|zh>.fnt into
+   SRAM_GAMEINFO_CJK_ADDR (glyphs 640+). A Ficha uses the other half of the bank. A pass
+   starts in FN_LIST (the Recents/Favorites names: numbered and pinned); fn_cjk_mode switches
+   it to FN_ROWS (scan_dir's browser rows: "? " placeholders, numbered later by
+   fn_cjk_page), FN_MARK (only note which numbered glyphs a page uses) or FN_PAGE (number a
+   page, recycling glyphs neither pinned nor marked). */
+enum { FN_LIST, FN_ROWS, FN_MARK, FN_PAGE };
+void fn_cjk_begin(int fresh);
+void fn_cjk_mode(uint8_t how);
+void fn_cjk_commit(void);
+void fn_utf8_to_menu(const char *src, char *dst, int dstsize);
+
 /* Parse /sd2snes/info/<rom>.yml (optional), stage the band image (<rom>.fmv animated,
  * else <rom>.gd static, else the sibling <rom>.cov OBJ fallback), write the meta
  * struct. Bounded + fail-safe; never hangs. mk3 always reports status=OK. */

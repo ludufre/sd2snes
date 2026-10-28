@@ -915,6 +915,8 @@ cus_src:
   .al : .xl
   cmp #$0080
   bcs cus_lang
+  cmp #CJK_FN_LOW
+  bcs cus_fnlow
   asl
   asl
   asl
@@ -948,7 +950,7 @@ cus_lang:
 cus_game:
   .al : .xl
   sec
-  sbc #$0280                 ; glyphs 640+: a game's own text, drawn by the firmware
+  sbc #$0280                 ; glyphs 640+: firmware-drawn (filetypes.c / gameinfo.c)
   asl
   asl
   asl
@@ -956,9 +958,32 @@ cus_game:
   asl
   asl
   clc
-  adc #!GI_CJK_SHEET
+  adc #!GI_CJK_SHEET         ; $CBC000: the file list
   sta $4372
   sep #$20 : .as
+  lda @CJK_MODE
+  beq cus_game_bank
+  rep #$20 : .al             ; the Ficha: same indices, the other 8 KB ($CBE000)
+  lda $4372
+  clc
+  adc #$2000
+  sta $4372
+  sep #$20 : .as
+  bra cus_game_bank
+cus_fnlow:
+  .al : .xl                  ; 16..127 past the resident names: more file-list glyphs
+  asl
+  asl
+  asl
+  asl
+  asl
+  asl
+  clc
+  adc #!GI_CJK_LOW
+  sta $4372
+  sep #$20 : .as
+cus_game_bank:
+  .as : .xl
   lda #^GI_CJK_SHEET
 cus_go:
   .as : .xl
@@ -2220,6 +2245,148 @@ cfl2_next:
   inx
   cpx #2*CJK2_NSLOTS
   bcc cfl2_loop
+  rts
+
+; cjk_flush_fn: the same for the firmware-drawn ranges (640+ and CJK_FN_LOW..127), after every
+; CMD_READDIR: scan_dir numbers the folder's ideographs afresh, so a glyph index means another one now.
+cjk_flush_fn:
+  php
+  rep #$30 : .al : .xl
+  phx
+  ldx #$0000
+cff_loop:
+  .al : .xl
+  phx
+  txa
+  asl
+  tax
+  lda @CJK_S2G, x
+  plx
+  cmp #$0000
+  beq cff_next
+  dec
+  jsr cff_ours
+  bcc cff_next
+  jsr cjk_unbind
+cff_next:
+  .al : .xl
+  inx
+  cpx #CJK_NSLOTS
+  bcc cff_loop
+  ldx #$0000
+cff2_loop:
+  .al : .xl
+  lda @CJK2_S2G, x
+  beq cff2_next
+  dec
+  jsr cff_ours
+  bcc cff2_next
+  inc                        ; cjk2_unbind takes glyph + 1
+  jsr cjk2_unbind
+cff2_next:
+  .al : .xl
+  inx
+  inx
+  cpx #2*CJK2_NSLOTS
+  bcc cff2_loop
+  plx
+  plp
+  rtl
+
+; cjk_fn_page: the browser is about to draw a page of a folder with CJK names (FN_CJK_HAS).
+; The firmware numbers only what is on screen: CMD_FN_PAGE rewrites the page's names and
+; redraws the glyphs it (re)assigned, listed at FN_CJK_NEW; those leave the VRAM cache, whatever
+; they showed before. The caller has drained a cover load (cover_sync_before_cmd).
+; jsl; preserves P.
+cjk_fn_page:
+  php
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$00                   ; wait_mcu_ready: the firmware back at its command poll
+  sta @MCU_CMD
+  ldx #$0000
+cfp_ready:
+  .as : .xl
+  lda @SNES_CMD
+  cmp #$55
+  beq cfp_send
+  dex
+  bne cfp_ready
+cfp_send:
+  .as : .xl
+  rep #$20 : .al
+  lda @dirptr_addr           ; the page's first entry: bank:addr is also its PSRAM address
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda @dirptr_bank
+  sta @MCU_PARAM+2
+  lda @listdisp
+  sta @MCU_PARAM+3
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_FN_PAGE
+  sta @MCU_CMD
+  jsl @WRAM_WAIT_MCU
+  rep #$30 : .al : .xl
+  lda @FN_CJK_NEW
+  and #$00ff
+  beq cfp_out
+  tay
+  ldx #$0000
+cfp_loop:
+  .al : .xl
+  phx
+  lda @FN_CJK_NEW+2, x       ; a glyph that shows something else now
+  tax
+  sep #$20 : .as
+  lda @CJK_G2S, x
+  beq cfp_bg2
+  rep #$20 : .al
+  and #$00ff
+  dec
+  phx
+  tax
+  jsr cjk_unbind
+  plx
+cfp_bg2:
+  .xl
+  sep #$20 : .as
+  lda @CJK2_G2S, x
+  beq cfp_next
+  rep #$20 : .al
+  and #$00ff
+  dec
+  asl
+  pha
+  txa
+  inc                        ; cjk2_unbind takes glyph + 1
+  plx                        ; 2 * BG2 slot
+  jsr cjk2_unbind
+cfp_next:
+  .xl
+  rep #$20 : .al
+  plx
+  inx
+  inx
+  dey
+  bne cfp_loop
+cfp_out:
+  plp
+  rtl
+
+; cff_ours: A = glyph -> carry set if the firmware draws it (CJK_FN_LOW..127, 640+). A kept.
+cff_ours:
+  .al : .xl
+  cmp #$0280
+  bcs cfo_out
+  cmp #$0080
+  bcs cfo_no
+  cmp #CJK_FN_LOW
+  rts
+cfo_no:
+  .al : .xl
+  clc
+cfo_out:
   rts
 
 ; cjk_preview_lang: the Language entry's live preview (mfunc_chg_language, every scroll of

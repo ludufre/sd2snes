@@ -930,6 +930,11 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       msu_probe_page(snescmd_readlong(SNESCMD_MCU_PARAM) & 0xffffff,
                      snescmd_readbyte(SNESCMD_MCU_PARAM + 3));
       return 0;
+    case SNES_CMD_FN_PAGE:
+      /* the same parameters (snes/cjk.a65, cjk_fn_page) */
+      fn_cjk_page(snescmd_readlong(SNESCMD_MCU_PARAM) & 0xffffff,
+                  snescmd_readbyte(SNESCMD_MCU_PARAM + 3));
+      return 0;
     case SNES_CMD_PLAY_PCM:
       /* A .pcm was picked in the browser: play it on the cartridge DAC.  MCU_PARAM was
          set up like a ROM launch (cwd + selected entry), so get_selected_name yields the

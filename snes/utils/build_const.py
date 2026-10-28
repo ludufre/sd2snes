@@ -118,7 +118,7 @@ CJK_PAD = True
 # whole string pool are a file on the card (lang_<code>.bin, /sd2snes/lang/) that the menu
 # copies into WRAM bank $7F when that language is selected (cjk.a65 cjk_lang_sync). A CJK
 # language column therefore costs the menu banks only its dispatch-table words.
-CJK_COMMON_MAX = 128
+CJK_COMMON_MAX = 16             # 16..127 are the firmware's too (filenames, cjk.a65 cus_src)
 CJK_LANG_FIRST = 128
 CJK_LANG_LAST = 640            # 640..767 (lead $FF) stay free for glyphs the firmware supplies
 CJK_LANGS = {"ja": "misaki_gothic_2nd.hex", "zh": "fusion8_zh_hans.hex"}   # code -> font

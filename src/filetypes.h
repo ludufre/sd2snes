@@ -79,6 +79,7 @@ uint8_t dir_may_open_as_msu(const uint8_t *path);
 #define DIR_MARK_PROBED    ' '
 #define MSU_PROBE_PAGE_MAX 32
 void msu_probe_page(uint32_t tbl, uint8_t count);
+void fn_cjk_page(uint32_t tbl, uint8_t count);
 int get_num_dirent(uint32_t addr);
 void sort_all_dir(uint32_t endaddr);
 void make_filesize_string(char *buf, uint32_t size);

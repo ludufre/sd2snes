@@ -65,6 +65,7 @@ fileselloop_redraw
   stz filesel_dirty
   jsr filesel_statusbar
   jsl @msu_probe_visible  ; settle the MSU-1 game icons of the folders on this page (msufolder.a65)
+  jsr filesel_fn_page     ; number the CJK names of this page (cjk.a65)
   jsr filesel_redraw
   jsr filesel_cleanup ; update phase 2
   jsl @gi_relight_check   ; back from game info: fade in over the finished list
@@ -75,6 +76,15 @@ fileselloop_redraw
                           ; snes/memtest.a65). Also self-gating, and it demotes the block
                           ; to MT_ST_SEEN on the way out so it opens exactly once.
   bra fileselloop
+
+filesel_fn_page:
+  lda filesel_state
+  bne +
+  lda @FN_CJK_HAS
+  beq +
+  jsr cover_sync_before_cmd ; a cover load in flight owns the command channel
+  jsl @cjk_fn_page
++ rts
 
 filesel_cleanup:
   sep #$20 : .as
@@ -3353,6 +3363,7 @@ filesel_request_filelist:
 filesel_request_filelist_wait_mcu:
   jsl @WRAM_WAIT_MCU
   jsr pop_window
+  jsl @cjk_flush_fn
 ; dirend_addr = (entry count reported by the firmware) * 4.  The firmware wrote
 ; the count into MCU_PARAM right after scan_dir; reading it back from the snescmd
 ; region is reliable.  The old approach scanned the SDRAM directory table at $C2

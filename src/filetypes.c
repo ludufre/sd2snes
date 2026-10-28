@@ -39,8 +39,26 @@
 #include "msu1.h"   /* menu_sfx_pump: keep a playing effect fed during dir scans */
 
 #include "timer.h"
+#include "gameinfo.h"
 
 extern cfg_t CFG;
+
+static char scan_disp[256];
+
+/* The name a row of the browser shows, into scan_disp: the menu-font text of the UTF-8 name
+   (a folder's with its '/'), with the extension hidden when asked. Every ideograph is two bytes
+   whatever its number, so fn_cjk_page can redo a row in place. */
+static void scan_disp_make(const char *fn, uint8_t type) {
+  fn_utf8_to_menu(fn, scan_disp, sizeof(scan_disp));
+  /* never for a card file: inside /sd2snes the extension IS the distinction
+     (one bucket holds <stem>.srm next to <stem>.slot, states/ holds 01.state
+     next to 02.state), so hiding it would show the same name twice over. */
+  if(type != TYPE_SUBDIR && type != TYPE_PARENT && CFG.hide_extensions
+     && type != TYPE_FILE && type != TYPE_DATA) {
+    char *dot = strrchr(scan_disp, '.');
+    if(dot) *dot = 1;
+  }
+}
 
 /*
  * directory format:
@@ -68,7 +86,7 @@ static uint16_t scan_dir_msu_rom(const uint8_t *path, uint32_t base_addr, uint16
     if(len > 250) break;
     memcpy(buf, path, len);
     if(!len || buf[len-1] != '/') buf[len++] = '/';
-    sram_readstrn(buf + len, (ent & 0xffffff) + SRAM_MENU_ADDR + 6, 256 - len);
+    sram_read_fsname(buf + len, (ent & 0xffffff) + SRAM_MENU_ADDR + 6, 256 - len);
     char *dot = strchr(buf + len, 1);   /* hidden extension */
     if(dot) *dot = '.';
     dot = strrchr(buf + len, '.');
@@ -163,6 +181,11 @@ printf("opendir res=%d\n", res);
   SNES_FTYPE type;
 printf("start\n");
   if (res == FR_OK) {
+    fn_cjk_begin(1);
+    /* the list popups show over the browser and share its glyph numbering: number theirs first */
+    cfg_dump_listed_games_for_snes(LAST_FILE, SRAM_LASTGAME_ADDR, 0);
+    cfg_dump_listed_games_for_snes(FAVORITES_FILE, SRAM_FAVORITEGAMES_ADDR, 0);
+    fn_cjk_mode(FN_ROWS);
     for (;;) {
       menu_sfx_pump();  /* keep a playing menu effect fed while scanning a big dir */
       res = f_readdir(&dir, &fno);
@@ -238,34 +261,31 @@ printf("start\n");
             } else {
               if(fn[0]=='.') continue; /* omit dot files */
               make_filesize_string(buf, fno.fsize);
-              /* never for a card file: inside /sd2snes the extension IS the distinction
-                 (one bucket holds <stem>.srm next to <stem>.slot, states/ holds 01.state
-                 next to 02.state), so hiding it would show the same name twice over. */
-              if(CFG.hide_extensions && type != TYPE_FILE && type != TYPE_DATA) {
-                char *dot = strrchr(fn, '.');
-                if(dot) *dot = 1;
-              }
             }
-            fnlen = strlen(fn);
             if(fno.fattrib & AM_DIR) {
-              fn[fnlen] = '/';
-              fn[fnlen+1] = 0;
-              fnlen++;
+              if(fn != (TCHAR*)file_lfn) { strcpy((char*)file_lfn, fn); fn = (TCHAR*)file_lfn; }
+              size_t ol = strlen(fn);
+              if(ol + 1 < 256) { fn[ol] = '/'; fn[ol + 1] = 0; }
             }
+            scan_disp_make(fn, type);
+            fnlen = strlen(scan_disp);
+            /* display\0 filesystem\0: the menu prints the first; get_selected_name opens the second */
+            fnlen = fnlen + 1 + strlen(fn) + 1;
             /* The file-string table grows from base_addr+0x10000 ($DC0000) up
                toward SRAM_DIR_STRINGS_END ($E00000, the battery SaveRAM). The
                region moved twice as the menu image grew: $C2.. -> $C3..$C7 (128K
                menu) -> $DC..$DF (192K menu; SRAM_DIR_ADDR now $DB0000). Stop
                before the next entry would spill into the SaveRAM. goto, not
                break: break would only exit the switch, not this scan loop. */
-            if(file_tbl_off + fnlen + 7 >= SRAM_DIR_STRINGS_END) goto dir_full;
+            if(file_tbl_off + fnlen + 6 >= SRAM_DIR_STRINGS_END) goto dir_full;
             /* write file size string */
             sram_writeblock(buf, file_tbl_off, 6);
-            /* write file name string (leaf) */
-            sram_writeblock(fn, file_tbl_off+6, fnlen+1);
+            /* write display name, then the UTF-8 name FatFs can open */
+            sram_writeblock(scan_disp, file_tbl_off + 6, strlen(scan_disp) + 1);
+            sram_writeblock(fn, file_tbl_off + 6 + strlen(scan_disp) + 1, strlen(fn) + 1);
             /* link file string entry in directory table */
             sram_writelong((file_tbl_off-SRAM_MENU_ADDR) | ((uint32_t)type << 24), ptr_tbl_off);
-            file_tbl_off += fnlen+7;
+            file_tbl_off += 6 + fnlen;
             ptr_tbl_off += 4;
             numentries++;
             if(type == TYPE_ROM) rom_seen++;
@@ -278,6 +298,7 @@ printf("start\n");
     }
   }
 dir_full:
+  fn_cjk_commit();
   /* write directory termination */
   sram_writelong(0, ptr_tbl_off);
   if(CFG.sort_directories) {
@@ -332,6 +353,29 @@ void msu_probe_page(uint32_t tbl, uint8_t count) {
                    ? 'M' : DIR_MARK_PROBED, str);
   }
   f_closedir(&root);
+}
+
+/* The browser is about to draw the rows of the directory table at tbl (SNES_CMD_FN_PAGE):
+   number their ideographs and redo their names in place. Two passes over the rows: the first
+   only marks the numbered glyphs the page keeps, so the second may recycle any other. */
+void fn_cjk_page(uint32_t tbl, uint8_t count) {
+  if(count > MSU_PROBE_PAGE_MAX
+     || tbl < SRAM_DIR_ADDR || tbl + 4 * count > SRAM_DIR_ADDR + 0x10000) return;
+  fn_cjk_begin(0);
+  for(uint8_t how = FN_MARK; how <= FN_PAGE; how++) {
+    fn_cjk_mode(how);
+    for(uint8_t i = 0; i < count; i++) {
+      uint32_t e = sram_readlong(tbl + 4 * i);
+      if(!e) break;
+      uint32_t str = SRAM_MENU_ADDR + (e & 0xffffff) + 6;
+      if(str < SRAM_DIR_ADDR + 0x10000 || str >= SRAM_DIR_STRINGS_END) continue;
+      uint16_t len = sram_readstrn(scan_disp, str, sizeof(scan_disp));
+      sram_readstrn(file_lfn, str + len + 1, 256);
+      scan_disp_make((const char *)file_lfn, e >> 24);
+      if(how == FN_PAGE && strlen(scan_disp) == len) sram_writeblock(scan_disp, str, len);
+    }
+  }
+  fn_cjk_commit();
 }
 
 /* dir_may_open_as_msu's walk over an open directory; closes it. self != 0: the directory was

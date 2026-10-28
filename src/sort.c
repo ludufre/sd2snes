@@ -107,7 +107,11 @@ int sort_cmp_elem(const void* elem1, const void* elem2) {
 
 /* get truncated string from database */
 void sort_getstring_for_dirent(char *ptr, uint32_t addr) {
-  sram_readstrn(ptr, addr + SRAM_MENU_ADDR + 6, SORT_STRLEN);
+  uint16_t n = sram_readstrn(ptr, addr + SRAM_MENU_ADDR + 6, SORT_STRLEN);
+  /* a '?' stands for what the font cannot show (and for every ideograph until its page is
+     drawn, fn_cjk_page): order such a name by its UTF-8 name, which follows */
+  if(strchr(ptr, '?') && n < SORT_STRLEN)
+    sram_readstrn(ptr, addr + SRAM_MENU_ADDR + 6 + n + 1, SORT_STRLEN);
 }
 
 /* get truncated string from database */

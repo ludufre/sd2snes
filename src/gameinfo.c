@@ -83,52 +83,113 @@ static const char gi_fb_str[][3] = {
  * (snes/utils/gen_cjk_font.py). More distinct ideographs than GI_CJK_MAX print as '?'. */
 #define GI_CJK_MAX   128
 #define GI_CJK_FIRST 0x2E80             /* kana, ideographs, full-width forms (build_const) */
-static uint16_t gi_cjk_cp[GI_CJK_MAX] IN_AHBRAM;   /* written before read (gi_cjk_n) */
+/* The file list (and the Recents/Favorites names) has its own, larger table: FN_CJK_MAX glyphs,
+   the first 128 as 640..767 like a Ficha's, the rest as the menu's glyphs CJK_FN_LOW..127
+   ({$FA, $80 + i}, drawn at SRAM_GAMEINFO_CJK_LOW_ADDR + 64 * i; snes/cjk.a65 cus_src).
+   A folder can hold far more ideographs than that, so only what is on screen is numbered: the
+   lists' glyphs are pinned when they are dumped, and the browser's rows get theirs from
+   fn_cjk_page (SNES_CMD_FN_PAGE) right before the menu draws a page, recycling the glyphs no
+   pinned name and no row of that page uses. Elsewhere a row holds stale pairs, never drawn. */
+#define FN_CJK_MAX   240
+#define CJK_FN_LOW   16
+static uint16_t gi_cjk_cp[GI_CJK_MAX] IN_AHBRAM;   /* the Ficha's; written before read (gi_cjk_n) */
 static uint8_t  gi_cjk_n;
-static const char *gi_cjk_code;         /* "ja"/"zh" while the menu language is CJK, else NULL */
+static const char *gi_cjk_code;         /* "ja"/"zh" while CJK text is being encoded, else NULL */
+/* Nested: scan_dir re-dumps the lists inside its own pass, and only the outermost commit draws.
+   While open, the file-list table is worked on in the scratch FRAME (scratch.h: only
+   gameinfo_load and a game load own it, neither runs inside a pass) and kept between passes in
+   SRAM_FN_CJK_ADDR: count, "has rows" flag, then cp[] + pin[] as one block. */
+typedef struct {
+  uint16_t cp[FN_CJK_MAX];
+  uint8_t  pin[FN_CJK_MAX / 8];          /* a list name shows it: never recycled */
+  uint8_t  mark[FN_CJK_MAX / 8];         /* used by the page being numbered */
+  uint8_t  fresh[FN_CJK_MAX / 8];        /* (re)assigned in this pass: to draw, and to flush */
+} fn_cjk_t;
+SCRATCH_FITS(fn_cjk_t, SCRATCH_FRAME_BYTES);
+#define FN_PERSIST (sizeof(((fn_cjk_t *)0)->cp) + sizeof(((fn_cjk_t *)0)->pin))
+static uint8_t fn_cjk_depth;
+static uint8_t fn_cjk_n;
+static uint8_t fn_cjk_has;              /* scan_dir listed a row with an ideograph */
+static uint8_t fn_cjk_how;
+
+#define FN_BIT(a, k)  ((a)[(k) >> 3] & (1 << ((k) & 7)))
+#define FN_SET(a, k)  ((a)[(k) >> 3] |= (uint8_t)(1 << ((k) & 7)))
 
 static void gi_cjk_reset(void) {
   gi_cjk_n = 0;
   gi_cjk_code = CFG.language == 8 ? "ja" : CFG.language == 9 ? "zh" : NULL;
 }
 
-/* index of an ideograph for this game (a new one is added); -1 = the table is full */
-static int gi_cjk_index(uint32_t cp) {
-  for(int k = 0; k < gi_cjk_n; k++)
-    if(gi_cjk_cp[k] == cp) return k;
-  if(gi_cjk_n >= GI_CJK_MAX) return -1;
-  gi_cjk_cp[gi_cjk_n] = (uint16_t)cp;
-  return gi_cjk_n++;
+void fn_cjk_mode(uint8_t how) {
+  fn_cjk_how = how;
 }
 
-/* Draw every indexed ideograph of the game into SRAM_GAMEINFO_CJK_ADDR: one sequential pass
- * over the sorted font file, merged with the sorted indices. A glyph the font lacks stays
+/* index of an ideograph (a new one is added); -1 = none (the table is full, or a browser row
+   outside fn_cjk_page) */
+static int gi_cjk_index(uint32_t cp) {
+  if(!fn_cjk_depth) {
+    for(int k = 0; k < gi_cjk_n; k++)
+      if(gi_cjk_cp[k] == cp) return k;
+    if(gi_cjk_n >= GI_CJK_MAX) return -1;
+    gi_cjk_cp[gi_cjk_n] = (uint16_t)cp;
+    return gi_cjk_n++;
+  }
+  fn_cjk_t *f = SCRATCH_FRAME(fn_cjk_t);
+  if(fn_cjk_how == FN_ROWS) { fn_cjk_has = 1; return -1; }
+  int k;
+  for(k = 0; k < fn_cjk_n && f->cp[k] != cp; k++);
+  if(k == fn_cjk_n) {
+    if(fn_cjk_how == FN_MARK) return -1;
+    if(k == FN_CJK_MAX) {
+      if(fn_cjk_how != FN_PAGE) return -1;
+      for(k = 0; k < FN_CJK_MAX && (FN_BIT(f->pin, k) || FN_BIT(f->mark, k)); k++);
+      if(k == FN_CJK_MAX) return -1;
+    } else fn_cjk_n++;
+    f->cp[k] = (uint16_t)cp;
+    FN_SET(f->fresh, k);
+  }
+  FN_SET(f->mark, k);
+  if(fn_cjk_how == FN_LIST) FN_SET(f->pin, k);
+  return k;
+}
+
+/* Draw every indexed ideograph into its sheet: k < 128 at dest + 64k, the rest (the file list's)
+ * at SRAM_GAMEINFO_CJK_LOW_ADDR + 64 * (CJK_FN_LOW + k - 128). One sequential pass over the
+ * sorted font file, merged with the indices sorted by code point. A glyph the font lacks stays
  * blank. Bounded by the file; fail-safe (no file = blank glyphs). */
 typedef struct {
-  uint16_t cp[GI_CJK_MAX];               /* the indices sorted by code point... */
-  uint8_t  idx[GI_CJK_MAX];              /* ...and which index each one is */
+  uint8_t  idx[FN_CJK_MAX];              /* the indices, sorted by code point */
   uint8_t  rec[10];
   uint8_t  tile[64];
 } gi_cjk_scratch_t;
 SCRATCH_FITS(gi_cjk_scratch_t, SCRATCH_LEAF_BYTES);
 
-static void gi_cjk_sheet(void) {
-  if(!gi_cjk_code || !gi_cjk_n) return;
+static uint32_t cjk_glyph_addr(uint32_t dest, int k) {
+  if(k < 128) return dest + (uint32_t)k * 64;
+  return SRAM_GAMEINFO_CJK_LOW_ADDR + (uint32_t)(CJK_FN_LOW + k - 128) * 64;
+}
+
+/* only != NULL: just the indices set in that bitmap */
+static void cjk_sheet_draw(const char *code, const uint16_t *src_cp, uint8_t n, uint32_t dest,
+                           const uint8_t *only) {
+  if(!code || !n) return;
   if(!scratch_leaf_take(SCR_GI_CJK)) return;
   gi_cjk_scratch_t *s = SCRATCH_LEAF(gi_cjk_scratch_t);
-  int n = gi_cjk_n;
-  for(int k = 0; k < n; k++) {           /* insertion sort, n <= 128 */
-    int j = k;
-    while(j > 0 && s->cp[j - 1] > gi_cjk_cp[k]) { s->cp[j] = s->cp[j - 1]; s->idx[j] = s->idx[j - 1]; j--; }
-    s->cp[j] = gi_cjk_cp[k];
+  int m = 0;
+  for(int k = 0; k < n; k++) {           /* insertion sort, n <= FN_CJK_MAX */
+    if(only && !FN_BIT(only, k)) continue;
+    int j = m++;
+    while(j > 0 && src_cp[s->idx[j - 1]] > src_cp[k]) { s->idx[j] = s->idx[j - 1]; j--; }
     s->idx[j] = (uint8_t)k;
   }
+  n = (uint8_t)m;
+  if(!n) { scratch_leaf_drop(); return; }
   memset(s->tile, 0, sizeof(s->tile));    /* blank first: a glyph the file lacks stays blank */
   for(int k = 0; k < n; k++)
-    sram_writeblock(s->tile, SRAM_GAMEINFO_CJK_ADDR + (uint32_t)k * 64, 64);
+    sram_writeblock(s->tile, cjk_glyph_addr(dest, s->idx[k]), 64);
   char path[] = "/sd2snes/lang/xx.fnt";
-  path[14] = gi_cjk_code[0];
-  path[15] = gi_cjk_code[1];
+  path[14] = code[0];
+  path[15] = code[1];
   file_open((const uint8_t *)path, FA_READ);
   if(!file_res) {
     UINT br;
@@ -138,10 +199,10 @@ static void gi_cjk_sheet(void) {
       for(unsigned r = 0; r < count && want < n; r++) {
         if(f_read(&file_handle, s->rec, 10, &br) != FR_OK || br != 10) break;
         uint16_t cp = (uint16_t)(s->rec[0] | (s->rec[1] << 8));
-        while(want < n && s->cp[want] < cp) want++;           /* not in the font */
-        if(want < n && s->cp[want] == cp) {
+        while(want < n && src_cp[s->idx[want]] < cp) want++;  /* not in the font */
+        if(want < n && src_cp[s->idx[want]] == cp) {
           cjk_render_glyph(s->rec + 2, s->tile);
-          sram_writeblock(s->tile, SRAM_GAMEINFO_CJK_ADDR + (uint32_t)s->idx[want] * 64, 64);
+          sram_writeblock(s->tile, cjk_glyph_addr(dest, s->idx[want]), 64);
           want++;
         }
       }
@@ -152,15 +213,61 @@ static void gi_cjk_sheet(void) {
   scratch_leaf_drop();
 }
 
+static void gi_cjk_sheet(void) {
+  cjk_sheet_draw(gi_cjk_code, gi_cjk_cp, gi_cjk_n, SRAM_GAMEINFO_CJK_GI_ADDR, NULL);
+}
+
+static const char *fn_cjk_saved_code;
+
+void fn_cjk_begin(int fresh) {
+  if(fn_cjk_depth++) return;
+  fn_cjk_t *f = SCRATCH_FRAME(fn_cjk_t);
+  fn_cjk_saved_code = gi_cjk_code;
+  /* a Chinese/Japanese filename must render even if the menu language is English */
+  gi_cjk_code = CFG.language == 8 ? "ja" : "zh";
+  fn_cjk_how = FN_LIST;
+  memset(f, 0, sizeof(*f));
+  fn_cjk_n = fn_cjk_has = 0;
+  if(!fresh) {
+    uint8_t n = sram_readbyte(SRAM_FN_CJK_ADDR);
+    if(n <= FN_CJK_MAX) {
+      sram_readblock(f, SRAM_FN_CJK_ADDR + 2, FN_PERSIST);
+      fn_cjk_n = n;
+      fn_cjk_has = sram_readbyte(SRAM_FN_CJK_ADDR + 1);
+    }
+  }
+}
+
+/* Saves the table, draws what this pass (re)assigned, and lists those glyphs (the menu's
+   numbering) at SRAM_FN_CJK_NEW_ADDR: the menu drops them from its VRAM cache
+   (snes/cjk.a65 cjk_fn_page). */
+void fn_cjk_commit(void) {
+  if(!fn_cjk_depth || --fn_cjk_depth) return;
+  fn_cjk_t *f = SCRATCH_FRAME(fn_cjk_t);
+  uint8_t c = 0;
+  sram_writebyte(fn_cjk_n, SRAM_FN_CJK_ADDR);
+  sram_writebyte(fn_cjk_has, SRAM_FN_CJK_ADDR + 1);
+  sram_writeblock(f, SRAM_FN_CJK_ADDR + 2, FN_PERSIST);
+  for(int k = 0; k < fn_cjk_n; k++)
+    if(FN_BIT(f->fresh, k))
+      sram_writeshort(k < 128 ? 640 + k : CJK_FN_LOW + k - 128, SRAM_FN_CJK_NEW_ADDR + 2 + 2 * c++);
+  sram_writebyte(c, SRAM_FN_CJK_NEW_ADDR);
+  cjk_sheet_draw(gi_cjk_code, f->cp, fn_cjk_n, SRAM_GAMEINFO_CJK_ADDR, f->fresh);
+  gi_cjk_code = fn_cjk_saved_code;
+}
+
 /* Decoded (>= 0x80) codepoint -> 0..3 font bytes into out. A glyph when the font has one, a
  * typographic stand-in when it has not, '?' otherwise. */
 static int gi_cp_emit(uint32_t cp, uint8_t *out) {
   uint8_t b = 0;
   if(gi_cjk_code && cp >= GI_CJK_FIRST && cp <= 0xFFFF) {
     int k = gi_cjk_index(cp);
+    if(k >= 128) { out[0] = 0xFA; out[1] = (uint8_t)(0x80 + CJK_FN_LOW + k - 128); return 2; }
     if(k >= 0) { out[0] = 0xFF; out[1] = (uint8_t)(0x80 + k); return 2; }
     out[0] = '?';
-    return 1;
+    if(!fn_cjk_depth) return 1;
+    out[1] = ' ';                        /* a file-list row keeps its length (fn_cjk_page) */
+    return 2;
   }
   if(cp - GI_FONT_LATIN1_BASE < sizeof(gi_font_latin1))
     b = gi_font_latin1[cp - GI_FONT_LATIN1_BASE];
@@ -218,6 +325,10 @@ static void gi_utf8_to_font(const char *src, char *dst, int dstsize) {
     for(int k = 0; k < nf && di < dstsize - 1; k++) dst[di++] = (char)fb[k];
   }
   dst[di] = 0;
+}
+
+void fn_utf8_to_menu(const char *src, char *dst, int dstsize) {
+  gi_utf8_to_font(src, dst, dstsize);
 }
 
 /* Incremental UTF-8 -> font transcoder state, for streaming a value that may split a

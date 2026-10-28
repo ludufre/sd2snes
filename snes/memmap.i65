@@ -284,8 +284,17 @@
 /* The active CJK language: /sd2snes/lang/<code>.bin (build_const.py), copied to $7F:CJK_LANG_BASE.
    Header (16 B): "SDL1", column, version, pool_len, sheet_addr, nglyphs, total_len (words LE).
    Every address in it (dispatch-table words, sheet_addr) is absolute in bank $7F. */
-#define GI_CJK_SHEET                $CBC000    /* glyphs 640+ (lead $FF): the game-info screen's CJK text, drawn
-                                                  by the firmware (SRAM_GAMEINFO_CJK_ADDR, src/memmap.h) */
+#define GI_CJK_SHEET                $CBC000    /* glyphs 640+ (lead $FF): browser filenames at $CBC000, the
+                                                  game-info screen's text at +$2000 (CJK_MODE=1, cus_src).
+                                                  Lockstep with SRAM_GAMEINFO_CJK_ADDR / _GI_ADDR in src/memmap.h */
+#define CJK_FN_LOW                  16         /* glyphs 16..127: the resident names use 0..15 (build_const
+                                                  CJK_COMMON_MAX), the rest are more firmware-drawn file-list
+                                                  glyphs, at GI_CJK_LOW + 64*i ($CBA400..$CBBFFF) */
+#define GI_CJK_LOW                  $CBA000    /* lockstep with SRAM_GAMEINFO_CJK_LOW_ADDR in src/memmap.h */
+#define FN_CJK_HAS                  $FF4201    /* non-zero: the folder has CJK names, numbered per page (CMD_FN_PAGE).
+                                                  SRAM_FN_CJK_ADDR + 1 in src/memmap.h */
+#define FN_CJK_NEW                  $FF4400    /* the glyphs CMD_FN_PAGE redrew: count byte, pad, u16 each.
+                                                  Lockstep with SRAM_FN_CJK_NEW_ADDR in src/memmap.h */
 #define CJK_LANG_BASE               $7F2000
 #define CJK_LANG_SHEET              $7F2008    /* header word: address of the glyph sheet in $7F */
 #define CJK_LANG_MAX                $DF00      /* $7F2000..$7FFEFF ($7FFFE0 = launch trampoline) */
@@ -879,6 +888,7 @@
 #define SVE_FLAGS                   0   /* bit0 = the file exists */
 #define SVE_DATE                    1   /* 16 chars + NUL, the menu language's date order */
 #define SVE_SIZE                    18  /* "8 KB" + NUL */
+#define CMD_FN_PAGE                 $52 /* browser, before drawing a page of a folder with CJK names (cjk_fn_page): MCU_PARAM as for CMD_MSU_PROBE_PAGE. The firmware numbers the page's ideographs and lists the glyphs it redrew at FN_CJK_NEW. Lockstep with SNES_CMD_FN_PAGE in src/snes.h. */
 #define CMD_GAMEOPT                 $51 /* per-game settings (src/gameopt.h): MCU_PARAM+8 = SVW_* (menu only; +0..7 as for that family's other commands), +9 = GOOP_*, +10 = option, +11 = value. In game it acts on the running game and the value takes effect at once (only an option with the live bit). The answer is GAMEOPT_BLK. Lockstep with SNES_CMD_GAMEOPT in src/snes.h. */
 #define GOOP_INFO                   0
 #define GOOP_SET                    1

@@ -1717,13 +1717,29 @@ void get_fileinfo (		/* No return code */
 			lfn = dp->lfn;
 			while ((w = *lfn++) != 0) {		/* Get an LFN character */
 #if !_LFN_UNICODE
-				w = ff_convert(w, 0);		/* Unicode -> OEM */
-				if (!w) { i = 0; break; }	/* No LFN if it could not be converted */
-				if (_DF1S && w >= 0x100)	/* Put 1st byte if it is a DBC (always false on SBCS cfg) */
-					p[i++] = (TCHAR)(w >> 8);
-#endif
+				/* UTF-8, not the OEM code page: CJK in a long name cannot become
+				   CP1252, and dropping the LFN then showed the 8.3 alias as mojibake.
+				   create_name() below decodes this back to Unicode for f_open. */
+				if (w < 0x80) {
+					if (i >= fno->lfsize - 1) { i = 0; break; }
+					p[i++] = (TCHAR)w;
+					continue;
+				}
+				if (w < 0x800) {
+					if (i >= fno->lfsize - 2) { i = 0; break; }
+					p[i++] = (TCHAR)(0xC0 | (w >> 6));
+					p[i++] = (TCHAR)(0x80 | (w & 0x3F));
+					continue;
+				}
+				if (i >= fno->lfsize - 3) { i = 0; break; }
+				p[i++] = (TCHAR)(0xE0 | (w >> 12));
+				p[i++] = (TCHAR)(0x80 | ((w >> 6) & 0x3F));
+				p[i++] = (TCHAR)(0x80 | (w & 0x3F));
+				continue;
+#else
 				if (i >= fno->lfsize - 1) { i = 0; break; }	/* No LFN if buffer overflow */
 				p[i++] = (TCHAR)w;
+#endif
 			}
 		}
 		p[i] = 0;	/* Terminate LFN string by a \0 */
@@ -1832,14 +1848,26 @@ FRESULT create_name (
 			return FR_INVALID_NAME;
 #if !_LFN_UNICODE
 		w &= 0xFF;
-		if (IsDBCS1(w)) {				/* Check if it is a DBC 1st byte (always false on SBCS cfg) */
-			b = (BYTE)p[si++];			/* Get 2nd byte */
-			w = (w << 8) + b;			/* Create a DBC */
-			if (!IsDBCS2(b))
-				return FR_INVALID_NAME;	/* Reject invalid sequence */
+		/* UTF-8 from get_fileinfo (CJK names). Invalid sequences fall through to the
+		   OEM code page so a CP1252 8.3 path still opens. */
+		if (w >= 0xC2 && w <= 0xDF && (BYTE)p[si] >= 0x80 && (BYTE)p[si] <= 0xBF) {
+			w = (WCHAR)((w & 0x1F) << 6 | (p[si++] & 0x3F));
+		} else if (w >= 0xE0 && w <= 0xEF
+		           && (BYTE)p[si] >= 0x80 && (BYTE)p[si] <= 0xBF
+		           && (BYTE)p[si + 1] >= 0x80 && (BYTE)p[si + 1] <= 0xBF) {
+			w = (WCHAR)((w & 0x0F) << 12 | ((p[si] & 0x3F) << 6) | (p[si + 1] & 0x3F));
+			si += 2;
+			if (w < 0x800) return FR_INVALID_NAME;	/* overlong */
+		} else {
+			if (IsDBCS1(w)) {				/* Check if it is a DBC 1st byte (always false on SBCS cfg) */
+				b = (BYTE)p[si++];			/* Get 2nd byte */
+				w = (w << 8) + b;			/* Create a DBC */
+				if (!IsDBCS2(b))
+					return FR_INVALID_NAME;	/* Reject invalid sequence */
+			}
+			w = ff_convert(w, 1);			/* Convert ANSI/OEM to Unicode */
+			if (!w) return FR_INVALID_NAME;	/* Reject invalid code */
 		}
-		w = ff_convert(w, 1);			/* Convert ANSI/OEM to Unicode */
-		if (!w) return FR_INVALID_NAME;	/* Reject invalid code */
 #endif
 		if (w < 0x80 && chk_chr("\"*:<>\?|\x7F", w)) /* Reject illegal characters for LFN */
 			return FR_INVALID_NAME;

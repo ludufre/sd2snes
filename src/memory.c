@@ -254,6 +254,13 @@ uint16_t sram_readblock(void* buf, uint32_t addr, uint16_t size) {
   return size;
 }
 
+uint16_t sram_read_fsname(void* buf, uint32_t addr, uint16_t size) {
+  uint16_t n = sram_readstrn(buf, addr, size);
+  if(n + 1 < size && sram_readbyte(addr + (uint32_t)n + 1))
+    return sram_readstrn(buf, addr + (uint32_t)n + 1, size);
+  return n;
+}
+
 uint16_t sram_readstrn(void* buf, uint32_t addr, uint16_t size) {
   uint16_t elemcount = 0;
   uint16_t count = size;

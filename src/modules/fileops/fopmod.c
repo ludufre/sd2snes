@@ -1342,6 +1342,14 @@ static int rm_mark(fopmod_t *m, uint32_t *i, char *out) {
     if(ent[3] == TYPE_PARENT) continue;
     api->sram_read(out, SRAM_MENU_ADDR + (ent[0] | ((uint32_t)ent[1] << 8) | ((uint32_t)ent[2] << 16)) + 6, FOP_PATH);
     out[FOP_MAXPATH] = 0;
+    /* display\0 filesystem\0 (filetypes.c): delete/rename must use the UTF-8 name */
+    for(k = 0; out[k]; k++) ;
+    if(k + 1 < FOP_MAXPATH && out[k + 1]) {
+      uint32_t j = 0;
+      k++;
+      while(out[k] && j < FOP_MAXPATH) out[j++] = out[k++];
+      out[j] = 0;
+    }
     for(k = 0; out[k]; k++) if(out[k] == 1) out[k] = 0x2e;     /* '.' */
     pnorm(out);
     if(out[0]) return ent[3];
