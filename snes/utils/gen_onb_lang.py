@@ -100,7 +100,7 @@ STRINGS = {
     "onb_ui_enable":    ("ENABLE?", "ATIVAR?", "¿ACTIVAR?", "AKTIV?", "ACTIVER ?", "ATTIVARE?", "ВКЛЮЧИТЬ?", "AANZETTEN?"),
     "onb_ui_choose":    ("CHOOSE", "ESCOLHA", "ELIGE", "WÄHLEN", "CHOIX", "SCEGLI", "ВЫБОР", "KIES"),
     "onb_ui_pick":      ("SELECT", "ESCOLHER", "ELEGIR", "WÄHLEN", "CHOISIR", "SCEGLI", "ВЫБОР", "KIEZEN"),
-    "onb_ui_more":      ("SEE ALSO", "VEJA TAMBÉM", "VER TAMBIÉN", "SIEHE AUCH", "VOIR AUSSI", "VEDI ANCHE", "СМ. ТАКЖЕ", "ZIE OOK"),
+    "onb_ui_more":      ("SEE ALSO", "VEJA TAMBÉM", "VER TAMBIÉN", "SIEHE AUCH", "VOIR AUSSI", "VEDI ANCHE", "СМОТРИ ТАКЖЕ", "ZIE OOK"),
     "onb_ui_next":      ("NEXT", "AVANÇAR", "AVANZAR", "WEITER", "SUIVANT", "AVANTI", "ДАЛЕЕ", "VERDER"),
     "onb_ui_back":      ("BACK", "VOLTAR", "ATRÁS", "ZURÜCK", "RETOUR", "TORNA", "НАЗАД", "TERUG"),
     "onb_ui_exit":      ("EXIT", "SAIR", "SALIR", "ENDE", "QUITTER", "ESCI", "ВЫХОД", "STOPPEN"),
@@ -265,13 +265,13 @@ NAMES = [
   # 48 BS-X and the Memory Pack
   ('BS-X and Memory Pack', 'BS-X e Memory Pack', 'BS-X y Memory Pack', 'BS-X und Memory Pack', 'BS-X et Memory Pack', 'BS-X e Memory Pack', 'BS-X и Memory Pack', 'BS-X en Memory Pack'),
   # 53 delete files and saves
-  ('Delete files and saves', 'Apagar arquivos e saves', 'Borrar archivos y saves', 'Dateien/Saves löschen', 'Effacer fichiers/saves', 'Eliminare file e save', 'Удаление файлов и сейвов', 'Bestanden/saves wissen'),
+  ('Delete files and saves', 'Apagar arquivos e saves', 'Borrar archivos y saves', 'Dateien/Saves löschen', 'Effacer fichiers/saves', 'Eliminare file e save', 'Удалить файлы/сохранения', 'Bestanden/saves wissen'),
   # 54 missing BIOS warning
-  ('Missing BIOS warning', 'Aviso de BIOS faltando', 'Aviso de BIOS que falta', 'Fehlendes BIOS melden', 'Alerte de BIOS manquant', 'Avviso di BIOS mancante', 'Предупреждение: нет BIOS', 'Melding: BIOS ontbreekt'),
+  ('Missing BIOS warning', 'Aviso de BIOS faltando', 'Aviso de BIOS que falta', 'Fehlendes BIOS melden', 'Alerte de BIOS manquant', 'Avviso di BIOS mancante', 'Инфо: BIOS не найден', 'Melding: BIOS ontbreekt'),
   # 55 the clock question on boot and the date format
-  ('Clock and date', 'Relógio e data', 'Reloj y fecha', 'Uhr und Datum', 'Horloge et date', 'Orologio e data', 'Часы и дата', 'Klok en datum'),
+  ('Clock and date', 'Relógio e data', 'Reloj y fecha', 'Uhr und Datum', 'Horloge et date', 'Orologio e data', 'Дата и время', 'Klok en datum'),
   # 56 a description for each option
-  ('Option descriptions', 'Descrição das opções', 'Descripción de opciones', 'Optionsbeschreibungen', 'Description des options', 'Descrizione opzioni', 'Описание опций', 'Uitleg bij opties'),
+  ('Option descriptions', 'Descrição das opções', 'Descripción de opciones', 'Optionsbeschreibungen', 'Description des options', 'Descrizione opzioni', 'Описание опций настроек', 'Uitleg bij opties'),
 ]
 
 
@@ -542,7 +542,7 @@ TEXTS = [
    'Saves, States, Cheats, Infokarten und Patch-Einstellungen jedes Spiels liegen in |/sd2snes/<Bereich>/<2 Buchstaben>/|, dazu ein Konsolenordner (|sgb, sft, nes, sms, a26|). Nur die Firmware aktualisiert? |Organize| im |Web Manager| starten, sonst wirken alte Saves verschwunden.',
    'Saves, states, cheats, fiches et réglages de patch de chaque jeu sont dans |/sd2snes/<zone>/<2 lettres>/|, plus un dossier par console (|sgb, sft, nes, sms, a26|). Tu mets à jour seulement le firmware ? Lance |Organize| dans le |Web Manager|, sinon les anciens saves semblent perdus.',
    'Save, state, cheat, schede e impostazioni delle patch di ogni gioco stanno in |/sd2snes/<area>/<2 lettere>/|, più una cartella per console (|sgb, sft, nes, sms, a26|). Aggiorni solo il firmware? Usa |Organize| nel |Web Manager|, o i vecchi save sembreranno spariti.',
-   'Сохранения, сейвстейты, чит-коды, карточки и настройки патчей каждой игры лежат в |/sd2snes/<раздел>/<2 буквы>/|, плюс папка консоли (|sgb, sft, nes, sms, a26|). Обновляете только прошивку? На компьютере откройте |Web Manager| на сайте, укажите ему карту памяти и запустите |Organize|, иначе старые сохранения пропадут из виду.',
+   'Сохранения, сейвстейты, чит-коды, карточки и настройки патчей каждой игры лежат в |/sd2snes/<раздел>/<2 буквы>/|, плюс папка консоли (|sgb, sft, nes, sms, a26|). Обновляете только прошивку? Откройте |Web Manager| на сайте, укажите ему карту памяти и запустите |Organize|, иначе старые сохранения пропадут из виду.',
    'Saves, states, cheats, spelinfo en patch-instellingen van elk spel staan in |/sd2snes/<gebied>/<2 letters>/|, plus een consolemap (|sgb, sft, nes, sms, a26|). Werk je alleen de firmware bij? Draai |Organize| in de |Web Manager|, anders lijken oude saves weg.'),
   # 30 the memory test of the main menu
   ("{memtest}, in the main menu, checks the cartridge's memory right on the console: [A] runs the full test, the wiring test included, in about 60 seconds. The console resets at the end.",
@@ -661,7 +661,7 @@ TEXTS = [
    'Steck eine SNES Mouse in einen der beiden Ports, und das Menü zeigt einen Zeiger. Linksklick [ML] ist [A], Rechtsklick [MR] ist [B], beide zusammen [MB] sind [X], rechts gedrückt halten [MRH] ist [Y]. In den Musik-Playern springt links gedrückt halten [MLH] zum nächsten Titel und [MRH] zum vorherigen. Schieb den Zeiger an den oberen oder unteren Rand, um die Liste zu blättern.',
    "Branche une SNES Mouse sur l'un des ports et le menu affiche un pointeur. Le clic gauche [ML] fait [A], le clic droit [MR] fait [B], les deux ensemble [MB] font [X] et le droit maintenu [MRH] fait [Y]. Dans les lecteurs de musique, le gauche maintenu [MLH] passe à la piste suivante et [MRH] revient à la précédente. Pousse le pointeur contre le bord haut ou bas pour faire défiler la liste.",
    'Collega un SNES Mouse a una delle due porte e il menu mostra un puntatore. Il clic sinistro [ML] è [A], il destro [MR] è [B], i due insieme [MB] sono [X] e tenere premuto il destro [MRH] è [Y]. Nei lettori musicali, tenere premuto il sinistro [MLH] passa alla traccia successiva e [MRH] torna alla precedente. Spingi il puntatore contro il bordo in alto o in basso per scorrere la lista.',
-   'Подключи мышь для SNES к любому порту, и в меню появится курсор. Левая кнопка [ML] работает как [A], правая [MR] как [B], обе [MB] как [X], а удержание правой [MRH] как [Y]. В проигрывателях удержание левой [MLH] включает следующий трек, а [MRH] - предыдущий. Упри курсор в верхний или нижний край, чтобы прокрутить список.',
+   'Подключи мышь для SNES к любому порту, и в меню появится курсор. Левая кнопка [ML] работает как [A], правая [MR] - как [B], обе [MB] - как [X], а удержание правой [MRH] - как [Y]. В проигрывателях удержание левой [MLH] включает следующий трек, а удержание правой [MRH] - предыдущий. Сдвинь курсор до упора в верхний или нижний край, чтобы прокрутить список.',
    'Sluit een SNES Mouse aan op een van beide poorten en het menu toont een aanwijzer. Linksklikken [ML] is [A], rechtsklikken [MR] is [B], beide samen [MB] is [X] en rechts ingedrukt houden [MRH] is [Y]. In de muziekspelers gaat links ingedrukt houden [MLH] naar het volgende nummer en [MRH] naar het vorige. Duw de aanwijzer tegen de boven- of onderrand om door de lijst te scrollen.'),
   # 44 the music players: |.pcm| (seek, playlist) and |.spc| (2.18)
   ("A |.pcm| or |.spc| in the list opens its player, and the folder is a playlist: the next track plays when one ends, [L]/[R] skip tracks. On a |.pcm|, [Left]/[Right] jump 5 s (hold for more) and a click on the bar seeks. An |.spc| shows its length, then moves on.",
@@ -715,7 +715,7 @@ TEXTS = [
    '{goptrow} speichert Einstellungen für ein Spiel, aufgebaut wie {cfg}, nur mit dem, was das Spiel nutzt. {gdefault} folgt der globalen Option. Öffnen mit [Y] auf einem Spiel, [L] auf der Infokarte oder [Y] auf der Ingame-Tab-Leiste, dort ist im Spiel Gesperrtes grau.',
    "{goptrow} garde des réglages pour un seul jeu, rangés comme {cfg}, avec seulement ce que le jeu utilise. {gdefault} suit l'option globale. Ouvrez avec [Y] sur un jeu, [L] sur la fiche ou [Y] sur les onglets du menu en jeu, où ce qui est bloqué en jeu est grisé.",
    "{goptrow} salva impostazioni per un solo gioco, come in {cfg}, solo con ciò che il gioco usa. {gdefault} segue l'opzione globale. Apri con [Y] su un gioco, [L] sulla scheda o [Y] sulle schede del menu in gioco, dove ciò che è bloccato in gioco è grigio.",
-   '{goptrow} содержит настройки, относящиеся к конкретной игре. Они организованы так же, как в {cfg}, и включают только те параметры, которые применимы к ней. {gdefault} соответствует общим настройкам. Открыть этот раздел можно нажатием кнопки [Y] на выбранной игре, кнопка [L] - в карточке игры или кнопка [Y] - на панели вкладок |Меню в игре|, при этом заблокированные для игры параметры отображаются серым цветом.',
+   'Пункт {goptrow} содержит настройки, относящиеся к конкретной игре. Они организованы так же, как в {cfg}, и включают только те параметры, которые применимы к ней. {gdefault} соответствует общим настройкам. Открыть этот раздел можно нажатием кнопки [Y] на выбранной игре, кнопка [L] - в карточке игры или кнопка [Y] - на панели вкладок |Меню в игре|, при этом заблокированные для игры параметры отображаются серым цветом.',
    '{goptrow} bewaart instellingen voor één spel, ingedeeld zoals {cfg}, met alleen wat dat spel gebruikt. {gdefault} volgt de algemene optie. Open met [Y] op een spel, [L] op de spelinfo of [Y] op de tabbalk van het in-game menu, waar wat vastligt grijs is.'),
   # 50 Repeat in the .spc / .pcm / .nsf players (2.18)
   ('In the |.spc|, |.pcm| and |.nsf| players, [X] turns {repeat} on: when the track ends it starts again instead of moving to the next one. An |.nsf| song ends after 3 s of silence. {repeat} starts off and the player remembers it.',
@@ -770,7 +770,7 @@ TEXTS = [
    '{lockrow} in {cfg} fragt vor allem, was die Karte oder die Einstellungen ändert, einen Code aus 4 bis 10 Tasten ab (3 s warten beendet einen kürzeren): {cfg}, Dateien löschen, umbenennen und verschieben, Spielstände, {goptrow}, Cheats bearbeiten, Autoboot und Themes, auch im Ingame-Menü. [B] 3 s halten bricht ab. Code vergessen? LockCode in |/sd2snes/config.yml| löschen.',
    '{lockrow}, dans {cfg}, demande un code de 4 à 10 boutons (attendez 3 s pour finir avant 10) avant ce qui change la carte ou les réglages : {cfg}, effacer, renommer et déplacer des fichiers, sauvegardes, {goptrow}, éditer les cheats, autoboot et thèmes, aussi dans le menu en jeu. Maintenir [B] 3 s annule. Code oublié ? Effacez LockCode dans |/sd2snes/config.yml|.',
    '{lockrow}, in {cfg}, chiede un codice da 4 a 10 tasti (aspetta 3 s per finire prima di 10) prima di ciò che cambia la scheda o le impostazioni: {cfg}, cancellare, rinominare e spostare file, salvataggi, {goptrow}, modificare i cheat, autoboot e temi, anche nel menu in gioco. Tenere [B] 3 s annulla. Codice dimenticato? Cancella LockCode in |/sd2snes/config.yml|.',
-   '{lockrow} в {cfg} спрашивает код из 4-10 кнопок (подождите 3 с, чтобы закончить раньше) перед всем, что меняет карту памяти или настройки: {cfg}, удаление, переименование и перемещение файлов, сохранения, {goptrow}, правка чит-кодов, автозапуск и темы, в том числе в |Меню в игре|. Удержание кнопки [B] 3 с - отмена. Забыли код? Удалите LockCode в |/sd2snes/config.yml|.',
+   '{lockrow} в {cfg} запрашивает код, состоящий из комбинации 4-10 кнопок, перед любым действием, меняющим данные на карте памяти или настройки: {cfg}, удалением, переименованием и перемещением файлов, сохранениями, {goptrow}, правкой чит-кодов, автозапуском и темами, в том числе в |Меню в игре|. Если в коде менее 10 кнопок, подождите 3 секунды, чтобы закончить ввод раньше. Удержание кнопки [B] в течение 3 секунд - отмена. Забыли код? Удалите строку LockCode в файле |/sd2snes/config.yml|.',
    "{lockrow} in {cfg} vraagt een code van 4 tot 10 knoppen (wacht 3 s om eerder te stoppen) voor alles wat de kaart of de instellingen wijzigt: {cfg}, bestanden wissen, hernoemen en verplaatsen, saves, {goptrow}, cheats bewerken, autoboot en thema's, ook in het in-game menu. [B] 3 s vasthouden annuleert. Code vergeten? Wis LockCode in |/sd2snes/config.yml|."),
   # 50 the PPU is cleared before every game boots
   ("Some romhacks draw their intro without clearing the video memory, and on a real console the menu's leftovers show as garbage. The |sd2snes+| wipes it before every game starts.",
@@ -824,7 +824,7 @@ TEXTS = [
    'Spiele mit Spezialchips (DSP, Super FX, SA-1, S-DD1, CX4, Super Game Boy, BS-X...) brauchen Hilfsdateien auf der Karte. Fehlt eine, nennt das Menü die Datei und bleibt stehen, statt zu hängen oder ein kaputtes Spiel zu starten.',
    "Les jeux à puces spéciales (DSP, Super FX, SA-1, S-DD1, CX4, Super Game Boy, BS-X...) ont besoin de fichiers sur la carte. S'il en manque un, le menu dit lequel et reste ouvert, au lieu de planter ou de lancer un jeu cassé.",
    'I giochi con chip speciali (DSP, Super FX, SA-1, S-DD1, CX4, Super Game Boy, BS-X...) vogliono file di supporto sulla scheda. Se ne manca uno, il menu dice quale e resta attivo, invece di bloccarsi o avviare un gioco rotto.',
-   'Играм со специальными чипами (DSP, Super FX, SA-1, S-DD1, CX4, Super Game Boy, BS-X...) нужны файлы BIOS в папке |/sd2snes|. Если какого-то из них нет, меню показывает его название и остаётся открытым, а не зависает и не запускает нерабочую игру.',
+   'Играм со специальными чипами (DSP, Super FX, SA-1, S-DD1, CX4, Super Game Boy, BS-X и другим) нужны файлы BIOS в папке |/sd2snes|. Если какого-то из них нет, меню показывает его название и остаётся открытым, а не зависает и не запускает нерабочую игру.',
    'Spellen met speciale chips (DSP, Super FX, SA-1, S-DD1, CX4, Super Game Boy, BS-X...) hebben hulpbestanden op de kaart nodig. Ontbreekt er een, dan noemt het menu het bestand en blijft het open, in plaats van te hangen.'),
   # 55 the clock question on boot and the date format
   ("When the cartridge's clock is not set, the menu asks for the time on start. {askclock} in {browser} turns the question off. The date at the bottom of the list follows the language: month first in English, day first in the others.",
