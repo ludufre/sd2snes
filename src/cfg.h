@@ -94,6 +94,9 @@
 #define CFG_STOP_MUSIC_GAME_INFO         ("StopMusicOnGameInfo")
 #define CFG_LOCK_CODE                    ("LockCode")
 #define CFG_FONT_NAME                    ("FontName")
+#define CFG_THEME_USE_FONT               ("ThemeUseFont")
+#define CFG_THEME_USE_SOUND              ("ThemeUseSound")
+#define CFG_THEME_USE_MUSIC              ("ThemeUseMusic")
 
 #define CFG_MENU_COMBO_MIN_BUTTONS       (3)
 
@@ -300,6 +303,15 @@ typedef struct __attribute__ ((__packed__)) _cfg_block {
      on its own that main.c writes over the menu image's font at every menu load (theme_font_file,
      theme.c). Picked with A in the browser like a .thm; "" (default) or a missing/bad file = the
      menu's own font. YAML FontName, cleared by Browser settings > Restore default font. */
+  uint8_t  theme_use_font;          /* CFG @ $261: the chosen .thm's own font (slot 13) goes on the menu.
+     The answer to the box the menu shows when a theme is picked; picking a .sfn or Restore default
+     font turns it off, so the last choice is the one that counts. Default 1. YAML ThemeUseFont. */
+  uint8_t  theme_use_sound;         /* CFG @ $262: the chosen .thm's own sound effects (slots 15-18) win
+     over the menu's. Same box, which sets theme_use_music along with it; picking a .spc leaves it
+     alone (the theme's effects stay). Default 1. YAML ThemeUseSound. */
+  uint8_t  theme_use_music;         /* CFG @ $263: the chosen .thm's own music (slot 14) wins over the
+     menu's. Same box as theme_use_sound; picking a .spc turns only this one off, so the last
+     choice of music is the one that counts. Default 1. YAML ThemeUseMusic. */
 } cfg_t;
 
 int cfg_save(void);

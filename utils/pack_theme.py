@@ -13,7 +13,9 @@ overwriting the referenced regions in PSRAM right after the menu is loaded
     9    1     N = number of regions
     10   2     flags  (bit0 = has logo; bit1 = outline off; bit2 = AA off)
     12   4     reserved (0)
-    16   N*4   TOC: per region { u8 slot ; u8 _rsv ; u16 length }
+    16   N*4   TOC: per region { u8 slot ; u8 len[16:23] ; u16 len[0:15] }
+               (a 24-bit length, as theme_toc_len reads it; files from before
+               the catalog regions always carry 0 in the second byte)
     ...        payload: region blobs concatenated in TOC order
 
 `slot` indexes the fork's _GFXPTR_ table (see SLOT_* below). The MCU resolves
@@ -187,7 +189,11 @@ def build_thm(regions, flags=0):
         if cap is not None and len(blob) > cap:
             raise ValueError("slot %d (%s) blob %d > cap %d"
                              % (slot, SLOT_NAME.get(slot, "?"), len(blob), cap))
-        toc += bytes([slot, 0]) + struct.pack("<H", len(blob))
+        if len(blob) > 0xFFFFFF:
+            raise ValueError("slot %d (%s) blob %d does not fit a 24-bit length"
+                             % (slot, SLOT_NAME.get(slot, "?"), len(blob)))
+        # 24-bit length: bits 16-23 in the byte after the slot (theme_toc_len)
+        toc += bytes([slot, len(blob) >> 16]) + struct.pack("<H", len(blob) & 0xFFFF)
         payload += blob
     return hdr + toc + payload
 
@@ -201,7 +207,8 @@ def parse_thm(data):
     regions = []
     poff = 16 + n * 4
     for _ in range(n):
-        slot, _rsv, length = data[off], data[off + 1], struct.unpack("<H", data[off + 2:off + 4])[0]
+        slot = data[off]
+        length = (data[off + 1] << 16) | struct.unpack("<H", data[off + 2:off + 4])[0]
         regions.append((slot, data[poff:poff + length]))
         poff += length
         off += 4

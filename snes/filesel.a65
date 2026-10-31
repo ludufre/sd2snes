@@ -643,6 +643,8 @@ sel_is_spc
 sel_is_theme
   jsl @lock_ask         ; fork: the parental lock (fmres.a65)
   bcs select_item_cont
+  jsl @theme_ask        ; the picture and the font/sounds question (themeask.a65)
+  bcs select_item_cont
   jsr snd_fx_confirm
   jsr select_theme
   bra select_item_cont

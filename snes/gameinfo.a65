@@ -673,10 +673,15 @@ gi_dc_show:
   stx $4332
   lda #^gi_hdma_mode
   sta $4334
-  ; --- the menu's BACKGROUND gradient: ch1 holds CG address = 0 (backdrop) per line, ch2
-  ;     writes the per-scanline teal colour to $2122 -> CGRAM[0] gets the menu's gradient.
-  ;     Reuse the menu's runtime tables (hdma_cg_addr / hdma_pal) so the info screen's
-  ;     background matches the browser. (These are re-set here to be self-contained.) ---
+  ; --- the BACKGROUND gradient: ch1 holds CG address = 0 (backdrop) per line, ch2 writes the
+  ;     per-scanline colour to $2122 -> CGRAM[0]. This screen has a gradient of its own
+  ;     (hdma_pal_gi_src, a theme's slot 20): it goes over the menu's in the hdma_pal WRAM
+  ;     buffer, and setup_gfx (gi_dc_restore) puts the menu's back. HDMA is off here. ---
+  lda #^hdma_pal
+  ldx #!hdma_pal
+  stx $2181
+  sta $2183
+  DMA7(#$00, #55, #^hdma_pal_gi_src, #!hdma_pal_gi_src, #$80)
   lda #$00 : sta $4310       ; ch1: 1 reg, direct, 1 byte/line
   lda #$21 : sta $4311       ; dest = $2121 (CGADD)
   ldx #!hdma_cg_addr

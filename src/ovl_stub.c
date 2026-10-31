@@ -83,6 +83,14 @@ void gameinfo_desc_full(void)
   if(ovl_enter(M1)) { ((fv_t)E(15))(); ovl_depth--; return; }
   sram_writebyte(0, SRAM_GAMEINFO_DESCEXT_ADDR);
 }
+/* no overlay: the menu's music, and a box with nothing to offer */
+int theme_music_load(void)       { int r; R(M1, 16, int (*)(void), 0); }
+void theme_info(const char *p)
+{
+  if(ovl_enter(M1)) { ((fs_t)E(17))(p); ovl_depth--; return; }
+  sram_writebyte(0, SRAM_COVER_ADDR + THEME_INFO_OFF);
+  sram_writebyte(0, SRAM_COVER_ADDR + COVER_OFF_STATUS);
+}
 
 /* ---- overlay 2 ------------------------------------------------------------------- */
 /* no overlay: an empty list, so the dialog opens on "no patch" */

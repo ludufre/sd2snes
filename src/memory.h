@@ -59,6 +59,7 @@ void assert_reset(void);
 void init(uint8_t *filename);
 void deassert_reset(void);
 uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header_addr);
+uint32_t load_spc_region(uint8_t* filename, uint32_t base, uint32_t len, uint32_t spc_data_addr, uint32_t spc_header_addr);
 int menu_spc_pick_random(uint8_t *out, int outsize);   /* spcload.c: 1 = a track drawn */
 /* Multi-slot battery SRAM (CICLO 2). SRM_SLOT_COUNT slots: internal index 0..3,
    UI "SLOT 1..4". Slot 0 = the legacy <stem>.srm (byte-identical); slots 1..3 =

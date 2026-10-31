@@ -16,8 +16,16 @@ extern cfg_t CFG;
 extern volatile mcu_status_t STM;
 
 uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header_addr) {
+  return load_spc_region(filename, 0, 0, spc_data_addr, spc_header_addr);
+}
+
+/* The same from `base` into the file, `len` bytes long: a theme carries its music as a
+   region, with more file after it. len 0 = the rest of the file. */
+uint32_t load_spc_region(uint8_t* filename, uint32_t base, uint32_t len,
+                         uint32_t spc_data_addr, uint32_t spc_header_addr) {
   DWORD filesize;
   UINT bytes_read;
+  uint32_t left = 0x10000;  /* the data segment, not "until EOF": past it is not SPC RAM */
   uint8_t data;
   UINT j;
 
@@ -25,7 +33,7 @@ uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header
 
   file_open(filename, FA_READ); /* Open SPC file */
   if(file_res) return 0;
-  filesize = file_handle.fsize;
+  filesize = len ? len : file_handle.fsize;
   if (filesize < 65920) { /* At this point, we care about filesize only */
     file_close(); /* since SNES decides if it is an SPC file */
     sram_writebyte(0, spc_header_addr); /* If file is too small, destroy previous SPC header */
@@ -33,11 +41,13 @@ uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header
   }
 
   set_mcu_addr(spc_data_addr);
-  f_lseek(&file_handle, 0x100L); /* Load 64K data segment */
+  f_lseek(&file_handle, base + 0x100L); /* Load 64K data segment */
 
-  for(;;) {
+  while(left) {
     bytes_read = file_read();
     if (file_res || !bytes_read) break;
+    if(bytes_read > left) bytes_read = left;
+    left -= bytes_read;
     FPGA_SELECT();
     FPGA_TX_BYTE(0x98);
     for(j=0; j<bytes_read; j++) {
@@ -51,7 +61,7 @@ uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header
   file_open(filename, FA_READ); /* Reopen SPC file to reset file_getc state*/
 
   set_mcu_addr(spc_header_addr);
-  f_lseek(&file_handle, 0x0L); /* Load 256 bytes header */
+  f_lseek(&file_handle, base); /* Load 256 bytes header */
 
   FPGA_SELECT();
   FPGA_TX_BYTE(0x98);
@@ -66,7 +76,7 @@ uint32_t load_spc(uint8_t* filename, uint32_t spc_data_addr, uint32_t spc_header
   file_open(filename, FA_READ); /* Reopen SPC file to reset file_getc state*/
 
   set_mcu_addr(spc_header_addr+0x100);
-  f_lseek(&file_handle, 0x10100L); /* Load 128 DSP registers */
+  f_lseek(&file_handle, base + 0x10100L); /* Load 128 DSP registers */
 
   FPGA_SELECT();
   FPGA_TX_BYTE(0x98);

@@ -32,7 +32,7 @@ grep -E '^#define (FEAT_2100|FEAT_2100_LIMIT\(x\)|FEAT_CC92|FEAT_PF94)[[:space:]
 
 MAPDEFS=
 for sym in SRAM_FAVORITEGAMES_ADDR SRAM_GAMEINFO_ADDR SRAM_MENU_CFG_ADDR SRAM_CFG_PLAYER_REPEAT_ADDR \
-           SRAM_LASTGAME_DIR_ADDR SRAM_LASTGAME_FILE_ADDR SRAM_GAMEOPT_ADDR; do
+           SRAM_LASTGAME_DIR_ADDR SRAM_LASTGAME_FILE_ADDR SRAM_GAMEOPT_ADDR SRAM_CHEAT_FLAGS_ADDR; do
   val=$(grep -hE "^#define[[:space:]]+$sym[[:space:]]" ../../src/memmap.h ../../src/memory.h 2>/dev/null | head -1 | awk '{print $3}')
   case "$val" in
     0[xX][0-9a-fA-F]*|\(0[xX][0-9a-fA-F]*) ;;

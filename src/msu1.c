@@ -6,6 +6,7 @@
 #include "spi.h"
 #include "fpga_spi.h"
 #include "cli.h"
+#include "theme.h"
 #include "fileops.h"
 #include "msu1.h"
 #include "snes.h"
@@ -735,14 +736,16 @@ static __attribute__((noinline)) void menusfx_preload(menusfx_slot_t *s) {
   UINT br = 0;
   uint8_t magic[4];
   DWORD fsz;
-  uint32_t need;
+  uint32_t need, start = 0, region = 0;
   s->ready = -1;                                    /* pessimistic until fully streamed */
   ff_sd_offload = 0; sd_offload = 0;                /* the magic read below is a normal RAM read */
-  if(f_open(&menusfx_pre_fil, (const TCHAR*)s->name, FA_READ) != FR_OK) return;
+  /* the chosen theme's own effect first; everything below reads the same from either */
+  if(theme_sfx_open(&menusfx_pre_fil, s->name, &region)) start = menusfx_pre_fil.fptr;
+  else if(f_open(&menusfx_pre_fil, (const TCHAR*)s->name, FA_READ) != FR_OK) return;
   if(f_read(&menusfx_pre_fil, magic, 4, &br) != FR_OK || br != 4 || memcmp(magic, "MSU1", 4)) {
     f_close(&menusfx_pre_fil); return;              /* not a valid MSU-1 PCM */
   }
-  fsz = f_size(&menusfx_pre_fil);
+  fsz = region ? region : f_size(&menusfx_pre_fil);
   if(fsz <= MSU_PCM_OFFSET_WAVEDATA) {
     f_close(&menusfx_pre_fil); return;              /* header only, no body */
   }
@@ -757,7 +760,7 @@ static __attribute__((noinline)) void menusfx_preload(menusfx_slot_t *s) {
   need = ((s->bytelen >> 1) + 3) & ~(uint32_t)3;
   if(!(s->bytelen & 3) && (fpga_sfx_status() & FPGA_SFX_ST_MONO)
      && need <= (SRAM_MENU_SFX_ADDR + MENU_SFX_WINDOW) - menusfx_next) {
-    f_lseek(&menusfx_pre_fil, MSU_PCM_OFFSET_WAVEDATA);
+    f_lseek(&menusfx_pre_fil, start + MSU_PCM_OFFSET_WAVEDATA);
     if(menusfx_stream_mono(&menusfx_pre_fil, menusfx_next, s->bytelen)) {
       f_close(&menusfx_pre_fil);
       s->base = menusfx_next;
@@ -780,7 +783,7 @@ static __attribute__((noinline)) void menusfx_preload(menusfx_slot_t *s) {
      freeze on the first blip.  sram_writeblock uses MCU writes that interleave in free
      slots (never taking ROM_ADDR from the live SNES), exactly like the cover load that
      already streams to PSRAM on every browse without ever freezing. */
-  f_lseek(&menusfx_pre_fil, MSU_PCM_OFFSET_WAVEDATA);
+  f_lseek(&menusfx_pre_fil, start + MSU_PCM_OFFSET_WAVEDATA);
   if(!psram_stream(&menusfx_pre_fil, s->base, s->bytelen, 0)) {
     f_close(&menusfx_pre_fil); return;              /* read error -> stay silent */
   }

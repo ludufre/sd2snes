@@ -150,6 +150,13 @@ ui_call_coversync:
 ui_call_coveroff:
   jsr cover_menu_off
   rtl
+; themeask.a65: the staged picture of a .thm goes up like box art
+ui_call_covershow:
+  jsr cover_show
+  sep #$20 : .as
+  lda #$01
+  sta cover_loaded
+  rtl
 
 ; --- $C0 trampolines for the PCM player screen (snes/pcmplay.a65, bank $C1).
 ; Same reason as the block above: all three targets are `rts` near.

@@ -790,10 +790,11 @@ ovl_stage_theme:
 	                                       ;   leaves the ASSEMBLER in .al, which would size
 	                                       ;   every `lda #imm` here 16-bit against 8-bit A
 	lda #$00 : sta @IGM_THM_MAGIC          ; invalidate while we fill (no long stz)
-	; --- backdrop gradient blob: hdma_pal_src -> IGM_THM_GRAD (55 B) ---
+	; --- backdrop gradient blob: hdma_pal_gi_src -> IGM_THM_GRAD (55 B): the in-game menu wears
+	;     the game info gradient, not the browser's ---
 	ldx #$0000
 ovl_thm_grad:
-	lda @hdma_pal_src, x : sta @IGM_THM_GRAD, x
+	lda @hdma_pal_gi_src, x : sta @IGM_THM_GRAD, x
 	inx : cpx #$0037 : bne ovl_thm_grad
 	; --- BAR colour-math table: hdma_math_src -> IGM_THM_MATH (19 B) ---
 	ldx #$0000

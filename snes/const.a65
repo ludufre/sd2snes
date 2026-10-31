@@ -44,6 +44,47 @@ hdma_pal_src
   .byt $00, $00, $00, $00, $00, $00, $00, $00
   .byt $00
 
+; The game info screen and the in-game menu have a gradient of their own (slot 20 of a .thm):
+; a theme without it uses its menu gradient here too (theme_apply copies it). Same format and
+; size as hdma_pal_src.
+hdma_pal_gi_src
+  .byt 56
+  .byt $00, $00
+  .byt 12
+  .byt $00, $00
+  .byt 12
+  .byt $00, $04
+  .byt 12
+  .byt $20, $08
+  .byt 12
+  .byt $40, $10
+  .byt 12
+  .byt $40, $14
+  .byt 12
+  .byt $60, $18
+  .byt 12
+  .byt $80, $20
+  .byt 12
+  .byt $80, $24
+  .byt 12
+  .byt $a0, $2c
+  .byt 12
+  .byt $c0, $30
+  .byt 12
+  .byt $e0, $34
+  .byt 12
+  .byt $e0, $3c
+  .byt 12
+  .byt $00, $41
+  .byt 12
+  .byt $20, $49
+  .byt $00
+  ; pad to the 55-byte region size: main.a65 DMAs a fixed #55 into the
+  ; hdma_pal WRAM buffer, and HDMA stops at the $00 above, so these are
+  ; never fetched -- they only keep the region (and theme_slot_max[4]) at 55.
+  .byt $00, $00, $00, $00, $00, $00, $00, $00
+  .byt $00
+
 hdma_cg_addr_src
   .byt $f0
   .byt $00, $00, $00, $00, $00, $00, $00, $00
@@ -951,6 +992,10 @@ gfxptr_info     .byt "_GFXPTR_"
 ; gfxptr[0] alone. Emit the font's bank byte here (assembler-resolved, robust to
 ; future relocations) so theme.c can address the font for the outline-off remap.
                 .byt ^font
+; the game info gradient, past what any older firmware reads. "GI" tells it from whatever
+; follows the table in an image that does not have it (the tour).
+                .byt "GI"
+                .word hdma_pal_gi_src
 
 ; ---- the browser's file manager (fileman.a65, bank $C3) ----
 ; build_const.py moves every text_fm_* / mtext_fm_* label into const_lang_fm.a65 (bank $C3,
@@ -977,6 +1022,10 @@ mtext_fm_merge_all      .byt "Merge all", 0
 mtext_fm_skip_all       .byt "Skip all", 0
 mtext_fm_keep_all       .byt "Keep both, all", 0
 text_fm_title           .byt "Files", 0
+text_thm_title          .byt "Theme", 0
+text_thm_font           .byt "Apply font", 0
+text_thm_sound          .byt "Apply sounds", 0
+text_thm_apply          .byt "Use this theme", 0
 text_fm_sel_keys        .byt "marked  A:Mark Y:Actions B:Done", 0
 text_fm_conflict        .byt "Already exists", 0
 text_fm_copying         .byt "Copying", 0

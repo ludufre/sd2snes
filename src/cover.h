@@ -80,5 +80,6 @@ int load_cover(const uint8_t *rom_path, uint32_t sram_addr);
  * screen to stage the cover + screenshot. Returns 1 on success, 0 otherwise.
  * Bounded + fail-safe; never hangs. */
 int load_cover_path(const char *cov_path, uint32_t sram_addr);
+int load_cover_region(const char *cov_path, uint32_t off, uint32_t sram_addr);
 
 #endif

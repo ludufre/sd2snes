@@ -1,0 +1,404 @@
+; The box the menu shows when a .thm is picked: the theme's picture, and whether to use the font
+; and the sounds it brings. A theme with none of these (every .thm made outside the catalog) never
+; gets here: the MCU answers "nothing" and the pick goes on as it always did.
+;
+; Bank $C3 like the file manager, for the same reason: $C0-$C2 are full. fmres.a65 theme_ask
+; (bank $C1) is the way in, through fm_bank_ok. The picture goes where the box art goes, so it
+; shows on the right and the window stays to its left.
+
+.link page $c3
+#include "memmap.i65"
+; memmap.i65 re-asserts '.link page $c0' on include; re-declare $c3 AFTER it.
+.link page $c3
+
+; past lock.a65's ($7E9F00-$7E9F65)
+#define TAX_MASK    $7E9F70     ; what the theme brings (THEME_HAS_* in src/theme.h)
+#define TAX_ANS     $7E9F71     ; the answers, MCU_PARAM+8 of CMD_SET_THEME
+#define TAX_SEL     $7E9F72     ; the row the bar is on
+#define TAX_N       $7E9F73     ; how many rows
+#define TAX_ROW     $7E9F74     ; the row being drawn
+#define TAX_T       $7E9F76     ; word scratch
+
+#define TA_HAS_FONT     $01
+#define TA_HAS_SOUND    $02
+#define TA_HAS_PICTURE  $04
+#define TA_ANS_FONT     $01
+#define TA_ANS_SOUND    $02
+
+#define TA_X        2
+#define TA_Y        9           ; rows above 8 are the logo (not text)
+#define TA_W        28          ; column 32 on is the picture
+#define TA_H        9
+#define TA_COL      4           ; the rows' column
+#define TA_TITLE    1           ; rows, from TA_Y
+#define TA_ROWS     3
+#define TA_HINT     7
+; from TA_COL: columns 4..27 (the inner ones end at 28); the longest hint is 23
+#define TA_TEXT     24
+
+; ---------------------------------------------------------------------------
+; theme_box: filesel's A on a .thm, Y as select_theme takes it. Carry set = cancelled. Whatever
+; happens, MCU_PARAM+0..8 is left ready for select_theme. Every register, width, DB and DP kept.
+; ---------------------------------------------------------------------------
+theme_box:
+  php
+  rep #$30 : .al : .xl
+  pha
+  phx
+  phy
+  phb
+  phd
+  dey
+  lda [dirptr_addr], y        ; the caller's DP: as select_theme
+  and #$00ff
+  sta @MCU_PARAM+6
+  dey
+  dey
+  lda [dirptr_addr], y
+  sta @MCU_PARAM+4
+  lda #!FILESEL_CWD
+  sta @MCU_PARAM
+  sep #$20 : .as
+  lda #^FILESEL_CWD
+  sta @MCU_PARAM+2
+  lda #$00
+  sta @MCU_PARAM+3
+  jsr fm_env
+  .as : .xl
+  jsr ta_coveroff             ; nothing floating over the box
+  jsl @ui_call_coversync
+  sep #$20 : .as
+  lda #$00
+  sta @SNES_CMD
+  lda #CMD_THEME_INFO
+  sta @MCU_CMD
+tb_wait:
+  .as
+  lda @SNES_CMD
+  cmp #$55
+  beq tb_done
+  cmp #$aa
+  bne tb_wait
+tb_done:
+  .as
+  lda #$00                    ; #$00, never #$55: the firmware would run it again
+  sta @MCU_CMD
+  lda @THEME_INFO
+  sta !TAX_MASK
+  lda @THEME_INFO_MAGIC       ; "TI" = the firmware answered; without it (an older firmware,
+  cmp #$54                    ; 'T' -- which ACKs the command and leaves bank $C9 as it was)
+  bne tb_nomagic              ; the byte is junk: no box, the pick goes on as before
+  lda @THEME_INFO_MAGIC+1
+  cmp #$49                    ; 'I'
+  beq tb_magic
+tb_nomagic:
+  .as
+  lda #$00
+  sta !TAX_MASK
+tb_magic:
+  .as
+  lda #TA_ANS_FONT|TA_ANS_SOUND
+  sta !TAX_ANS
+  lda !TAX_MASK
+  beq tb_go                   ; nothing to ask: as before this box existed
+  jsr ta_box
+  bcs tb_no
+tb_go:
+  .as
+  lda !TAX_ANS
+  sta @MCU_PARAM+8
+  rep #$30 : .al : .xl
+  pld
+  plb
+  ply
+  plx
+  pla
+  plp
+  clc
+  rtl
+tb_no:
+  .as
+  rep #$30 : .al : .xl
+  pld
+  plb
+  ply
+  plx
+  pla
+  plp
+  sec
+  rtl
+
+; ta_box: draw it, run it, close it. Carry set = cancelled.
+ta_box:
+  .as : .xl
+  lda bar_xl                  ; the browser's bar comes back on exit
+  pha
+  lda bar_yl
+  pha
+  lda bar_wl
+  pha
+  lda #TA_X
+  sta window_x
+  lda #TA_Y
+  sta window_y
+  lda #TA_W
+  sta window_w
+  lda #TA_H
+  sta window_h
+  lda #^zero
+  sta window_tbank
+  ldx #!zero
+  stx window_taddr
+  jsl @ui_call_wopen
+  sep #$20 : .as
+  rep #$10 : .xl
+  ldx #!text_thm_title
+  jsr fm_str
+  lda #TA_Y+TA_TITLE
+  sta print_y
+  lda #TA_COL
+  sta print_x
+  jsr ta_print
+; one row per thing the theme brings, then the one that goes ahead
+  lda #$01
+  sta !TAX_N
+  lda !TAX_MASK
+  and #TA_HAS_FONT
+  beq +
+  inc !TAX_N
++ lda !TAX_MASK
+  and #TA_HAS_SOUND
+  beq +
+  inc !TAX_N
++ stz !TAX_ROW
+tb_rows:
+  .as : .xl
+  jsr ta_row
+  inc !TAX_ROW
+  lda !TAX_ROW
+  cmp !TAX_N
+  bcc tb_rows
+  lda #^text_confirm_hint
+  sta print_bank
+  ldx #!text_confirm_hint
+  stx print_src
+  jsl @ui_call_resolve
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #TA_Y+TA_HINT
+  sta print_y
+  lda #TA_COL
+  sta print_x
+  jsr ta_print
+  jsl @hint_keys              ; the keys in green, like the other boxes (manhost.a65)
+  sep #$20 : .as
+  rep #$10 : .xl
+; the one that goes ahead first: all the user did was press A on the theme
+  lda !TAX_N
+  dec
+  sta !TAX_SEL
+  jsr ta_bar
+  stz screen_dma_disable      ; the NMI uploads the box from here on
+  lda !TAX_MASK
+  and #TA_HAS_PICTURE
+  beq tb_loop
+  lda #$00                    ; the cover code runs with DB = 0, as from the browser
+  pha
+  plb
+  jsl @ui_call_covershow
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb
+tb_loop:
+  .as : .xl
+  jsl @bgx_loop_gate          ; the scrolling background composes while the loop waits
+  lda isr_done
+  beq tb_loop
+  stz isr_done
+  jsl @ui_call_pad
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda pad_b
+  bne tb_cancel
+  lda pad_a
+  bne tb_a
+  lda pad_up
+  bne tb_up
+  lda pad_down
+  bne tb_down
+  bra tb_loop
+tb_up:
+  .as : .xl
+  lda !TAX_SEL
+  beq tb_loop
+  dec !TAX_SEL
+  bra tb_moved
+tb_down:
+  .as : .xl
+  lda !TAX_SEL
+  inc
+  cmp !TAX_N
+  bcs tb_loop
+  sta !TAX_SEL
+tb_moved:
+  .as : .xl
+  lda #$01                    ; snd_fx_cursor
+  sta @SFX_MAILBOX
+  jsr ta_bar
+  bra tb_loop
+tb_a:
+  .as : .xl
+  lda !TAX_SEL
+  sta !TAX_ROW
+  jsr ta_kind                 ; A = 0 / TA_ANS_* of that row
+  beq tb_take
+  eor !TAX_ANS
+  sta !TAX_ANS
+  lda #$01                    ; snd_fx_cursor
+  sta @SFX_MAILBOX
+  jsr ta_row
+  bra tb_loop
+tb_take:
+  .as : .xl
+  clc
+  bra tb_close
+tb_cancel:
+  .as : .xl
+  lda #$03                    ; snd_fx_back
+  sta @SFX_MAILBOX
+  sec
+tb_close:
+  .as : .xl
+  php
+  jsl @ui_call_wclose
+  sep #$20 : .as
+  rep #$10 : .xl
+  plp
+  bcc tb_ret
+  jsr ta_coveroff             ; staying: the browser asks for its own cover again
+  sec
+tb_ret:
+  .as : .xl
+  pla
+  sta bar_wl
+  pla
+  sta bar_yl
+  pla
+  sta bar_xl
+  rts
+
+ta_coveroff:
+  .as : .xl
+  lda #$00                    ; DB = 0, as ui_call_coveroff wants it
+  pha
+  plb
+  jsl @ui_call_coveroff
+  sep #$20 : .as
+  rep #$10 : .xl
+  lda #$7e
+  pha
+  plb
+  rts
+
+ta_bar:
+  .as : .xl
+  lda #TA_X+1
+  sta bar_xl
+  lda #TA_W-2
+  sta bar_wl
+  lda !TAX_SEL
+  clc
+  adc #TA_Y+TA_ROWS-1
+  sta bar_yl
+  rts
+
+; ta_kind: what row TAX_ROW is: TA_ANS_FONT, TA_ANS_SOUND, or 0 for the one that goes ahead
+ta_kind:
+  .as : .xl
+  lda !TAX_ROW
+  sta !TAX_T
+  lda !TAX_MASK
+  and #TA_HAS_FONT
+  beq tk_sound
+  lda !TAX_T
+  beq tk_font
+  dec !TAX_T
+tk_sound:
+  .as
+  lda !TAX_MASK
+  and #TA_HAS_SOUND
+  beq tk_go
+  lda !TAX_T
+  bne tk_go
+  lda #TA_ANS_SOUND
+  rts
+tk_font:
+  .as
+  lda #TA_ANS_FONT
+  rts
+tk_go:
+  .as
+  lda #$00
+  rts
+
+; ta_row: draw row TAX_ROW
+ta_row:
+  .as : .xl
+  lda !TAX_ROW
+  clc
+  adc #TA_Y+TA_ROWS
+  sta print_y
+  lda #TA_COL
+  sta print_x
+  jsr ta_kind
+  bne tr_check
+  ldx #!text_thm_apply
+  jsr fm_str
+  jmp ta_print
+tr_check:
+  .as : .xl
+  pha
+  and !TAX_ANS
+  beq tr_off
+  ldx #!ta_on
+  bra tr_box
+tr_off:
+  .as : .xl
+  ldx #!ta_off
+tr_box:
+  .as : .xl
+  stx print_src
+  lda #^ta_on
+  sta print_bank
+  jsr ta_print
+  lda #TA_COL+4
+  sta print_x
+  pla
+  cmp #TA_ANS_FONT
+  beq tr_font
+  ldx #!text_thm_sound
+  bra tr_label
+tr_font:
+  .as : .xl
+  ldx #!text_thm_font
+tr_label:
+  .as : .xl
+  jsr fm_str
+  lda #TA_TEXT-4              ; the label starts 4 columns in: it stops at the same column
+  bra ta_print_n
+ta_print:
+  .as : .xl
+  lda #TA_TEXT
+ta_print_n:
+  .as : .xl
+  sta print_count
+  stz print_pal
+  jsl @gi_call_hiprint
+  sep #$20 : .as
+  rep #$10 : .xl
+  rts
+
+ta_on   .byt "[x]", 0
+ta_off  .byt "[ ]", 0

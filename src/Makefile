@@ -84,7 +84,7 @@ SRC += nesave.c cfg.c cheat.c yaml.c savestate.c sgb.c gbc.c sms.c atari.c nes.c
 # Shared helpers: menu command handlers, file->PSRAM streaming, string/path
 # utilities and the YAML sidecar writer.
 SRC += menucmd.c psram_io.c strutil.c yamlw.c trainer.c cheatcode.c cheatedit.c scratch.c cjkglyph.c qoa.c
-SRC += dirindex.c
+SRC += dirindex.c themereg.c
 # Per-game options (the .opt sidecar): today the 1CHIP transient fix per game.
 SRC += gameopt.c
 # RAM connection test driven from the menu ("Memory test").  Every config: the Mk.II is
@@ -568,7 +568,8 @@ OVL2_FILE = ovl2.$(OVL_SFX)
 ifneq ($(strip $(OVL1_SRC)),)
 OVL1_RENAME = theme_apply theme_font_edges_stale theme_font_edges theme_font_file font_select \
               theme_clear theme_pick theme_select sysinfo_open load_cover load_cover_path \
-              sysinfo_pass load_spc menu_spc_pick_random gameinfo_load gameinfo_desc_full
+              sysinfo_pass load_spc menu_spc_pick_random gameinfo_load gameinfo_desc_full \
+              theme_music_load theme_info
 OVL_RENAME = $(OVL1_RENAME) $(OVL2_RENAME)
 # bootleg_scan stays resident (ovl_stub.c): the overlay's own definition is renamed away.
 # Every overlay sees every rename: an overlay calling another overlay's entry fails to link.

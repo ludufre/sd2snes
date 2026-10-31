@@ -446,6 +446,9 @@ static void cfg_make_allchanged(void) {
   CFG.stop_music_game_info = 1;                  /* the menu music stops on the game info screen */
   memcpy(CFG.lock_code, "\x12\x34\x56\x70", 4);   /* a change lock of 7 buttons: BYsSudl */
   strcpy((char *)CFG.font_name, "/fonts/round.sfn"); /* a font picked in the browser */
+  CFG.theme_use_font = 0;                            /* the box's answers, all off */
+  CFG.theme_use_sound = 0;
+  CFG.theme_use_music = 0;
 }
 
 /* ---- the alternating-booleans config ------------------------------------

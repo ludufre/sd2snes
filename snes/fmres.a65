@@ -407,6 +407,29 @@ lka_no:
   sec
   rtl
 
+; theme_ask: filesel's A on a .thm, after the lock. Carry set = stay in the browser. The box lives
+; in $C3; without that bank the pick goes on with both answers on, as a theme did before the box.
+theme_ask:
+  php
+  jsl @fm_bank_ok
+  bcc tas_plain
+  jsl @theme_box
+  bcs tas_no
+  plp
+  clc
+  rtl
+tas_plain:
+  sep #$20 : .as
+  lda #$03
+  sta @MCU_PARAM+8
+  plp
+  clc
+  rtl
+tas_no:
+  plp
+  sec
+  rtl
+
 ; lock_entry: show_menu, the row picked, before it acts (menu.a65).  A (16 bits) = the row's
 ; type, Y = where its target is in [w_menu_addr] (show_menu's DP, $08 there).  Carry SET =
 ; refused: show_menu goes back to its list.  All registers and widths kept.

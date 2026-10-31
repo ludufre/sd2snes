@@ -40,18 +40,26 @@ static void cover_set_status(uint32_t base, uint8_t status, uint8_t w,
  * Used by the game-info screen to stage the cover (-> OBJ name table 0) and the
  * screenshot (-> OBJ name table 1) into separate banks. */
 int load_cover_path(const char *cov_path, uint32_t sram_addr) {
+  return load_cover_region(cov_path, 0, sram_addr);
+}
+
+/* The same from `off` into the file: a theme carries its picture as a region. A NULL path only
+ * says "no cover". */
+int load_cover_region(const char *cov_path, uint32_t off, uint32_t sram_addr) {
   UINT got = 0;
   uint8_t hdr[COVER_HEADER_SIZE];
 
   /* fail-safe default: mark "no cover" up front; only OK after a clean load */
   cover_set_status(sram_addr, COVER_STATUS_NONE, 0, 0, 0, 0, 0);
 
+  if(!cov_path) return 0;
   printf("cover: try %s\n", cov_path);
   file_open((uint8_t*)cov_path, FA_READ);
   if(file_res) {
     printf("cover: open failed res=%d (no cover)\n", file_res);
     return 0;
   }
+  if(off) f_lseek(&file_handle, off);
 
   /* header */
   file_res = f_read(&file_handle, hdr, COVER_HEADER_SIZE, &got);

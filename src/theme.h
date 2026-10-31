@@ -51,6 +51,40 @@ int theme_font_edges_stale(void);
 #define TEXT_EDGE_ON     1
 #define TEXT_EDGE_OFF    2
 
+#include <stdint.h>
+#include "ff.h"
+
+/* What the catalog appends to a .thm (format in theme.c). */
+#define THEME_SLOT_FONT     13
+#define THEME_SLOT_MUSIC    14
+#define THEME_SLOT_SFX      15   /* cursor, confirm, back, error */
+#define THEME_SLOT_PREVIEW  19
+#define THEME_SLOT_GAME_GRAD 20  /* gradient of the game info screen and the in-game menu */
+
+/* theme_info's answer, at SRAM_COVER_ADDR + THEME_INFO_OFF (past the cover's 8-byte meta). */
+#define THEME_INFO_OFF      0x3A10
+#define THEME_HAS_FONT      0x01
+#define THEME_HAS_SOUND     0x02
+#define THEME_HAS_PICTURE   0x04
+/* ...followed by "TI": the menu cannot clear bank $C9, so an older firmware (which leaves
+   whatever was there) is told apart by these two bytes, and the menu then applies directly. */
+#define THEME_INFO_MAGIC    "TI"
+
+/* The answers of the menu's box, MCU_PARAM+8 of SNES_CMD_SET_THEME. */
+#define THEME_ANSWER_FONT   0x01
+#define THEME_ANSWER_SOUND  0x02   /* music and effects: sets theme_use_music and theme_use_sound */
+
+#define THEME_VERSION   2       /* highest version read; 1 = no background */
+#define THEME_NREGIONS  21      /* slots a .thm may carry: the 13 of the menu + the catalog's 7 + slot 20 */
+
+/* themereg.c, resident */
+uint32_t theme_toc_len(const uint8_t *e);
+int theme_region_open(FIL *f, const char *path, uint8_t slot, uint32_t *len);
+int theme_sound_open(FIL *f, uint8_t slot, uint32_t *len);
+int theme_sfx_open(FIL *f, const char *name, uint32_t *len);
+int theme_music_load(void);
+void theme_info(const char *path);
+
 /* Persist the chosen theme. `name` is the full SD path of a .thm (as returned
  * by get_selected_name) or NULL/empty to clear back to the baked default.
  * Updates CFG.skin_name and saves config. */

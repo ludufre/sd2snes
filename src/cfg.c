@@ -102,6 +102,12 @@ _Static_assert(offsetof(cfg_t, gb_rotate_buttons) == 0x1da, "cfg_t.gb_rotate_but
 _Static_assert(offsetof(cfg_t, stop_music_game_info) == 0x1db, "cfg_t.stop_music_game_info must stay at CFG_ADDR+$1DB");
 _Static_assert(offsetof(cfg_t, lock_code) == 0x1dc, "cfg_t.lock_code must stay at CFG_ADDR+$1DC");
 _Static_assert(offsetof(cfg_t, font_name) == 0x1e1, "cfg_t.font_name must stay at CFG_ADDR+$1E1");
+_Static_assert(offsetof(cfg_t, theme_use_font) == 0x261, "cfg_t.theme_use_font must stay at CFG_ADDR+$261");
+_Static_assert(offsetof(cfg_t, theme_use_sound) == 0x262, "cfg_t.theme_use_sound must stay at CFG_ADDR+$262");
+_Static_assert(offsetof(cfg_t, theme_use_music) == 0x263, "cfg_t.theme_use_music must stay at CFG_ADDR+$263");
+/* The whole struct is blitted to the BSRAM: its end must stay below the next region. */
+_Static_assert(SRAM_MENU_CFG_ADDR + sizeof(cfg_t) <= SRAM_CHEAT_FLAGS_ADDR,
+               "cfg_t runs into SRAM_CHEAT_FLAGS_ADDR (memmap.h)");
 
 /* The defaults, as code: a const cfg_t image cost 609 bytes of flash, 512 of them the
    zeros of the four path fields.  memset gives every field not set below its default 0:
@@ -159,6 +165,9 @@ void cfg_defaults(cfg_t *c) {
   c->ingame_buttons_menu = CFG_DEFAULT_IGM_BUTTONS;
   c->cc_time_limit = 3;           /* 6 minutes, the event setting */
   c->menu_music_random = 1;
+  c->theme_use_font = 1;
+  c->theme_use_sound = 1;
+  c->theme_use_music = 1;
   memcpy(c->menu_music_folder, "/sd2snes/music", sizeof("/sd2snes/music"));
   c->ask_clock_on_boot = 1;
   c->open_msu_folders = 1;
@@ -343,7 +352,10 @@ static const cfg_item_t cfg_items[] = {
   CFGI(CFG_GB_ROTATE_BUTTONS,           gb_rotate_buttons,          CK_BOOL,    0),
   CFGI(CFG_STOP_MUSIC_GAME_INFO,        stop_music_game_info,       CK_BOOL,    0),
   CFGI(CFG_LOCK_CODE,                   lock_code,                  CK_SEQ,     0),
-  CFGI(CFG_FONT_NAME,                   font_name,                  CK_STR,     0)
+  CFGI(CFG_FONT_NAME,                   font_name,                  CK_STR,     0),
+  CFGI(CFG_THEME_USE_FONT,              theme_use_font,             CK_BOOL,    0),
+  CFGI(CFG_THEME_USE_SOUND,             theme_use_sound,            CK_BOOL,    0),
+  CFGI(CFG_THEME_USE_MUSIC,             theme_use_music,            CK_BOOL,    0)
 };
 #undef CFGI
 

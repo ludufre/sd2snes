@@ -63,6 +63,8 @@
 #define COVER_C9_TILES              $C90000    /* 4bpp tiles (name-grid order) */
 #define COVER_C9_PAL                $C92000    /* up to 8 OBJ palettes, 16 BGR555 each */
 #define COVER_C9_BLOCKMAP           $C92100    /* per-16x16-block palette index (0..7) */
+#define THEME_INFO                  $C93A10    /* its answer: THEME_HAS_* (src/theme.h) */
+#define THEME_INFO_MAGIC            $C93A11    /* "TI" after it; an older firmware leaves bank $C9 as it was (src/theme.h) */
 #define COVER_C9_STATUS             $C93A00    /* meta: status,w_spr,h_spr,npal,rsvd,flags */
 #define COVER_C9_META_W             $C93A01    /* w_spr */
 #define COVER_C9_META_H             $C93A02    /* h_spr */
@@ -681,7 +683,7 @@
    (manhost.a65), gfk_colon $F483BC-BD (manhost.a65, the ficha footer's key colouring) -- free
    again from $F483BE, with OVL_NONAME_BUF taking $F483C0-$F483DF. */
 #define IGM_THM_MAGIC               $F48260 /* 1B: $A5 = staged block valid, written LAST by the overlay before the jsl $c80008; 0 = invalid (aborted/never staged) and the shell must fall back to its baked colours. */
-#define IGM_THM_GRAD                $F48261 /* 55B: backdrop gradient blob ([count,lo,hi]* terminated by a 0 count), copied from the THEMED hdma_pal_src. Same 55-byte region size main.a65 DMAs into the hdma_pal WRAM buffer. */
+#define IGM_THM_GRAD                $F48261 /* 55B: backdrop gradient blob ([count,lo,hi]* terminated by a 0 count), copied from the THEMED hdma_pal_gi_src. Same 55-byte region size main.a65 DMAs into the hdma_pal WRAM buffer. */
 #define IGM_THM_GRAD_A              $8261   /* 16-bit abs alias of IGM_THM_GRAD for abs,Y reads under DBR=$F4 (igt_grad_build walks two cursors and the 65816 has long,X but NO long,Y). KEEP IN LOCKSTEP with IGM_THM_GRAD above -- same convention as OVL_RB/OVL_TMBUF in cheatlist.i65. */
 #define IGM_THM_MATH                $F48298 /* 19B: colour-math table of the selection BAR, copied RAW from hdma_math_src -- so it already carries the NORMAL bar colour in its COLDATA bytes. */
 #define IGM_THM_BARCOL              $F482AB /* 8B: BAR colours from hdma_bar_color_src -- 4B normal then 4B highlight (active editing). The shell applies a group the way set_bar_color (ui.a65) does: byte i overwrites table offset 2+3*i (2, 5, 8, 11) of its WRAM copy of IGM_THM_MATH. The staged table is RAW, so only the highlight group ever NEEDS patching in. */
@@ -974,6 +976,7 @@
 #define CMD_SAVE_CHT_RECENT         $2b /* MCU_PARAM low byte: recent index. Resolves path via LAST_FILE then cheat_yaml_save. */
 #define CMD_SET_THEME               $2c /* selected .thm in a visible folder (MCU_PARAM set like LOADROM): store full path, reload menu */
 #define CMD_CLR_THEME               $2d /* clear menu theme to baked default, reload menu */
+#define CMD_THEME_INFO              $53 /* before the box for a .thm: what does it bring? (src/theme.c theme_info) */
 #define CMD_CLR_FONT                $52 /* clear CFG.font_name (the .sfn) back to the menu's own font, reload menu. Lockstep with SNES_CMD_CLR_FONT */
 #define CMD_SET_MENU_SPC            $2e /* selected .spc (MCU_PARAM set like LOADROM): store full path in CFG.bgm_name, enable music */
 #define CMD_CLR_MENU_SPC            $2f /* clear CFG.bgm_name -> menu BGM falls back to /sd2snes/menu.spc */
@@ -1228,6 +1231,9 @@
 #define CFG_STOP_MUSIC_GI               CFG_ADDR+$01DB /* 0/1: stop the menu music while the game info screen is up, start it again on the way back (snes/gimusic.a65). $1D9/$1DA are reserved in cfg_t. YAML StopMusicOnGameInfo. Lockstep with src/cfg.h. */
 #define CFG_LOCK_CODE                   CFG_ADDR+$01DC /* 5 B: the parental lock's code (lock.a65), 4 to 10 buttons a nibble each (1..12), the first on top, a 0 nibble ends it; all zero = none. Lockstep with cfg_t.lock_code */
 #define CFG_FONT_NAME                   CFG_ADDR+$01E1 /* 128 B: full SD path of the chosen .sfn (the menu font on its own; theme.c). Only the MCU reads it. Lockstep with cfg_t.font_name */
+#define CFG_THEME_USE_FONT              CFG_ADDR+$0261 /* 0/1: the chosen .thm's own font goes on the menu (the theme box's answer). Only the MCU reads it. YAML ThemeUseFont. Lockstep with cfg_t.theme_use_font */
+#define CFG_THEME_USE_SOUND             CFG_ADDR+$0262 /* 0/1: the chosen .thm's own effects (the theme box's answer). Only the MCU reads it. YAML ThemeUseSound. Lockstep with cfg_t.theme_use_sound */
+#define CFG_THEME_USE_MUSIC             CFG_ADDR+$0263 /* 0/1: the chosen .thm's own music (the same answer; picking a .spc clears it). Only the MCU reads it. YAML ThemeUseMusic. Lockstep with cfg_t.theme_use_music */
 #define ONB_VERSION                     3              /* the first-boot tour's version: bump it when a release adds cards to the tour (tag them with it, +ONB_FD_SINCE), and the tour comes back once showing only them. Lockstep with snes/onboarding/onb_memmap.i65. */
 
 #define MENU_ENTRY_SIZE             23

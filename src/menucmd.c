@@ -792,7 +792,10 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
          "a new track each time you come back to the menu" falls out of the existing
          handshake.  The draw writes into file_lfn (a menu-mode scratch buffer every
          other handler here fills the same way) and returns 0 for a folder that is
-         missing/empty/unset, which leaves the two lines above untouched. */
+         missing/empty/unset, which leaves the two lines above untouched.
+         The chosen theme's own music wins over all of it, without touching those options:
+         the next theme, or none, finds them as the user left them. */
+      if(theme_music_load()) return 0;
       if(CFG.menu_music_random && menu_spc_pick_random(file_lfn, sizeof(file_lfn))) {
         spc = file_lfn;
       }
@@ -936,10 +939,25 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
          yields the full SD path; store it and reload the menu so theme_apply
          patches the gfxptr regions of the fresh menu image. */
       get_selected_name(file_lfn);
+      {
+        /* the answers of the box the menu showed; a .sfn never gets here with one */
+        uint8_t answer = snescmd_readbyte(SNESCMD_MCU_PARAM + 8);
+        if(strcasecmp(strrchr((char*)file_lfn, '.') ?: "", ".sfn")) {
+          CFG.theme_use_font = !!(answer & THEME_ANSWER_FONT);
+          /* one answer for both: the theme's music and its effects. theme_pick ->
+             theme_select drops the effects cache before anything reads it again. */
+          CFG.theme_use_sound = CFG.theme_use_music = !!(answer & THEME_ANSWER_SOUND);
+        }
+      }
       theme_pick((char*)file_lfn);       /* a .sfn is a font, the rest a theme */
       browser_pos_save((char*)file_lfn); /* come back to this .thm, not to the root */
       *menu_reload = 1; /* leave loop -> outer loop reloads + themes the menu */
       return cmd;
+    case SNES_CMD_THEME_INFO:
+      /* a .thm is about to be picked: what does it bring? MCU_PARAM as for SET_THEME */
+      get_selected_name(file_lfn);
+      theme_info((char*)file_lfn);
+      return 0;
     case SNES_CMD_CLR_THEME:
     case SNES_CMD_CLR_FONT:
       /* revert to the baked-in default look, or (Restore default font) to the
@@ -981,6 +999,9 @@ uint8_t menucmd_dispatch(uint8_t cmd, uint8_t *menu_reload) {
       strncpy((char*)CFG.bgm_name, (char*)file_lfn, sizeof(CFG.bgm_name) - 1);
       CFG.bgm_name[sizeof(CFG.bgm_name) - 1] = 0;
       CFG.enable_menu_music = 1;
+      /* the last choice counts: this .spc over the theme's music. Only the music: the
+         theme's effects (theme_use_sound) stay, so the effects cache stays valid too. */
+      CFG.theme_use_music = 0;
       /* Picking a track by hand has to turn shuffle OFF: the random draw overrides
          bgm_name on every BGM load, so leaving it on would silently ignore the choice
          the user just made from the very next boot onwards. */
