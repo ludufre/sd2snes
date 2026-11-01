@@ -67,5 +67,7 @@ onb_demo_map
   .byt 23, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 54 2.18: the NTT Data Keypad (the controllers picture)
   .byt 23, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 55 2.18: the parental lock (the controllers picture: the code is typed on the pad)
   .byt 41, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 56 2.19: what's new
-  .byt 49, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 57 2.19: font files (the text sample picture)
-  .byt 62, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 58 2.19: the Atari 2600 on the Mk.II (the Atari picture)
+  .byt 8, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 57 2.19: the animated background (the plain file list of covers_off: no bank has room for a picture of its own)
+  .byt 48, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 58 2.19: a theme's font and sounds (the themes card's picture)
+  .byt 49, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 59 2.19: font files (the text sample picture)
+  .byt 62, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff   ; 60 2.19: the Atari 2600 on the Mk.II (the Atari picture)

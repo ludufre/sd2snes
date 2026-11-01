@@ -146,7 +146,7 @@ onb_langname_tbl  .word onb_langname_0, onb_langname_1, onb_langname_2, onb_lang
 
 ; ===========================================================================
 ; onb_feat_table -- the ONB_NUM_CARDS cards in tour order (the base tour, "and more"
-; last, then the 2.17 and 2.18 sections: each its separator and the release's cards), then the items of
+; last, then the 2.17, 2.18 and 2.19 sections: each its separator and the release's cards), then the items of
 ; the "and more" card (from ONB_MORE_FIRST). ONB_FEAT_STRIDE=16 bytes each;
 ; layout in onb_memmap.i65). name/text point at the localized strtab rows in
 ; onb_const_lang_b.a65 ($C0); +0 = the parent CFG byte that must be on; +10 = the ONB_FF_*
@@ -267,25 +267,29 @@ onb_feat_table:
   .byt ONB_PAL_PURPLE, ONB_OPT_INFO : .word 0
   .word 0, 3, onb_f56_name, onb_f56_text, 0, ONB_FF_SECTION   ; 56 2.19: what's new (Settings > tour: section 3)
   .byt ONB_PAL_AMBER, ONB_OPT_INFO : .word 0
-  .word 0, 3, onb_f57_name, onb_f57_text, 0, 0   ; 57 2.19: font files (.sfn), picked like a theme
+  .word 0, 3, onb_f57_name, onb_f57_text, 0, 0   ; 57 2.19: the animated menu background (a theme's own, off in Japanese/Chinese)
+  .byt ONB_PAL_PURPLE, ONB_OPT_INFO : .word 0
+  .word 0, 3, onb_f58_name, onb_f58_text, 0, 0   ; 58 2.19: a theme's font, sounds and preview (Apply font / Apply sounds)
+  .byt ONB_PAL_PURPLE, ONB_OPT_INFO : .word 0
+  .word 0, 3, onb_f59_name, onb_f59_text, 0, 0   ; 59 2.19: font files (.sfn), picked like a theme
   .byt ONB_PAL_CYAN, ONB_OPT_INFO : .word 0
-  .word 0, 3, onb_f58_name, onb_f58_text, 0, 0   ; 58 2.19: the Atari 2600 on the Mk.II too, the same keys on both boards
+  .word 0, 3, onb_f60_name, onb_f60_text, 0, 0   ; 60 2.19: the Atari 2600 on the Mk.II too, the same keys on both boards
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f59_name, onb_f59_text, 0, 0   ; 59 and more: the PPU is cleared before every game
+  .word 0, 1, onb_f61_name, onb_f61_text, 0, 0   ; 61 and more: the PPU is cleared before every game
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f60_name, onb_f60_text, 0, 0   ; 60 and more: bus timing compat
+  .word 0, 1, onb_f62_name, onb_f62_text, 0, 0   ; 62 and more: bus timing compat
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f61_name, onb_f61_text, 0, 0   ; 61 and more: hardware model
+  .word 0, 1, onb_f63_name, onb_f63_text, 0, 0   ; 63 and more: hardware model
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f62_name, onb_f62_text, 0, 0   ; 62 and more: BS-X
+  .word 0, 1, onb_f64_name, onb_f64_text, 0, 0   ; 64 and more: BS-X
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f63_name, onb_f63_text, 0, 0   ; 63 and more: delete
+  .word 0, 1, onb_f65_name, onb_f65_text, 0, 0   ; 65 and more: delete
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f64_name, onb_f64_text, 0, 0   ; 64 and more: missing BIOS
+  .word 0, 1, onb_f66_name, onb_f66_text, 0, 0   ; 66 and more: missing BIOS
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f65_name, onb_f65_text, 0, 0   ; 65 and more: clock and date
+  .word 0, 1, onb_f67_name, onb_f67_text, 0, 0   ; 67 and more: clock and date
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
-  .word 0, 1, onb_f66_name, onb_f66_text, 0, 0   ; 66 and more: option descriptions
+  .word 0, 1, onb_f68_name, onb_f68_text, 0, 0   ; 68 and more: option descriptions
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
 
 ; the bar colour: the menu's hdma_bar_color_src ("normal", then "highlight"), the
