@@ -266,7 +266,9 @@
 #define BGX_SM                      $7F4400    /*   its map word (tile | priority) */
 #define BGX_FREE                    $7F4C00    /* 512 words per region: free slots (a stack of RO4 + slot * 2) */
 #define BGX_VA                      $7F7800    /* 512 words per region: the slot's VRAM address */
-#define BGX_TBLOK                   $7F7FFC    /* BGX_TBLMAGIC once BGX_SM / BGX_VA are filled in */
+#define BGX_TBLOK                   $7F7FFC    /* BGX_TBLMAGIC once BGX_SM / BGX_VA are filled in. ZERO slack:
+                                                  region B's last slot (509 of 510) is BGX_VA + $400 + 509 * 2 =
+                                                  $7F7FFA-$7F7FFB; one more slot per region would land on it */
 #define BGX_BGMAPC                  $7FC800    /* 2 KB: the background map, built once */
 #define BGX_TMAPC                   $7FD000    /* 2 KB: the blank text map, built once */
 #define BGX_PMAPC                   $7FD800    /* 22 * 64 B: the blank physical rows, built once */

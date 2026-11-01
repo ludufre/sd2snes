@@ -478,17 +478,33 @@ int cfg_load() {
         }
         case CK_BSXTIME:
           {
-          /* hex digits, by shifting: strtoll(..., 16) pulled the 64-bit division routines
-             into the image.  The "0x" prefix strtoll accepted is still accepted. */
-          uint64_t v = 0;
+          /* Hex digits, by shifting: strtoll(..., 16) pulled the 64-bit division routines
+             into the image.  What strtoll took is still taken: leading white space, an
+             optional sign, an optional "0x", digits up to the first non-hex character,
+             and a value that saturates (at LLONG_MAX, as strtoll) instead of wrapping.
+             A minus reads as 0: no negative time means anything.
+             The value only reaches the clock as a real date -- the 14 low digits all
+             decimal and the month 01..12 -- because bcdtime2srtctime() copies a month of
+             up to 165 as is and the menu's clock editor indexes its month table with that
+             byte.  Anything else (0, a minus, a saturated value, a stray A-F digit) keeps
+             the default the struct already holds. */
+          uint64_t v = 0, t;
           const char *h = tok.stringvalue;
+          unsigned d;
+          int neg;
+          while(*h == ' ' || (unsigned)(*h - '\t') <= (unsigned)('\r' - '\t')) h++;
+          neg = (*h == '-');
+          if(neg || *h == '+') h++;
           if(h[0] == '0' && (h[1] | 0x20) == 'x') h += 2;
           for(; ; h++) {
-            unsigned d = (unsigned)*h - '0';
+            d = (unsigned)*h - '0';
             if(d > 9) { d = ((unsigned)*h | 0x20) - 'a'; if(d > 5) break; d += 10; }
-            v = (v << 4) | d;
+            v = (v >> 59) ? 0x7fffffffffffffffULL : (v << 4) | d;
           }
-          bcdtime2srtctime(v, p);
+          if(neg) v = 0;
+          for(t = v, d = 0; d < 14 && (t & 0xf) <= 9; d++, t >>= 4);
+          d = (d == 14) ? (unsigned)(v >> 32) & 0xff : 0;     /* BCD month */
+          if(d - 1 < 0x12) bcdtime2srtctime(v, p);
           }
           break;
         case CK_SEQ: {

@@ -138,11 +138,15 @@
 /* 0xFF0C00-0xFF0C07: savestate diagnostics (reject counter + watchdog breadcrumb +
    partial-sample gate breadcrumbs + the fill-wait throttle counter), owned and zeroed
    by the menu handler (ss_init, snes/savestate.i65). Reserved here so MCU-side
-   allocations skip the range. */
+   allocations skip the range (the _Static_asserts below see these two, not the comment). */
+#define SRAM_SS_DIAG_ADDR            (0xFF0C00L)
+#define SRAM_SS_DIAG_BYTES           (8)
 /* 0xFF0C40-0xFF0C4F: the card overlay load timing probe of a measurement build
    (make OVL_TIMING=1, ovl.c): 4 words the MCU publishes for USB, nothing on the SNES side
-   reads them.  Comment-only lockstep note in snes/memmap.i65. */
+   reads them.  Comment-only lockstep note in snes/memmap.i65. ($FF0C30 is a breadcrumb
+   the menu's measurement builds use, free in the menu mode.) */
 #define SRAM_OVL_TIMING_ADDR         (0xFF0C40L)
+#define SRAM_OVL_TIMING_BYTES        (16)
 #define SRAM_NUM_CHEATS              (0xFF0700L)
 #define SS_SCENE_GATE_ADDR           (0xFF0702L) /* 1 byte armed on EVERY game load (savestate.c, before the core gate, so it is never stale) = "this game needs the overlay probe gated on scene liveness". Keyed by core+checksum; today only Super Mario RPG (US) on the SA-1 core. When 1, the probe in snes/savestate.a65 additionally requires the FPGA's scene_fresh bit at $F90720 (cheat.v: the S-CPU wrote the pad to SA-1 IRAM $3010/$3011 or polled $4218/$4219 in the last ~49-73ms) before it opens the overlay -- the NMI hook also fires during scene transitions where the frame loop is parked mid-RPC, and opening there hangs the game on resume (proven in hardware on Mk.II). Takes the first byte of the $FF0702..$FF0707 gap (NUM_CHEATS is a short at $FF0700-01; CHEAT_WIN_BASE follows at $FF0708); $FF0704..$FF0707 now hold the in-game menu combo pair, so the gap is FULL. Lockstep with SS_SCENE_GATE in snes/memmap.i65. */
 #define SS_OVL_APUFIX_GATE_ADDR      (0xFF0703L) /* 1 byte armed on EVERY game load (savestate.c) = "re-run this game's savestate_fixes.yml code when the in-game overlay CLOSES". Keyed by header checksum only, like the yml itself; today only Star Ocean (13B8). The fix blobs re-sync a WRAM shadow of the APU handshake with the live $214x port, but until now they only ran on savestate save/load (audio_fix in snes/savestate.a65). Star Ocean spins on that shadow with an UNBOUNDED loop inside its V-IRQ handler (LDA $2140 : CMP $2140 : BNE : EOR $4A : BPL, three sites reached from $C0:0221), so any drift across an overlay open/close deadlocks the handler on resume -- the picture stays exactly as the overlay restored it and the game never repopulates OAM (its sprites vanish), which is the reported field-scene freeze. Running the blob once more on close makes the spin pass. Opt-in per game on purpose: a blob is free-form code (some entries write immediates, one writes $2140 itself), so firing it on every overlay close for the whole library would be a far wider behaviour change. MERGE HAZARD: the v2.16 branch uses 0xFF0703 as the savestate-thumbnail validity mask -- whichever side merges second must move one of the two. Lockstep with SS_OVL_APUFIX_GATE in snes/memmap.i65. */
@@ -302,8 +306,12 @@
 #define SRAM_CFG_PLAYER_REPEAT_ADDR  (0xFF02D9L)
 #define SRAM_CMD_ADDR                (0xFF1000L)
 #define SRAM_PARAM_ADDR              (0xFF1004L)
-/* $FF1010..$FF103F (inside the snes_menu_errmsg string, $FF1001..$FF1040): the menu copies the localized first line of the
-   card-overlay popup here (MCU_ERR_TPL in snes/memmap.i65, ovlwarn.a65) -- menu only, while no command is pending. */
+/* $FF1010..$FF103F (inside the snes_menu_errmsg string, $FF1001..$FF1040 -- SRAM_MCU_ERR_MSG_BYTES after the code
+   byte at SRAM_CMD_ADDR): the menu copies the localized first line of the card-overlay popup here (MCU_ERR_TPL in
+   snes/memmap.i65, ovlwarn.a65) -- menu only, while no command is pending, after the 9-byte overlay name. */
+#define SRAM_MCU_ERR_MSG_BYTES       (64)
+#define SRAM_MCU_ERR_TPL_ADDR        (0xFF1010L)
+#define SRAM_MCU_ERR_TPL_BYTES       (48)
 #define SRAM_MCU_STATUS_ADDR         (0xFF1100L)
 #define SRAM_SNES_STATUS_ADDR        (0xFF1110L)
 #define SRAM_SYSINFO_ADDR            (0xFF1200L) /* System Information screen: the packed sysinfo_blk_t defined below (128 B of the 544 B free up to LAST_GAME $FF1420). Lockstep with SYSINFO_BLK / SI2_* in snes/memmap.i65. */
@@ -464,8 +472,15 @@ _Static_assert(SRAM_CHEAT_OVL_GATE_ADDR == 0xFF0710L && SRAM_FLAGROW_FREE_ADDR =
                && SRAM_PATCH_HDR_SEL_ADDR == 0xFF071CL && SRAM_LOAD_NACK_ADDR == 0xFF071DL
                && SRAM_EXPORT_RESULT_ADDR == 0xFF071EL && SS_CX4_GATE_ADDR == 0xFF071FL,
                "the $FF0710..$FF071F flag row is full: one owner per byte");
-_Static_assert(SRAM_CHEAT_EDIT_ADDR >= 0xFF0800L && SRAM_CHEAT_EDIT_ADDR + CHEAT_EDIT_BYTES <= 0xFF0C00L,
+_Static_assert(SRAM_CHEAT_EDIT_ADDR >= 0xFF0800L && SRAM_CHEAT_EDIT_ADDR + CHEAT_EDIT_BYTES <= SRAM_SS_DIAG_ADDR,
                "CHEAT_EDIT (512 B) must sit between the $FF07xx gap and the savestate diagnostics at $FF0C00");
+_Static_assert(SRAM_OVL_TIMING_ADDR >= SRAM_SS_DIAG_ADDR + SRAM_SS_DIAG_BYTES
+               && SRAM_OVL_TIMING_ADDR + SRAM_OVL_TIMING_BYTES <= SRAM_CMD_ADDR,
+               "the overlay timing probe (16 B) must sit after the savestate diagnostics and below SRAM_CMD");
+_Static_assert(SRAM_MCU_ERR_TPL_ADDR >= SRAM_CMD_ADDR + 1 + SRAM_OVL_NAME_LEN
+               && SRAM_MCU_ERR_TPL_ADDR + SRAM_MCU_ERR_TPL_BYTES <= SRAM_CMD_ADDR + 1 + SRAM_MCU_ERR_MSG_BYTES
+               && SRAM_CMD_ADDR + 1 + SRAM_MCU_ERR_MSG_BYTES <= SRAM_MCU_STATUS_ADDR,
+               "MCU_ERR_TPL (48 B) must sit inside the error message, after the overlay name, below MCU_STATUS");
 _Static_assert(SRAM_CHEAT_TITLE_ADDR + 64 <= SRAM_CHEAT_YML_PATH_ADDR,
                "CHEAT_TITLE (64 B) must stay below CHEAT_YML_PATH");
 _Static_assert(SRAM_CHEAT_NAMES_ADDR + 64 * 64 <= SRAM_MANUAL_GUIDES_ADDR,
