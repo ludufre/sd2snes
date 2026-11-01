@@ -1,4 +1,4 @@
-; atari_snes.s -- Atari 2600 video + controls "player" for the sd2snes Mk.II (v18), the SNES half
+; atari_snes.s -- Atari 2600 video + controls "player" for the sd2snes Mk.II (v19), the SNES half
 ; of the STorm2600 core (verilog/sd2snes_atari).  By AndinhoNFS; 65816, ca65.  SPDX-License-Identifier: GPL-2.0-or-later
 ;
 ; v17: v15 with the DMA diagnostic (L) only in test builds.  The public build (DIAGBLD = 0, the
@@ -48,8 +48,18 @@
 ; register 8 ($2028, bits 1:0) every frame; the name is shown for ~2.5 s on BG2 (2bpp text,
 ; font in VRAM $1000, map at $1C00, row 26, inside the 160-pixel colour window).
 ;
-; CONTROLS (SNES pad 1): d-pad = joystick, B or A = fire, Start = RESET, Select = SELECT,
-;   R = pause, X = next palette, Y = Easy/Normal/Hard, L+R+Select+X = back to the menu.
+; CONTROLS: SNES pad 1 = left joystick (P0), SNES pad 2 = right joystick (P1).
+;   On each pad: d-pad = joystick (SWCHA bits 7:4 for pad 1, bits 3:0 for pad 2),
+;   B or A = fire (pad 1 -> INPT4, pad 2 -> INPT5).  Pad 1 only: Start = RESET,
+;   Select = SELECT, L/R/X/Y as below, L+R+Start+Select = reset the game,
+;   L+R+Select+X = back to the menu.
+; v19: second joystick.  Pad 2 ($421A/$421B) drives P1 (SWCHA bits 3:0, the same bit
+;   order and polarity as P0) and fire 1 (register 2 bit 1), as on the Mk.III player.
+;   Both ports go through the controller filter of the menu: a port is used only when
+;   its ID nibble is 0 (pad) or 4 (NTT Data keypad, PAD_ID_NOTPAD = $000B), and the
+;   nibble is masked off; anything else (mouse, Super Scope, nothing) reads as released.
+;   The console switches, the combos and L/R/X/Y stay on pad 1.  The SWCHA table is
+;   now written out here (it was an include without its generator).
 ; v18 (the button layout of the Mk.III player, so both boards play the same):
 ;   L = Easy/Normal/Hard, R = pause, X = TV type switch Color <-> B/W (SWCHB bit 3),
 ;   Y = next palette.  L, R, X and Y act on RELEASE, and only when that key was the only
@@ -121,6 +131,8 @@ VNOW   = $82                ; V counter at the end of the DMAs (16-bit)
 CHL    = $84                ; X L R pressed while one of L/R/X/Y was down (v18)
 CHH    = $85                ; Y Select Start, the same
 TVBW   = $86                ; 1 = TV type switch at B/W (SWCHB bit 3 low)
+JOY2L  = $88                ; pad 2, $421A after the controller filter (v19)
+JOY2H  = $89                ; pad 2, $421B
 DROW   = $0300              ; WRAM (bank 0 mirror): the diagnostic row, 32 words
 
 .segment "CODE"
@@ -250,6 +262,8 @@ Reset:
     stz UDPREV
     stz JOYL
     stz JOYH
+    stz JOY2L
+    stz JOY2H
     stz DIRTY
     lda #$7E
     sta PTR+2
@@ -522,10 +536,28 @@ Nmi:
     lda $4212
     and #$01
     bne @padwait
+    ; both ports through the controller filter of the menu (v19): ID nibble 0 (pad) or
+    ; 4 (NTT Data keypad) = the 12 buttons, nibble masked off; anything else = released
+    rep #$20
+    .a16
     lda $4218
-    sta JOYL
-    lda $4219
-    sta JOYH
+    bit #$000B              ; PAD_ID_NOTPAD
+    beq @p1pad
+    lda #$0000
+@p1pad:
+    .a16
+    and #$FFF0
+    sta JOYL                ; JOYL/JOYH
+    lda $421A
+    bit #$000B
+    beq @p2pad
+    lda #$0000
+@p2pad:
+    .a16
+    and #$FFF0
+    sta JOY2L               ; JOY2L/JOY2H
+    sep #$20
+    .a8
 
     ; reset-to-menu combo L+R+Select+X (pad word $2070), same as the sd2snes in-game hook
     lda JOYL
@@ -730,14 +762,27 @@ Nmi:
     rep #$30
     .a16
     .i16
-    lda JOYH
+    lda JOY2H               ; pad 2 -> P1: the table byte, high nibble moved to bits 3:0
     and #$000F
     tax
     sep #$20
     .a8
     lda SwchaLut,x
+    lsr
+    lsr
+    lsr
+    lsr
     sta TMP
-    lda TMP
+    rep #$20
+    .a16
+    lda JOYH                ; pad 1 -> P0, bits 7:4
+    and #$000F
+    tax
+    sep #$20
+    .a8
+    lda SwchaLut,x
+    and #$F0
+    ora TMP
     sta WIN+0               ; SWCHA
 
     lda #$FF
@@ -781,15 +826,27 @@ Nmi:
 @hardsw:
     lda TMP
     sta WIN+1               ; SWCHB
+    lda #$03                ; register 2: bit 0 = fire 0, bit 1 = fire 1, 1 = released
+    sta TMP
     lda JOYH
     ora JOYL
-    and #$80                ; B or A -> fire 0
-    beq @nof
-    lda #$02
-    bra @wf
-@nof:
-    lda #$03
-@wf:
+    and #$80                ; pad 1 B or A -> fire 0 (INPT4)
+    beq @nof0
+    lda TMP
+    and #$FE
+    sta TMP
+@nof0:
+    .a8
+    lda JOY2H
+    ora JOY2L
+    and #$80                ; pad 2 B or A -> fire 1 (INPT5)
+    beq @nof1
+    lda TMP
+    and #$FD
+    sta TMP
+@nof1:
+    .a8
+    lda TMP
     sta WIN+2
 
     lda DIRTY               ; picture moved: rebuild the pointer tables
@@ -1071,8 +1128,11 @@ SpcProg:
     .byte $8F,$6C,$F2       ; mov $F2,#$6C   (DSP register FLG)
     .byte $8F,$20,$F3       ; mov $F3,#$20   (soft reset off, mute off, echo write off)
     .byte $2F,$FE           ; bra $          (spin)
+; SWCHA nibble of one joystick, indexed by the d-pad bits of $4219/$421B (bit 3 Up,
+; 2 Down, 1 Left, 0 Right): bits 7:4 = Right Left Down Up, active low, bits 3:0 = 1.
+; Pad 1 uses it as is (P0); pad 2 moves the high nibble down (P1, bits 3:0).
 SwchaLut:
-    .include "swcha_lut.inc"
+    .byte $FF,$7F,$BF,$3F,$DF,$5F,$9F,$1F,$EF,$6F,$AF,$2F,$CF,$4F,$8F,$0F
 
 .segment "HEADER"           ; $FFC0
     .byte "ATARI2600 VIDEO PLYR "   ; 21 bytes

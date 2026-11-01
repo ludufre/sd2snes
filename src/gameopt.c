@@ -77,8 +77,12 @@ extern char current_filename[];
 #define AP_2100   (AP_SNES | AP_GB | AP_SMS | AP_A26)
 #ifdef CONFIG_MK2
 #define AP_LIMIT  AP_SNES                    /* the Mk.II SGB core has no brightness limit */
+/* the reset hook lives in cheat.v, which the Mk.II Atari core (sd2snes_atari) replaces with a
+   stub; its $2100 patcher (address.v + main.v of the base) is still there */
+#define AP_RESETP (AP_2100 & ~AP_A26)
 #else
 #define AP_LIMIT  AP_2100
+#define AP_RESETP AP_2100
 #endif
 #define F_LIVE    GAMEOPT_F_LIVE
 #define F_SGB     GAMEOPT_F_SGB
@@ -98,7 +102,7 @@ static const struct { uint16_t off; uint8_t fl, ap; } gameopt_list[] = {
   GO(enable_hook_holdoff,     F_SGB, AP_SNES | AP_GB),
   GO(r213f_override,          0, AP_SNES),
   GO(bus_compat,              0, AP_SNES),
-  GO(reset_patch,             F_SGB, AP_2100),            /* cheat.v's reset hook; dead on the GBC core */
+  GO(reset_patch,             F_SGB, AP_RESETP),          /* cheat.v's reset hook; dead on the GBC core */
   GO(enable_ingame_savestate, 0, AP_SNES),
   GO(enable_savestate_slots,  0, AP_SNES),
   GO(cx4_speed,               0, AP_SNES | AP_CX4),

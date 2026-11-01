@@ -21,7 +21,7 @@ all: $(OUT)
 
 # asar exits non-zero on error, but it also prints errors to stdout while doing so;
 # the mkdir keeps a fresh checkout (no misc/) working.
-$(OUT): $(SRC)
+$(OUT): $(SRC) a26_text.inc
 	@mkdir -p $(@D)
 	@rm -f $(OUT)
 	$(ASAR) $(SRC) $(OUT)

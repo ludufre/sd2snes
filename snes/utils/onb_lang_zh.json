@@ -66,7 +66,7 @@
  "name_26": "比赛卡带回合时长",
  "text_26": "Campus Challenge 92和PowerFest 94卡带会进行限时回合，与当年的比赛一样。可选择回合时长，3到18分钟：当年比赛用的是6分钟。也可在「{chipopts}」中设置。",
  "name_27": "其他主机",
- "text_27": "NES、Master System和Game Boy Color游戏在各自的FPGA核心上运行，仅限|FXPAK PRO（Mk.III）|，Atari 2600游戏在|sd2snes Mk.II|上也能运行，打开方式与普通ROM相同。这些核心是实验性的：部分游戏可能出错或无法运行。NES游戏颜色不对时，按[L]+[R]+[Start]+[Up]重绘调色板。",
+ "text_27": "NES、Master System、Game Boy Color和Atari 2600游戏在各自的FPGA核心上运行。这些核心是实验性的：部分游戏可能出错或无法运行。NES游戏颜色不对时，按[L]+[R]+[Start]+[Up]重绘调色板。仅限|FXPAK PRO（Mk.III）|，Atari 2600除外：从2.19版起也可在|sd2snes Mk.II|上使用。",
  "name_28": "Atari 2600操作",
  "text_28": "主机上的开关映射到1P手柄：按住[Start]为RESET，按住[Select]为SELECT，[L]切换难度（Easy、Normal、Hard），[R]暂停，[X]切换彩色/黑白，[Y]切换调色板。「{chipopts}」中的「{a26w}」可选160像素（1:1）或256像素（宽屏），仅限|FXPAK PRO（Mk.III）|。",
  "name_29": "SD卡中的文件夹",

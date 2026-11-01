@@ -118,6 +118,7 @@ typedef struct {
   uint8_t  sc_lead_fill;  /* the fill byte of the bank being checked */
 #ifdef CONFIG_MK2
   uint8_t  sc_mir_ok;     /* Stella's rule: the first 128 bytes of every 4K bank repeat in the next 128 */
+  uint8_t  sc_mir_banks;  /* 4K banks whose 256-byte lead-in was actually checked for that rule */
   uint8_t  fe_hist[4];    /* the 4 bytes before the current one (FE/F8 windows) */
   uint8_t  fe_seen;       /* how many of fe_hist are valid, saturates at 4 */
   uint8_t  fe_sigs;       /* bit N = FE signature N of a26_fe_sig found */
@@ -213,10 +214,13 @@ static void a26_scan_block(a26_scan_t *st, const uint8_t *buf, uint32_t len,
 #ifdef CONFIG_MK2
   /* Stella's rule needs no buffer of its own: the blocks are 512 bytes and start on
      multiples of 512 (the carry bytes only precede the first new byte), so the 256-byte
-     lead-in of a bank is always inside ONE block, at buf[carry]. A block too short to hold
-     it (a truncated file) can only lose evidence. */
+     lead-in of a bank is always inside ONE block, at buf[carry]. sc_mir_ok only records
+     "no evidence against", so every bank it vouches for is counted: a bank that was never
+     read (truncated or skipped scan) must not pass for a mirrored one, see
+     a26_superchip_stella(). */
   if(((base + carry) & 0xFFF) == 0) {
     if(len - carry < 256 || memcmp(buf + carry, buf + carry + 128, 128)) st->sc_mir_ok = 0;
+    else if(st->sc_mir_banks < 255) st->sc_mir_banks++;
   }
 #endif
 #ifdef CONFIG_MK2
@@ -331,9 +335,12 @@ static uint8_t a26_superchip(const a26_scan_t *st) {
    4K bank repeat in the next 128 (the RAM is mirrored there on the cartridge). It also
    catches images whose lead-in is not one constant filler (Crystal Castles, Dig Dug, ...)
    or that never read the RAM through two distinct addresses. Used for 8K (F8SC) and 16K
-   (F6SC) only, in addition to a26_superchip(). */
-static uint8_t a26_superchip_stella(const a26_scan_t *st) {
-  return st->sc_mir_ok;
+   (F6SC) only, in addition to a26_superchip().
+   The rule holds only when EVERY bank was checked: sc_mir_ok starts at 1 and is only ever
+   cleared, so a scan that was skipped (scratch refused) or cut short (read error) would
+   otherwise vouch for banks it never saw and put RAM over $1000-$10FF of a plain cart. */
+static uint8_t a26_superchip_stella(const a26_scan_t *st, uint32_t romsize) {
+  return (uint8_t)(st->sc_mir_ok && st->sc_mir_banks == (romsize >> 12));
 }
 
 /* FE: a signature, and no "potential F8" (Stella asks for 2 hits of one store). */
@@ -381,7 +388,7 @@ static void a26_decide(a26_romprops_t *props, const a26_scan_t *st,
       props->scheme = A26_BS_F8;
       props->size_class = 2;
 #ifdef CONFIG_MK2
-      sc |= a26_superchip_stella(st);
+      sc |= a26_superchip_stella(st, romsize);
 #endif
       props->superchip = sc;
 #ifdef CONFIG_MK2
@@ -396,7 +403,7 @@ static void a26_decide(a26_romprops_t *props, const a26_scan_t *st,
       props->scheme = A26_BS_F6;
       props->size_class = 3;
 #ifdef CONFIG_MK2
-      sc |= a26_superchip_stella(st);
+      sc |= a26_superchip_stella(st, romsize);
 #endif
       props->superchip = sc;
       break;
@@ -450,7 +457,8 @@ void a26_id(a26_romprops_t *props, uint8_t *filename) {
 
   a26_scan_reset(&st);
   /* A refused scratch skips the scan: like a truncated one (below) it can only
-     LOSE evidence, so the image boots as the default for its size. */
+     LOSE evidence, so the image boots as the default for its size (sc_mir_ok, the
+     one flag that starts out "yes", is held to the bank count it was checked on). */
   if((romsize == 2048 || romsize == 4096 || romsize == 8192
       || romsize == 16384 || romsize == 32768)
      && scratch_leaf_take(SCR_A26)) {
@@ -464,7 +472,11 @@ void a26_id(a26_romprops_t *props, uint8_t *filename) {
         /* A truncated scan can only LOSE evidence, never invent it, and every
            NOIMPL below needs evidence -- so deciding on the part that was read
            stays on the conservative side (at worst the image boots as the
-           default for its size). Reported, not escalated. */
+           default for its size). That holds for the counters and for
+           sc_lead_const, whose Superchip verdict also needs read-port references
+           from the bytes that WERE read. The exception is sc_mir_ok (Mk.II), a
+           pure "nothing against" flag: a26_superchip_stella() accepts it only
+           when every bank was checked. Reported, not escalated. */
         printf("A26: scan truncated at %ld/%ld (res=%d)\n",
                (long)pos, (long)romsize, file_res);
         break;

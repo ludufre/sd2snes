@@ -16,7 +16,7 @@ OBJ   = atari_snes.o
 
 all: $(OUT)
 
-$(OUT): atari_snes.s font_txt.inc swcha_lut.inc lorom.cfg fix_snes_checksum.py
+$(OUT): atari_snes.s font_txt.inc lorom.cfg fix_snes_checksum.py
 	@mkdir -p $(@D)
 	@rm -f $(OUT) $(OBJ)
 	$(CA65) -o $(OBJ) atari_snes.s

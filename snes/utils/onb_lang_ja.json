@@ -66,7 +66,7 @@
  "name_26": "競技用カートの制限時間",
  "text_26": "Campus Challenge 92とPowerFest 94のカートは、当時の大会と同じく制限時間付きのラウンドで遊びます。3分から18分まで時間を選べます（大会では6分）。{chipopts}でも変更できます。",
  "name_27": "ほかのゲーム機",
- "text_27": "NES、Master System、Game Boy Colorのゲームは専用のFPGAコアで動き、|FXPAK PRO（Mk.III）|専用です。Atari 2600のゲームは|sd2snes Mk.II|でも動きます。どれもほかのROMと同じように開けます。コアは試験的で、表示が乱れたり動かなかったりするゲームもあります。NESで色がおかしいときは、[L]+[R]+[Start]+[Up]でパレットを描き直します。",
+ "text_27": "NES、Master System、Game Boy Color、Atari 2600のゲームは専用のFPGAコアで動きます。コアは試験的で、表示が乱れたり動かなかったりするゲームもあります。NESで色がおかしいときは、[L]+[R]+[Start]+[Up]でパレットを描き直します。|FXPAK PRO（Mk.III）|専用ですが、Atari 2600はバージョン2.19から|sd2snes Mk.II|でも使えます。",
  "name_28": "Atari 2600の操作",
  "text_28": "本体のスイッチは1Pコントローラーにあります。[Start]と[Select]は押している間RESETとSELECT、[L]で難易度（Easy、Normal、Hard）、[R]で一時停止、[X]でカラー/白黒、[Y]でパレットを切り替えます。{chipopts}の「{a26w}」では160ドット（1:1）か256ドット（ワイド）を選べます。|FXPAK PRO（Mk.III）|専用。",
  "name_29": "カード内のフォルダー",

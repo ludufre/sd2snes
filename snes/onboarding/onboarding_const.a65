@@ -207,7 +207,7 @@ onb_feat_table:
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
   .word 0, 1, onb_f26_name, onb_f26_text, 0, 0   ; 26 Competition Cart round
   .byt ONB_PAL_GREEN, ONB_OPT_CCTIME : .word !CFG_CC_TIME_LIMIT
-  .word 0, 1, onb_f27_name, onb_f27_text, 0, ONB_FF_MK3ONLY   ; 27 other consoles (Mk.III only)
+  .word 0, 1, onb_f27_name, onb_f27_text, 0, 0                ; 27 other consoles (both boards: the Atari 2600 runs on the Mk.II from 2.19)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0
   .word 0, 1, onb_f28_name, onb_f28_text, 0, 0                ; 28 Atari 2600 controls (both boards)
   .byt ONB_PAL_GREEN, ONB_OPT_INFO : .word 0

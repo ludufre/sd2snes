@@ -334,7 +334,12 @@ int main(void) {
     {
       static const struct { const char *rom; uint8_t hook, onechip, autosave, rpatch; } p[] = {
         { "/roms/Alex.sms", GAMEOPT_V_NA, GAMEOPT_V_DEFAULT, GAMEOPT_V_NA,      GAMEOPT_V_DEFAULT },
+#ifdef CONFIG_MK2
+        /* the Mk.II Atari core stubs cheat.v out: no reset hook */
+        { "/roms/Pitfall.a26", GAMEOPT_V_NA, GAMEOPT_V_DEFAULT, GAMEOPT_V_NA,      GAMEOPT_V_NA },
+#else
         { "/roms/Pitfall.a26", GAMEOPT_V_NA, GAMEOPT_V_DEFAULT, GAMEOPT_V_NA,      GAMEOPT_V_DEFAULT },
+#endif
         { "/roms/Zelda.nes", GAMEOPT_V_NA, GAMEOPT_V_NA,      GAMEOPT_V_DEFAULT, GAMEOPT_V_NA },
       };
       int iauto = idx_of(offsetof(cfg_t, enable_autosave)), irp = idx_of(offsetof(cfg_t, reset_patch));

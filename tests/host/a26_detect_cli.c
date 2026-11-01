@@ -15,6 +15,12 @@
  * SCHEME is "-" whenever ERROR is not OK (the scheme field is meaningless then)
  * and "n/a" when the file is not a .a26 by extension, i.e. when the detector
  * never ran. run_a26_detect.sh greps the line by its "SCHEME=" prefix.
+ *
+ * Fault injection (environment), for the scan paths a clean file never takes:
+ *   A26_READ_FAIL_AT=<offset>  f_read fails (FR_DISK_ERR, 0 bytes) once the
+ *                              file position reaches <offset>: a truncated scan
+ *   A26_LEAF_BUSY=1            the LEAF scratch is already held when a26_id()
+ *                              runs, so the scan is skipped altogether
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +33,9 @@
 #include "cfg.h"      /* shim: the stand-in cfg_t */
 
 #include "atari.h"    /* the real src/atari.h */
+#include "scratch.h"  /* the real src/scratch.h: A26_LEAF_BUSY holds the LEAF */
+
+static long read_fail_at = -1;   /* A26_READ_FAIL_AT, -1 = never */
 
 /* --- fileops/FatFs globals atari.c borrows -------------------------------
  * shim.c defines its own copies for the patch harness; this CLI does not link
@@ -50,6 +59,10 @@ FRESULT f_lseek(FIL *fp, DWORD ofs) {
 FRESULT f_read(FIL *fp, void *buff, UINT btr, UINT *br) {
   size_t got;
   if (!fp->fp) return FR_INT_ERR;
+  if (read_fail_at >= 0 && (long)fp->fptr + (long)btr > read_fail_at) {
+    if (br) *br = 0;
+    return FR_DISK_ERR;
+  }
   got = fread(buff, 1, btr, fp->fp);
   fp->fptr += (DWORD)got;
   if (br) *br = (UINT)got;
@@ -104,6 +117,12 @@ int main(int argc, char **argv) {
   file_handle.fsize = (DWORD)ftell(file_handle.fp);
   fseek(file_handle.fp, 0, SEEK_SET);
   file_handle.fptr = 0;
+
+  if (getenv("A26_READ_FAIL_AT")) read_fail_at = strtol(getenv("A26_READ_FAIL_AT"), NULL, 0);
+  if (getenv("A26_LEAF_BUSY") && !scratch_leaf_take(SCR_GI_SCAN)) {
+    fprintf(stderr, "A26_LEAF_BUSY: could not take the LEAF scratch\n");
+    return 2;
+  }
 
   a26_id(&a26_romprops, (uint8_t *)path);
 

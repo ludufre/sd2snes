@@ -1483,8 +1483,8 @@ static const uint8_t *load_chip_core(void) {
 }
 
 /* NES, Master System, Atari 2600 and the Game Boy Color core: experimental, and without
-   savestates or the in-game menu.  On the Mk.II the first three are refused earlier and a
-   .gbc runs on the Super Game Boy, so this is only ever true on the Mk.III. */
+   savestates or the in-game menu.  On the Mk.II a .nes / .sms is refused earlier and a .gbc
+   runs on the Super Game Boy, so there it is true for a .a26 only (the sd2snes_atari core). */
 static int load_is_experimental(void) {
   return nes_romprops.has_nes || sms_active || a26_romprops.has_a26
       || (sgb_romprops.has_sgb && sgb_romprops.core_is_gbc);
